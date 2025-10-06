@@ -12,7 +12,7 @@ GUARD_ENSURE_SL        = (os.getenv("GUARD_ENSURE_SL","1").lower() in ("1","true
 GUARD_SL_GRACE_SEC     = int(os.getenv("GUARD_SL_GRACE_SEC","2"))
 STRICT_MODE_SINGLE     = (os.getenv("STRICT_MODE_SINGLE","1").lower() in ("1","true","yes","on"))
 USE_NATIVE_TP_SL_FLAG  = (os.getenv("USE_NATIVE_TP_SL","0").lower() in ("1","true","yes","on"))
-AUTO_TPSL_MODE         = (os.getenv("AUTO_TPSL_MODE","off").lower() in ("auto","on","1","true","yes"))  # <— חדש
+AUTO_TPSL_MODE         = (os.getenv("AUTO_TPSL_MODE","off").lower() in ("auto","on","1","true","yes"))
 STOP_WORKING_TYPE      = (os.getenv("STOP_WORKING_TYPE") or os.getenv("BINANCE_WORKING_TYPE") or "MARK_PRICE")
 TP_BE_ONLY_AFTER_TP1   = (os.getenv("TP_BE_ONLY_AFTER_TP1","1").lower() in ("1","true","yes","on"))
 SMART_MANAGE_AFTER_TP1 = (os.getenv("SMART_MANAGE_AFTER_TP1","1").lower() in ("1","true","yes","on"))
@@ -133,13 +133,11 @@ def _split_native_vs_qty(orders: List[Dict[str,Any]]) -> Tuple[List[Dict[str,Any
     for o in orders:
         typ = (o.get("type") or "").upper()
         if "STOP" in typ or "TAKE_PROFIT" in typ:
-            # Binance לא מחזיר closePosition בשדות כולם; נזהה לפי היעדר quantity/נוכחות reduceOnly
             if str(o.get("closePosition","")).lower() == "true":
                 native.append(o)
             elif o.get("reduceOnly") is True or o.get("origQty") or o.get("quantity"):
                 qty.append(o)
             else:
-                # fallback: אם אין quantity אבל גם אין closePosition בשדה—ננחש Native
                 native.append(o)
     return native, qty
 
@@ -264,14 +262,10 @@ def _decide_mode(cli, symbol: str) -> str:
     """returns 'native' or 'quantities'."""
     if not AUTO_TPSL_MODE:
         return "native" if USE_NATIVE_TP_SL_FLAG else "quantities"
-
-    # auto: inspect existing orders
     nat, qty = _split_native_vs_qty(_active_orders(cli, symbol))
     if nat and not qty: return "native"
     if qty and not nat: return "quantities"
-    # mixed or none -> prefer env flag, else default to quantities (safer for ladders)
     if STRICT_MODE_SINGLE and nat and qty:
-        # in strict mode, don't add more mixing; stick to env-preferred
         return "native" if USE_NATIVE_TP_SL_FLAG else "quantities"
     return "native" if USE_NATIVE_TP_SL_FLAG else "quantities"
 
@@ -280,10 +274,7 @@ def _decide_mode(cli, symbol: str) -> str:
 # =========================
 def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Dict[str,Any]:
     """
-    Ensures an always-on protective SL:
-    - Auto mode: picks native/quantities safely without mixing.
-    - Atomic update: place->verify->cancel.
-    - BE+ after TP1, ATR trail with min-profit gate.
+    Ensures an always-on protective SL.
     """
     if not GUARD_ENSURE_SL:
         return {"ok": False, "symbol": symbol, "reason":"guard_disabled"}
@@ -300,30 +291,23 @@ def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Di
     with suppress(Exception): last = _last_price(cli, symbol)
     flt = _get_filters(cli, symbol)
 
-    # choose mode
     mode = prefer_mode or _decide_mode(cli, symbol)  # 'native' | 'quantities'
-
-    # detect existing protection of the chosen mode
     orders = _active_orders(cli, symbol)
     nat, qty = _split_native_vs_qty(orders)
     mode_orders = nat if mode=="native" else qty
     current_sl_px = _best_stop_px(side, mode_orders)
 
-    # compute target
     tp1_ok = _tp1_filled(cli, symbol) if (SMART_MANAGE_AFTER_TP1 or TP_BE_ONLY_AFTER_TP1) else True
     target_px, reason = _target_sl_price(cli, symbol, side, entry, last, tp1_ok, current_sl_px, flt)
 
-    # quantities/full coverage
     qty_cover = _qqty(symbol, abs_qty, flt)
     if qty_cover <= 0: return {"ok": False, "symbol": symbol, "reason":"qty_rounds_zero"}
 
-    # if already protected tightly enough, skip
     if current_sl_px is not None:
         tick = float(flt.get("price_tick") or 0.0)
         if tick and abs(target_px - current_sl_px) < (1.5*tick):
             return {"ok": True, "symbol": symbol, "mode": mode, "actions":[{"skip":"already_protected","current_sl": current_sl_px}]}
 
-    # ========== Atomic update ==========
     if mode=="native":
         new_ord = _place_stop_native(cli, symbol, opp, target_px)
     else:
@@ -343,6 +327,7 @@ def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Di
             {"cancelled_old_stops": cancelled},
         ]
     }
+
 
 
 
