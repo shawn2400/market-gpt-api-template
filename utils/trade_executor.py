@@ -63,6 +63,10 @@ from utils.approvals import ConfirmStore, send_confirm_request, require_approval
 with suppress(Exception):
     from utils.binance_futures_exec import BinanceFuturesExec  # type: ignore
 
+# ← NEW: הגנת סטופ מיידית אחרי כניסה (ייבוא שקט)
+with suppress(Exception):
+    from utils.guard_stop import ensure_protective_stop  # type: ignore
+
 log = logging.getLogger("algogpt.trade_executor")
 
 # ─────────── Feature flags for trail (ENV override-able per ticket) ───────────
@@ -645,6 +649,13 @@ async def execute_trade_live(
     if not entry_res or (entry_res.get("ok") is False):
         await _tg_send(f"⚠️ <b>Entry failed</b>\n• {sym} {side}\n• Reason: <code>{entry_res.get('reason') if entry_res else 'entry_failed'}</code>")
         return {"ok": False, "reason": entry_res.get("reason", "entry_failed"), "details": entry_res}
+
+    # ← NEW: הגנת סטופ מיידית אחרי שהכניסה הצליחה (לפני חימוש TP/SL) —
+    #      אם guard_stop קיים, זה יוודא שיש SL/TP מינימליים לפי מצב הפוזיציה והכמויות בפועל.
+    with suppress(Exception):
+        if 'ensure_protective_stop' in globals():
+            ensure_protective_stop(sym, prefer_mode="quantities")
+            log.info("protective_stop.ensure called (mode=quantities) for %s", sym)
 
     sanity_ok = bool(entry_res.get("sanity_ok", True))
     sanity_bps = entry_res.get("sanity_bps")
