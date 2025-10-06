@@ -9,15 +9,21 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import suppress
 
-from fastapi import APIRouter, Body, HTTPException, Request, Header
+from fastapi import APIRouter, Body, HTTPException, Header
 
 logger = logging.getLogger("algogpt.position_ops")
 router = APIRouter(prefix="/position-ops", tags=["position-ops"])
 
 # Guard (אופציונלי, שקט אם חסר)
-GUARD_ENSURE_AFTER_OPS = (os.getenv("GUARD_ENSURE_AFTER_OPS","1").lower() in ("1","true","yes","on"))
+GUARD_ENSURE_AFTER_OPS = (os.getenv("GUARD_ENSURE_AFTER_OPS", "1").lower() in ("1", "true", "yes", "on"))
 with suppress(Exception):
     from utils.guard_stop import ensure_protective_stop  # type: ignore
+
+def _ensure_guard(symbol: str, *, prefer_mode: str = "native") -> None:
+    if not GUARD_ENSURE_AFTER_OPS:
+        return
+    with suppress(Exception):
+        ensure_protective_stop(symbol, prefer_mode=prefer_mode)  # type: ignore
 
 # =========================
 # Helpers: auth (Bearer)
@@ -52,7 +58,10 @@ with suppress(Exception):
 # Quantize
 # =========================
 def _fallback_filters():
-    return {"price_tick": float(os.getenv("DEFAULT_PRICE_TICK", "0.01")), "qty_step": float(os.getenv("DEFAULT_QTY_STEP", "0.001"))}
+    return {
+        "price_tick": float(os.getenv("DEFAULT_PRICE_TICK", "0.01")),
+        "qty_step": float(os.getenv("DEFAULT_QTY_STEP", "0.001")),
+    }
 
 def _round_step(v: float, step: float) -> float:
     if step <= 0:
@@ -71,7 +80,7 @@ def _get_filters(client, symbol: str) -> Dict[str, Any]:
     try:
         ex = client.futures_exchange_info() or {}
         for s in ex.get("symbols", []):
-            if str(s.get("symbol","")).upper() == symbol.upper():
+            if str(s.get("symbol", "")).upper() == symbol.upper():
                 price_tick = None
                 qty_step = None
                 for f in s.get("filters", []):
@@ -112,9 +121,9 @@ def _get_client():
 def _align_position_mode(client) -> None:
     mode_override = (os.getenv("POSITION_MODE_OVERRIDE", "") or "").strip().lower()
     with suppress(Exception):
-        if mode_override in ("hedge","dual","dual_side","dual_side_position","dualposition"):
+        if mode_override in ("hedge", "dual", "dual_side", "dual_side_position", "dualposition"):
             client.futures_change_position_mode(dualSidePosition="true")
-        elif mode_override in ("oneway","one_way","single","single_side","oneside"):
+        elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
 
 # =========================
@@ -137,7 +146,7 @@ def _last_price(symbol: str) -> float:
     p = cli.futures_symbol_ticker(symbol=symbol.upper())
     return float(p["price"])
 
-def _cancel_open_conditional(client, symbol: str, kinds=("STOP","TAKE_PROFIT","TRAILING_STOP_MARKET")) -> int:
+def _cancel_open_conditional(client, symbol: str, kinds=("STOP", "TAKE_PROFIT", "TRAILING_STOP_MARKET")) -> int:
     n = 0
     for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
         typ = (o.get("type") or "").upper()
@@ -151,7 +160,7 @@ def _cancel_open_conditional(client, symbol: str, kinds=("STOP","TAKE_PROFIT","T
 # Gates (TP1/min profit)
 # =========================
 def _tp1_filled(client, symbol: str) -> bool:
-    tags = [t.strip().upper() for t in (os.getenv("TP1_TAGS","TP1,tp1,tp_1,TAKE_PROFIT_1").split(","))]
+    tags = [t.strip().upper() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1").split(","))]
     try:
         orders = client.futures_get_all_orders(symbol=symbol.upper(), limit=120) or []
         for o in orders:
@@ -172,8 +181,8 @@ def _profit_ok(entry: float, last: float, side: str, min_pct: float) -> bool:
     return move >= min_pct
 
 def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, str]:
-    want_tp1 = (os.getenv("SMART_MANAGE_AFTER_TP1","0").lower() in ("1","true","yes","on"))
-    min_profit = float(os.getenv("TRAIL_MIN_PROFIT_PCT","0") or 0)
+    want_tp1 = (os.getenv("SMART_MANAGE_AFTER_TP1", "0").lower() in ("1", "true", "yes", "on"))
+    min_profit = float(os.getenv("TRAIL_MIN_PROFIT_PCT", "0") or 0)
     last = 0.0
     with suppress(Exception):
         last = _last_price(symbol)
@@ -184,17 +193,9 @@ def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, 
     return (True, "ok")
 
 # =========================
-# BE
+# Internal impls (no auth)
 # =========================
-@router.post("/be", summary="Move SL to BE ± offset_bps (STOP_MARKET closePosition)")
-def be(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
-    _require_bearer(Authorization)
-    symbol = (payload.get("symbol") or "").upper()
-    offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS") or 8)
-    if not symbol:
-        raise HTTPException(status_code=422, detail="symbol required")
-
-    client = _get_client()
+def _be_impl(client, *, symbol: str, offset_bps: int) -> Dict[str, Any]:
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
     ok, why = _gate_be_trail(client, symbol, side, entry)
@@ -203,44 +204,34 @@ def be(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Heade
 
     flt = _get_filters(client, symbol)
     if side == "BUY":
-        be_px = _quantize_price(symbol, entry * (1 + offset_bps/10000.0), flt)
+        be_px = _quantize_price(symbol, entry * (1 + offset_bps / 10000.0), flt)
         opp = "SELL"
     else:
-        be_px = _quantize_price(symbol, entry * (1 - offset_bps/10000.0), flt)
+        be_px = _quantize_price(symbol, entry * (1 - offset_bps / 10000.0), flt)
         opp = "BUY"
 
-    _cancel_open_conditional(client, symbol, kinds=("STOP","TRAILING_STOP_MARKET"))
+    _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
     order = client.futures_create_order(
         symbol=symbol,
         side=opp,
         type="STOP_MARKET",
         stopPrice=be_px,
         closePosition=True,
-        workingType=os.getenv("BINANCE_WORKING_TYPE","MARK_PRICE"),
+        workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
         newClientOrderId=_build_client_order_id(symbol, opp, role="BE"),
     )
-    out = {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "be_price": be_px, "orderId": order.get("orderId")}
-    if GUARD_ENSURE_AFTER_OPS:
-        with suppress(Exception):
-            ensure_protective_stop(symbol, prefer_mode="native")
+    out = {
+        "ok": True,
+        "symbol": symbol,
+        "pos_side": side,
+        "qty": abs_qty,
+        "entry": entry,
+        "be_price": be_px,
+        "orderId": order.get("orderId"),
+    }
     return out
 
-# =========================
-# Trail
-# =========================
-@router.post("/trail", summary="Enable/refresh trailing SL (TRAILING_STOP_MARKET reduceOnly quantity)")
-def trail(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
-    _require_bearer(Authorization)
-    symbol = (payload.get("symbol") or "").upper()
-    cb = payload.get("callbackRate") or payload.get("callback_rate") or payload.get("callback_rate_pct")
-    atr_mult = payload.get("atr_mult")
-    if not symbol:
-        raise HTTPException(status_code=422, detail="symbol required")
-
-    cb_min = float(os.getenv("TRAIL_CALLBACK_MIN_PCT","0.1"))
-    cb_max = float(os.getenv("TRAIL_CALLBACK_MAX_PCT","4.9"))
-
-    client = _get_client()
+def _trail_impl(client, *, symbol: str, callbackRate: Optional[float], atr_mult: Optional[float]) -> Dict[str, Any]:
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
     last = _last_price(symbol)
@@ -248,6 +239,10 @@ def trail(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = He
     if not ok:
         return {"ok": False, "reason": why, "skipped": "trail"}
 
+    cb_min = float(os.getenv("TRAIL_CALLBACK_MIN_PCT", "0.1"))
+    cb_max = float(os.getenv("TRAIL_CALLBACK_MAX_PCT", "4.9"))
+
+    cb = callbackRate
     if cb is None:
         try:
             if atr_mult:
@@ -257,7 +252,7 @@ def trail(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = He
                     from math import fabs
                     for i in range(1, len(kl)):
                         h = float(kl[i][2]); l = float(kl[i][3]); pc = float(kl[i-1][4])
-                        trs.append(max(h-l, fabs(h-pc), fabs(l-pc)))
+                        trs.append(max(h - l, fabs(h - pc), fabs(l - pc)))
                     atr = (sum(trs[-14:]) / 14.0) if len(trs) >= 14 else 0.0
                 pct = (atr * float(atr_mult) / last * 100.0) if (last and atr) else 1.0
             else:
@@ -269,15 +264,13 @@ def trail(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = He
         cb = max(cb_min, min(cb_max, float(cb)))
 
     opp = "SELL" if side == "BUY" else "BUY"
-    client = _get_client()
-    _align_position_mode(client)
     flt = _get_filters(client, symbol)
 
-    _cancel_open_conditional(client, symbol, kinds=("STOP","TRAILING_STOP_MARKET"))
+    _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
 
     qty = _quantize_qty(symbol, abs_qty, flt)
     if qty <= 0:
-        raise HTTPException(status_code=409, detail="trail qty rounds to zero")
+        return {"ok": False, "error": "trail qty rounds to zero"}
 
     order = client.futures_create_order(
         symbol=symbol,
@@ -287,12 +280,99 @@ def trail(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = He
         quantity=qty,
         reduceOnly=True,
         newClientOrderId=_build_client_order_id(symbol, opp, role="TRAIL"),
-        workingType=os.getenv("BINANCE_WORKING_TYPE","MARK_PRICE"),
+        workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
     )
-    out = {"ok": True, "symbol": symbol, "pos_side": side, "qty": qty, "entry": entry, "callbackRate": float(cb), "orderId": order.get("orderId")}
-    if GUARD_ENSURE_AFTER_OPS:
-        with suppress(Exception):
-            ensure_protective_stop(symbol, prefer_mode="native")
+    out = {
+        "ok": True,
+        "symbol": symbol,
+        "pos_side": side,
+        "qty": qty,
+        "entry": entry,
+        "callbackRate": float(cb),
+        "orderId": order.get("orderId"),
+    }
+    return out
+
+def _tp_ladder_impl(client, *, symbol: str, pcts: List[float], splits: List[float]) -> Dict[str, Any]:
+    _align_position_mode(client)
+    side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    last = _last_price(symbol)
+    flt = _get_filters(client, symbol)
+    opp = "SELL" if side == "BUY" else "BUY"
+
+    # Cancel existing TPs
+    for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
+        typ = (o.get("type") or "").upper()
+        if "TAKE_PROFIT" in typ:
+            with suppress(Exception):
+                client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
+
+    placed = []
+    for i, (pct, split) in enumerate(zip(pcts, splits), start=1):
+        q_raw = abs_qty * float(split)
+        q = _quantize_qty(symbol, q_raw, flt)
+        if q <= 0:
+            continue
+        if side == "BUY":
+            trig = _quantize_price(symbol, last * (1.0 + float(pct) / 100.0), flt)
+        else:
+            trig = _quantize_price(symbol, last * (1.0 - float(pct) / 100.0), flt)
+
+        order = client.futures_create_order(
+            symbol=symbol,
+            side=opp,
+            type="TAKE_PROFIT_MARKET",
+            stopPrice=trig,
+            quantity=q,
+            reduceOnly=True,
+            timeInForce="GTC",
+            newClientOrderId=_build_client_order_id(symbol, opp, role=f"TP{i}"),
+            workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+        )
+        placed.append({"i": i, "pct": float(pct), "split": float(split), "qty": q, "stop": trig, "orderId": order.get("orderId")})
+
+    result = {
+        "ok": True,
+        "symbol": symbol,
+        "side": side,
+        "qty": abs_qty,
+        "entry": entry,
+        "built": len(placed),
+        "orders": placed,
+    }
+    return result
+
+# =========================
+# BE (route)
+# =========================
+@router.post("/be", summary="Move SL to BE ± offset_bps (STOP_MARKET closePosition)")
+def be(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
+    _require_bearer(Authorization)
+    symbol = (payload.get("symbol") or "").upper()
+    offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS") or 8)
+    if not symbol:
+        raise HTTPException(status_code=422, detail="symbol required")
+
+    client = _get_client()
+    out = _be_impl(client, symbol=symbol, offset_bps=offset_bps)
+    _ensure_guard(symbol, prefer_mode="native")
+    return out
+
+# =========================
+# Trail (route)
+# =========================
+@router.post("/trail", summary="Enable/refresh trailing SL (TRAILING_STOP_MARKET reduceOnly quantity)")
+def trail(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
+    _require_bearer(Authorization)
+    symbol = (payload.get("symbol") or "").upper()
+    cb = payload.get("callbackRate") or payload.get("callback_rate") or payload.get("callback_rate_pct")
+    atr_mult = payload.get("atr_mult")
+    if not symbol:
+        raise HTTPException(status_code=422, detail="symbol required")
+
+    client = _get_client()
+    out = _trail_impl(client, symbol=symbol, callbackRate=cb, atr_mult=atr_mult)
+    _ensure_guard(symbol, prefer_mode="native")
     return out
 
 # =========================
@@ -314,7 +394,7 @@ def sl_move(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = 
     opp = "SELL" if side == "BUY" else "BUY"
     px = _quantize_price(symbol, price, flt)
 
-    _cancel_open_conditional(client, symbol, kinds=("STOP","TRAILING_STOP_MARKET"))
+    _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
     order = client.futures_create_order(
         symbol=symbol,
         side=opp,
@@ -322,71 +402,30 @@ def sl_move(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = 
         stopPrice=px,
         closePosition=True,
         newClientOrderId=_build_client_order_id(symbol, opp, role="SL"),
-        workingType=os.getenv("BINANCE_WORKING_TYPE","MARK_PRICE"),
+        workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
     )
     res = {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "sl_price": px, "orderId": order.get("orderId")}
-    if GUARD_ENSURE_AFTER_OPS:
-        with suppress(Exception):
-            ensure_protective_stop(symbol, prefer_mode="native")
+    _ensure_guard(symbol, prefer_mode="native")
     return res
 
 # =========================
-# TP Ladder
+# TP Ladder (route)
 # =========================
 @router.post("/tp/ladder", summary="Create/refresh TP ladder (TAKE_PROFIT_MARKET reduce-only partials)")
 def tp_ladder(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
     _require_bearer(Authorization)
     symbol = (payload.get("symbol") or "").upper()
-    pcts: List[float] = payload.get("pcts") or [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_PCTS","1.8,3.2,5.5").split(","))]
-    splits: List[float] = payload.get("splits") or [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_SPLITS","0.4,0.35,0.25").split(","))]
+    pcts: List[float] = payload.get("pcts") or [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5").split(","))]
+    splits: List[float] = payload.get("splits") or [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25").split(","))]
     if not symbol:
         raise HTTPException(status_code=422, detail="symbol required")
     if not pcts or not splits or len(pcts) != len(splits):
         raise HTTPException(status_code=422, detail="pcts and splits must be same length")
 
     client = _get_client()
-    _align_position_mode(client)
-    side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
-    last = _last_price(symbol)
-    flt = _get_filters(client, symbol)
-
-    opp = "SELL" if side == "BUY" else "BUY"
-
-    for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
-        typ = (o.get("type") or "").upper()
-        if "TAKE_PROFIT" in typ:
-            with suppress(Exception):
-                client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
-
-    placed = []
-    for i, (pct, split) in enumerate(zip(pcts, splits), start=1):
-        q_raw = abs_qty * float(split)
-        q = _quantize_qty(symbol, q_raw, flt)
-        if q <= 0:
-            continue
-        if side == "BUY":
-            trig = _quantize_price(symbol, last * (1.0 + float(pct)/100.0), flt)
-        else:
-            trig = _quantize_price(symbol, last * (1.0 - float(pct)/100.0), flt)
-
-        order = client.futures_create_order(
-            symbol=symbol,
-            side=opp,
-            type="TAKE_PROFIT_MARKET",
-            stopPrice=trig,
-            quantity=q,
-            reduceOnly=True,
-            timeInForce="GTC",
-            newClientOrderId=_build_client_order_id(symbol, opp, role=f"TP{i}"),
-            workingType=os.getenv("BINANCE_WORKING_TYPE","MARK_PRICE"),
-        )
-        placed.append({"i": i, "pct": float(pct), "split": float(split), "qty": q, "stop": trig, "orderId": order.get("orderId")})
-
-    result = {"ok": True, "symbol": symbol, "side": side, "qty": abs_qty, "entry": entry, "built": len(placed), "orders": placed}
-    if GUARD_ENSURE_AFTER_OPS:
-        with suppress(Exception):
-            ensure_protective_stop(symbol, prefer_mode="native")
-    return result
+    out = _tp_ladder_impl(client, symbol=symbol, pcts=pcts, splits=splits)
+    _ensure_guard(symbol, prefer_mode="native")
+    return out
 
 # =========================
 # TP יחיד
@@ -417,7 +456,7 @@ def tp_one(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = H
         trig = _quantize_price(symbol, float(price), flt)
     else:
         pct = float(pct)
-        trig = _quantize_price(symbol, (last * (1.0 + pct/100.0)) if side == "BUY" else (last * (1.0 - pct/100.0)), flt)
+        trig = _quantize_price(symbol, (last * (1.0 + pct / 100.0)) if side == "BUY" else (last * (1.0 - pct / 100.0)), flt)
 
     qty = _quantize_qty(symbol, abs_qty, flt)
     if qty <= 0:
@@ -432,12 +471,10 @@ def tp_one(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = H
         reduceOnly=True,
         timeInForce="GTC",
         newClientOrderId=_build_client_order_id(symbol, opp, role="TP1"),
-        workingType=os.getenv("BINANCE_WORKING_TYPE","MARK_PRICE"),
+        workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
     )
     res = {"ok": True, "symbol": symbol, "side": side, "qty": qty, "entry": entry, "stop": trig, "orderId": order.get("orderId")}
-    if GUARD_ENSURE_AFTER_OPS:
-        with suppress(Exception):
-            ensure_protective_stop(symbol, prefer_mode="native")
+    _ensure_guard(symbol, prefer_mode="native")
     return res
 
 # =========================
@@ -457,9 +494,7 @@ def tp_cancel(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] 
             with suppress(Exception):
                 client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
                 n += 1
-    if GUARD_ENSURE_AFTER_OPS:
-        with suppress(Exception):
-            ensure_protective_stop(symbol, prefer_mode="native")
+    _ensure_guard(symbol, prefer_mode="native")
     return {"ok": True, "symbol": symbol, "cancelled": n}
 
 # =========================
@@ -492,9 +527,7 @@ def close_fraction(payload: Dict[str, Any] = Body(...), Authorization: Optional[
         reduceOnly=True,
         newClientOrderId=_build_client_order_id(symbol, opp, role="CLOSE"),
     )
-    if GUARD_ENSURE_AFTER_OPS:
-        with suppress(Exception):
-            ensure_protective_stop(symbol, prefer_mode="native")
+    _ensure_guard(symbol, prefer_mode="native")
     return {"ok": True, "symbol": symbol, "fraction": fraction, "qty_closed": qty, "orderId": order.get("orderId")}
 
 # =========================
@@ -504,7 +537,7 @@ def close_fraction(payload: Dict[str, Any] = Body(...), Authorization: Optional[
 def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
     _require_bearer(Authorization)
     symbol = (payload.get("symbol") or "").upper()
-    do = payload.get("do") or ["be","trail","tp_ladder"]
+    do = payload.get("do") or ["be", "trail", "tp_ladder"]
     offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS") or 8)
     callbackRate = payload.get("callbackRate")
     pcts = payload.get("pcts")
@@ -518,12 +551,11 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
     client = _get_client()
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
-
     allow_be_trail, reason = _gate_be_trail(client, symbol, side, entry)
 
     try:
         if "be" in do and allow_be_trail:
-            out["steps"]["be"] = be({"symbol": symbol, "offset_bps": offset_bps})
+            out["steps"]["be"] = _be_impl(client, symbol=symbol, offset_bps=offset_bps)
         elif "be" in do and not allow_be_trail:
             out["steps"]["be"] = {"ok": False, "reason": reason, "skipped": "be"}
     except Exception as e:
@@ -532,12 +564,7 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
 
     try:
         if "trail" in do and allow_be_trail:
-            body = {"symbol": symbol}
-            if callbackRate is not None:
-                body["callbackRate"] = callbackRate
-            if atr_mult is not None:
-                body["atr_mult"] = atr_mult
-            out["steps"]["trail"] = trail(body)
+            out["steps"]["trail"] = _trail_impl(client, symbol=symbol, callbackRate=callbackRate, atr_mult=atr_mult)
         elif "trail" in do and not allow_be_trail:
             out["steps"]["trail"] = {"ok": False, "reason": reason, "skipped": "trail"}
     except Exception as e:
@@ -546,18 +573,17 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
 
     try:
         if "tp_ladder" in do:
-            body = {"symbol": symbol}
-            if pcts is not None: body["pcts"] = pcts
-            if splits is not None: body["splits"] = splits
-            out["steps"]["tp_ladder"] = tp_ladder(body)
+            # default pcts/splits if not provided
+            if pcts is None:
+                pcts = [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5").split(","))]
+            if splits is None:
+                splits = [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25").split(","))]
+            out["steps"]["tp_ladder"] = _tp_ladder_impl(client, symbol=symbol, pcts=pcts, splits=splits)
     except Exception as e:
         out["ok"] = False
         out["steps"]["tp_ladder"] = {"ok": False, "error": str(e)}
 
-    if GUARD_ENSURE_AFTER_OPS:
-        with suppress(Exception):
-            ensure_protective_stop(symbol, prefer_mode="native")
-
+    _ensure_guard(symbol, prefer_mode="native")
     return out
 
 # =========================
@@ -567,12 +593,15 @@ _SCHED_TASK: Optional[asyncio.Task] = None
 _SCHED_ACTIVE = False
 
 def _sched_should_run() -> bool:
-    return (os.getenv("AUTO_MOVE_ENABLE","0").lower() in ("1","true","yes","on"))
+    return (os.getenv("AUTO_MOVE_ENABLE", "0").lower() in ("1", "true", "yes", "on"))
 
 def _parse_csv_floats(val: Optional[str]) -> Optional[List[float]]:
-    if not val: return None
-    try: return [float(x.strip()) for x in str(val).split(",") if str(x).strip()]
-    except Exception: return None
+    if not val:
+        return None
+    try:
+        return [float(x.strip()) for x in str(val).split(",") if str(x).strip()]
+    except Exception:
+        return None
 
 async def _auto_loop(symbols: List[str], every_sec: int, steps: List[str],
                      offset_bps: int, cb_rate: Optional[float], atr_mult: Optional[float],
@@ -585,19 +614,31 @@ async def _auto_loop(symbols: List[str], every_sec: int, steps: List[str],
         for sym in symbols:
             try:
                 infos = client.futures_position_information(symbol=sym) or []
-                if not infos: continue
+                if not infos:
+                    continue
                 amt = float(infos[0].get("positionAmt") or 0.0)
-                if abs(amt) < 1e-12: continue
-                body: Dict[str, Any] = {"symbol": sym, "do": steps}
-                body["offset_bps"] = offset_bps
-                if cb_rate is not None: body["callbackRate"] = cb_rate
-                if atr_mult is not None: body["atr_mult"] = atr_mult
-                if pcts is not None: body["pcts"] = pcts
-                if splits is not None: body["splits"] = splits
-                try:
-                    manage_once(body)
-                except Exception as e:
-                    logger.warning("auto_loop.manage_once_failed %s: %s", sym, e)
+                if abs(amt) < 1e-12:
+                    continue
+                body_steps: List[str] = steps
+                side, abs_qty, entry = _fetch_position_side_qty_entry(client, sym)
+                allow_be_trail, reason = _gate_be_trail(client, sym, side, entry)
+
+                if "be" in body_steps:
+                    if allow_be_trail:
+                        _ = _be_impl(client, symbol=sym, offset_bps=offset_bps)
+                    else:
+                        logger.debug("auto be skipped %s: %s", sym, reason)
+                if "trail" in body_steps:
+                    if allow_be_trail:
+                        _ = _trail_impl(client, symbol=sym, callbackRate=cb_rate, atr_mult=atr_mult)
+                    else:
+                        logger.debug("auto trail skipped %s: %s", sym, reason)
+                if "tp_ladder" in body_steps:
+                    ppcts = pcts or _parse_csv_floats(os.getenv("SMART_MANAGE_PCTS")) or [1.8, 3.2, 5.5]
+                    psplits = splits or _parse_csv_floats(os.getenv("SMART_MANAGE_SPLITS")) or [0.4, 0.35, 0.25]
+                    _ = _tp_ladder_impl(client, symbol=sym, pcts=ppcts, splits=psplits)
+
+                _ensure_guard(sym, prefer_mode="native")
             except Exception as e:
                 logger.warning("auto_loop.symbol_failed %s: %s", sym, e)
         elapsed = time.time() - started
@@ -612,16 +653,16 @@ async def auto_start(payload: Dict[str, Any] = Body(...), Authorization: Optiona
         return {"ok": False, "error": "AUTO_MOVE_ENABLE is off"}
     symbols = [str(x).upper() for x in (payload.get("symbols") or [])]
     if not symbols:
-        wl = os.getenv("WATCHLIST","") or ""
+        wl = os.getenv("WATCHLIST", "") or ""
         symbols = [s.strip().upper() for s in wl.split(",") if s.strip()]
     if not symbols:
         raise HTTPException(status_code=422, detail="symbols required or WATCHLIST must be set")
 
-    every_sec = int(payload.get("every_sec") or os.getenv("AUTO_MOVE_EVERY_SEC","20"))
-    steps = [s.strip().lower() for s in (payload.get("steps") or (os.getenv("AUTO_MOVE_STEPS","be,trail").split(",")))]
-    offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS","8"))
+    every_sec = int(payload.get("every_sec") or os.getenv("AUTO_MOVE_EVERY_SEC", "20"))
+    steps = [s.strip().lower() for s in (payload.get("steps") or (os.getenv("AUTO_MOVE_STEPS", "be,trail").split(",")))]
+    offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS", "8"))
     cb_rate = payload.get("callbackRate")
-    atr_mult = payload.get("atr_mult") or (float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT","0") or 0) or None)
+    atr_mult = payload.get("atr_mult") or (float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None)
     pcts = payload.get("pcts") or _parse_csv_floats(os.getenv("SMART_MANAGE_PCTS"))
     splits = payload.get("splits") or _parse_csv_floats(os.getenv("SMART_MANAGE_SPLITS"))
 
@@ -643,6 +684,7 @@ async def auto_stop(Authorization: Optional[str] = Header(None)):
         with suppress(Exception):
             _SCHED_TASK.cancel()
     return {"ok": True, "status": "stopped"}
+
 
 
 
