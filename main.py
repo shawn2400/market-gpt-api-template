@@ -1111,6 +1111,50 @@ async def approve_signed(request: Request):
         record_approval_approved()
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
 
+# -------------------- Smoke: ensure SL on WATCHLIST (alert only on Emergency)
+@router.post("/guard/smoke/run", summary="Run ensure_protective_stop() on WATCHLIST. Telegram only on Emergency.")
+async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
+    # Bearer required for safety
+    _require_bearer(request)
+
+    if "ensure_protective_stop" not in globals():
+        raise HTTPException(status_code=501, detail="ensure_protective_stop() not available")
+
+    if isinstance(symbols, str) and symbols.strip():
+        sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    else:
+        sym_list = [s.strip().upper() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
+    if not sym_list:
+        raise HTTPException(status_code=400, detail="no symbols to check")
+
+    results: Dict[str, Any] = {}
+    emergencies: List[str] = []
+
+    for s in sym_list:
+        try:
+            # prefer quantities mode for protective RO STOP
+            res = ensure_protective_stop(s, prefer_mode="quantities")
+        except Exception as e:
+            res = {"ok": False, "error": str(e)}
+
+        results[s] = res
+
+        # Heuristic: consider it "Emergency" if the guard had to place a brand-new stop or convert to MARKET.
+        flag = False
+        try:
+            if isinstance(res, dict):
+                flag = bool(res.get("emergency")) or bool(res.get("placed")) or (str(res.get("action","")).lower() in ("emergency","place"))
+        except Exception:
+            pass
+        if flag:
+            emergencies.append(s)
+
+    if emergencies:
+        lines = ["🚨 <b>Smoke Guard</b> · Emergency protective SL placed", f"• Symbols: <code>{','.join(emergencies)}</code>"]
+        await _send_telegram_html("\n".join(lines))
+
+    return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
+
 @router.get("/ops/digest/expired", summary="Send Telegram digest for expired approval tickets in last N hours")
 async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     if not (aioredis and REDIS_URL and BOT_TOKEN and ADMIN_CHAT_ID):
