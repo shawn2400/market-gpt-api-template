@@ -222,7 +222,7 @@ services:
       - key: HEALTH_TP1_ENABLE
         value: "1"
       - key: HEALTH_TP1_INTERVAL_SEC
-        value: "600"
+        value: "1200"
       - key: TP1_TAGS
         value: TP1,tp1,tp_1,TAKE_PROFIT_1
       - key: HEALTH_TP1_ONLY_WITH_POSITION
