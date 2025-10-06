@@ -14,8 +14,13 @@ from fastapi import APIRouter, Body, HTTPException, Request, Header
 logger = logging.getLogger("algogpt.position_ops")
 router = APIRouter(prefix="/position-ops", tags=["position-ops"])
 
+# Guard (אופציונלי, שקט אם חסר)
+GUARD_ENSURE_AFTER_OPS = (os.getenv("GUARD_ENSURE_AFTER_OPS","1").lower() in ("1","true","yes","on"))
+with suppress(Exception):
+    from utils.guard_stop import ensure_protective_stop  # type: ignore
+
 # =========================
-# Helpers: auth (Bearer) – אם הוגדר API_BEARER_TOKEN נחייב כותרת Authorization
+# Helpers: auth (Bearer)
 # =========================
 API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
 
@@ -44,13 +49,13 @@ with suppress(Exception):
     _build_client_order_id = build_client_order_id  # override if exists
 
 # =========================
-# Quantize (מונע -1111)
+# Quantize
 # =========================
 def _fallback_filters():
     return {"price_tick": float(os.getenv("DEFAULT_PRICE_TICK", "0.01")), "qty_step": float(os.getenv("DEFAULT_QTY_STEP", "0.001"))}
 
 def _round_step(v: float, step: float) -> float:
-    if step <= 0: 
+    if step <= 0:
         return v
     return math.floor(v / step + 1e-12) * step
 
@@ -143,7 +148,7 @@ def _cancel_open_conditional(client, symbol: str, kinds=("STOP","TAKE_PROFIT","T
     return n
 
 # =========================
-# Gating: אחרי TP1 + רווח מינימלי
+# Gates (TP1/min profit)
 # =========================
 def _tp1_filled(client, symbol: str) -> bool:
     tags = [t.strip().upper() for t in (os.getenv("TP1_TAGS","TP1,tp1,tp_1,TAKE_PROFIT_1").split(","))]
@@ -214,7 +219,11 @@ def be(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Heade
         workingType=os.getenv("BINANCE_WORKING_TYPE","MARK_PRICE"),
         newClientOrderId=_build_client_order_id(symbol, opp, role="BE"),
     )
-    return {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "be_price": be_px, "orderId": order.get("orderId")}
+    out = {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "be_price": be_px, "orderId": order.get("orderId")}
+    if GUARD_ENSURE_AFTER_OPS:
+        with suppress(Exception):
+            ensure_protective_stop(symbol, prefer_mode="native")
+    return out
 
 # =========================
 # Trail
@@ -280,7 +289,11 @@ def trail(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = He
         newClientOrderId=_build_client_order_id(symbol, opp, role="TRAIL"),
         workingType=os.getenv("BINANCE_WORKING_TYPE","MARK_PRICE"),
     )
-    return {"ok": True, "symbol": symbol, "pos_side": side, "qty": qty, "entry": entry, "callbackRate": float(cb), "orderId": order.get("orderId")}
+    out = {"ok": True, "symbol": symbol, "pos_side": side, "qty": qty, "entry": entry, "callbackRate": float(cb), "orderId": order.get("orderId")}
+    if GUARD_ENSURE_AFTER_OPS:
+        with suppress(Exception):
+            ensure_protective_stop(symbol, prefer_mode="native")
+    return out
 
 # =========================
 # SL לפי מחיר
@@ -311,7 +324,11 @@ def sl_move(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = 
         newClientOrderId=_build_client_order_id(symbol, opp, role="SL"),
         workingType=os.getenv("BINANCE_WORKING_TYPE","MARK_PRICE"),
     )
-    return {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "sl_price": px, "orderId": order.get("orderId")}
+    res = {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "sl_price": px, "orderId": order.get("orderId")}
+    if GUARD_ENSURE_AFTER_OPS:
+        with suppress(Exception):
+            ensure_protective_stop(symbol, prefer_mode="native")
+    return res
 
 # =========================
 # TP Ladder
@@ -335,7 +352,6 @@ def tp_ladder(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] 
 
     opp = "SELL" if side == "BUY" else "BUY"
 
-    # מנקה רק TP קיימים לפני בנייה
     for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
         typ = (o.get("type") or "").upper()
         if "TAKE_PROFIT" in typ:
@@ -366,13 +382,14 @@ def tp_ladder(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] 
         )
         placed.append({"i": i, "pct": float(pct), "split": float(split), "qty": q, "stop": trig, "orderId": order.get("orderId")})
 
-    return {"ok": True, "symbol": symbol, "side": side, "qty": abs_qty, "entry": entry, "built": len(placed), "orders": placed}
+    result = {"ok": True, "symbol": symbol, "side": side, "qty": abs_qty, "entry": entry, "built": len(placed), "orders": placed}
+    if GUARD_ENSURE_AFTER_OPS:
+        with suppress(Exception):
+            ensure_protective_stop(symbol, prefer_mode="native")
+    return result
 
 # =========================
-# TP יחיד — בדיוק מהשורת curl שלך (/tp/one)
-#     אפשר לתת:
-#       {"symbol":"SOLUSDT","pct":2.2}    # טריגר ב-% מהמחיר האחרון
-#       {"symbol":"SOLUSDT","price":232}  # טריגר במחיר מוחלט
+# TP יחיד
 # =========================
 @router.post("/tp/one", summary="Create/refresh a single native TP (TAKE_PROFIT_MARKET reduce-only)")
 def tp_one(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
@@ -390,7 +407,6 @@ def tp_one(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = H
     flt = _get_filters(client, symbol)
     opp = "SELL" if side == "BUY" else "BUY"
 
-    # בטל TP ישנים
     for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
         typ = (o.get("type") or "").upper()
         if "TAKE_PROFIT" in typ:
@@ -401,10 +417,7 @@ def tp_one(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = H
         trig = _quantize_price(symbol, float(price), flt)
     else:
         pct = float(pct)
-        if side == "BUY":
-            trig = _quantize_price(symbol, last * (1.0 + pct/100.0), flt)
-        else:
-            trig = _quantize_price(symbol, last * (1.0 - pct/100.0), flt)
+        trig = _quantize_price(symbol, (last * (1.0 + pct/100.0)) if side == "BUY" else (last * (1.0 - pct/100.0)), flt)
 
     qty = _quantize_qty(symbol, abs_qty, flt)
     if qty <= 0:
@@ -421,7 +434,11 @@ def tp_one(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = H
         newClientOrderId=_build_client_order_id(symbol, opp, role="TP1"),
         workingType=os.getenv("BINANCE_WORKING_TYPE","MARK_PRICE"),
     )
-    return {"ok": True, "symbol": symbol, "side": side, "qty": qty, "entry": entry, "stop": trig, "orderId": order.get("orderId")}
+    res = {"ok": True, "symbol": symbol, "side": side, "qty": qty, "entry": entry, "stop": trig, "orderId": order.get("orderId")}
+    if GUARD_ENSURE_AFTER_OPS:
+        with suppress(Exception):
+            ensure_protective_stop(symbol, prefer_mode="native")
+    return res
 
 # =========================
 # ביטול כל ה-TP
@@ -440,6 +457,9 @@ def tp_cancel(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] 
             with suppress(Exception):
                 client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
                 n += 1
+    if GUARD_ENSURE_AFTER_OPS:
+        with suppress(Exception):
+            ensure_protective_stop(symbol, prefer_mode="native")
     return {"ok": True, "symbol": symbol, "cancelled": n}
 
 # =========================
@@ -472,6 +492,9 @@ def close_fraction(payload: Dict[str, Any] = Body(...), Authorization: Optional[
         reduceOnly=True,
         newClientOrderId=_build_client_order_id(symbol, opp, role="CLOSE"),
     )
+    if GUARD_ENSURE_AFTER_OPS:
+        with suppress(Exception):
+            ensure_protective_stop(symbol, prefer_mode="native")
     return {"ok": True, "symbol": symbol, "fraction": fraction, "qty_closed": qty, "orderId": order.get("orderId")}
 
 # =========================
@@ -530,6 +553,10 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
     except Exception as e:
         out["ok"] = False
         out["steps"]["tp_ladder"] = {"ok": False, "error": str(e)}
+
+    if GUARD_ENSURE_AFTER_OPS:
+        with suppress(Exception):
+            ensure_protective_stop(symbol, prefer_mode="native")
 
     return out
 
@@ -616,6 +643,7 @@ async def auto_stop(Authorization: Optional[str] = Header(None)):
         with suppress(Exception):
             _SCHED_TASK.cancel()
     return {"ok": True, "status": "stopped"}
+
 
 
 
