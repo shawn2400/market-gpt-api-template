@@ -1010,7 +1010,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         sym, side, qty = ticket.get("symbol",""), ticket.get("side",""), ticket.get("qty","")
         msg = (
             f"✅ <b>Approved</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
-            f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n• Flow: <code>{flow}</code>\n— — —\נבוצע והועבר לניהול."
+            f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n• Flow: <code>{flow}</code>\n— — —\nבוצע והועבר לניהול."
             if ok else
             f"⚠️ <b>Approve Failed</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
             f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n• Flow: <code>{flow}</code>\n— — —\n"
@@ -1284,6 +1284,17 @@ except Exception as _e:
 
 @app.on_event("startup")
 async def _startup_tasks():
+    # --- one-shot "bot online" ping to Telegram (non-blocking) ---
+    async def _notify_bot_online():
+        try:
+            await asyncio.sleep(0.5)
+            name = os.getenv("APP_TITLE", "AlgoGPT Supervisor")
+            env  = os.getenv("ENV", os.getenv("ENVIRONMENT","prod"))
+            await _send_telegram_html(f"🟢 <b>Bot online</b> · <code>{name}</code> · env=<code>{env}</code>")
+        except Exception:
+            pass
+    asyncio.create_task(_notify_bot_online())
+
     if _health_tp1_loaded and HEALTH_TP1_ENABLE:
         watch = [s.strip() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
         if watch:
@@ -1310,6 +1321,22 @@ async def _startup_tasks():
             await asyncio.sleep(int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","20")))
     if _bool_env("MANAGER_ENABLE", True):
         asyncio.create_task(periodic_manager())
+
+    # Optional: periodic guarder to ensure SL exists on WATCHLIST positions
+    async def periodic_guarder():
+        syms = [s.strip().upper() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
+        if not syms:
+            return
+        while True:
+            try:
+                for s in syms:
+                    with suppress(Exception):
+                        ensure_protective_stop(s, prefer_mode="quantities")
+            except Exception:
+                pass
+            await asyncio.sleep(int(os.getenv("GUARDER_INTERVAL_SEC","45")))
+    if _bool_env("GUARDER_ENABLE", True):
+        asyncio.create_task(periodic_guarder())
 
 @app.get("/health/tp1", tags=["meta"])
 async def health_tp1_now(symbols: Optional[str] = Query(None, description="CSV of symbols; default from WATCHLIST")):
