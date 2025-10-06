@@ -19,15 +19,27 @@ services:
         value: "120"
       - key: LOG_LEVEL
         value: "INFO"
+      - key: APP_MODULE
+        value: main:app
+      - key: PYTHONPATH
+        value: /app
 
       # --- Base URL ---
       - key: PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
+      - key: CONTEXT_URL
+        value: https://algogpt-docker.onrender.com
+      - key: WEBHOOK_HOST
+        value: https://algogpt-docker.onrender.com
 
       # --- Auth / Secrets (להזין בדשבורד) ---
-      - key: API_KEY
-        sync: false
       - key: API_BEARER_TOKEN
+        sync: false
+      - key: API_TOKEN
+        sync: false
+      - key: PRIMARY_API_TOKEN
+        sync: false
+      - key: OPS_SIGN_SECRET
         sync: false
       - key: REDIS_URL
         sync: false
@@ -44,72 +56,53 @@ services:
       - key: ALERTS_INGEST_HMAC_SECRET
         sync: false
 
-      # === SAFETY MUST-HAVE (נוסף/מעודכן) ===
+      # === SAFETY MUST-HAVE ===
       - key: GUARD_ENSURE_SL
         value: "1"
       - key: GUARD_SL_GRACE_SEC
         value: "2"
       - key: STRICT_MODE_SINGLE
         value: "1"
-      # מוד יחיד: Quantities (אל תערבב Native)
       - key: USE_NATIVE_TP_SL
         value: "0"
       - key: ALLOW_REVERSE_TRADES
         value: "0"
       - key: REVERSE_COOLDOWN_SEC
         value: "120"
-      - key: ORD_ATOMIC_UPDATE
-        value: "1"
-      - key: ORD_VERIFY_TIMEOUT_MS
-        value: "800"
-      - key: ORD_CANCEL_STRATEGY
-        value: MINIMAL
       - key: ENFORCE_QTY_BOUNDS
         value: "1"
       - key: STOP_WORKING_TYPE
         value: MARK_PRICE
       - key: HEALTH_TP_GRACE_SEC
         value: "8"
-
-      # אופציונלי אבל מומלץ לייצוב:
-      - key: TP_BE_ONLY_AFTER_TP1
-        value: "1"
-      - key: SMART_MANAGE_AFTER_TP1
-        value: "1"
-      - key: TRAIL_MIN_PROFIT_PCT
-        value: "0.7"
-      - key: BINANCE_WORKING_TYPE
-        value: MARK_PRICE
-      - key: USE_EXCHANGE_FILTERS
-        value: "1"
-      - key: ORDER_ROUND_TO_TICK
+      - key: PRICE_PROTECT
         value: "1"
 
-      # --- SL/Trail tuning שנוספו ---
-      - key: SL_MONOTONIC
+      # --- Orders / Verify / Cancel ---
+      - key: ORD_ATOMIC_UPDATE
         value: "1"
-      - key: LADDER_SL_DEFAULT_PCTS
-        value: "1.2"
-      - key: BE_BUFFER_USDT
-        value: "0.03"
-      - key: ATR_UPDATE_COOLDOWN_SEC
-        value: "20"
-      - key: ATR_MIN_DELTA
-        value: "0.02"
-
-      # --- יציבות/רטריי שנוספו ---
-      - key: COALESCE_WINDOW_MS
-        value: "1500"
-      - key: RETRY_MAX
-        value: "3"
-      - key: RETRY_BASE_MS
-        value: "500"
-      - key: RETRY_JITTER
+      - key: ORD_VERIFY_TIMEOUT_MS
+        value: "800"
+      - key: ORD_CANCEL_STRATEGY
+        value: MINIMAL
+      - key: ORDER_ID_PREFIX
+        value: ALG
+      - key: ORDER_ID_INCLUDE_TS
         value: "1"
-      - key: REST_COOLDOWN_SEC
-        value: "6"
+      - key: ORDERS_USE_OCO
+        value: "1"
+      - key: ORDER_BACKOFF_BASE_MS
+        value: "120"
+      - key: ORDER_BACKOFF_MAX_MS
+        value: "1600"
+      - key: ORDERS_BUCKET_WINDOW_SEC
+        value: "10"
+      - key: ORDERS_QPS_BUCKET
+        value: "8"
 
       # --- Redis client ---
+      - key: USE_REDIS_IDEM
+        value: "1"
       - key: REDIS_CONNECT_TIMEOUT
         value: "5.0"
       - key: REDIS_SOCKET_TIMEOUT
@@ -138,8 +131,6 @@ services:
         value: "0"
       - key: RATE_LIMIT_BACKEND
         value: redis
-      - key: USE_REDIS_IDEM
-        value: "1"
 
       # --- Market / Exchange defaults ---
       - key: DEFAULT_MARKET
@@ -156,6 +147,20 @@ services:
         value: https://api.binance.com
       - key: BINANCE_TESTNET
         value: "false"
+      - key: BINANCE_WORKING_TYPE
+        value: MARK_PRICE
+      - key: BINANCE_HTTP_TIMEOUT
+        value: "10.0"
+      - key: BINANCE_MAX_RETRIES
+        value: "2"
+      - key: BINANCE_RECV_WINDOW
+        value: "45000"
+      - key: LISTENKEY_KEEPALIVE_SEC
+        value: "1800"
+      - key: WS_KEEPALIVE_SEC
+        value: "25"
+      - key: USE_WS
+        value: "1"
 
       # --- Scanner / Universe ---
       - key: SCAN_SOURCE
@@ -164,20 +169,6 @@ services:
         value: exchange
       - key: SCAN_INTERVALS
         value: 5m,15m,1h,4h
-
-      # --- Indicator context ---
-      - key: INDICATOR_INTERVALS
-        value: 15m,1h,4h,1d
-
-      # --- Allowlist / Watchlist ---
-      - key: ALLOWLIST_MODE
-        value: off
-      - key: SYMBOLS_ALLOWLIST_PATH
-        value: config/symbols_allowlist.json
-      - key: WATCHLIST
-        value: BTCUSDT,ETHUSDT,SOLUSDT
-
-      # --- Scanner caps & RL ---
       - key: SCAN_MAX_SYMBOLS
         value: "150"
       - key: SCAN_MAX_LIMIT
@@ -186,10 +177,22 @@ services:
         value: "4"
       - key: TOP_SYMBOLS
         value: "150"
-      - key: SCAN_RL_LIMIT
-        value: "120"
-      - key: SCAN_RL_WINDOW
-        value: "60"
+
+      # --- Indicator context ---
+      - key: INDICATOR_INTERVALS
+        value: 15m,1h,4h,1d
+      - key: ENABLE_INDICATOR_EXIT
+        value: "1"
+      - key: ADX_MIN
+        value: "18"
+
+      # --- Allowlist / Watchlist ---
+      - key: ALLOWLIST_MODE
+        value: off
+      - key: SYMBOLS_ALLOWLIST_PATH
+        value: config/symbols_allowlist.json
+      - key: WATCHLIST
+        value: BTCUSDT,ETHUSDT,SOLUSDT
 
       # --- Approvals / Telegram routing ---
       - key: APPROVAL_ENABLED
@@ -216,8 +219,14 @@ services:
         value: "1"
       - key: ALLOW_MARKET_ENTRY
         value: "1"
+      - key: NATIVE_TPSL_ENABLE
+        value: "0"
+      - key: MANAGER_WRITES_ORDERS
+        value: "1"
+      - key: ORDERS_USE_OCO
+        value: "1"
 
-      # >>> Auto-Qty (חדש/מתוקנן)
+      # >>> Auto-Qty
       - key: AUTO_QTY_ENABLE
         value: "1"
       - key: AUTO_QTY_BUDGET_USDT
@@ -226,19 +235,20 @@ services:
         value: "7"
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
         value: "0.35"
+      - key: MIN_NOTIONAL_USDT
+        value: "5"
+      - key: MAX_TRADE_BUDGET
+        value: "30"
 
-      # ⚠ חשוב: Quantities בלבד – לא להשתמש ב-Native TP/SL
-      - key: NATIVE_TPSL_ENABLE
-        value: "0"
-
-      - key: ORDERS_USE_OCO
+      # --- SL/Trail / BE / Laddering ---
+      - key: SL_MONOTONIC
         value: "1"
-      - key: MANAGER_WRITES_ORDERS
+      - key: BE_BUFFER_USDT
+        value: "0.03"
+      - key: TP_BE_ONLY_AFTER_TP1
         value: "1"
-      - key: TRAIL_ENABLE
+      - key: STREAM_TP_BE
         value: "1"
-      - key: TRAIL_ATR_MULT
-        value: "1.5"
       - key: TP_LADDER_ON_APPROVE
         value: "1"
       - key: LADDER_TP_ENABLE
@@ -251,7 +261,31 @@ services:
         value: "1"
       - key: LADDER_SL_DEFAULT_PCTS
         value: "1.2"
-      - key: STREAM_TP_BE
+      - key: TP_MAX_LADDERS
+        value: "3"
+      - key: TRAIL_ENABLE
+        value: "1"
+      - key: TRAIL_ATR_MULT
+        value: "1.5"
+      - key: ATR_UPDATE_COOLDOWN_SEC
+        value: "20"
+      - key: ATR_MIN_DELTA
+        value: "0.02"
+
+      # --- יציבות/רטריי ---
+      - key: COALESCE_WINDOW_MS
+        value: "1500"
+      - key: RETRY_MAX
+        value: "3"
+      - key: RETRY_BASE_MS
+        value: "500"
+      - key: RETRY_JITTER
+        value: "1"
+      - key: REST_COOLDOWN_SEC
+        value: "6"
+      - key: USE_EXCHANGE_FILTERS
+        value: "1"
+      - key: ORDER_ROUND_TO_TICK
         value: "1"
 
       # --- Smart-Manage ---
@@ -266,16 +300,6 @@ services:
       - key: SMART_MANAGE_TRAIL_ATR_MULT
         value: "1.5"
 
-      # --- Hardening ---
-      - key: HYBRID_HARD_CANCEL_ENABLE
-        value: "1"
-      - key: HYBRID_CANCEL_CONFIRM_TRIES
-        value: "4"
-      - key: HYBRID_CANCEL_CONFIRM_SLEEP_MS
-        value: "200"
-      - key: ARM_VERIFY_DISABLE
-        value: "0"
-
       # --- Health TP1 ---
       - key: HEALTH_TP1_ENABLE
         value: "1"
@@ -286,89 +310,49 @@ services:
       - key: HEALTH_TP1_ONLY_WITH_POSITION
         value: "1"
 
-      # --- Notifications / Reports ---
-      - key: NOTIFY_OPEN
-        value: "true"
-      - key: NOTIFY_APPROVED
-        value: "true"
-      - key: NOTIFY_FILLED
-        value: "true"
-      - key: NOTIFY_TP_HIT
-        value: "true"
-      - key: NOTIFY_SL_HIT
-        value: "true"
-      - key: NOTIFY_TRAIL_MOVE
-        value: "true"
-      - key: NOTIFY_BREAKEVEN
-        value: "true"
-      - key: NOTIFY_PARTIAL_CLOSE
-        value: "true"
-      - key: NOTIFY_FINAL_REPORT
-        value: "true"
-      - key: FINAL_REPORT_TELEGRAM
-        value: "true"
-      - key: PNL_TRACKING
-        value: "true"
-      - key: METRICS_ENABLE
-        value: "true"
-
-      # --- Manager / Scheduler ---
-      - key: MANAGER_ENABLE
-        value: "1"
-      - key: MANAGER_INTERVAL_SEC
-        value: "10"
-      - key: TRADE_MANAGER_ENABLE
-        value: "1"
-      - key: TRADE_MANAGER_INTERVAL_SEC
-        value: "20"
-      - key: AI_SCHED_ENABLE
-        value: "1"
-      - key: AI_SCHED_INTERVAL_SEC
-        value: "300"
-
-      # --- Digest Job ---
-      - key: OPS_DIGEST_ENABLE
-        value: "1"
+      # --- Digest / Ops ---
+      - key: OPS_TICKET_TTL_SEC
+        value: "1800"
       - key: OPS_DIGEST_INTERVAL_HOURS
         value: "3"
-      - key: OPS_DIGEST_BACKOFF_ON_ERROR_SEC
-        value: "15"
-      - key: OPS_DIGEST_RUN_IMMEDIATE
-        value: "0"
-      - key: OPS_DIGEST_LOOKBACK_HOURS
-        value: "3"
+
+      # --- ETA / Velocity ---
+      - key: ETA_SMART_ENABLE
+        value: "1"
+      - key: ETA_VELOCITY_WINDOW
+        value: "30"
+      - key: DEFAULT_INTERVAL
+        value: 1m
+
+      # --- Risk / Caps ---
+      - key: DAILY_LOSS_CAP_USDT
+        value: "150"
+      - key: KILL_ON_CAP
+        value: "1"
+      - key: NO_PROGRESS_TIMEOUT_MIN
+        value: "30"
+
+      # --- Security public paths ---
+      - key: SECURITY_PUBLIC_PATHS
+        value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/scan/top-volume,/topk
+      - key: SECURITY_PUBLIC_PREFIXES
+        value: /public,/price,/static,/risk
 
       # --- OpenAPI include (רשות) ---
       - key: OPENAPI_INCLUDE_TAGS
         value: "Status,Public Feed,Price,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest"
 
-      # --- Alerts endpoints ---
-      - key: ALERTS_INGEST_URL
-        value: https://algogpt-docker.onrender.com/alerts/ingest
-      - key: ALERTS_ANALYSIS_URL
-        value: https://algogpt-docker.onrender.com/alerts/ingest
-
-      # --- Security public paths (כולל החדשים) ---
-      - key: SECURITY_PUBLIC_PATHS
-        value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/scan/top-volume,/topk
-
-      # --- Misc חדשים שביקשת ---
-      - key: TP_MAX_LADDERS
-        value: "3"
-      - key: ENABLE_INDICATOR_EXIT
+      # --- Misc (מועבר מהבקשה שלך) ---
+      - key: AI_SCHED_ENABLE
         value: "1"
-      - key: ADX_MIN
-        value: "18"
-      - key: NO_PROGRESS_TIMEOUT_MIN
-        value: "30"
-      - key: DAILY_LOSS_CAP_USDT
-        value: "150"
-      - key: KILL_ON_CAP
-        value: "1"
-      - key: PRICE_PROTECT
-        value: "1"
-      - key: USE_WS
-        value: "1"
+      - key: AI_SCHED_INTERVAL_SEC
+        value: "60"
+      - key: SUCCESS_WARN_PCT
+        value: "60"
+      - key: PNL_TRACKING
+        value: "true"
+      - key: METRICS_ENABLE
+        value: "true"
 
 
 
