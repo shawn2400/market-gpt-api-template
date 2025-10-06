@@ -16,13 +16,11 @@ from utils.trade_execution_core import (
 log = logging.getLogger("algogpt.guard_stop")
 
 def _position_snapshot(sym: str) -> Dict[str, Any]:
-    """קורא את מצב הפוזיציה מה־Futures. מחזיר side ('BUY'/'SELL'/None), qty>0, entry_price>0 אם קיימת."""
+    """מצב פוזיציה מה־Futures. מחזיר side ('BUY'/'SELL'/None), qty>0, entry_price>0 אם קיימת."""
     cli = get_futures_client()
     info = cli.futures_position_information(symbol=sym.upper())
     if not info:
         return {"has_position": False}
-    # Binance לעיתים מחזיר מערך אחד (One-way) או שניים (Hedge: LONG/SHORT).
-    # נעדיף את זו עם abs(positionAmt) הכי גדולה.
     best = None
     for row in info:
         try:
@@ -41,7 +39,7 @@ def _position_snapshot(sym: str) -> Dict[str, Any]:
     return {"has_position": True, "side": side, "qty": abs(amt), "entry_price": entry}
 
 def _has_open_stop(sym: str) -> bool:
-    """בודק אם כבר יש STOP פתוח רלוונטי (NEW / PARTIALLY_FILLED)."""
+    """בודק אם כבר יש STOP/TRAIL פתוח רלוונטי (NEW / PARTIALLY_FILLED)."""
     try:
         lst = get_all_orders(sym, limit=50) or []
         for o in lst:
@@ -54,7 +52,7 @@ def _has_open_stop(sym: str) -> bool:
     return False
 
 def _cancel_open_stops(sym: str) -> int:
-    """מבטל כל STOP/TRAILING_STOP פתוחים. זהיר – מבטל רק מצבים NEW/PARTIALLY_FILLED."""
+    """מבטל כל STOP/TRAILING_STOP פתוחים (לפי צורך)."""
     cnt = 0
     try:
         lst = get_all_orders(sym, limit=50) or []
@@ -75,7 +73,7 @@ def ensure_protective_stop(symbol: str, *, prefer_mode: str = "quantities", be_o
     prefer_mode:
       - "quantities": מגדיר כמות לפי positionAmt בפועל.
       - "flat": אם לא מוצא פוזיציה/כמות – לא עושה כלום (שקט).
-    be_offset_bps: מיקום SL סביב מחיר כניסה (BE+/-).
+    be_offset_bps: מיקום SL סביב מחיר כניסה (BE±offset).
     """
     sym = symbol.upper().strip()
     snap = _position_snapshot(sym)
@@ -89,18 +87,14 @@ def ensure_protective_stop(symbol: str, *, prefer_mode: str = "quantities", be_o
     if qty <= 0:
         return {"ok": True, "skipped": True, "reason": "zero_qty"}
 
-    # אם כבר יש STOP פתוח — לא נוגעים (זהירות כפילויות).
+    # אם כבר יש STOP פתוח — לא נוגעים (מניעת כפילות).
     if _has_open_stop(sym):
         return {"ok": True, "skipped": True, "reason": "existing_stop"}
 
-    # מחשב מחיר BE±offset, ואז מציב STOP_MARKET reduceOnly בכמות מלאה.
     close_side = _close_side_for(side)
-    # אם אין entry_px (קצה נדיר) — נשתמש בהסטת STOP_BAND_BPS נגד הכיוון (שמרני).
     if entry_px and entry_px > 0:
         be_px = _offset_bps(entry_px, (+be_offset_bps if side=="BUY" else -be_offset_bps), +1)
     else:
-        # Fallback: stop מעט מעבר למחיר נוכחי הידוע למערכת (אין כאן קריאה ל־mark).
-        # שמרני – פשוט נגד הכיוון הנכון:
         be_px = _offset_bps(1.0, (-STOP_BAND_BPS if side=="BUY" else +STOP_BAND_BPS), +1)
 
     stop_str, _ = _q_price(sym, float(be_px))
@@ -117,7 +111,6 @@ def ensure_protective_stop(symbol: str, *, prefer_mode: str = "quantities", be_o
         newClientOrderId=f"{(ORDER_ID_PREFIX or 'ALG').strip()}_SL_PROTECT_{sym}_{close_side}",
     )
 
-    # במצב Hedge — positionSide נקבע לפי כיוון הסגירה (הפוך מהכניסה)
     eff_ps = _effective_position_side("LONG" if side=="SELL" else "SHORT")
     if eff_ps != "BOTH":
         args["positionSide"] = eff_ps
@@ -126,7 +119,6 @@ def ensure_protective_stop(symbol: str, *, prefer_mode: str = "quantities", be_o
         resp = futures_create_order(**args)
         return {"ok": True, "response": resp, "placed": True, "qty": float(qty), "stop": stop_str}
     except Exception as e:
-        # אם reduceOnly נכשל ב-One-way — ננסה בלי reduceOnly
         msg = str(e).lower()
         if "reduce only" in msg or "reduceonly" in msg or "-1106" in msg:
             args2 = dict(args); args2.pop("reduceOnly", None)
@@ -135,4 +127,5 @@ def ensure_protective_stop(symbol: str, *, prefer_mode: str = "quantities", be_o
                 return {"ok": True, "response": resp2, "placed": True, "qty": float(qty), "stop": stop_str, "ro_fallback": True}
         log.warning("ensure_protective_stop.failed(%s): %s", sym, e)
         return {"ok": False, "error": str(e)}
+
 
