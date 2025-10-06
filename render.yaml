@@ -44,7 +44,7 @@ services:
       - key: ALERTS_INGEST_HMAC_SECRET
         sync: false
 
-      # === SAFETY MUST-HAVE (מוסף/מעודכן) ===
+      # === SAFETY MUST-HAVE (נוסף/מעודכן) ===
       - key: GUARD_ENSURE_SL
         value: "1"
       - key: STRICT_MODE_SINGLE
@@ -197,7 +197,7 @@ services:
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
         value: "0.35"
 
-      # ⚠ חשוב: אם בחרנו Quantities – לא להשתמש ב-Native TP/SL
+      # ⚠ חשוב: Quantities בלבד – לא להשתמש ב-Native TP/SL
       - key: NATIVE_TPSL_ENABLE
         value: "0"
 
@@ -224,7 +224,7 @@ services:
       - key: STREAM_TP_BE
         value: "1"
 
-      # --- Smart-Manage: הפעלה מיידית אחרי approve + חסמים
+      # --- Smart-Manage ---
       - key: SMART_MANAGE_ON_APPROVE
         value: "1"
       - key: SMART_MANAGE_PCTS
@@ -326,13 +326,14 @@ services:
       - key: SECURITY_PUBLIC_PATHS
         value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/scan/top-volume,/topk
 
-      # --- תקני עיגול/פילטרים (לבקשתך) ---
+      # --- תקני עיגול/פילטרים (ללא כפילויות) ---
       - key: TRAIL_USE_NATIVE
         value: "0"
-      - key: ORDER_ROUND_TO_TICK
-        value: "1"
       - key: USE_EXCHANGE_FILTERS
         value: "1"
+      - key: ORDER_ROUND_TO_TICK
+        value: "1"
+
 
 
 
