@@ -94,6 +94,12 @@ app.add_middleware(
 # =================================================
 router = APIRouter(tags=["ops-approval"])
 
+
+# --- Guard import (quiet) ---
+with suppress(Exception):
+    from utils.guard_stop import ensure_protective_stop  # type: ignore
+
+
 # optional metrics (no-op fallbacks)
 def record_approval_created(): ...
 def record_approval_approved(): ...
@@ -998,7 +1004,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     if ok:
         try:
             sm = _smart_manage_env()
-            if sm["enable"]:
+            if sm["enable"]]:
                 sym = str(ticket.get("symbol","")).upper()
                 sm_result = await _smart_manage_now(sym,
                                                     offset_bps=sm["offset_bps"],
@@ -1008,6 +1014,11 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
                 logger.info("smart_manage_after_approve: %s -> %s", sym, sm_result)
         except Exception as e:
             logger.warning("smart_manage_after_approve_failed: %s", e)
+
+        # --- Ensure protective stop (Quantities mode) right after open ---
+        with suppress(Exception):
+            sym = str(ticket.get("symbol","")).upper()
+            ensure_protective_stop(sym, prefer_mode="quantities")
 
     if not ok:
         logger.warning("approve_failed: ticket=%s flow=%s detail=%s", ticket_id, flow, json.dumps(exec_res, ensure_ascii=False))
@@ -1107,6 +1118,11 @@ async def approve_signed(request: Request):
             logger.info("smart_manage_after_approve_signed: %s -> %s", sym, sm_result)
     except Exception as e:
         logger.warning("smart_manage_after_approve_signed_failed: %s", e)
+
+    # --- Ensure protective stop (Quantities mode) right after open ---
+    with suppress(Exception):
+        sym = str(payload.get("symbol","")).upper()
+        ensure_protective_stop(sym, prefer_mode="quantities")
 
     with suppress(Exception):
         record_approval_approved()
