@@ -33,6 +33,36 @@ logging.basicConfig(
 logger = logging.getLogger("algogpt.main")
 
 # =================================================
+# Inline ENV defaults (so you don't have to put them in Render/Rider)
+# =================================================
+_inline_env_defaults: Dict[str, str] = {
+    "GUARD_SL_GRACE_SEC": "2",
+    "ORD_VERIFY_TIMEOUT_MS": "800",
+    "ORD_CANCEL_STRATEGY": "MINIMAL",
+    "SL_MONOTONIC": "1",
+    "BE_BUFFER_USDT": "0.03",
+    "ATR_UPDATE_COOLDOWN_SEC": "20",
+    "ATR_MIN_DELTA": "0.02",
+    "COALESCE_WINDOW_MS": "1500",
+    "RETRY_MAX": "3",
+    "RETRY_BASE_MS": "500",
+    "RETRY_JITTER": "1",
+    "REST_COOLDOWN_SEC": "6",
+    "TP_MAX_LADDERS": "3",
+    "ENABLE_INDICATOR_EXIT": "1",
+    "ADX_MIN": "18",
+    "NO_PROGRESS_TIMEOUT_MIN": "30",
+    "DAILY_LOSS_CAP_USDT": "150",
+    "KILL_ON_CAP": "1",
+    "PRICE_PROTECT": "1",
+    "USE_WS": "1",
+    # שמרתי גם על ערך ברירת מחדל סביר ל-WS_KEEPALIVE_SEC אם תרצה להשתמש בו בהמשך
+    "WS_KEEPALIVE_SEC": "25",
+}
+for _k, _v in _inline_env_defaults.items():
+    os.environ.setdefault(_k, _v)
+
+# =================================================
 # Simple in-memory ConfirmStore (fallback)
 # =================================================
 class ConfirmStore:
@@ -1413,6 +1443,8 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+    # אם תרצה, אכין גם patch ל-Dockerfile/guarders וכו' – תגיד לי.
+
 
 
 
