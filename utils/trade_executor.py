@@ -56,10 +56,10 @@ from utils.trade_execution_core import (
     _Idem,
 )
 
-# ← מוסיף את ממשק האישור (סטאבים ב-approvals אם אין מודול מלא)
+# ← ממשק האישור (סטאבים אם חסר מודול מלא)
 from utils.approvals import ConfirmStore, send_confirm_request, require_approval  # type: ignore
 
-# ← אופציונלי: ביצוע ישיר ל-Futures בשביל יישור מצב חשבון (Hedge/One-way)
+# ← אופציונלי: Futures exec ליישור מצב חשבון
 with suppress(Exception):
     from utils.binance_futures_exec import BinanceFuturesExec  # type: ignore
 
@@ -113,10 +113,6 @@ def _coid(kind: str, sym: str, side: str) -> str:
 
 # ─────────── Align position mode helper (fix -4061) ───────────
 def _ensure_runtime_position_mode() -> None:
-    """
-    מיישר את מצב החשבון (Hedge/One-Way) מול Binance לפי POSITION_MODE_OVERRIDE אם הוגדר.
-    רץ באופן שקט; כישלון לא מפיל את הזרימה.
-    """
     mode = (os.getenv("POSITION_MODE_OVERRIDE", "") or "").strip().lower()
     if not mode:
         return
@@ -133,17 +129,15 @@ def _ensure_runtime_position_mode() -> None:
 # ─────────── Order verification helpers (for TP/SL hardening) ───────────
 def _order_matches(o: Dict[str, Any], *, typ: str, qty: str, stop: Optional[str], price: Optional[str],
                    side: str, eff_ps: str, expect_ro: bool) -> bool:
-    """בודק התאמה מינימלית לשדות מרכזיים אחרי place."""
     try:
         if str(o.get("type","")).upper() != typ: return False
         if str(o.get("side","")).upper() != side: return False
         if eff_ps != "BOTH" and str(o.get("positionSide","")).upper() != eff_ps: return False
-        if eff_ps == "BOTH" and ("positionSide" in o):  # לא אמור להיות positionSide ב-One-way
+        if eff_ps == "BOTH" and ("positionSide" in o):
             return False
         if expect_ro:
             ro = o.get("reduceOnly")
             if ro not in (True, "true", 1): return False
-        # כמויות/מחירים עוברים עיגולים — נבדוק גם float
         if qty and str(o.get("origQty") or o.get("quantity") or "") != qty:
             try:
                 if abs(float(o.get("origQty", "0")) - float(qty)) > 1e-12: return False
@@ -171,9 +165,6 @@ def _place_close_order_hardened(args: Dict[str, Any], *, sym: str, typ: str, qty
                                 side: str, eff_ps: str, expect_ro: bool,
                                 place_fn, list_fn, cancel_fn,
                                 max_retries: int = 3) -> Dict[str, Any]:
-    """
-    מציב הזמנה → מאמת ב-get_all_orders התאמה (type/side/ps/qty/stop/price/RO) → אם לא מתאים: cancel+retry.
-    """
     if ARM_VERIFY_DISABLE:
         try:
             return {"ok": True, "response": place_fn(**args)}
@@ -233,11 +224,6 @@ def _be_price_for(side: str, entry_px: float, offset_bps: float) -> float:
         return _offset_bps(entry_px, -offset_bps, +1)
 
 def _find_tp1_filled(sym: str) -> bool:
-    """
-    מזהה אם TP1 התמלאה, לפי:
-    1) תגיות מה-ENV ב-TP1_TAGS (clientOrderId/שם מכיל אחת מהן), או
-    2) ברירת מחדל: clientOrderId שמכיל/מתחיל TP1.
-    """
     try:
         lst = get_all_orders(sym, limit=50) or []
         tags = TP1_TAGS_ENV if TP1_TAGS_ENV else ["TP1"]
@@ -247,7 +233,7 @@ def _find_tp1_filled(sym: str) -> bool:
             if st != "FILLED" or not typ.startswith("TAKE_PROFIT"):
                 continue
             coi = str(o.get("clientOrderId") or "")
-            name = (o.get("origClientOrderId") or "")  # לפעמים מחזיר זה
+            name = (o.get("origClientOrderId") or "")
             s = (coi + "|" + name).upper()
             if any(tag.upper() in s for tag in tags):
                 return True
@@ -274,9 +260,6 @@ def _cancel_many(sym: str, orders: List[Dict[str, Any]]) -> None:
             futures_cancel_order(sym, str(o.get("orderId")))
 
 def _remaining_qty_hint(initial_qty: float, sym: str, side: str) -> float:
-    """
-    אומדן כמות שנותרה לאחר TP/ים שמולאו. שמרני — reduceOnly ימנע הגדלה במקרה קצה.
-    """
     try:
         lst = get_all_orders(sym, limit=50) or []
         sold = 0.0
@@ -293,9 +276,6 @@ def _remaining_qty_hint(initial_qty: float, sym: str, side: str) -> float:
 
 async def _arm_be_after_tp1(sym: str, side: str, *, entry_px: float, qty: float, position_side: str,
                             poll_sec: int = None) -> None:
-    """
-    סוקר כל BE_GUARD_EVERY_SEC: כש-TP1 מתמלאת → מבטל SL פתוחים וחומש SL חדש ב-BE±offset.
-    """
     if poll_sec is None: poll_sec = max(5, BE_GUARD_EVERY_SEC)
     await asyncio.sleep(2.0)
     while True:
@@ -403,7 +383,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
         return False, None
 
     async def _confirm_cancel(oid: str) -> bool:
-        """מאשר שביטול אכן נקלט (poll קצר על get_all_orders)."""
         tries = max(1, HYBRID_CANCEL_CONFIRM_TRIES)
         sleep_ms = max(50, HYBRID_CANCEL_CONFIRM_SLEEP_MS)
         for _ in range(tries):
@@ -426,7 +405,6 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
         stp_filled, stp_fill_px = await asyncio.to_thread(_is_filled, stp_id)
 
         if lim_filled and not stp_filled:
-            # FIX + קשיחה: כש-LIMIT מתמלא – מבטלים את ה-STOP ומאשרים ביטול
             if HYBRID_HARD_CANCEL_ENABLE:
                 with suppress(Exception): futures_cancel_order(sym, stp_id)
                 with suppress(Exception):
@@ -507,7 +485,7 @@ async def execute_trade_live(
     if not base_price or base_price <= 0:
         raise RuntimeError(f"Cannot fetch price for {sym}")
 
-    # Resolve trail flags (ticket > ENV)
+    # Resolve trail flags
     trail_enabled = bool(TRAIL_ENABLE_DEFAULT if trail is None else trail)
     trail_mult    = float(TRAIL_ATR_MULT_DEFAULT if (trail_atr_mult is None) else trail_atr_mult)
     trail_freeze_enabled = bool(TRAIL_FREEZE_ENABLE_DEF if (trail_freeze is None) else trail_freeze)
@@ -620,7 +598,6 @@ async def execute_trade_live(
             if approval.get("status") != "approved":
                 return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
 
-    # Enforce quality gate after optional pre-approval
     if os.getenv("FEAT_QUALITY_ENFORCE", "1").lower() in ("1","true","yes","on") and not gate.get("enter_ok"):
         return {"ok": False, "reason": "quality_gate_rejected", "gate": gate}
 
@@ -633,25 +610,20 @@ async def execute_trade_live(
         if approval.get("status") != "approved":
             return {"ok": False, "status": approval.get("status"), "reason": "not_approved"}
 
-    # ביטול TP/SL ישנים לפני חימוש חדשים
     _cancel_old_closing_orders(sym)
 
-    # ← מיישר מצב חשבון (Hedge/One-way) לפני שינוי מינוף/הזמנה – פותר שגיאות -4061
     with suppress(Exception):
         _ensure_runtime_position_mode()
 
-    # עדכון מינוף (לא מפיל את הזרימה אם נכשל)
     with suppress(Exception):
         set_leverage(sym, int(dyn_leverage))
 
-    # כניסה היברידית
     entry_res = await _place_hybrid_entry(sym, side, float(qty), float(base_price), entry, position_side)
     if not entry_res or (entry_res.get("ok") is False):
         await _tg_send(f"⚠️ <b>Entry failed</b>\n• {sym} {side}\n• Reason: <code>{entry_res.get('reason') if entry_res else 'entry_failed'}</code>")
         return {"ok": False, "reason": entry_res.get("reason", "entry_failed"), "details": entry_res}
 
-    # ← NEW: הגנת סטופ מיידית אחרי שהכניסה הצליחה (לפני חימוש TP/SL) —
-    #      אם guard_stop קיים, זה יוודא שיש SL/TP מינימליים לפי מצב הפוזיציה והכמויות בפועל.
+    # ← NEW: מגן SL מיד אחרי כניסה (לפני חימוש TP/SL)
     with suppress(Exception):
         if 'ensure_protective_stop' in globals():
             ensure_protective_stop(sym, prefer_mode="quantities")
@@ -687,13 +659,11 @@ async def execute_trade_live(
             "atr_mult": trail_mult,
             "freeze": trail_freeze_enabled,
             "callback_rate_pct": trail_callback_pct,
-            "binance_limits_pct": [TRAIL_CALLBACK_MIN_PCT, TRAIL_CALLBACK_MAX_PCT],
         },
     }
 
     close_side = _close_side_for(side)
 
-    # בניית סולמות TP/SL
     ladders = _build_ladders(
         sym, side, float(qty),
         ([tp] if tp is not None else tp_targets), tp_splits,
@@ -705,7 +675,7 @@ async def execute_trade_live(
     tp_success = False
     sl_success = False
 
-    # ---- חימוש TP (קשיח + אימות) ----
+    # ---- TP arming (hardened) ----
     for idx, o in enumerate(plan["tp_orders"], start=1):
         typ = str(o.get("type")).upper()
         args: Dict[str, Any] = dict(
@@ -747,7 +717,7 @@ async def execute_trade_live(
         if res.get("ok"):
             tp_success = True
 
-    # ---- חימוש SL (trailing או סטטי) ----
+    # ---- SL arming (trail or static) ----
     if trail_enabled:
         eff_ps = _effective_position_side(position_side)
         qty_str, _ = _q_qty(sym, float(qty))
@@ -842,7 +812,6 @@ async def execute_trade_live(
         await _tg_send(f"⚠️ <b>Arming TP/SL failed</b>\n• {sym} {side} qty={qty}\n• rolled_back={bool(rb.get('ok'))}")
         return plan
 
-    # הודעה ל-טלגרם על כניסה + חימוש
     try:
         tp_cnt = sum(1 for o in plan["tp_orders"] if isinstance(o.get("response", {}).get("orderId"), (int, str)))
         sl_cnt = sum(1 for o in plan["sl_orders"] if isinstance(o.get("response", {}).get("orderId"), (int, str)))
@@ -857,7 +826,6 @@ async def execute_trade_live(
     except Exception:
         pass
 
-    # --- Arm BE only after TP1 (live & dynamic) ---
     try:
         if (not trail_enabled) and BE_GUARD_ENABLE and TP_BE_ONLY_AFTER_TP1:
             entry_px = float(plan["entry_result"].get("price") or plan["base_price"])
@@ -882,7 +850,7 @@ def _safe_close_position(sym: str, side: str, qty: float, position_side: str = "
     )
     if eff_ps != "BOTH":
         args["positionSide"] = eff_ps
-        args["reduceOnly"] = True  # Hedge תקין
+        args["reduceOnly"] = True
     try:
         return {"ok": True, "response": futures_create_order(**args)}
     except Exception as e:
@@ -901,6 +869,7 @@ __all__ = [
     "send_confirm_request",
     "require_approval",
 ]
+
 
 
 
