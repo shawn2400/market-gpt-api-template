@@ -2,18 +2,21 @@
 from __future__ import annotations
 
 import os
+import time
 import math
+import hashlib
 import logging
-from typing import Any, Dict, List, Tuple
+import asyncio
+from typing import Any, Dict, List, Optional, Tuple
 from contextlib import suppress
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Request
 
-# COID אחיד
+# אחיד: בנאי COID אחד לכל האפליקציה
 with suppress(Exception):
     from utils.order_ids import build_client_order_id  # type: ignore
 
-# כימות price/qty מדויק
+# כימות מדויק ל-price/qty לפי exchangeInfo (מונע -1111)
 with suppress(Exception):
     from utils.quantize import get_filters, quantize_price, quantize_qty  # type: ignore
 
@@ -76,6 +79,10 @@ def _cancel_open_conditional(client, symbol: str, kinds=("STOP", "TAKE_PROFIT", 
 # TP/BE gating helpers
 # =========================
 def _tp1_filled(client, symbol: str) -> bool:
+    """
+    מזהה האם TP1 מולא בעבר הקרוב.
+    חיפוש לפי clientOrderId שכולל TP1 / תגיות מהסביבה, ומצב FILLED.
+    """
     tags = [t.strip().upper() for t in (os.getenv("TP1_TAGS","TP1,tp1,tp_1,TAKE_PROFIT_1").split(","))]
     try:
         orders = client.futures_get_all_orders(symbol=symbol.upper(), limit=100) or []
@@ -97,6 +104,11 @@ def _profit_ok(entry: float, last: float, side: str, min_pct: float) -> bool:
     return move >= min_pct
 
 def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, str]:
+    """
+    קובע אם לאפשר BE/Trail לפי:
+    - SMART_MANAGE_AFTER_TP1=1 => דרוש TP1 מלא.
+    - TRAIL_MIN_PROFIT_PCT=x => דרוש רווח מינימלי באחוזים מן הכניסה.
+    """
     want_tp1 = (os.getenv("SMART_MANAGE_AFTER_TP1","0").lower() in ("1","true","yes","on"))
     min_profit = float(os.getenv("TRAIL_MIN_PROFIT_PCT","0") or 0)
     last = 0.0
@@ -110,7 +122,7 @@ def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, 
     return (True, "ok")
 
 # =========================
-# BE: STOP_MARKET closePosition (יציב)
+# BE: STOP_MARKET closePosition
 # =========================
 @router.post("/be", summary="Move SL to BE ± offset_bps (STOP_MARKET closePosition)")
 def be(payload: Dict[str, Any] = Body(...)):
@@ -149,7 +161,7 @@ def be(payload: Dict[str, Any] = Body(...)):
     return {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "be_price": be_px, "orderId": order.get("orderId")}
 
 # =========================
-# Trail: TRAILING_STOP_MARKET reduceOnly+quantity (מתקן -4136)
+# Trail: TRAILING_STOP_MARKET עם quantity+reduceOnly (מתקן -4136)
 # =========================
 @router.post("/trail", summary="Enable/refresh trailing SL (TRAILING_STOP_MARKET reduceOnly quantity)")
 def trail(payload: Dict[str, Any] = Body(...)):
@@ -193,6 +205,7 @@ def trail(payload: Dict[str, Any] = Body(...)):
         cb = max(cb_min, min(cb_max, float(cb)))
 
     opp = "SELL" if side == "BUY" else "BUY"
+
     _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
 
     qty = quantize_qty(symbol, abs_qty, flt)
@@ -243,83 +256,7 @@ def sl_move(payload: Dict[str, Any] = Body(...)):
     return {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "sl_price": px, "orderId": order.get("orderId")}
 
 # =========================
-# TP Native — closePosition=true (מופיע בשורת הפוזיציה)
-# =========================
-def _cancel_native_tp(client, symbol: str) -> int:
-    n = 0
-    for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
-        typ = (o.get("type") or "").upper()
-        if "TAKE_PROFIT" not in typ:
-            continue
-        is_native = str(o.get("closePosition", "")).lower() == "true" or not o.get("reduceOnly")
-        if is_native:
-            with suppress(Exception):
-                client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
-                n += 1
-    return n
-
-@router.post("/tp/native", summary="Set a single native TP (TAKE_PROFIT_MARKET closePosition=true)")
-def tp_native(payload: Dict[str, Any] = Body(...)):
-    symbol = (payload.get("symbol") or "").upper()
-    price = payload.get("price")
-    pct = payload.get("pct")
-    if not symbol:
-        raise HTTPException(status_code=422, detail="symbol required")
-    if price is None and pct is None:
-        raise HTTPException(status_code=422, detail="one of {price,pct} required")
-
-    client = _get_client()
-    _align_position_mode(client)
-    side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
-    flt = get_filters(client, symbol)
-
-    if price is not None:
-        try:
-            target = float(price)
-        except Exception:
-            raise HTTPException(status_code=422, detail="bad price")
-    else:
-        try:
-            pct = float(pct)
-        except Exception:
-            raise HTTPException(status_code=422, detail="bad pct")
-        if side == "BUY":
-            target = entry * (1.0 + pct / 100.0)
-        else:
-            target = entry * (1.0 - pct / 100.0)
-
-    stop = quantize_price(symbol, float(target), flt)
-    opp = "SELL" if side == "BUY" else "BUY"
-
-    cancelled = _cancel_native_tp(client, symbol)
-
-    order = client.futures_create_order(
-        symbol=symbol,
-        side=opp,
-        type="TAKE_PROFIT_MARKET",
-        stopPrice=stop,
-        closePosition=True,
-        workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
-        newClientOrderId=build_client_order_id(symbol, opp, role="TP_NATIVE"),
-        timeInForce="GTC",
-    )
-    return {
-        "ok": True, "symbol": symbol, "pos_side": side, "entry": entry,
-        "tp_price": stop, "cancelled_native": cancelled, "orderId": order.get("orderId")
-    }
-
-@router.post("/tp/native/cancel", summary="Cancel only native position TP (leave ladder intact)")
-def tp_native_cancel(payload: Dict[str, Any] = Body(...)):
-    symbol = (payload.get("symbol") or "").upper()
-    if not symbol:
-        raise HTTPException(status_code=422, detail="symbol required")
-    client = _get_client()
-    _align_position_mode(client)
-    n = _cancel_native_tp(client, symbol)
-    return {"ok": True, "symbol": symbol, "cancelled_native": n}
-
-# =========================
-# TP Ladder – partial reduce-only (עם כימות)
+# TP Ladder – partial reduce-only, עם כימות Decimal
 # =========================
 @router.post("/tp/ladder", summary="Create/refresh TP ladder (TAKE_PROFIT_MARKET reduce-only partials)")
 def tp_ladder(payload: Dict[str, Any] = Body(...)):
@@ -339,7 +276,7 @@ def tp_ladder(payload: Dict[str, Any] = Body(...)):
 
     opp = "SELL" if side == "BUY" else "BUY"
 
-    # מנקה רק TP (כולל native ולדר)
+    # מנקה רק TP קיימים לפני בנייה
     for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
         typ = (o.get("type") or "").upper()
         if "TAKE_PROFIT" in typ:
@@ -423,9 +360,9 @@ def close_fraction(payload: Dict[str, Any] = Body(...)):
     return {"ok": True, "symbol": symbol, "fraction": fraction, "qty_closed": qty, "orderId": order.get("orderId")}
 
 # =========================
-# ניהול חד-פעמי (כעת עם TP_NATIVE אופציונלי)
+# ניהול חד-פעמי
 # =========================
-@router.post("/manage-once", summary="One-shot smart manage: BE + TRAIL + TP ladder + (optional) TP native")
+@router.post("/manage-once", summary="One-shot smart manage: BE + TRAIL + TP ladder")
 def manage_once(payload: Dict[str, Any] = Body(...)):
     symbol = (payload.get("symbol") or "").upper()
     do = payload.get("do") or ["be", "trail", "tp_ladder"]
@@ -434,11 +371,6 @@ def manage_once(payload: Dict[str, Any] = Body(...)):
     pcts = payload.get("pcts")
     splits = payload.get("splits")
     atr_mult = payload.get("atr_mult") or os.getenv("SMART_MANAGE_TRAIL_ATR_MULT")
-    # TP-Native opt-in
-    tp_native_pct = payload.get("tp_native_pct") or os.getenv("SMART_NATIVE_TP_PCT")
-    tp_native_price = payload.get("tp_native_price")
-    do_tp_native = payload.get("do_tp_native") or (os.getenv("SMART_NATIVE_ON_APPROVE","0").lower() in ("1","true","yes","on"))
-
     if not symbol:
         raise HTTPException(status_code=422, detail="symbol required")
 
@@ -483,17 +415,112 @@ def manage_once(payload: Dict[str, Any] = Body(...)):
         out["ok"] = False
         out["steps"]["tp_ladder"] = {"ok": False, "error": str(e)}
 
-    try:
-        if do_tp_native and (tp_native_price is not None or tp_native_pct is not None):
-            b = {"symbol": symbol}
-            if tp_native_price is not None: b["price"] = float(tp_native_price)
-            else: b["pct"] = float(tp_native_pct)
-            out["steps"]["tp_native"] = tp_native(b)
-    except Exception as e:
-        out["ok"] = False
-        out["steps"]["tp_native"] = {"ok": False, "error": str(e)}
-
     return out
+
+# =========================
+# Scheduler פנימי – “שיזוז כל X זמן”
+# =========================
+
+_SCHED_TASK: Optional[asyncio.Task] = None
+_SCHED_ACTIVE = False
+
+def _sched_should_run() -> bool:
+    return (os.getenv("AUTO_MOVE_ENABLE","0").lower() in ("1","true","yes","on"))
+
+def _parse_csv_floats(val: Optional[str]) -> Optional[List[float]]:
+    if not val:
+        return None
+    try:
+        return [float(x.strip()) for x in str(val).split(",") if str(x).strip()]
+    except Exception:
+        return None
+
+async def _auto_loop(symbols: List[str], every_sec: int, steps: List[str],
+                     offset_bps: int, cb_rate: Optional[float], atr_mult: Optional[float],
+                     pcts: Optional[List[float]], splits: Optional[List[float]]) -> None:
+    global _SCHED_ACTIVE
+    client = _get_client()
+    _align_position_mode(client)
+    while _SCHED_ACTIVE:
+        started = time.time()
+        for sym in symbols:
+            try:
+                infos = client.futures_position_information(symbol=sym) or []
+                if not infos:
+                    continue
+                amt = float(infos[0].get("positionAmt") or 0.0)
+                if abs(amt) < 1e-12:
+                    continue  # אין פוזיציה פתוחה
+                body: Dict[str, Any] = {"symbol": sym, "do": steps}
+                body["offset_bps"] = offset_bps
+                if cb_rate is not None:
+                    body["callbackRate"] = cb_rate
+                if atr_mult is not None:
+                    body["atr_mult"] = atr_mult
+                if pcts is not None:
+                    body["pcts"] = pcts
+                if splits is not None:
+                    body["splits"] = splits
+                # מפעילים ניהול
+                try:
+                    manage_once(body)
+                except Exception as e:
+                    logger.warning("auto_loop.manage_once_failed %s: %s", sym, e)
+            except Exception as e:
+                logger.warning("auto_loop.symbol_failed %s: %s", sym, e)
+        # דילוג עד המחזור הבא
+        elapsed = time.time() - started
+        sleep_for = max(1.0, every_sec - elapsed)
+        await asyncio.sleep(sleep_for)
+
+@router.post("/auto/start", summary="Start periodic smart-manage loop (every N sec) for given symbols")
+async def auto_start(payload: Dict[str, Any] = Body(...)):
+    """
+    payload:
+      symbols: ["SOLUSDT","BTCUSDT"]
+      every_sec: 15
+      steps: ["be","trail","tp_ladder"]
+      offset_bps: 8
+      callbackRate: 1.0
+      atr_mult: 1.5
+      pcts: [1.8,3.2,5.5]
+      splits: [0.4,0.35,0.25]
+    """
+    global _SCHED_TASK, _SCHED_ACTIVE
+    if not _sched_should_run():
+        return {"ok": False, "error": "AUTO_MOVE_ENABLE is off"}
+    symbols = [str(x).upper() for x in (payload.get("symbols") or [])]
+    if not symbols:
+        wl = os.getenv("WATCHLIST","") or ""
+        symbols = [s.strip().upper() for s in wl.split(",") if s.strip()]
+    if not symbols:
+        raise HTTPException(status_code=422, detail="symbols required or WATCHLIST must be set")
+
+    every_sec = int(payload.get("every_sec") or os.getenv("AUTO_MOVE_EVERY_SEC","20"))
+    steps = [s.strip().lower() for s in (payload.get("steps") or (os.getenv("AUTO_MOVE_STEPS","be,trail").split(",")))]
+    offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS","8"))
+    cb_rate = payload.get("callbackRate")
+    atr_mult = payload.get("atr_mult") or (float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT","0") or 0) or None)
+    pcts = payload.get("pcts") or _parse_csv_floats(os.getenv("SMART_MANAGE_PCTS"))
+    splits = payload.get("splits") or _parse_csv_floats(os.getenv("SMART_MANAGE_SPLITS"))
+
+    if _SCHED_ACTIVE and _SCHED_TASK and not _SCHED_TASK.done():
+        return {"ok": True, "status": "already_running"}
+
+    _SCHED_ACTIVE = True
+    _SCHED_TASK = asyncio.create_task(
+        _auto_loop(symbols, every_sec, steps, offset_bps, cb_rate, atr_mult, pcts, splits)
+    )
+    return {"ok": True, "status": "started", "symbols": symbols, "every_sec": every_sec, "steps": steps}
+
+@router.post("/auto/stop", summary="Stop periodic smart-manage loop")
+async def auto_stop():
+    global _SCHED_TASK, _SCHED_ACTIVE
+    _SCHED_ACTIVE = False
+    if _SCHED_TASK:
+        with suppress(Exception):
+            _SCHED_TASK.cancel()
+    return {"ok": True, "status": "stopped"}
 
 
 
