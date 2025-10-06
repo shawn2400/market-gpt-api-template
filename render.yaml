@@ -89,8 +89,6 @@ services:
         value: ALG
       - key: ORDER_ID_INCLUDE_TS
         value: "1"
-      - key: ORDERS_USE_OCO
-        value: "1"
       - key: ORDER_BACKOFF_BASE_MS
         value: "120"
       - key: ORDER_BACKOFF_MAX_MS
