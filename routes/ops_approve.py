@@ -51,6 +51,12 @@ VELOCITY_LOG_LEVEL         = (os.getenv("VELOCITY_LOG_LEVEL","WARNING") or "WARN
 DEBUG_APPROVE_HTML         = _bool_env("DEBUG_APPROVE_HTML", False)
 APPROVE_FALLBACK_TO_MARKET = not _bool_env("PROPOSE_BLOCK_ON_FAIL", False)
 
+SMART_MANAGE_ON_APPROVE    = _bool_env("SMART_MANAGE_ON_APPROVE", False)
+SMART_MANAGE_BE_OFFSET_BPS = int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS","8")))
+SMART_MANAGE_PCTS          = [float(x) for x in (os.getenv("SMART_MANAGE_PCTS","") or "").split(",") if x.strip()] or None
+SMART_MANAGE_SPLITS        = [float(x) for x in (os.getenv("SMART_MANAGE_SPLITS","") or "").split(",") if x.strip()] or None
+SMART_MANAGE_TRAIL_ATR_MULT= float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT","0") or 0) or None
+
 # -------- ConfirmStore fallback ----------
 try:
     from utils.trade_executor import ConfirmStore  # type: ignore
@@ -58,7 +64,6 @@ except Exception:
     try:
         from app.trade_executor import ConfirmStore  # type: ignore
     except Exception:
-        # fallback to definition from main.py if present
         from main import ConfirmStore  # type: ignore
 
 # -------- Position sizing (AUTO_QTY) ----------
@@ -167,14 +172,12 @@ def _align_position_mode(client) -> None:
 
 # -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
-    # Prefer project executor if present
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
     except Exception:
         pass
 
-    # Fallback: direct Binance REST
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
@@ -219,13 +222,11 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e1:
             if not _is_code_4061(e1):
                 raise
-            # retry #1: without positionSide
             try:
                 retry_kwargs = dict(base_kwargs)
                 order = client.futures_create_order(**retry_kwargs)
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "no_positionSide"}
             except Exception as e2:
-                # retry #2: derived LONG/SHORT from side
                 try:
                     retry2_kwargs = dict(base_kwargs)
                     retry2_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
@@ -305,11 +306,9 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         n = max(10, math.ceil(window_min / m) + 5)
         kl = get_klines_sync(symbol, interval=interval, limit=n) or []
 
-        closes: List[float]
         try:
             if 'DataFrame' in str(type(kl)):
-                cols = getattr(kl, 'columns', [])
-                if hasattr(kl, 'columns') and ('close' in cols):
+                if hasattr(kl, 'columns') and ('close' in getattr(kl, 'columns', [])):
                     closes = [float(x) for x in kl['close'].tolist()]
                 else:
                     closes = [float(x) for x in kl.iloc[:, 4].tolist()]
@@ -325,10 +324,7 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         per_min = avg_per_candle / m
         return per_min if per_min > 0 else None
     except Exception as e:
-        if VELOCITY_LOG_LEVEL == "INFO":
-            logger.info("velocity_calc_failed: %s", e)
-        else:
-            logger.warning("velocity_calc_failed: %s", e)
+        (logger.info if (os.getenv("VELOCITY_LOG_LEVEL","WARNING").upper()=="INFO") else logger.warning)("velocity_calc_failed: %s", e)
         return None
 
 def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp2=None, tp3=None,
@@ -379,6 +375,37 @@ async def _delete_ticket(tid: str, source: str) -> None:
     with suppress(Exception):
         ConfirmStore.decide(tid, approved=False)
 
+# -------- Smart-manage trigger (internal call) --------
+async def _smart_manage_now(symbol: str,
+                            offset_bps: Optional[int] = None,
+                            pcts: Optional[List[float]] = None,
+                            splits: Optional[List[float]] = None,
+                            atr_mult: Optional[float] = None) -> Dict[str, Any]:
+    base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else ""
+    token = API_BEARER_TOKEN
+    if not base or not token:
+        return {"ok": False, "skipped": True, "reason": "missing base or token"}
+
+    body: Dict[str, Any] = {"symbol": symbol}
+    if offset_bps is not None:
+        body["offset_bps"] = offset_bps
+    if pcts is not None:
+        body["pcts"] = pcts
+    if splits is not None:
+        body["splits"] = splits
+    if atr_mult is not None:
+        body["atr_mult"] = atr_mult
+
+    try:
+        async with httpx.AsyncClient(timeout=15.0) as cli:
+            r = await cli.post(f"{base}/position-ops/manage-once",
+                               headers={"Authorization": f"Bearer {token}"},
+                               json=body)
+        return {"ok": r.status_code < 300, "status": r.status_code, "text": r.text}
+    except Exception as e:
+        logger.warning("smart_manage_now_error: %s", e)
+        return {"ok": False, "error": str(e)}
+
 # -------------------- API --------------------
 @router.post("/ops/ticket", summary="Create approval ticket (Redis + ConfirmStore) – sends Telegram with Preview/Approve/Reject")
 async def create_ticket(
@@ -398,7 +425,6 @@ async def create_ticket(
 
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
-    # Smart ETA (optional)
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         with suppress(Exception):
@@ -407,7 +433,6 @@ async def create_ticket(
         for k, v in etas.items():
             payload.setdefault(k, v)
 
-    # Flags by note (optional)
     try:
         from routes.ops_flags import apply_note_flags  # type: ignore
     except Exception:
@@ -425,7 +450,6 @@ async def create_ticket(
     }
     req_body = apply_note_flags(note, req_body)
 
-    # Optional RR-min check
     with suppress(Exception):
         rr_min_flag = float(req_body.get("rr_min") or 0.0)
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
@@ -541,6 +565,19 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
 
+    # ניהול אוטומטי מייד אחרי אישור (אם מופעל)
+    if ok and SMART_MANAGE_ON_APPROVE:
+        with suppress(Exception):
+            sym = str(ticket.get("symbol","")).upper()
+            sm_res = await _smart_manage_now(
+                sym,
+                offset_bps=SMART_MANAGE_BE_OFFSET_BPS,
+                pcts=SMART_MANAGE_PCTS,
+                splits=SMART_MANAGE_SPLITS,
+                atr_mult=SMART_MANAGE_TRAIL_ATR_MULT
+            )
+            logger.info("smart_manage_after_approve: %s -> %s", sym, sm_res)
+
     if not ok:
         logger.warning("approve_failed: ticket=%s flow=%s detail=%s", ticket_id, flow, json.dumps(exec_res, ensure_ascii=False))
 
@@ -627,6 +664,20 @@ async def approve_signed(request: Request):
             exec_res = {"primary": exec_res, "fallback_market": retry}
         else:
             raise HTTPException(status_code=502, detail={"execute_error": exec_res})
+
+    # ניהול מיידי גם ב-signed אם מופעל
+    if SMART_MANAGE_ON_APPROVE:
+        with suppress(Exception):
+            sym = str(payload.get("symbol","")).upper()
+            sm_res = await _smart_manage_now(
+                sym,
+                offset_bps=SMART_MANAGE_BE_OFFSET_BPS,
+                pcts=SMART_MANAGE_PCTS,
+                splits=SMART_MANAGE_SPLITS,
+                atr_mult=SMART_MANAGE_TRAIL_ATR_MULT
+            )
+            logger.info("smart_manage_after_approve_signed: %s -> %s", sym, sm_res)
+
     with suppress(Exception):
         record_approval_approved()
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
@@ -640,7 +691,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
 
-        # קריאה לשני המפתחות: התקין + השגוי מהעבר (לשמירה על דאטה היסטורי)
         key_good = f"{NS}:expired_log"
         key_bad  = key_good + "}"
 
@@ -685,8 +735,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
-
-
 
 
 
