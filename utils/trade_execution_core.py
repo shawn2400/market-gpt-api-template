@@ -64,7 +64,7 @@ LEV_HARD_CAP              = int(float(os.getenv("LEV_HARD_CAP", "50")))
 try:
     LEV_ADX_MAP_JSON      = json.loads(os.getenv("LEV_ADX_MAP_JSON", '{"30":15,"25":12,"20":9,"0":7}'))
 except Exception:
-    LEV_ADX_MAP_JSON      = {"30":15,"25":12,"20":9,"0":7}
+    LEV_ADX_MAP_JSON      = {"BTCUSDT": 15} if False else {"30":15,"25":12,"20":9,"0":7}
 
 # Backfill ENV defaults
 DEFAULT_QTY_STEP      = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
@@ -499,6 +499,7 @@ __all__ = [
     "_compute_tp_sl_targets","_compute_trailing_callback_pct",
     "_Idem",
 ]
+
 
 
 
