@@ -47,6 +47,8 @@ services:
       # === SAFETY MUST-HAVE (נוסף/מעודכן) ===
       - key: GUARD_ENSURE_SL
         value: "1"
+      - key: GUARD_SL_GRACE_SEC
+        value: "2"
       - key: STRICT_MODE_SINGLE
         value: "1"
       # מוד יחיד: Quantities (אל תערבב Native)
@@ -58,6 +60,10 @@ services:
         value: "120"
       - key: ORD_ATOMIC_UPDATE
         value: "1"
+      - key: ORD_VERIFY_TIMEOUT_MS
+        value: "800"
+      - key: ORD_CANCEL_STRATEGY
+        value: MINIMAL
       - key: ENFORCE_QTY_BOUNDS
         value: "1"
       - key: STOP_WORKING_TYPE
@@ -78,6 +84,30 @@ services:
         value: "1"
       - key: ORDER_ROUND_TO_TICK
         value: "1"
+
+      # --- SL/Trail tuning שנוספו ---
+      - key: SL_MONOTONIC
+        value: "1"
+      - key: LADDER_SL_DEFAULT_PCTS
+        value: "1.2"
+      - key: BE_BUFFER_USDT
+        value: "0.03"
+      - key: ATR_UPDATE_COOLDOWN_SEC
+        value: "20"
+      - key: ATR_MIN_DELTA
+        value: "0.02"
+
+      # --- יציבות/רטריי שנוספו ---
+      - key: COALESCE_WINDOW_MS
+        value: "1500"
+      - key: RETRY_MAX
+        value: "3"
+      - key: RETRY_BASE_MS
+        value: "500"
+      - key: RETRY_JITTER
+        value: "1"
+      - key: REST_COOLDOWN_SEC
+        value: "6"
 
       # --- Redis client ---
       - key: REDIS_CONNECT_TIMEOUT
@@ -235,10 +265,6 @@ services:
         value: "8"
       - key: SMART_MANAGE_TRAIL_ATR_MULT
         value: "1.5"
-      - key: SMART_MANAGE_AFTER_TP1
-        value: "1"
-      - key: TRAIL_MIN_PROFIT_PCT
-        value: "0.7"
 
       # --- Hardening ---
       - key: HYBRID_HARD_CANCEL_ENABLE
@@ -326,12 +352,22 @@ services:
       - key: SECURITY_PUBLIC_PATHS
         value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/scan/top-volume,/topk
 
-      # --- תקני עיגול/פילטרים (ללא כפילויות) ---
-      - key: TRAIL_USE_NATIVE
-        value: "0"
-      - key: USE_EXCHANGE_FILTERS
+      # --- Misc חדשים שביקשת ---
+      - key: TP_MAX_LADDERS
+        value: "3"
+      - key: ENABLE_INDICATOR_EXIT
         value: "1"
-      - key: ORDER_ROUND_TO_TICK
+      - key: ADX_MIN
+        value: "18"
+      - key: NO_PROGRESS_TIMEOUT_MIN
+        value: "30"
+      - key: DAILY_LOSS_CAP_USDT
+        value: "150"
+      - key: KILL_ON_CAP
+        value: "1"
+      - key: PRICE_PROTECT
+        value: "1"
+      - key: USE_WS
         value: "1"
 
 
