@@ -1,309 +1,138 @@
 # utils/guard_stop.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-
-import os
-import time
-import math
-from typing import Any, Dict, List, Optional, Tuple
+import logging
 from contextlib import suppress
+from typing import Dict, Any, Optional, List
 
-try:
-    from binance.client import Client  # type: ignore
-except Exception:
-    Client = None  # type: ignore
+from utils.binance_client import (
+    get_all_orders, futures_create_order, futures_cancel_order, get_futures_client,
+)
+from utils.trade_execution_core import (
+    _q_price, _q_qty, _effective_position_side, _close_side_for, _offset_bps,
+    STOP_BAND_BPS, ORDER_ID_PREFIX,
+)
 
-# קונפיג
-ORDER_ID_PREFIX = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
-BINANCE_WORKING_TYPE = os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE")
-DEFAULT_TICK = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
-DEFAULT_QTY_STEP = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
+log = logging.getLogger("algogpt.guard_stop")
 
-GUARD_ENABLE = os.getenv("GUARD_ENABLE", "1").lower() in ("1","true","yes","on")
-GUARD_ENSURE_AFTER_OPS = os.getenv("GUARD_ENSURE_AFTER_OPS", "1").lower() in ("1","true","yes","on")
-GUARD_VERIFY_SLEEP_SEC = float(os.getenv("GUARD_VERIFY_SLEEP_SEC", "0.15"))
-GUARD_VERIFY_TRIES = int(os.getenv("GUARD_VERIFY_TRIES", "6"))
+def _position_snapshot(sym: str) -> Dict[str, Any]:
+    """קורא את מצב הפוזיציה מה־Futures. מחזיר side ('BUY'/'SELL'/None), qty>0, entry_price>0 אם קיימת."""
+    cli = get_futures_client()
+    info = cli.futures_position_information(symbol=sym.upper())
+    if not info:
+        return {"has_position": False}
+    # Binance לעיתים מחזיר מערך אחד (One-way) או שניים (Hedge: LONG/SHORT).
+    # נעדיף את זו עם abs(positionAmt) הכי גדולה.
+    best = None
+    for row in info:
+        try:
+            amt = float(row.get("positionAmt") or 0.0)
+            if best is None or abs(amt) > abs(float(best.get("positionAmt") or 0.0)):
+                best = row
+        except Exception:
+            continue
+    if not best:
+        return {"has_position": False}
+    amt = float(best.get("positionAmt") or 0.0)
+    if abs(amt) < 1e-12:
+        return {"has_position": False}
+    entry = float(best.get("entryPrice") or 0.0)
+    side = "BUY" if amt > 0 else "SELL"
+    return {"has_position": True, "side": side, "qty": abs(amt), "entry_price": entry}
 
-BE_OFFSET_BPS = float(os.getenv("TP_BE_OFFSET_BPS", "8"))
-TRAIL_ATR_MULT = float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "1.5") or "0")
-TP1_TAGS = [t.strip().upper() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1").split(","))]
-
-# כימות (נשתמש ב-quantize אם זמין)
-with suppress(Exception):
-    from utils.quantize import get_filters as _gf, quantize_price as _qp, quantize_qty as _qq  # type: ignore
-
-def _client() -> Client:
-    if Client is None:
-        raise RuntimeError("binance client not available")
-    api_key = os.getenv("BINANCE_API_KEY", "").strip()
-    api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
-    if not api_key or not api_sec:
-        raise RuntimeError("BINANCE keys missing")
-    return Client(api_key, api_sec)
-
-def _align_position_mode(client) -> None:
-    mode = (os.getenv("POSITION_MODE_OVERRIDE","") or "").strip().lower()
-    with suppress(Exception):
-        if mode in ("hedge","dual","dual_side","dual_side_position","dualposition"):
-            client.futures_change_position_mode(dualSidePosition="true")
-        elif mode in ("oneway","one_way","single","single_side","oneside"):
-            client.futures_change_position_mode(dualSidePosition="false")
-
-def _filters(client, symbol: str) -> Dict[str, Any]:
-    if "_gf" in globals():
-        with suppress(Exception):
-            return _gf(client, symbol)
+def _has_open_stop(sym: str) -> bool:
+    """בודק אם כבר יש STOP פתוח רלוונטי (NEW / PARTIALLY_FILLED)."""
     try:
-        ex = client.futures_exchange_info() or {}
-        for s in ex.get("symbols", []):
-            if str(s.get("symbol","")).upper() == symbol.upper():
-                tick = 0.0; step = 0.0
-                for f in s.get("filters", []):
-                    if f.get("filterType") == "PRICE_FILTER":
-                        tick = float(f.get("tickSize") or 0.0)
-                    if f.get("filterType") == "LOT_SIZE":
-                        step = float(f.get("stepSize") or 0.0)
-                return {"price_tick": tick or DEFAULT_TICK, "qty_step": step or DEFAULT_QTY_STEP}
-    except Exception:
-        pass
-    return {"price_tick": DEFAULT_TICK, "qty_step": DEFAULT_QTY_STEP}
-
-def _q_price(symbol: str, price: float, flt: Dict[str, Any]) -> float:
-    if "_qp" in globals():
-        with suppress(Exception):
-            return _qp(symbol, price, flt)
-    tick = float(flt.get("price_tick") or DEFAULT_TICK)
-    if tick <= 0: return round(price, 8)
-    steps = math.floor(price / tick + 1e-12)
-    return round(max(tick, steps * tick), 8)
-
-def _q_qty(symbol: str, qty: float, flt: Dict[str, Any]) -> float:
-    if "_qq" in globals():
-        with suppress(Exception):
-            return _qq(symbol, qty, flt)
-    step = float(flt.get("qty_step") or DEFAULT_QTY_STEP)
-    if step <= 0: return round(qty, 8)
-    steps = math.floor(qty / step + 1e-12)
-    return round(max(step, steps * step), 8)
-
-def _build_coid(symbol: str, side: str, role: str, extra: Optional[str] = None) -> str:
-    base = f"{ORDER_ID_PREFIX}_{symbol.upper()}_{side.upper()}_{role.upper()}_{int(time.time())}"
-    if extra: base += f"_{extra}"
-    if len(base) <= 32:
-        return base
-    return base[:24] + "_" + str(abs(hash(base)))[:7]
-
-def _get_active_orders(client, symbol: str) -> Tuple[List[Dict[str, Any]], Optional[str], float, float, float]:
-    sym = symbol.upper()
-    orders = client.futures_get_open_orders(symbol=sym) or []
-    infos = client.futures_position_information(symbol=sym) or []
-    if not infos:
-        return orders, None, 0.0, 0.0, 0.0
-    pos = infos[0]
-    qty = float(pos.get("positionAmt") or 0.0)
-    entry = float(pos.get("entryPrice") or 0.0)
-    side = "BUY" if qty > 0 else ("SELL" if qty < 0 else None)
-
-    mark = 0.0
-    with suppress(Exception):
-        mp = client.futures_mark_price(symbol=sym) or {}
-        mark = float(mp.get("markPrice") or 0.0)
-    return orders, side, abs(qty), entry, mark
-
-def _tp1_was_hit(client, symbol: str) -> bool:
-    try:
-        arr = client.futures_get_all_orders(symbol=symbol.upper(), limit=120) or []
-        for o in arr:
-            st = (o.get("status") or "").upper()
+        lst = get_all_orders(sym, limit=50) or []
+        for o in lst:
+            st  = (o.get("status") or "").upper()
             typ = (o.get("type") or "").upper()
-            cid = ((o.get("clientOrderId") or "") + " " + (o.get("origClientOrderId") or "")).upper()
-            if st == "FILLED" and "TAKE_PROFIT" in typ:
-                if "TP1" in cid or any(t for t in TP1_TAGS if t and t in cid):
-                    return True
+            if st in ("NEW", "PARTIALLY_FILLED") and typ.startswith(("STOP", "TRAILING_STOP")):
+                return True
     except Exception:
         pass
     return False
 
-def _atr_now(client, symbol: str, interval: str = "1m", period: int = 14) -> float:
-    with suppress(Exception):
-        kl = client.futures_klines(symbol=symbol.upper(), interval=interval, limit=period + 2) or []
-        if len(kl) < period + 1:
-            return 0.0
-        trs: List[float] = []
-        for i in range(1, len(kl)):
-            h = float(kl[i][2]); l = float(kl[i][3]); pc = float(kl[i-1][4])
-            trs.append(max(h - l, abs(h - pc), abs(l - pc)))
-        if len(trs) < period:
-            return 0.0
-        return sum(trs[-period:]) / float(period)
-    return 0.0
+def _cancel_open_stops(sym: str) -> int:
+    """מבטל כל STOP/TRAILING_STOP פתוחים. זהיר – מבטל רק מצבים NEW/PARTIALLY_FILLED."""
+    cnt = 0
+    try:
+        lst = get_all_orders(sym, limit=50) or []
+        for o in lst:
+            st  = (o.get("status") or "").upper()
+            typ = (o.get("type") or "").upper()
+            if st in ("NEW","PARTIALLY_FILLED") and typ.startswith(("STOP", "TRAILING_STOP")):
+                with suppress(Exception):
+                    futures_cancel_order(sym, o["orderId"])
+                    cnt += 1
+    except Exception as e:
+        log.warning("cancel_open_stops_failed(%s): %s", sym, e)
+    return cnt
 
-def _verify_working(client, symbol: str, new_id: int) -> bool:
-    tries = GUARD_VERIFY_TRIES
-    while tries > 0:
-        with suppress(Exception):
-            od = client.futures_get_order(symbol=symbol.upper(), orderId=new_id) or {}
-            st = (od.get("status") or "").upper()
-            if st in ("NEW","PARTIALLY_FILLED"):
-                return True
-        time.sleep(GUARD_VERIFY_SLEEP_SEC)
-        tries -= 1
-    return False
+def ensure_protective_stop(symbol: str, *, prefer_mode: str = "quantities", be_offset_bps: float = 6.0) -> Dict[str, Any]:
+    """
+    מאבטח SL מיידי לפי הפוזיציה הקיימת.
+    prefer_mode:
+      - "quantities": מגדיר כמות לפי positionAmt בפועל.
+      - "flat": אם לא מוצא פוזיציה/כמות – לא עושה כלום (שקט).
+    be_offset_bps: מיקום SL סביב מחיר כניסה (BE+/-).
+    """
+    sym = symbol.upper().strip()
+    snap = _position_snapshot(sym)
+    if not snap.get("has_position"):
+        return {"ok": True, "skipped": True, "reason": "no_position"}
 
-def _cancel_old_stops(client, symbol: str, keep_order_id: int) -> int:
-    n = 0
-    for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
-        if int(o.get("orderId") or 0) == int(keep_order_id):
-            continue
-        typ = (o.get("type") or "").upper()
-        if "STOP" in typ:
-            with suppress(Exception):
-                client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
-                n += 1
-    return n
+    side: str = snap["side"]  # BUY/SELL של הכניסה
+    qty: float = float(snap["qty"])
+    entry_px: float = float(snap.get("entry_price") or 0.0)
 
-def _place_or_replace_stop_atomic(
-    client,
-    symbol: str,
-    *,
-    side_close: str,
-    stop_price: float,
-    qty: float,
-    mode_native: bool,
-    position_side: str,
-) -> Dict[str, Any]:
-    sym = symbol.upper()
-    flt = _filters(client, sym)
-    px = _q_price(sym, stop_price, flt)
+    if qty <= 0:
+        return {"ok": True, "skipped": True, "reason": "zero_qty"}
 
-    if mode_native:
-        new = client.futures_create_order(
-            symbol=sym,
-            side=side_close,
-            type="STOP_MARKET",
-            stopPrice=px,
-            closePosition=True,
-            workingType=BINANCE_WORKING_TYPE,
-            newClientOrderId=_build_coid(sym, side_close, "SL", "ALGOGPT"),
-        )
+    # אם כבר יש STOP פתוח — לא נוגעים (זהירות כפילויות).
+    if _has_open_stop(sym):
+        return {"ok": True, "skipped": True, "reason": "existing_stop"}
+
+    # מחשב מחיר BE±offset, ואז מציב STOP_MARKET reduceOnly בכמות מלאה.
+    close_side = _close_side_for(side)
+    # אם אין entry_px (קצה נדיר) — נשתמש בהסטת STOP_BAND_BPS נגד הכיוון (שמרני).
+    if entry_px and entry_px > 0:
+        be_px = _offset_bps(entry_px, (+be_offset_bps if side=="BUY" else -be_offset_bps), +1)
     else:
-        q = _q_qty(sym, qty, flt)
-        if q <= 0:
-            raise RuntimeError("guard_stop: qty rounds to zero")
-        new = client.futures_create_order(
-            symbol=sym,
-            side=side_close,
-            type="STOP_MARKET",
-            stopPrice=px,
-            quantity=q,
-            reduceOnly=True,
-            workingType=BINANCE_WORKING_TYPE,
-            newClientOrderId=_build_coid(sym, side_close, "SL", "ALGOGPT"),
-            positionSide=position_side,
-        )
+        # Fallback: stop מעט מעבר למחיר נוכחי הידוע למערכת (אין כאן קריאה ל־mark).
+        # שמרני – פשוט נגד הכיוון הנכון:
+        be_px = _offset_bps(1.0, (-STOP_BAND_BPS if side=="BUY" else +STOP_BAND_BPS), +1)
 
-    new_id = int(new.get("orderId") or 0)
-    ok = _verify_working(client, sym, new_id)
-    if not ok:
-        return {"ok": False, "placed": new, "verified": False, "cancelled_old": 0}
-    cancelled = _cancel_old_stops(client, sym, keep_order_id=new_id)
-    return {"ok": True, "placed": new, "verified": True, "cancelled_old": cancelled}
+    stop_str, _ = _q_price(sym, float(be_px))
+    qty_str, _  = _q_qty(sym, float(qty))
 
-def ensure_protective_stop(
-    symbol: str,
-    *,
-    prefer_mode: str = "native",   # "native" | "quantities"
-    be_buffer_bps: Optional[float] = None,
-    atr_mult: Optional[float] = None,
-) -> Dict[str, Any]:
-    if not GUARD_ENABLE:
-        return {"ok": True, "skipped": True, "reason": "GUARD_ENABLE=0"}
-
-    cli = _client()
-    _align_position_mode(cli)
-
-    orders, pos_side, qty_abs, entry, mark = _get_active_orders(cli, symbol)
-    if not pos_side or not (qty_abs and qty_abs > 0) or not (entry and entry > 0):
-        return {"ok": False, "reason": "no_open_position"}
-
-    side_close = "SELL" if pos_side == "BUY" else "BUY"
-    be_bps = float(BE_OFFSET_BPS if be_buffer_bps is None else be_buffer_bps)
-
-    prev_sl = None
-    for o in orders:
-        typ = (o.get("type") or "").upper()
-        if "STOP" not in typ:
-            continue
-        sp = float(o.get("stopPrice") or o.get("price") or 0.0)
-        if sp <= 0:
-            continue
-        if prev_sl is None:
-            prev_sl = sp
-        else:
-            if pos_side == "BUY":
-                prev_sl = max(prev_sl, sp)
-            else:
-                prev_sl = min(prev_sl, sp)
-
-    tp1_hit = _tp1_was_hit(cli, symbol)
-
-    atr_mult_eff = float(TRAIL_ATR_MULT if atr_mult is None else atr_mult) or 0.0
-    atr_val = _atr_now(cli, symbol) if atr_mult_eff > 0 else 0.0
-    trail_sl = None
-    if atr_val and mark:
-        if pos_side == "BUY":
-            trail_sl = mark - atr_mult_eff * atr_val
-        else:
-            trail_sl = mark + atr_mult_eff * atr_val
-
-    if tp1_hit:
-        if pos_side == "BUY":
-            be_px = entry * (1.0 + be_bps/10000.0)
-            candidate = be_px
-            if trail_sl: candidate = max(candidate, trail_sl)
-            if prev_sl is not None: candidate = max(candidate, prev_sl)
-        else:
-            be_px = entry * (1.0 - be_bps/10000.0)
-            candidate = be_px
-            if trail_sl: candidate = min(candidate, trail_sl)
-            if prev_sl is not None: candidate = min(candidate, prev_sl)
-    else:
-        candidate = trail_sl if trail_sl else (prev_sl if prev_sl is not None else (entry * (0.985 if pos_side == "BUY" else 1.015)))
-        if prev_sl is not None:
-            if pos_side == "BUY": candidate = max(candidate, prev_sl)
-            else:                 candidate = min(candidate, prev_sl)
-
-    mode_native = (prefer_mode.lower() == "native")
-
-    if prev_sl is None:
-        emergency_target = candidate
-        placed = _place_or_replace_stop_atomic(
-            cli, symbol,
-            side_close=side_close,
-            stop_price=emergency_target,
-            qty=qty_abs,
-            mode_native=mode_native,
-            position_side="LONG" if pos_side == "BUY" else "SHORT",
-        )
-        return {"ok": bool(placed.get("ok")), "emergency_set": True, "detail": placed}
-
-    eps = max(1e-8, 1e-6 * entry)
-    if abs(candidate - prev_sl) <= eps:
-        return {"ok": True, "skipped": True, "reason": "no_material_change", "prev_sl": prev_sl}
-
-    placed = _place_or_replace_stop_atomic(
-        cli, symbol,
-        side_close=side_close,
-        stop_price=candidate,
-        qty=qty_abs,
-        mode_native=mode_native,
-        position_side="LONG" if pos_side == "BUY" else "SHORT",
+    args: Dict[str, Any] = dict(
+        symbol=sym,
+        side=close_side,
+        type="STOP_MARKET",
+        workingType="MARK_PRICE",
+        stopPrice=stop_str,
+        quantity=qty_str,
+        reduceOnly=True,
+        newClientOrderId=f"{(ORDER_ID_PREFIX or 'ALG').strip()}_SL_PROTECT_{sym}_{close_side}",
     )
-    return {
-        "ok": bool(placed.get("ok")),
-        "tp1_hit": tp1_hit,
-        "entry": entry,
-        "mark": mark,
-        "prev_sl": prev_sl,
-        "target_sl": candidate,
-        "detail": placed,
-    }
+
+    # במצב Hedge — positionSide נקבע לפי כיוון הסגירה (הפוך מהכניסה)
+    eff_ps = _effective_position_side("LONG" if side=="SELL" else "SHORT")
+    if eff_ps != "BOTH":
+        args["positionSide"] = eff_ps
+
+    try:
+        resp = futures_create_order(**args)
+        return {"ok": True, "response": resp, "placed": True, "qty": float(qty), "stop": stop_str}
+    except Exception as e:
+        # אם reduceOnly נכשל ב-One-way — ננסה בלי reduceOnly
+        msg = str(e).lower()
+        if "reduce only" in msg or "reduceonly" in msg or "-1106" in msg:
+            args2 = dict(args); args2.pop("reduceOnly", None)
+            with suppress(Exception):
+                resp2 = futures_create_order(**args2)
+                return {"ok": True, "response": resp2, "placed": True, "qty": float(qty), "stop": stop_str, "ro_fallback": True}
+        log.warning("ensure_protective_stop.failed(%s): %s", sym, e)
+        return {"ok": False, "error": str(e)}
+
