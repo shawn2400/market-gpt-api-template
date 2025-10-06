@@ -15,6 +15,10 @@ from fastapi import APIRouter, Body, HTTPException
 with suppress(Exception):
     from utils.order_ids import build_client_order_id  # type: ignore
 
+# כימות מדויק ל-price/qty לפי exchangeInfo (מונע -1111)
+with suppress(Exception):
+    from utils.quantize import get_filters, quantize_price, quantize_qty  # type: ignore
+
 logger = logging.getLogger("algogpt.position_ops")
 router = APIRouter(prefix="/position-ops", tags=["position-ops"])
 
@@ -39,39 +43,6 @@ def _align_position_mode(client) -> None:
             client.futures_change_position_mode(dualSidePosition="true")
         elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
-
-# =========================
-# Exchange filters & rounding
-# =========================
-_FILTERS: Dict[str, Dict[str, float]] = {}
-
-def _filters(symbol: str) -> Dict[str, float]:
-    s = symbol.upper()
-    if s in _FILTERS:
-        return _FILTERS[s]
-    cli = _get_client()
-    info = cli.futures_exchange_info()
-    tick = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
-    step = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
-    for sym in info.get("symbols", []):
-        if sym.get("symbol") == s:
-            for f in sym.get("filters", []):
-                if f.get("filterType") == "PRICE_FILTER":
-                    tick = float(f.get("tickSize", tick))
-                elif f.get("filterType") == "LOT_SIZE":
-                    step = float(f.get("stepSize", step))
-            break
-    _FILTERS[s] = {"tick": tick, "step": step}
-    return _FILTERS[s]
-
-def _round_price(symbol: str, px: float) -> float:
-    tick = _filters(symbol)["tick"]
-    return math.floor(float(px) / tick) * tick
-
-def _round_qty(symbol: str, qty: float) -> float:
-    step = _filters(symbol)["step"]
-    q = math.floor(float(qty) / step) * step
-    return float(f"{q:.12f}")
 
 # =========================
 # Position & price helpers
@@ -113,7 +84,6 @@ def _tp1_filled(client, symbol: str) -> bool:
     """
     tags = [t.strip().upper() for t in (os.getenv("TP1_TAGS","TP1,tp1,tp_1,TAKE_PROFIT_1").split(","))]
     try:
-        # מגביל כדי לא למשוך היסטוריה ענקית
         orders = client.futures_get_all_orders(symbol=symbol.upper(), limit=100) or []
         for o in orders:
             st = (o.get("status") or "").upper()
@@ -151,7 +121,7 @@ def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, 
     return (True, "ok")
 
 # =========================
-# BE: STOP_MARKET closePosition (בלי reduceOnly/quantity)
+# BE: STOP_MARKET closePosition (נשאר כמו שהוא, עובד טוב)
 # =========================
 @router.post("/be", summary="Move SL to BE ± offset_bps (STOP_MARKET closePosition)")
 def be(payload: Dict[str, Any] = Body(...)):
@@ -169,12 +139,13 @@ def be(payload: Dict[str, Any] = Body(...)):
     if not ok:
         return {"ok": False, "reason": why, "skipped": "be"}
 
-    # מחשב מחיר BE מעוגל
+    # מחיר BE מעוגל
+    flt = get_filters(client, symbol)
     if side == "BUY":
-        be_px = _round_price(symbol, entry * (1 + offset_bps/10000.0))
+        be_px = quantize_price(symbol, entry * (1 + offset_bps/10000.0), flt)
         opp = "SELL"
     else:
-        be_px = _round_price(symbol, entry * (1 - offset_bps/10000.0))
+        be_px = quantize_price(symbol, entry * (1 - offset_bps/10000.0), flt)
         opp = "BUY"
 
     # מבטל SL/Trail ישנים
@@ -185,16 +156,16 @@ def be(payload: Dict[str, Any] = Body(...)):
         side=opp,
         type="STOP_MARKET",
         stopPrice=be_px,
-        closePosition=True,               # ❗ אין reduceOnly/quantity
+        closePosition=True,               # נשאר closePosition – זה עובד יציב ל-BE
         workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
         newClientOrderId=build_client_order_id(symbol, opp, role="BE"),
     )
     return {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "be_price": be_px, "orderId": order.get("orderId")}
 
 # =========================
-# Trail: TRAILING_STOP_MARKET closePosition (בלי reduceOnly/quantity)
+# Trail: TRAILING_STOP_MARKET עם quantity+reduceOnly (מתקן -4136)
 # =========================
-@router.post("/trail", summary="Enable/refresh trailing SL (TRAILING_STOP_MARKET closePosition)")
+@router.post("/trail", summary="Enable/refresh trailing SL (TRAILING_STOP_MARKET reduceOnly quantity)")
 def trail(payload: Dict[str, Any] = Body(...)):
     symbol = (payload.get("symbol") or "").upper()
     cb = payload.get("callbackRate") or payload.get("callback_rate") or payload.get("callback_rate_pct")
@@ -209,6 +180,7 @@ def trail(payload: Dict[str, Any] = Body(...)):
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
     last = _last_price(symbol)
+    flt = get_filters(client, symbol)
 
     # Gating (TP1 / min profit)
     ok, why = _gate_be_trail(client, symbol, side, entry)
@@ -216,7 +188,7 @@ def trail(payload: Dict[str, Any] = Body(...)):
         return {"ok": False, "reason": why, "skipped": "trail"}
 
     if cb is None:
-        # חישוב גס אם לא נמסר: 1.0% או לפי ATR*mult אם נדרש (פשטות)
+        # חישוב גס אם לא נמסר
         try:
             if atr_mult:
                 from math import fabs
@@ -241,16 +213,22 @@ def trail(payload: Dict[str, Any] = Body(...)):
     # מבטל SL/Trail ישנים
     _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
 
+    # כמות מלאה של הפוזיציה (מעוגל ל-step) – reduceOnly
+    qty = quantize_qty(symbol, abs_qty, flt)
+    if qty <= 0:
+        raise HTTPException(status_code=409, detail="trail qty rounds to zero")
+
     order = client.futures_create_order(
         symbol=symbol,
         side=opp,
         type="TRAILING_STOP_MARKET",
         callbackRate=float(cb),
-        closePosition=True,               # ❗ אין reduceOnly/quantity
+        quantity=qty,
+        reduceOnly=True,
         newClientOrderId=build_client_order_id(symbol, opp, role="TRAIL"),
         workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
     )
-    return {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "callbackRate": float(cb), "orderId": order.get("orderId")}
+    return {"ok": True, "symbol": symbol, "pos_side": side, "qty": qty, "entry": entry, "callbackRate": float(cb), "orderId": order.get("orderId")}
 
 # =========================
 # SL למיקום ספציפי (STOP_MARKET closePosition)
@@ -265,12 +243,10 @@ def sl_move(payload: Dict[str, Any] = Body(...)):
     client = _get_client()
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
-
-    # SL ידני לא נחסם (בכוונה), אבל אם תרצה:
-    # ok, why = _gate_be_trail(client, symbol, side, entry)
+    flt = get_filters(client, symbol)
 
     opp = "SELL" if side == "BUY" else "BUY"
-    px = _round_price(symbol, price)
+    px = quantize_price(symbol, price, flt)
 
     _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
 
@@ -279,14 +255,14 @@ def sl_move(payload: Dict[str, Any] = Body(...)):
         side=opp,
         type="STOP_MARKET",
         stopPrice=px,
-        closePosition=True,               # ❗ אין reduceOnly/quantity
+        closePosition=True,               # ל-SL ידני/BE זה יציב
         newClientOrderId=build_client_order_id(symbol, opp, role="SL"),
         workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
     )
     return {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "sl_price": px, "orderId": order.get("orderId")}
 
 # =========================
-# TP Ladder – partial reduce-only, עם עיגול כמות/מחיר
+# TP Ladder – partial reduce-only, עם כימות Decimal
 # =========================
 @router.post("/tp/ladder", summary="Create/refresh TP ladder (TAKE_PROFIT_MARKET reduce-only partials)")
 def tp_ladder(payload: Dict[str, Any] = Body(...)):
@@ -302,6 +278,7 @@ def tp_ladder(payload: Dict[str, Any] = Body(...)):
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
     last = _last_price(symbol)
+    flt = get_filters(client, symbol)
 
     opp = "SELL" if side == "BUY" else "BUY"
 
@@ -315,22 +292,21 @@ def tp_ladder(payload: Dict[str, Any] = Body(...)):
     placed = []
     for i, (pct, split) in enumerate(zip(pcts, splits), start=1):
         q_raw = abs_qty * float(split)
-        q = _round_qty(symbol, q_raw)
+        q = quantize_qty(symbol, q_raw, flt)
         if q <= 0:
             continue
 
-        # יעד לפי המחיר הנוכחי (אפשר לשנות ל-entry אם מעדיף)
         if side == "BUY":
-            trig = _round_price(symbol, last * (1.0 + float(pct)/100.0))
+            trig = quantize_price(symbol, last * (1.0 + float(pct)/100.0), flt)
         else:
-            trig = _round_price(symbol, last * (1.0 - float(pct)/100.0))
+            trig = quantize_price(symbol, last * (1.0 - float(pct)/100.0), flt)
 
         order = client.futures_create_order(
             symbol=symbol,
             side=opp,
             type="TAKE_PROFIT_MARKET",
             stopPrice=trig,
-            quantity=q,                    # ❗ partial qty (מעוגל)
+            quantity=q,
             reduceOnly=True,
             timeInForce="GTC",
             newClientOrderId=build_client_order_id(symbol, opp, role=f"TP{i}"),
@@ -373,7 +349,9 @@ def close_fraction(payload: Dict[str, Any] = Body(...)):
     _align_position_mode(client)
     side, abs_qty, _ = _fetch_position_side_qty_entry(client, symbol)
     opp = "SELL" if side == "BUY" else "BUY"
-    qty = _round_qty(symbol, abs_qty * fraction)
+
+    flt = get_filters(client, symbol)
+    qty = quantize_qty(symbol, abs_qty * fraction, flt)
     if qty <= 0:
         return {"ok": False, "error": "qty_to_close_zero"}
 
