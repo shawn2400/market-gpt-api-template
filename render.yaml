@@ -44,6 +44,41 @@ services:
       - key: ALERTS_INGEST_HMAC_SECRET
         sync: false
 
+      # === SAFETY MUST-HAVE (מוסף/מעודכן) ===
+      - key: GUARD_ENSURE_SL
+        value: "1"
+      - key: STRICT_MODE_SINGLE
+        value: "1"
+      # מוד יחיד: Quantities (אל תערבב Native)
+      - key: USE_NATIVE_TP_SL
+        value: "0"
+      - key: ALLOW_REVERSE_TRADES
+        value: "0"
+      - key: REVERSE_COOLDOWN_SEC
+        value: "120"
+      - key: ORD_ATOMIC_UPDATE
+        value: "1"
+      - key: ENFORCE_QTY_BOUNDS
+        value: "1"
+      - key: STOP_WORKING_TYPE
+        value: MARK_PRICE
+      - key: HEALTH_TP_GRACE_SEC
+        value: "8"
+
+      # אופציונלי אבל מומלץ לייצוב:
+      - key: TP_BE_ONLY_AFTER_TP1
+        value: "1"
+      - key: SMART_MANAGE_AFTER_TP1
+        value: "1"
+      - key: TRAIL_MIN_PROFIT_PCT
+        value: "0.7"
+      - key: BINANCE_WORKING_TYPE
+        value: MARK_PRICE
+      - key: USE_EXCHANGE_FILTERS
+        value: "1"
+      - key: ORDER_ROUND_TO_TICK
+        value: "1"
+
       # --- Redis client ---
       - key: REDIS_CONNECT_TIMEOUT
         value: "5.0"
@@ -83,8 +118,6 @@ services:
         value: oneway
       - key: BINANCE_MARGIN_TYPE_DEFAULT
         value: ISOLATED
-      - key: BINANCE_WORKING_TYPE
-        value: MARK_PRICE
       - key: BINANCE_FUTURES_HTTP_BASE
         value: https://fapi.binance.com
       - key: BINANCE_FUTURES_WS_BASE
@@ -164,8 +197,10 @@ services:
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
         value: "0.35"
 
+      # ⚠ חשוב: אם בחרנו Quantities – לא להשתמש ב-Native TP/SL
       - key: NATIVE_TPSL_ENABLE
-        value: "1"
+        value: "0"
+
       - key: ORDERS_USE_OCO
         value: "1"
       - key: MANAGER_WRITES_ORDERS
@@ -186,8 +221,6 @@ services:
         value: "1"
       - key: LADDER_SL_DEFAULT_PCTS
         value: "1.2"
-      - key: TP_BE_ONLY_AFTER_TP1
-        value: "1"
       - key: STREAM_TP_BE
         value: "1"
 
@@ -300,6 +333,7 @@ services:
         value: "1"
       - key: USE_EXCHANGE_FILTERS
         value: "1"
+
 
 
 
