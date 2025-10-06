@@ -12,7 +12,7 @@ Guards Core:
 - מכבד ENV:
   GUARD_ENSURE_SL, GUARD_SL_GRACE_SEC, STOP_WORKING_TYPE, ENFORCE_QTY_BOUNDS,
   ORD_ATOMIC_UPDATE, ORD_VERIFY_TIMEOUT_MS, ORD_CANCEL_STRATEGY, PRICE_PROTECT,
-  LOCK_AFTER_TP1, SL_MONOTONIC, BE_BUFFER_USDT
+  SL_MONOTONIC, BE_BUFFER_USDT
 """
 from __future__ import annotations
 import os, time, hmac, hashlib, logging
@@ -85,7 +85,7 @@ async def _mutex_release(key: str) -> None:
 # -------- Helpers ----------
 def _coid(prefix: str, symbol: str, role: str, key: str) -> str:
     """
-    Binanace clientOrderId limit ~ 32 chars. Use compressed form.
+    Binance clientOrderId limit ~ 32 chars. Use compressed form.
     Format: {prefix}_{sym}_{role}_{hash}
     """
     sym = (symbol or "").upper()
@@ -182,7 +182,6 @@ def _needs_new_sl(existing: List[Dict[str, Any]], side: str, new_stop: float) ->
             best = max(best, sp)
         elif side == "BUY":    # short: lower SL is safer
             best = min(best, sp)
-    # decide whether new_stop is safer than best
     if best is None:
         return True
     if side == "SELL":
@@ -199,17 +198,6 @@ def ensure_protective_stop(symbol: str, prefer_mode: str = "quantities") -> Dict
     """
     Ensure there's ALWAYS a protective SL for an open position (single-side mode).
     Place STOP_MARKET reduceOnly.
-
-    Return:
-    {
-      "ok": bool,
-      "skipped": bool,
-      "action": "place"|"skip",
-      "placed": bool,
-      "clientOrderId": str|None,
-      "emergency": bool,
-      "detail": str
-    }
     """
     ok, why = _ensure_inputs_ok()
     if not ok:
@@ -241,7 +229,7 @@ def ensure_protective_stop(symbol: str, prefer_mode: str = "quantities") -> Dict
         return {"ok": False, "skipped": True, "detail": "unknown side"}
 
     mark = _mark(cli, symbol)
-    stop_price = _best_stop_for_side(side, entry_price or mark, mark)
+    stop_price = _best_stop_for_side(side, (entry_price or mark), mark)
     if not stop_price or stop_price <= 0:
         return {"ok": False, "skipped": True, "detail": "failed to compute stop"}
 
@@ -261,17 +249,15 @@ def ensure_protective_stop(symbol: str, prefer_mode: str = "quantities") -> Dict
         "stopPrice": f"{stop_price:.6f}",
         "closePosition": False,
         "reduceOnly": True,
+        "timeInForce": "GTC",
         "newClientOrderId": coid,
         "workingType": _working_type(),
     }
 
-    # sanity for qty bounds
     if _bool("ENFORCE_QTY_BOUNDS", True):
         qty = abs(amt)
-        # respect minimal notional / qty_step if you have them in env, else allow exchange to reject
         req["quantity"] = f"{qty:.8f}"
 
-    # atomic place with verify
     grace = _sl_grace()
     start = time.time()
     try:
@@ -316,8 +302,8 @@ def atomic_update_orders(
       1) מבטל רק מה שצריך (MINIMAL) או לפי strategy.
       2) מניח הוראות חדשות עם clientOrderId מבוסס hash.
     plan = {
-      "cancel": [{"clientOrderId": "..."} ...]   # אופציונלי
-      "create": [ {binance_order_kwargs...}, ... ]  # חובה אם רוצים יצירה
+      "cancel": [{"clientOrderId": "..."} ...],   # אופציונלי
+      "create": [ {binance_order_kwargs...}, ... ],  # אופציונלי/חובה אם רוצים יצירה
       "note": "context string for idempotency"   # אופציונלי
     }
     """
@@ -335,11 +321,9 @@ def atomic_update_orders(
                 if c.get("orderId"):
                     res = client.futures_cancel_order(symbol=symbol, orderId=c["orderId"])
                 else:
-                    # cancel by clientOrderId
                     res = client.futures_cancel_order(symbol=symbol, origClientOrderId=c.get("clientOrderId"))
                 cancelled.append(res)
             except Exception as e:
-                # MINIMAL strategy: ignore missing/filled errors
                 if strategy != "MINIMAL":
                     return {"ok": False, "detail": f"cancel failed: {e}"}
 
@@ -347,21 +331,16 @@ def atomic_update_orders(
     created, errors = [], []
     prefix = os.getenv("ORDER_ID_PREFIX","ALG")
     note = plan.get("note","")
-    # derive common hash from note to make coids stable per plan
     base_key = _h(f"{symbol}|{note}|{time.time():.0f}")
 
     for i, spec in enumerate(plan.get("create") or []):
-        # force safe defaults
         spec = dict(spec)
-        # idempotent coid
         role = (spec.get("role") or spec.get("type") or "ORD")[:6]
         coid = _coid(prefix, symbol, role, f"{base_key}:{i}:{role}")
         spec.setdefault("newClientOrderId", coid)
-
-        # respect workingType/RO
         spec.setdefault("workingType", _working_type())
         if "reduceOnly" not in spec:
-            spec["reduceOnly"] = bool(spec.get("side") in ("SELL","BUY") and spec.get("type","").upper().startswith("TAKE_PROFIT"))
+            spec["reduceOnly"] = bool(spec.get("side") in ("SELL","BUY") and str(spec.get("type","")).upper().startswith("TAKE_PROFIT"))
 
         try:
             res = client.futures_create_order(**spec)
@@ -390,3 +369,4 @@ def atomic_update_orders(
         "verified": ok_verify,
         "strategy": strategy,
     }
+
