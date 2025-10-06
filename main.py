@@ -49,7 +49,7 @@ class ConfirmStore:
 
     @classmethod
     def create(cls, req: Dict[str, Any]) -> None:
-        tid = str(req.get("ticket_id") or f"T_{int(time.time())}")
+        tid = str(req.get("ticket_id") or f"T_{int(time.time())}_{secrets.token_hex(3)}")
         cls._items[tid] = {"ticket_id": tid, "req": dict(req), "ts": time.time(), "approved": None}
         logger.debug("ConfirmStore.create: %s", tid)
 
@@ -94,11 +94,9 @@ app.add_middleware(
 # =================================================
 router = APIRouter(tags=["ops-approval"])
 
-
 # --- Guard import (quiet) ---
 with suppress(Exception):
     from utils.guard_stop import ensure_protective_stop  # type: ignore
-
 
 # optional metrics (no-op fallbacks)
 def record_approval_created(): ...
@@ -179,7 +177,6 @@ except Exception:
     with suppress(Exception):
         from utils.position_sizing import ensure_final_qty  # type: ignore
     if "ensure_final_qty" not in globals():
-        # safe fallback: identity
         def ensure_final_qty(ticket: Dict[str, Any], price: float) -> Dict[str, Any]:
             return ticket
 
@@ -190,9 +187,7 @@ def _get_last_price(symbol: str) -> Optional[float]:
         p = get_price(symbol)
         if p:
             return float(p)
-
     with suppress(Exception):
-        # Import locally to avoid build-time failures
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
         api_sec = os.getenv("BINANCE_API_SECRET","").strip()
@@ -295,7 +290,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         return await place_futures_market(ticket)
 
     try:
-        # Local import to avoid build-time failures
         from binance.client import Client  # type: ignore
     except Exception as e:
         logger.error("binance import failed: %s", e)
@@ -339,13 +333,11 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e1:
             if not _is_code_4061(e1):
                 raise
-            # retry #1: without positionSide
             try:
                 retry_kwargs = dict(base_kwargs)
                 order = client.futures_create_order(**retry_kwargs)
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "no_positionSide"}
             except Exception as e2:
-                # retry #2: derived LONG/SHORT from side
                 try:
                     retry2_kwargs = dict(base_kwargs)
                     retry2_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
@@ -728,7 +720,6 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     _require_bearer(request)
     rec, _ = await _load_ticket(ticket_id)
     if not rec:
-        # also try showing stale (ConfirmStore) if exists
         with suppress(Exception):
             for it in ConfirmStore.pending():
                 if str(it.get("ticket_id")) == str(ticket_id):
@@ -835,7 +826,6 @@ async def ui_pending(request: Request = None):
 async def ui_orders(symbol: str = Query(..., description="Symbol, e.g. SOLUSDT"), request: Request = None):
     _require_bearer(request)
     try:
-        # Local import only inside function
         from binance.client import Client  # type: ignore
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"binance import failed: {e}")
@@ -855,12 +845,10 @@ async def ui_orders(symbol: str = Query(..., description="Symbol, e.g. SOLUSDT")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"futures_get_open_orders error: {e}")
 
-    # Role/TP detection helpers
     tp1_tags = set(t.upper() for t in TP1_TAGS) if TP1_TAGS else set()
     sl_tags = set(t.upper() for t in SL_TAGS)
 
     def detect_role(o: Dict[str, Any]) -> str:
-        # by type first
         typ = (o.get("type") or "").upper()
         cid = (o.get("clientOrderId") or "").upper()
         if "TAKE_PROFIT" in typ:
@@ -870,18 +858,15 @@ async def ui_orders(symbol: str = Query(..., description="Symbol, e.g. SOLUSDT")
                     return "TP1"
             if "TP2" in cid: return "TP2"
             if "TP3" in cid: return "TP3"
-            # Check env tags for TP1
             if any(t in cid for t in tp1_tags):
                 return "TP1"
             return role_guess
         if "STOP" in typ or any(t in cid for t in sl_tags):
             return "SL"
-        # fallback by client id semantics
         if "ENTRY" in cid or "OPEN" in cid:
             return "ENTRY"
         return "OTHER"
 
-    # If multiple TPs with no explicit tag, infer by price proximity to current TP ladder ordering
     try:
         last_price = _get_last_price(sym) or 0.0
     except Exception:
@@ -892,7 +877,6 @@ async def ui_orders(symbol: str = Query(..., description="Symbol, e.g. SOLUSDT")
         role = detect_role(o)
         enriched.append({**o, "_role": role})
 
-    # Try to mark single ambiguous TP? as TP1 by nearest to market (heuristic) if no explicit TP1 exists
     if not any(x["_role"] == "TP1" for x in enriched):
         tps = [x for x in enriched if x["_role"].startswith("TP")]
         if len(tps) >= 1 and last_price > 0:
@@ -903,7 +887,6 @@ async def ui_orders(symbol: str = Query(..., description="Symbol, e.g. SOLUSDT")
             if tps_sorted:
                 tps_sorted[0]["_role"] = "TP1"
 
-    # build HTML
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     health_link = f"{base}/health/tp1?symbols={sym}"
 
@@ -970,7 +953,7 @@ async def ui_orders(symbol: str = Query(..., description="Symbol, e.g. SOLUSDT")
     tail = "</tbody></table></body>"
     return HTMLResponse(head + "\n".join(rows) + tail)
 
-# -------------------- Approve/Reject/Approve Signed/Digest --------------------
+# -------------------- Approve/Reject/Approve/Signed --------------------
 @router.get("/ops/approve", summary="Approve ticket (supports ticket_id) -> executes trade")
 async def approve(ticket_id: str = Query(..., description="ticket_id")):
     ticket, source = await _load_ticket(ticket_id)
@@ -1004,7 +987,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     if ok:
         try:
             sm = _smart_manage_env()
-            if sm["enable"]]:
+            if sm["enable"]:
                 sym = str(ticket.get("symbol","")).upper()
                 sm_result = await _smart_manage_now(sym,
                                                     offset_bps=sm["offset_bps"],
@@ -1027,7 +1010,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         sym, side, qty = ticket.get("symbol",""), ticket.get("side",""), ticket.get("qty","")
         msg = (
             f"✅ <b>Approved</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
-            f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n• Flow: <code>{flow}</code>\n— — —\nבוצע והועבר לניהול."
+            f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n• Flow: <code>{flow}</code>\n— — —\נבוצע והועבר לניהול."
             if ok else
             f"⚠️ <b>Approve Failed</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
             f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n• Flow: <code>{flow}</code>\n— — —\n"
@@ -1233,9 +1216,7 @@ except Exception as _e:
     logger.warning("health_tp1 module not found (%s) – using built-in fallback", _e)
     _health_tp1_loaded = True
 
-    # --- Fallback implementations (no top-level Binance import) ---
     async def quick_check_tp1(symbols, tp1_tags=None, notify_telegram=False):
-        # Import Binance client locally
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
         api_sec = os.getenv("BINANCE_API_SECRET","").strip()
@@ -1248,7 +1229,6 @@ except Exception as _e:
         for sym in symbols:
             symu = str(sym).upper().strip()
 
-            # Skip symbols with no open position
             try:
                 pos_infos = cli.futures_position_information(symbol=symu) or []
                 pos_qty = 0.0
@@ -1256,14 +1236,11 @@ except Exception as _e:
                     q = float(pos_infos[0].get("positionAmt") or 0.0)
                     pos_qty = abs(q)
                 if pos_qty < 1e-12:
-                    # Do not include in output if no open position
                     out[symu] = {"skipped_no_position": True}
                     continue
             except Exception:
-                # On error, keep checking orders but mark unknown pos
                 pass
 
-            # Collect open orders and detect TP1
             try:
                 orders = cli.futures_get_open_orders(symbol=symu)
             except Exception:
@@ -1289,11 +1266,9 @@ except Exception as _e:
                     })
 
             out[symu] = {"tp1_tags": tags, "tp1_present": has_tp1, "open_conditional": found}
-            # Build batched line only for symbols with an open position
             mark = "✅" if has_tp1 else "⚠️"
             batch_lines.append(f"• {symu}: {mark} {'TP1 found' if has_tp1 else 'TP1 missing'}")
 
-        # Send a single batched Telegram message (optional)
         if notify_telegram and len(batch_lines) > 1:
             await _send_telegram_html("\n".join(batch_lines))
 
@@ -1310,13 +1285,11 @@ except Exception as _e:
 @app.on_event("startup")
 async def _startup_tasks():
     if _health_tp1_loaded and HEALTH_TP1_ENABLE:
-        # WATCHLIST -> symbols to check
         watch = [s.strip() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
         if watch:
             asyncio.create_task(health_check_tp1_tags(watch, interval_sec=HEALTH_TP1_INTERVAL_SEC))
             logger.info("health_tp1 background started (interval=%ss, symbols=%s)", HEALTH_TP1_INTERVAL_SEC, ",".join(watch))
 
-    # periodic "smart manage now" for WATCHLIST (optional)
     async def periodic_manager():
         base = PUBLIC_HOST.rstrip("/")
         token = API_BEARER_TOKEN
@@ -1364,6 +1337,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
