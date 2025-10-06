@@ -1172,6 +1172,11 @@ with suppress(Exception):
     from routes.position_ops import router as position_ops_router  # type: ignore
     app.include_router(position_ops_router)
 
+# Mount Locked PnL router (new)
+with suppress(Exception):
+    from routes.locked_report import router as locked_router  # type: ignore
+    app.include_router(locked_router)
+
 # =================================================
 # Root / Health / Ready / Debug
 # =================================================
@@ -1364,6 +1369,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
