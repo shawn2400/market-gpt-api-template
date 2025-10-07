@@ -37,13 +37,34 @@ try:
 except Exception:
     get_klines_sync = None  # type: ignore
 
-try:
-    from utils.binance_client import get_price  # type: ignore
-except Exception:
-    def get_price(symbol: str) -> float:  # type: ignore
-        return 0.0
+# מחיר: קודם utils.binance_client.get_price; אם אין/נכשל — פולבאק ל-python-binance
+def _safe_get_price(symbol: str) -> float:
+    # 1) utils.binance_client
+    try:
+        from utils.binance_client import get_price  # type: ignore
+        p = get_price(symbol)
+        if p:
+            return float(p)
+    except Exception:
+        pass
 
-router = APIRouter(prefix="/scan", tags=["Scanner"], dependencies=[Depends(require_bearer_token)])
+    # 2) python-binance (אם יש מפתחות)
+    try:
+        from binance.client import Client  # type: ignore
+        api_key = os.getenv("BINANCE_API_KEY", "").strip()
+        api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
+        if not api_key or not api_sec:
+            return 0.0
+        cli = Client(api_key, api_sec)
+        info = cli.futures_symbol_ticker(symbol=str(symbol).upper())
+        if info and "price" in info:
+            return float(info["price"])
+    except Exception as e:
+        LOG.debug({"event": "price.fallback_failed", "symbol": symbol, "error": str(e)})
+
+    return 0.0
+
+router = APIRouter(prefix="/scan", tags=["scan"], dependencies=[Depends(require_bearer_token)])
 
 # --- זיכרון קטן למניעת ספאם (per symbol+timeframe) ---
 _STATE: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -236,6 +257,7 @@ async def scan_top_volume(
     except Exception as hb_e:
         LOG.warning({"event": "heartbeat.failed", "error": str(hb_e)})
 
+    # תמיד נחזיר JSON 200
     return {
         "ok": err is None,
         "count_total": len(signals_raw or []),
@@ -318,7 +340,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         tf = timeframe or "15m"
         k = max(60, min(kline_limit, 500))
 
-        have_any_real = False
+        # ננסה אמיתי; אם לא — ניפול לדמו
         for sym in wl:
             try:
                 if get_klines_sync is None:
@@ -328,7 +350,6 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                 if hasattr(df, "__getitem__") and "close" in getattr(df, "columns", []):
                     closes = [float(x) for x in df["close"]]
                 elif isinstance(df, list) and len(df) > 0:
-                    # list of candlesticks (open, high, low, close...) – Binance style
                     closes = [float(row[4]) for row in df]
                 else:
                     raise RuntimeError("unknown klines format")
@@ -365,7 +386,6 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                     "note": note,
                     "details": {"trend": trend, "rsi": rsi_val, "ema21": ema21, "ema50": ema50, "close": close},
                 })
-                have_any_real = True
             except Exception as e:
                 LOG.debug({"event": "klines.symbol_failed", "symbol": sym, "error": str(e)})
                 continue
@@ -380,7 +400,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             phase = (now // 60 + i) % 10
             side = "BUY" if phase < 5 else "SELL"
             score = 7.6 if i == 0 else 6.2 + (i * 0.6)
-            price = float(get_price(sym) or 0.0)
+            price = _safe_get_price(sym)
             out.append({
                 "symbol": sym,
                 "timeframe": tf,
@@ -393,6 +413,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
     except Exception as e:
         LOG.warning({"event": "compute_signals.crashed", "error": str(e)})
         return []
+
 
 
 
