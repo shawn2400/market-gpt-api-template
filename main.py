@@ -56,7 +56,6 @@ _inline_env_defaults: Dict[str, str] = {
     "KILL_ON_CAP": "1",
     "PRICE_PROTECT": "1",
     "USE_WS": "1",
-    # שמרתי גם על ערך ברירת מחדל סביר ל-WS_KEEPALIVE_SEC אם תרצה להשתמש בו בהמשך
     "WS_KEEPALIVE_SEC": "25",
 }
 for _k, _v in _inline_env_defaults.items():
@@ -178,7 +177,6 @@ SL_TAGS = [t.strip() for t in (os.getenv("SL_TAGS","SL,STOP,STOP_LOSS,STOP_LOSS_
 # =================================================
 # ClientOrderId builder (recommended format)
 # =================================================
-# נעדיף את המימוש המרכזי עם מגבלת 36 תווים; אם חסר — נשתמש בפולבק המקומי.
 try:
     from utils.order_ids import build_client_order_id  # type: ignore
 except Exception:
@@ -207,12 +205,46 @@ except Exception:
             return ticket
 
 # Prices
+async def _get_last_price_http(symbol: str) -> Optional[float]:
+    """Try public HTTP endpoints (no API keys)."""
+    sym = symbol.upper()
+    timeout = httpx.Timeout(6.0, connect=2.0)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as cli:
+            # Futures first
+            r = await cli.get("https://fapi.binance.com/fapi/v1/ticker/price", params={"symbol": sym})
+            if r.status_code == 200:
+                data = r.json()
+                p = float(data.get("price"))
+                if p > 0:
+                    return p
+    except Exception:
+        pass
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as cli:
+            # Spot fallback
+            r = await cli.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": sym})
+            if r.status_code == 200:
+                data = r.json()
+                p = float(data.get("price"))
+                if p > 0:
+                    return p
+    except Exception:
+        pass
+    return None
+
 def _get_last_price(symbol: str) -> Optional[float]:
     with suppress(Exception):
         from utils.binance_client import get_price  # type: ignore
         p = get_price(symbol)
         if p:
             return float(p)
+    # public HTTP (sync wrapper over async to keep call sites simple)
+    try:
+        return asyncio.get_event_loop().run_until_complete(_get_last_price_http(symbol))
+    except Exception:
+        pass
+    # official client as last resort (requires keys)
     with suppress(Exception):
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
@@ -220,7 +252,7 @@ def _get_last_price(symbol: str) -> Optional[float]:
         if not api_key or not api_sec:
             return None
         cli = Client(api_key, api_sec)
-        info = cli.futures_symbol_ticker(symbol=symbol)
+        info = cli.futures_symbol_ticker(symbol=symbol.upper())
         if info and "price" in info:
             return float(info["price"])
     return None
@@ -1234,7 +1266,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
 
-# Mount routers
+# Mount inline router
 app.include_router(router)
 
 # Mount position-ops router (BE/Trail/TP/Close/Manage)
@@ -1246,6 +1278,19 @@ with suppress(Exception):
 with suppress(Exception):
     from routes.locked_report import router as locked_router  # type: ignore
     app.include_router(locked_router)
+
+# Mount Scanner + TopK routers (ensure they show up in OpenAPI)
+try:
+    from routes.scan_top_volume import router as scan_router  # type: ignore
+    app.include_router(scan_router)
+except Exception as e:
+    logger.warning("scan_top_volume router not loaded: %s", e)
+
+try:
+    from routes.topk import router as topk_router  # type: ignore
+    app.include_router(topk_router)
+except Exception as e:
+    logger.warning("topk router not loaded: %s", e)
 
 # =================================================
 # Root / Health / Ready / Debug
@@ -1288,8 +1333,8 @@ try:
     from utils.health_tp1 import health_check_tp1_tags, quick_check_tp1  # type: ignore
     _health_tp1_loaded = True
 except Exception as _e:
-    logger.warning("health_tp1 module not found (%s) – using built-in fallback", _e)
-    _health_tp1_loaded = True
+    logger.info("health_tp1 utils not found (%s) – using built-in fallback", _e)
+    _health_tp1_loaded = True  # we provide fallback below
 
     async def quick_check_tp1(symbols, tp1_tags=None, notify_telegram=False):
         from binance.client import Client  # type: ignore
@@ -1439,8 +1484,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
-    # אם תרצה, אכין גם patch ל-Dockerfile/guarders וכו' – תגיד לי.
-
 
 
 
