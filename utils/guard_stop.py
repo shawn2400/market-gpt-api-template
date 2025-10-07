@@ -1,7 +1,7 @@
-# utils/guard_stop.py
+# /app/utils/guard_stop.py
 from __future__ import annotations
 
-import os, time, math
+import os, time, math, re
 from contextlib import suppress
 from typing import Any, Dict, List, Tuple, Optional
 
@@ -100,19 +100,30 @@ with suppress(Exception):
         return _qq(symbol, qty, flt)
 
 # =========================
-# Order IDs
+# Order IDs (מרוכז עם fallback)
 # =========================
-def _coid_fit(s: str, limit: int = 32) -> str:
-    return s if len(s)<=limit else s[:limit-8] + "_" + str(abs(hash(s)))[:7]
+try:
+    from utils.order_ids import build_client_order_id as _builder  # type: ignore
+except Exception:
+    # fallback מקומי (36 תווים, סניטיזציה)
+    _SAFE = re.compile(r'[^A-Za-z0-9._:/-]')
+    def _sanitize(s: str, maxlen: int = 36) -> str:
+        return _SAFE.sub("_", str(s))[:maxlen]
+    def _coid_fit(s: str, maxlen: int = 36) -> str:
+        s = _sanitize(s, maxlen*4)
+        if len(s) <= maxlen: return s
+        import hashlib as _hh
+        h = _hh.md5(s.encode("utf-8")).hexdigest()[:6]
+        return f"{s[:maxlen-(len(h)+1)]}_{h}"
+    def _builder(symbol: str, side: str, role: str) -> str:
+        pref = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
+        role = str(role or "").replace("@","_")
+        ts = int(time.time()*1000)
+        return _coid_fit(f"{pref}-{symbol}-{side}-{role}-{ts}", 36)
 
 def _build_client_order_id(symbol: str, side: str, role: str) -> str:
-    prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
-    return _coid_fit(f"{prefix}_{symbol.upper()}_{side.upper()}_{role.upper()}_{int(time.time())}", 32)
-
-with suppress(Exception):
-    from utils.order_ids import build_client_order_id as _builder  # type: ignore
-    def _build_client_order_id(symbol: str, side: str, role: str) -> str:  # type: ignore
-        return _builder(symbol, side, role)
+    # role עובר ניקוי כאן כדי למנוע '@'
+    return _builder(symbol, side, str(role or "").replace("@","_"))
 
 # =========================
 # Position & open orders
@@ -181,7 +192,7 @@ def _place_stop_quantities(cli, symbol: str, side: str, qty: float, stop_px: flo
         symbol=symbol, side=side, type="STOP_MARKET",
         stopPrice=stop_px, quantity=qty, reduceOnly=True,
         workingType=STOP_WORKING_TYPE, timeInForce="GTC",
-        newClientOrderId=_build_client_order_id(symbol, side, "SL@ALGOGPT"),
+        newClientOrderId=_build_client_order_id(symbol, side, "SL_ALGOGPT"),
     )
 
 def _place_stop_native(cli, symbol: str, side: str, stop_px: float) -> Dict[str,Any]:
@@ -189,7 +200,7 @@ def _place_stop_native(cli, symbol: str, side: str, stop_px: float) -> Dict[str,
         symbol=symbol, side=side, type="STOP_MARKET",
         stopPrice=stop_px, closePosition=True,
         workingType=STOP_WORKING_TYPE, timeInForce="GTC",
-        newClientOrderId=_build_client_order_id(symbol, side, "SL@ALGOGPT"),
+        newClientOrderId=_build_client_order_id(symbol, side, "SL_ALGOGPT"),
     )
 
 def _cancel_stops(cli, symbol: str, keep_order_id: Optional[int], kinds=("STOP","TAKE_PROFIT")) -> int:
