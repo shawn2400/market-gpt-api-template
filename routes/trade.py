@@ -1,6 +1,6 @@
-# routes/trade.py
+# /app/routes/trade.py
 from __future__ import annotations
-import os, time, logging, inspect
+import os, time, logging, inspect, re
 from typing import Any, Dict, Optional, List, Callable
 
 from fastapi import APIRouter, Header, HTTPException, Request, Body, Query
@@ -70,6 +70,21 @@ try:
 except Exception:
     Client = None  # type: ignore
 
+# --------- COID builder (מרכזי עם fallback) ----------
+try:
+    from utils.order_ids import build_client_order_id  # type: ignore
+except Exception:
+    _SAFE = re.compile(r'[^A-Za-z0-9._:/-]')
+    def build_client_order_id(symbol: str, side: str, role: str = "ENTRY") -> str:  # type: ignore
+        pref = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
+        ts = int(time.time()*1000)
+        raw = f"{pref}-{str(symbol).upper()}-{str(side).upper()}-{str(role).upper()}-{ts}"
+        s = _SAFE.sub("_", raw)
+        if len(s) <= 36: return s
+        import hashlib
+        h = hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
+        return f"{s[:36-(len(h)+1)]}_{h}"
+
 # --------- helpers ----------
 def _hedge_mode_enabled() -> bool:
     if os.getenv("POSITION_MODE_OVERRIDE","").strip().lower() in ("hedge","hedged"):
@@ -126,7 +141,8 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "side": side,
             "type": "MARKET",
             "quantity": qty,
-            "newClientOrderId": f"{os.getenv('ORDER_ID_PREFIX','ALG')}_{symbol}_{side}_{int(time.time())}",
+            # ✅ COID חוקי (<=36) עם סניטיזציה
+            "newClientOrderId": build_client_order_id(symbol, side, role="ENTRY"),
         }
 
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
@@ -256,7 +272,7 @@ class TradeRequest(BaseModel):
 
 @router.post("/trade/execute")
 async def trade_execute(
-    request: Request,  # ← חייב להגיע לפני פרמטרים עם ברירת מחדל
+    request: Request,
     req: TradeRequest = Body(...),
     x_idempotency_key: Optional[str] = Header(default=None, alias="X-Idempotency-Key"),
 ):
@@ -363,6 +379,7 @@ async def trade_reject(id: str = Query(..., description="idempotency key or tick
     # נסמן כ-fail בהקשר ביצוע (לא התרחש ביצוע)
     record_trade_fail("HYBRID")
     return {"ok": True, "rejected": True, "id": id}
+
 
 
 
