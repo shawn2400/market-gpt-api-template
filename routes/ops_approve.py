@@ -95,6 +95,29 @@ try:
 except Exception:
     from utils.position_sizing import ensure_final_qty  # type: ignore
 
+# -------- ClientOrderId builder (36 chars, sanitized) ----------
+try:
+    from utils.order_ids import build_client_order_id  # type: ignore
+except Exception:
+    # פולבק קטן כדי לא לשבור — אותו פורמט, מגבלה 36, hash קצר
+    import hashlib as _hl
+    def _coid_fit_local(s: str, limit: int = 36) -> str:
+        s = re.sub(r'[^A-Za-z0-9._:/-]', '_', str(s))
+        if len(s) <= limit:
+            return s
+        h = _hl.md5(s.encode("utf-8")).hexdigest()[:6]
+        return f"{s[:limit-(len(h)+1)]}_{h}"
+    def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Optional[str] = None) -> str:
+        prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
+        sym = str(symbol).upper().strip()
+        sd  = str(side).upper().strip()
+        rl  = str(role).upper().strip().replace("@", "_")
+        ts  = str(int(time.time() * 1000))
+        parts = [prefix, sym, sd, rl, ts]
+        if extra:
+            parts.append(str(extra))
+        return _coid_fit_local("-".join(parts), 36)
+
 # -------- Prices ----------
 def _get_last_price(symbol: str) -> Optional[float]:
     """
@@ -240,7 +263,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "side": side,
             "type": "MARKET",
             "quantity": qty,
-            "newClientOrderId": f"ALG_{symbol}_{side}_{int(time.time())}",
+            "newClientOrderId": build_client_order_id(symbol, side, role="ENTRY"),
         }
 
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
@@ -776,6 +799,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
