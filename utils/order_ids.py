@@ -1,22 +1,30 @@
 # /app/utils/order_ids.py
 from __future__ import annotations
 import os, re, time, hashlib
+from typing import Optional
 
-__all__ = ["build_client_order_id", "coid_fit", "sanitize_coid"]
+"""
+כלי מרכזי לבניית newClientOrderId חוקי לבינאנס (Futures):
+- תווים מותרים: . A-Z a-z 0-9 _ - : /
+- אורך מרבי: 36
+- חיתוך זהיר + hash קצר ליציבות יוניקיות
+- role עובר סניטיזציה (ללא '@' וכדו')
+"""
 
-# Binance allows: ^[.A-Z:/a-z0-9_-]{1,36}$
-_SAFE = re.compile(r'[^A-Za-z0-9._:/-]')
+__all__ = ["build_client_order_id", "sanitize_coid", "coid_fit"]
+
+# Binance regex (לפי הדוקו/פרקטיקה): ^[.A-Z:/a-z0-9_-]{1,36}$
+_ALLOWED_RX = re.compile(r'[^A-Za-z0-9._:/-]')
 
 def sanitize_coid(s: str, maxlen: int = 36) -> str:
-    """Replace illegal chars and trim to maxlen."""
-    return _SAFE.sub("_", str(s))[:maxlen]
+    """מסנן תווים אסורים וחותך לאורך המותר."""
+    return _ALLOWED_RX.sub("_", str(s))[:maxlen]
 
 def coid_fit(s: str, maxlen: int = 36) -> str:
-    """Trim with tiny hash suffix if we overflow, still after sanitation."""
-    s = sanitize_coid(s, maxlen*3)  # sanitize first on a longer buffer
+    """חותך באלג׳ יוניקי קצר אם חורגים מהאורך (אחרי סניטיזציה)."""
+    s = sanitize_coid(s, maxlen * 4)  # buffer
     if len(s) <= maxlen:
         return s
-    # keep most-left, add short hash for uniqueness
     h = hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
     head = s[: maxlen - (len(h) + 1)]
     return f"{head}_{h}"
@@ -25,22 +33,24 @@ def build_client_order_id(
     symbol: str,
     side: str,
     role: str = "ENTRY",
-    extra: str | None = None,
+    extra: Optional[str] = None,
     maxlen: int = 36,
 ) -> str:
     """
-    Recommended COID:
+    תבנית מומלצת:
       {PREFIX}-{SYM}-{SIDE}-{ROLE}-{TS}[-{EXTRA}]
-    All parts sanitized, then trimmed to <= maxlen (36 by default).
+    - PREFIX מ-ORDER_ID_PREFIX (ברירת מחדל ALG)
+    - הכל עובר סניטיזציה + חיתוך <= maxlen
     """
     prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
-    sym = str(symbol).upper().strip()
-    sd  = str(side).upper().strip()
-    rl  = str(role).upper().strip().replace("@", "_")   # נגד Illegal '@'
-    ts  = int(time.time() * 1000)
-    parts = [prefix, sym, sd, rl, str(ts)]
+    sym = str(symbol or "").upper().strip()
+    sd  = str(side or "").upper().strip()
+    rl  = str(role or "").upper().strip().replace("@", "_")
+    ts  = str(int(time.time() * 1000))
+    parts = [prefix, sym, sd, rl, ts]
     if extra:
         parts.append(str(extra))
     base = "-".join(parts)
     return coid_fit(base, maxlen)
+
 
