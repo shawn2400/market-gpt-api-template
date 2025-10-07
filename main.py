@@ -879,138 +879,6 @@ async def ui_pending(request: Request = None):
     )
     return HTMLResponse(body)
 
-# -------------------- UI: Live Orders (TP/SL/Entry)
-@router.get("/ops/ui/orders", summary="List open orders for a symbol (highlights TP1 via tags)")
-async def ui_orders(symbol: str = Query(..., description="Symbol, e.g. SOLUSDT"), request: Request = None):
-    _require_bearer(request)
-    try:
-        from binance.client import Client  # type: ignore
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"binance import failed: {e}")
-
-    api_key = os.getenv("BINANCE_API_KEY","").strip()
-    api_sec = os.getenv("BINANCE_API_SECRET","").strip()
-    if not api_key or not api_sec:
-        raise HTTPException(status_code=500, detail="BINANCE keys missing")
-
-    client = Client(api_key, api_sec)
-    sym = symbol.upper().strip()
-    with suppress(Exception):
-        _align_position_mode(client)
-
-    try:
-        orders = client.futures_get_open_orders(symbol=sym) or []
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"futures_get_open_orders error: {e}")
-
-    tp1_tags = set(t.upper() for t in TP1_TAGS) if TP1_TAGS else set()
-    sl_tags = set(t.upper() for t in SL_TAGS)
-
-    def detect_role(o: Dict[str, Any]) -> str:
-        typ = (o.get("type") or "").upper()
-        cid = (o.get("clientOrderId") or "").upper()
-        if "TAKE_PROFIT" in typ:
-            role_guess = "TP?"
-            for t in ("TP1","TP_1","TP-1","TAKE_PROFIT_1"):
-                if t in cid:
-                    return "TP1"
-            if "TP2" in cid: return "TP2"
-            if "TP3" in cid: return "TP3"
-            if any(t in cid for t in tp1_tags):
-                return "TP1"
-            return role_guess
-        if "STOP" in typ or any(t in cid for t in sl_tags):
-            return "SL"
-        if "ENTRY" in cid or "OPEN" in cid:
-            return "ENTRY"
-        return "OTHER"
-
-    try:
-        last_price = _get_last_price(sym) or 0.0
-    except Exception:
-        last_price = 0.0
-
-    enriched: List[Dict[str, Any]] = []
-    for o in orders:
-        role = detect_role(o)
-        enriched.append({**o, "_role": role})
-
-    if not any(x["_role"] == "TP1" for x in enriched):
-        tps = [x for x in enriched if x["_role"].startswith("TP")]
-        if len(tps) >= 1 and last_price > 0:
-            def dist(o):
-                p = float(o.get("price") or o.get("stopPrice") or 0) or 0.0
-                return abs(p - last_price)
-            tps_sorted = sorted(tps, key=dist)
-            if tps_sorted:
-                tps_sorted[0]["_role"] = "TP1"
-
-    base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
-    health_link = f"{base}/health/tp1?symbols={sym}"
-
-    head = (
-        "<!doctype html><meta charset='utf-8'>"
-        "<body style='font-family:sans-serif;max-width:1100px;margin:2rem auto;line-height:1.5'>"
-        f"<h2 style='margin:0 0 .6rem 0'>Open Orders · <code>{_md_html(sym)}</code></h2>"
-        f"<div style='margin:0 0 1rem 0'><a href='{health_link}' style='text-decoration:none'>{_badge('Check TP1 Health', '#0ea5e9')} 🔍</a></div>"
-        "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
-        "<thead><tr style='background:#fafafa'>"
-        "<th style='text-align:left;padding:.45rem .6rem'>Status</th>"
-        "<th style='text-align:left;padding:.45rem .6rem'>Role</th>"
-        "<th style='text-align:left;padding:.45rem .6rem'>Type</th>"
-        "<th style='text-align:left;padding:.45rem .6rem'>Side</th>"
-        "<th style='text-align:right;padding:.45rem .6rem'>Qty</th>"
-        "<th style='text-align:right;padding:.45rem .6rem'>Price</th>"
-        "<th style='text-align:right;padding:.45rem .6rem'>Stop</th>"
-        "<th style='text-align:left;padding:.45rem .6rem'>Client ID</th>"
-        "<th style='text-align:left;padding:.45rem .6rem'>ReduceOnly</th>"
-        "<th style='text-align:left;padding:.45rem .6rem'>PositionSide</th>"
-        "<th style='text-align:left;padding:.45rem .6rem'>Time</th>"
-        "</tr></thead><tbody>"
-    )
-    rows = []
-    def fmt_float(x):
-        try:
-            f = float(x)
-            return f"{f:.6g}"
-        except Exception:
-            return str(x or "")
-
-    for o in enriched:
-        status = _status_badge(str(o.get("status","")))
-        role_badge = _role_badge(o.get("_role","OTHER"))
-        typ = _md_html(str(o.get("type","")))
-        side = _md_html(str(o.get("side","")))
-        qty = fmt_float(o.get("origQty") or o.get("origqty"))
-        price = fmt_float(o.get("price"))
-        stop = fmt_float(o.get("stopPrice"))
-        coid = _md_html(str(o.get("clientOrderId","")))
-        ro = "Yes" if str(o.get("reduceOnly","false")).lower() == "true" else "No"
-        ps = _md_html(str(o.get("positionSide","")))
-        t_ms = int(o.get("time") or o.get("updateTime") or 0)
-        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(t_ms/1000)) + "Z" if t_ms else "—"
-
-        highlight = "background:#f0fff4" if o.get("_role") == "TP1" else "background:#fff"
-        rows.append(
-            f"<tr style='{highlight}'>"
-            f"<td style='padding:.4rem .6rem'>{status}</td>"
-            f"<td style='padding:.4rem .6rem;font-weight:600'>{role_badge}</td>"
-            f"<td style='padding:.4rem .6rem'>{typ}</td>"
-            f"<td style='padding:.4rem .6rem'>{side}</td>"
-            f"<td style='padding:.4rem .6rem;text-align:right'>{qty}</td>"
-            f"<td style='padding:.4rem .6rem;text-align:right'>{price}</td>"
-            f"<td style='padding:.4rem .6rem;text-align:right'>{stop}</td>"
-            f"<td style='padding:.4rem .6rem'><code>{coid}</code></td>"
-            f"<td style='padding:.4rem .6rem'>{ro}</td>"
-            f"<td style='padding:.4rem .6rem'>{ps}</td>"
-            f"<td style='padding:.4rem .6rem'>{ts}</td>"
-            f"</tr>"
-        )
-    if not rows:
-        rows.append("<tr><td colspan='11' style='padding:.8rem .6rem;color:#6b7280'>No open orders.</td></tr>")
-    tail = "</tbody></table></body>"
-    return HTMLResponse(head + "\n".join(rows) + tail)
-
 # -------------------- Approve/Reject/Approve/Signed --------------------
 @router.get("/ops/approve", summary="Approve ticket (supports ticket_id) -> executes trade")
 async def approve(ticket_id: str = Query(..., description="ticket_id")):
@@ -1457,6 +1325,57 @@ async def _startup_tasks():
             await asyncio.sleep(int(os.getenv("GUARDER_INTERVAL_SEC","45")))
     if _bool_env("GUARDER_ENABLE", True):
         asyncio.create_task(periodic_guarder())
+
+    # ---------- periodic scanner (auto approvals to Telegram) ----------
+    async def periodic_scanner():
+        try:
+            # reuse the router logic (filters/notify/heartbeat)
+            from routes.scan_top_volume import scan_top_volume  # type: ignore
+        except Exception as e:
+            logger.warning("periodic_scanner_unavailable: %s", e)
+            return
+
+        every = int(os.getenv("SCAN_CRON_EVERY_SEC", "45") or "45")
+        tf = os.getenv("SCAN_TIMEFRAME", "15m") or "15m"
+        kline_limit = int(os.getenv("SCAN_KLINES", "200") or "200")
+        limit = int(os.getenv("SCAN_LIMIT", "12") or "12")
+        min_score = float(os.getenv("SCAN_MIN_SCORE", "7.0") or "7.0")
+        rearm_score = float(os.getenv("SCAN_REARM_SCORE", "6.0") or "6.0")
+        dedupe_sec = int(os.getenv("SCAN_DEDUPE_WINDOW_SEC", "300") or "300")
+        leverage = float(os.getenv("DEFAULT_LEVERAGE", "5") or "5")
+        stake = float(os.getenv("DEFAULT_STAKE_USDT", "50") or "50")
+        ttl_sec = int(os.getenv("SCAN_TTL_SEC", "900") or "900")
+        chat = os.getenv("TELEGRAM_CHAT_ID")
+
+        if not chat:
+            logger.info("periodic_scanner: TELEGRAM_CHAT_ID missing; skipping")
+            return
+
+        while True:
+            try:
+                await scan_top_volume(
+                    market="futures",
+                    quote="USDT",
+                    limit=limit,
+                    timeframe=tf,
+                    kline_limit=kline_limit,
+                    min_score=min_score,
+                    require_side=True,
+                    notify="telegram",
+                    chat_id=str(chat),
+                    rich=True,
+                    ttl_sec=ttl_sec,
+                    rearm_score=rearm_score,
+                    dedupe_window_sec=dedupe_sec,
+                    leverage=leverage,
+                    stake_usdt=stake,
+                )
+            except Exception as e:
+                logger.warning("periodic_scanner_error: %s", e)
+            await asyncio.sleep(max(10, every))
+
+    if _bool_env("SCAN_CRON_ENABLE", True):
+        asyncio.create_task(periodic_scanner())
 
 @app.get("/health/tp1", tags=["meta"])
 async def health_tp1_now(symbols: Optional[str] = Query(None, description="CSV of symbols; default from WATCHLIST")):
