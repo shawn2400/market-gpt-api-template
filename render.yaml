@@ -48,7 +48,7 @@ services:
 
       # ================== Security (לא סודי) ==================
       - key: SECURITY_PUBLIC_PATHS
-        value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk
+        value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now
       - key: SECURITY_PUBLIC_PREFIXES
         value: /public,/price,/static,/risk
 
@@ -177,6 +177,28 @@ services:
         value: "5"
       - key: DEFAULT_STAKE_USDT
         value: "50"
+
+      # ================== SCAN CRON (auto approvals to Telegram) ==================
+      - key: SCAN_CRON_ENABLE
+        value: "1"
+      - key: SCAN_CRON_EVERY_SEC
+        value: "45"
+      - key: SCAN_CRON_TIMEFRAME
+        value: 15m
+      - key: SCAN_CRON_KLINES
+        value: "200"
+      - key: SCAN_CRON_LIMIT
+        value: "12"
+      - key: SCAN_CRON_MIN_SCORE
+        value: "7"
+      - key: SCAN_REARM_SCORE
+        value: "6"
+      - key: SCAN_DEDUPE_WINDOW_SEC
+        value: "300"
+      - key: SCAN_TTL_SEC
+        value: "900"
+      - key: SCAN_RICH
+        value: "1"
 
       # ================== Approvals / Telegram routing ==================
       - key: APPROVAL_ENABLED
@@ -456,7 +478,7 @@ services:
       - key: INSTANCE_ID
         value: algogpt-docker
       - key: ROUTES_ONLY
-        value: routes.manager,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.scan_top_volume,routes.topk,routes.ops_flags,routes.guard_smoke,routes.status,routes.debug
+        value: routes.manager,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.scan_top_volume,routes.scan_public,routes.topk,routes.ops_flags,routes.guard_smoke,routes.status,routes.debug
       - key: METRICS_ENABLE
         value: "true"
       - key: PNL_TRACKING
@@ -511,8 +533,6 @@ services:
         value: shaharabecassis8@gmail.com
       - key: DEBUG_ALERTS_HMAC_CHECK
         value: "1"
-
-
 
 
 
