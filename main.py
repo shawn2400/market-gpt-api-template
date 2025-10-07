@@ -119,6 +119,22 @@ app.add_middleware(
 )
 
 # =================================================
+# Helpers: internal base URL (avoid PUBLIC_HOST for self-calls)
+# =================================================
+def _port() -> int:
+    try:
+        return int(os.getenv("PORT", "10000") or "10000")
+    except Exception:
+        return 10000
+
+def get_internal_base() -> str:
+    # Prefer explicit INTERNAL_BASE. Else, localhost.
+    internal = (os.getenv("INTERNAL_BASE") or "").strip()
+    if internal:
+        return internal.rstrip("/")
+    return f"http://127.0.0.1:{_port()}"
+
+# =================================================
 # OPS APPROVE (inlined router)
 # =================================================
 router = APIRouter(tags=["ops-approval"])
@@ -553,13 +569,12 @@ async def _smart_manage_now(symbol: str,
                             splits: Optional[List[float]] = None,
                             atr_mult: Optional[float] = None) -> Dict[str, Any]:
     """
-    Triggers /position-ops/manage-once for a given symbol via internal HTTP.
-    Controlled by SMART_MANAGE_ON_APPROVE and SMART_MANAGE_* envs.
+    Triggers /position-ops/manage-once via INTERNAL base to avoid external 502.
     """
-    base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else ""
+    base = get_internal_base()
     token = API_BEARER_TOKEN
-    if not base or not token:
-        return {"ok": False, "skipped": True, "reason": "missing base or token"}
+    if not token:
+        return {"ok": False, "skipped": True, "reason": "missing token"}
 
     body: Dict[str, Any] = {"symbol": symbol}
     if offset_bps is not None:
@@ -572,15 +587,25 @@ async def _smart_manage_now(symbol: str,
         body["callback_rate"] = None
         body["atr_mult"] = atr_mult
 
-    try:
-        async with httpx.AsyncClient(timeout=15.0) as cli:
-            r = await cli.post(f"{base}/position-ops/manage-once",
-                               headers={"Authorization": f"Bearer {token}"},
-                               json=body)
-        return {"ok": r.status_code < 300, "status": r.status_code, "text": r.text}
-    except Exception as e:
-        logger.warning("smart_manage_now_error: %s", e)
-        return {"ok": False, "error": str(e)}
+    timeout = httpx.Timeout(10.0, connect=2.5)
+    retries = 2
+    for attempt in range(retries + 1):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as cli:
+                r = await cli.post(f"{base}/position-ops/manage-once",
+                                   headers={"Authorization": f"Bearer {token}"},
+                                   json=body)
+            ok = r.status_code < 500 and r.status_code not in (429,)
+            if ok:
+                return {"ok": r.status_code < 300, "status": r.status_code, "text": r.text}
+            # 5xx/429 -> backoff
+            await asyncio.sleep(0.5 + attempt * 0.75)
+        except Exception as e:
+            if attempt >= retries:
+                logger.warning("smart_manage_now_error: %s", e)
+                return {"ok": False, "error": str(e)}
+            await asyncio.sleep(0.5 + attempt * 0.75)
+    return {"ok": False, "error": "smart_manage_exhausted"}
 
 def _smart_manage_env() -> Dict[str, Any]:
     def _parse_floats_csv(val: Optional[str]) -> Optional[List[float]]:
@@ -1090,8 +1115,8 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
 
-        key_good = f"{NS}:expired_log"
-        key_bad  = key_good + "}"
+        key_good = f"{NS}:expired_log}"
+        key_bad  = key_good + "}"  # keep both in case of past key bug
 
         items: List[str] = []
         with suppress(Exception):
@@ -1275,12 +1300,18 @@ except Exception as _e:
                 logger.warning("health_tp1_fallback_loop_error: %s", e)
             await asyncio.sleep(max(60, int(interval_sec)))
 
+# -------------------------------------------------
+# Startup tasks with protective delays and locks
+# -------------------------------------------------
+_manager_lock = asyncio.Lock()
+_manager_backoff = 0.0  # seconds
+
 @app.on_event("startup")
 async def _startup_tasks():
     # --- one-shot "bot online" ping to Telegram (non-blocking) ---
     async def _notify_bot_online():
         try:
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.7)
             name = os.getenv("APP_TITLE", "AlgoGPT Supervisor")
             env  = os.getenv("ENV", os.getenv("ENVIRONMENT","prod"))
             await _send_telegram_html(f"🟢 <b>Bot online</b> · <code>{name}</code> · env=<code>{env}</code>")
@@ -1295,28 +1326,46 @@ async def _startup_tasks():
             logger.info("health_tp1 background started (interval=%ss, symbols=%s)", HEALTH_TP1_INTERVAL_SEC, ",".join(watch))
 
     async def periodic_manager():
-        base = PUBLIC_HOST.rstrip("/")
+        global _manager_backoff
+        await asyncio.sleep(2.0)  # give the server a moment to fully come up
         token = API_BEARER_TOKEN
-        if not base or not token:
+        if not token:
+            logger.info("periodic_manager: missing API_BEARER_TOKEN; skipping")
             return
         syms = [s.strip() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
         if not syms:
             return
+        base = get_internal_base()
+        every_sec = max(10, int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","60")))
         while True:
-            try:
-                async with httpx.AsyncClient(timeout=15.0) as cli:
-                    for s in syms:
-                        await cli.post(f"{base}/position-ops/manage-once",
-                                       headers={"Authorization": f"Bearer {token}"},
-                                       json={"symbol": s})
-            except Exception as e:
-                logger.warning("periodic_manager_error: %s", e)
-            await asyncio.sleep(int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","20")))
+            sleep_extra = _manager_backoff
+            if sleep_extra > 0:
+                await asyncio.sleep(sleep_extra)
+            async with _manager_lock:  # prevent overlaps
+                try:
+                    async with httpx.AsyncClient(timeout=10.0) as cli:
+                        for s in syms:
+                            r = await cli.post(f"{base}/position-ops/manage-once",
+                                               headers={"Authorization": f"Bearer {token}"},
+                                               json={"symbol": s})
+                            if r.status_code >= 500 or r.status_code == 429:
+                                # escalate backoff gently, cap to 90s
+                                _manager_backoff = min((_manager_backoff or 0) * 1.6 + 5, 90)
+                                logger.warning("periodic_manager_backoff: status=%s backoff=%ss", r.status_code, _manager_backoff)
+                            else:
+                                # success path reduces backoff
+                                _manager_backoff = max(0.0, _manager_backoff * 0.5 - 2.0)
+                except Exception as e:
+                    _manager_backoff = min((_manager_backoff or 0) * 1.5 + 5, 90)
+                    logger.warning("periodic_manager_error: %s (backoff now %.1fs)", e, _manager_backoff)
+            await asyncio.sleep(every_sec)
+
     if _bool_env("MANAGER_ENABLE", True):
         asyncio.create_task(periodic_manager())
 
     # Optional: periodic guarder to ensure SL exists on WATCHLIST positions
     async def periodic_guarder():
+        await asyncio.sleep(3.0)
         syms = [s.strip().upper() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
         if not syms:
             return
@@ -1334,12 +1383,12 @@ async def _startup_tasks():
     # ---------- periodic scanner (auto approvals to Telegram) ----------
     async def periodic_scanner():
         try:
-            # reuse the router logic (filters/notify/heartbeat)
             from routes.scan_top_volume import scan_top_volume  # type: ignore
         except Exception as e:
             logger.warning("periodic_scanner_unavailable: %s", e)
             return
 
+        await asyncio.sleep(4.0)  # avoid hammering on boot
         every       = int(os.getenv("SCAN_CRON_EVERY_SEC", "45") or "45")
         tf          = os.getenv("SCAN_CRON_TIMEFRAME", "15m") or "15m"
         kline_limit = int(os.getenv("SCAN_CRON_KLINES", "200") or "200")
@@ -1409,9 +1458,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
-
-
-
 
 
 
