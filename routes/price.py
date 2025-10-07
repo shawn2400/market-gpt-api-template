@@ -15,7 +15,8 @@ except Exception:
     def update_price(symbol: str, price: float) -> None:  # type: ignore
         return None
 
-from utils.binance_client import futures_mark_price  # מחזיר float
+# מחזיר float (סינכרוני)
+from utils.binance_client import futures_mark_price  # type: ignore
 
 # Redis רשותי
 try:
@@ -25,7 +26,6 @@ except Exception:
 
 logger = logging.getLogger("algogpt.price")
 
-# ✅ prefix כדי לא להתנגש עם "/" של ה־app הראשי
 router = APIRouter(prefix="/price", tags=["Price"])
 
 BIN_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
@@ -35,7 +35,7 @@ class PriceResponse(BaseModel):
     ok: bool
     symbol: Optional[str] = None
     price: Optional[float] = None
-    source: Optional[str] = None   # redis/cache/binance_futures_client/binance_fapi/binance_spot
+    source: Optional[str] = None   # redis/cache/binance_futures_client/binance_fapi/binance_fapi_ticker/binance_spot
     ts: Optional[float] = None
     error: Optional[str] = None
 
@@ -76,12 +76,24 @@ async def _binance_fapi_mark(symbol: str) -> Optional[float]:
             if r.status_code != 200:
                 return None
             data = r.json()
-            # לפי Binance, המפתח הוא markPrice, אך לעיתים מתקבל מערך — נכבד את שני המקרים
             if isinstance(data, list) and data:
                 data = data[0]
             return float(data.get("markPrice", 0) or 0) or None
     except Exception as e:
         logger.warning(f"[PRICE] FAPI premiumIndex failed for {symbol}: {e}")
+        return None
+
+async def _binance_fapi_ticker(symbol: str) -> Optional[float]:
+    """פולבאק נוסף: futures ticker/price (מחיר אחרון)"""
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            r = await client.get(f"{BIN_FAPI}/fapi/v1/ticker/price", params={"symbol": symbol})
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            return float(data.get("price", 0) or 0) or None
+    except Exception as e:
+        logger.warning(f"[PRICE] FAPI ticker/price failed for {symbol}: {e}")
         return None
 
 async def _binance_spot_price(symbol: str) -> Optional[float]:
@@ -127,6 +139,13 @@ async def get_price_symbol(symbol: str = Path(..., min_length=3, example="BTCUSD
         await _redis_set(f"price:{sym}", mark, ex=30)
         return PriceResponse(ok=True, symbol=sym, price=float(mark), source="binance_fapi", ts=time.time())
 
+    # 4b) FAPI ticker/price (last)
+    last = await _binance_fapi_ticker(sym)
+    if last and last > 0:
+        update_price(sym, last)
+        await _redis_set(f"price:{sym}", last, ex=30)
+        return PriceResponse(ok=True, symbol=sym, price=float(last), source="binance_fapi_ticker", ts=time.time())
+
     # 5) Spot ticker
     spot = await _binance_spot_price(sym)
     if spot and spot > 0:
@@ -135,8 +154,6 @@ async def get_price_symbol(symbol: str = Path(..., min_length=3, example="BTCUSD
         return PriceResponse(ok=True, symbol=sym, price=float(spot), source="binance_spot", ts=time.time())
 
     raise HTTPException(status_code=502, detail="Unable to fetch price for symbol")
-
-
 
 
 
