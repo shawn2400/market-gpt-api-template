@@ -48,7 +48,7 @@ services:
 
       # ================== Security (לא סודי) ==================
       - key: SECURITY_PUBLIC_PATHS
-        value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/scan/top-volume,/topk
+        value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/telegram/ping,/trade/approve,/trade/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk
       - key: SECURITY_PUBLIC_PREFIXES
         value: /public,/price,/static,/risk
 
@@ -166,7 +166,17 @@ services:
       - key: SYMBOLS_ALLOWLIST_PATH
         value: config/symbols_allowlist.json
       - key: WATCHLIST
-        value: BTCUSDT,ETHUSDT,SOLUSDT
+        value: BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT
+
+      # ================== Scan/Notify quick tuning ==================
+      - key: HEARTBEAT_HOURS
+        value: "2"
+      - key: HEARTBEAT_MIN_SCORE
+        value: "4.0"
+      - key: DEFAULT_LEVERAGE
+        value: "5"
+      - key: DEFAULT_STAKE_USDT
+        value: "50"
 
       # ================== Approvals / Telegram routing ==================
       - key: APPROVAL_ENABLED
@@ -205,6 +215,18 @@ services:
         value: "120"
       - key: OPS_TICKET_TTL_SEC
         value: "1800"
+
+      # ================== Smart-Manage right after approve ==================
+      - key: SMART_MANAGE_ON_APPROVE
+        value: "1"
+      - key: SMART_MANAGE_BE_OFFSET_BPS
+        value: "8"
+      - key: SMART_MANAGE_PCTS
+        value: 1.8,3.2,5.5
+      - key: SMART_MANAGE_SPLITS
+        value: 0.4,0.35,0.25
+      - key: SMART_MANAGE_TRAIL_ATR_MULT
+        value: "1.5"
 
       # ================== Trade & Orders ==================
       - key: EXECUTE_TRADES
@@ -420,7 +442,13 @@ services:
       - key: ETA_VELOCITY_WINDOW
         value: "30"
       - key: DEFAULT_INTERVAL
-        value: 1m
+        value: 15m
+
+      # ================== Guarder (optional) ==================
+      - key: GUARDER_ENABLE
+        value: "1"
+      - key: GUARDER_INTERVAL_SEC
+        value: "45"
 
       # ================== Ops / Misc ==================
       - key: ALGOGPT_VERSION
