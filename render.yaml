@@ -224,19 +224,19 @@ services:
       - key: ORDERS_USE_OCO
         value: "1"
 
-      # >>> Auto-Qty
+      # >>> Auto-Qty (תקציב 50$ לכל עסקה)
       - key: AUTO_QTY_ENABLE
         value: "1"
-      - key: AUTO_QTY_BUDGET_USDT
-        value: "30"
-      - key: AUTO_QTY_LEVERAGE_DEFAULT
-        value: "7"
+      - key: AUTO_QTY_MODE
+        value: notional
+      - key: AUTO_QTY_USDT_PER_TRADE
+        value: "50"
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
         value: "0.35"
       - key: MIN_NOTIONAL_USDT
         value: "5"
       - key: MAX_TRADE_BUDGET
-        value: "30"
+        value: "50"
 
       # --- SL/Trail / BE / Laddering ---
       - key: SL_MONOTONIC
@@ -336,11 +336,15 @@ services:
       - key: SECURITY_PUBLIC_PREFIXES
         value: /public,/price,/static,/risk
 
+      # --- ROUTES (הפעלה מפורשת של סריקה/דירוג) ---
+      - key: ROUTES_ONLY
+        value: routes.manager,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.topk,routes.ops_flags,routes.guard_smoke
+
       # --- OpenAPI include (רשות) ---
       - key: OPENAPI_INCLUDE_TAGS
-        value: "Status,Public Feed,Price,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest"
+        value: "Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest"
 
-      # --- Misc (מועבר מהבקשה שלך) ---
+      # --- Misc ---
       - key: AI_SCHED_ENABLE
         value: "1"
       - key: AI_SCHED_INTERVAL_SEC
