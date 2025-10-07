@@ -178,27 +178,23 @@ SL_TAGS = [t.strip() for t in (os.getenv("SL_TAGS","SL,STOP,STOP_LOSS,STOP_LOSS_
 # =================================================
 # ClientOrderId builder (recommended format)
 # =================================================
-def _coid_fit(s: str, limit: int = 32) -> str:
-    if len(s) <= limit:
-        return s
-    h = hashlib.md5(s.encode("utf-8")).hexdigest()[:7]
-    return f"{s[:limit-8]}_{h}"
-
-def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Optional[str] = None) -> str:
-    """
-    Recommended format (<=32 chars safe): {PREFIX}_{SYM}_{SIDE}_{ROLE}_{TS}[_{EXTRA}]
-    PREFIX from ORDER_ID_PREFIX (default ALG_MAIN).
-    ROLE in: ENTRY | TP1 | TP2 | TP3 | SL | BE | TRAIL | MANUAL
-    """
-    prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG_MAIN").strip() or "ALG_MAIN"
-    sym = str(symbol).upper()
-    sd  = str(side).upper()
-    role = str(role).upper()
-    ts = int(time.time())
-    base = f"{prefix}_{sym}_{sd}_{role}_{ts}"
-    if extra:
-        base = f"{base}_{re.sub(r'[^A-Z0-9]+','',str(extra).upper())}"
-    return _coid_fit(base, 32)
+# נעדיף את המימוש המרכזי עם מגבלת 36 תווים; אם חסר — נשתמש בפולבק המקומי.
+try:
+    from utils.order_ids import build_client_order_id  # type: ignore
+except Exception:
+    def _coid_fit_local(s: str, limit: int = 36) -> str:
+        if len(s) <= limit:
+            return s
+        h = hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
+        return f"{s[:limit-(len(h)+1)]}_{h}"
+    def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Optional[str] = None) -> str:
+        prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
+        sym = str(symbol).upper()
+        sd  = str(side).upper()
+        rl  = str(role).upper().replace("@","_")
+        ts = str(int(time.time()*1000))
+        base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
+        return _coid_fit_local(base, 36)
 
 # Position sizing (AUTO_QTY)
 try:
@@ -280,7 +276,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
         if reject_url:  row.append({"text":"❌ Reject","url":reject_url})
         payload["reply_markup"] = {"inline_keyboard":[row]}
     try:
-        async with httpx.AsyncClient(timeout=12.0) as cli:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as cli:
             r = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
         try:
             data = r.json()
@@ -1444,6 +1440,7 @@ if __name__ == "__main__":
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
     # אם תרצה, אכין גם patch ל-Dockerfile/guarders וכו' – תגיד לי.
+
 
 
 
