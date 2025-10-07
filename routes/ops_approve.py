@@ -64,7 +64,30 @@ except Exception:
     try:
         from app.trade_executor import ConfirmStore  # type: ignore
     except Exception:
-        from main import ConfirmStore  # type: ignore
+        class ConfirmStore:  # type: ignore
+            _P: Dict[str, Dict[str, Any]] = {}
+            @classmethod
+            def pending(cls) -> List[Dict[str, Any]]:
+                return list(cls._P.values())
+            @classmethod
+            def create(cls, payload: Dict[str, Any]) -> str:
+                tid = payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}"
+                payload["ticket_id"] = tid
+                payload.setdefault("created_ts", int(time.time()))
+                payload.setdefault("ttl_sec", TICKET_TTL_SEC)
+                cls._P[tid] = payload
+                return tid
+            @classmethod
+            def get(cls, ticket_id: str) -> Optional[Dict[str, Any]]:
+                return cls._P.get(ticket_id)
+            @classmethod
+            def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]:
+                it = cls._P.pop(ticket_id, None)
+                if not it:
+                    return {"ok": False, "error": "not_found"}
+                it["approved"] = approved
+                it["decided_ts"] = int(time.time())
+                return {"ok": True, "approved": approved, "ticket_id": ticket_id}
 
 # -------- Position sizing (AUTO_QTY) ----------
 try:
@@ -74,6 +97,10 @@ except Exception:
 
 # -------- Prices ----------
 def _get_last_price(symbol: str) -> Optional[float]:
+    """
+    מנסה להביא מחיר מסינקים קיימים; נופל חזרה ל-binance client אם צריך.
+    שים לב: קריאות ל-Binance הן סינכרוניות — עטוף ב-suppress כדי לא לתקוע את הלולאה.
+    """
     with suppress(Exception):
         from utils.binance_client import get_price  # type: ignore
         p = get_price(symbol)
@@ -108,6 +135,7 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
     key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text)==64 else secret_hex_or_text.encode("utf-8")
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
+# keep a single redis connection factory
 async def _redis():
     if not (aioredis and REDIS_URL):
         return None
@@ -122,8 +150,10 @@ def _parse_mode(note: Optional[str]) -> Optional[str]:
     return m.group(1).upper() if m else None
 
 # -------- Telegram --------
-async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
-                              reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
+async def _send_telegram_html(text: str,
+                              approve_url: Optional[str] = None,
+                              reject_url: Optional[str] = None,
+                              preview_url: Optional[str] = None) -> Dict[str, Any]:
     if not BOT_TOKEN or not ADMIN_CHAT_ID:
         return {"ok": False, "skipped": True}
     payload: Dict[str, Any] = {
@@ -137,7 +167,8 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
         if reject_url:  row.append({"text":"❌ Reject","url":reject_url})
         payload["reply_markup"] = {"inline_keyboard":[row]}
     try:
-        async with httpx.AsyncClient(timeout=12.0) as cli:
+        # timeout מגן — מונע "היתקעות" אם טלגרם לא עונה
+        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as cli:
             r = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
         try:
             data = r.json()
@@ -172,6 +203,7 @@ def _align_position_mode(client) -> None:
 
 # -------- Execution backends ----------
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    # דרך מתאם פנימי אם זמין
     try:
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
@@ -222,11 +254,13 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e1:
             if not _is_code_4061(e1):
                 raise
+            # retry 1: בלי positionSide
             try:
                 retry_kwargs = dict(base_kwargs)
                 order = client.futures_create_order(**retry_kwargs)
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "no_positionSide"}
             except Exception as e2:
+                # retry 2: positionSide נגזר מה-side
                 try:
                     retry2_kwargs = dict(base_kwargs)
                     retry2_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
@@ -324,7 +358,7 @@ def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optio
         per_min = avg_per_candle / m
         return per_min if per_min > 0 else None
     except Exception as e:
-        (logger.info if (os.getenv("VELOCITY_LOG_LEVEL","WARNING").upper()=="INFO") else logger.warning)("velocity_calc_failed: %s", e)
+        (logger.info if VELOCITY_LOG_LEVEL=="INFO" else logger.warning)("velocity_calc_failed: %s", e)
         return None
 
 def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp2=None, tp3=None,
@@ -397,10 +431,12 @@ async def _smart_manage_now(symbol: str,
         body["atr_mult"] = atr_mult
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as cli:
-            r = await cli.post(f"{base}/position-ops/manage-once",
-                               headers={"Authorization": f"Bearer {token}"},
-                               json=body)
+        async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, connect=5.0)) as cli:
+            r = await cli.post(
+                f"{base}/position-ops/manage-once",
+                headers={"Authorization": f"Bearer {token}"},
+                json=body
+            )
         return {"ok": r.status_code < 300, "status": r.status_code, "text": r.text}
     except Exception as e:
         logger.warning("smart_manage_now_error: %s", e)
@@ -420,11 +456,13 @@ async def create_ticket(
     position_side = (payload.get("position_side") or payload.get("positionSide") or "BOTH").upper()
     budget = float(payload.get("budget") or payload.get("budget_usd") or 0.0)
 
+    # מקל על ולידציה – qty/lev יכולים להיות 0 כדי לאפשר AUTO_QTY בשלב האישור
     if not (symbol and side):
         raise HTTPException(status_code=422, detail="Missing fields (symbol/side). qty/leverage may be auto at approve.")
 
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
+    # ETA חכם (אם מאופשר)
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         with suppress(Exception):
@@ -450,6 +488,7 @@ async def create_ticket(
     }
     req_body = apply_note_flags(note, req_body)
 
+    # RR מינימלי (אופציונלי)
     with suppress(Exception):
         rr_min_flag = float(req_body.get("rr_min") or 0.0)
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
@@ -528,6 +567,7 @@ def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
     if not price or float(price) <= 0:
         return None
     new_ticket = ensure_final_qty(dict(ticket), float(price))
+    # נרמול position_side: לא מעבירים "BOTH" הלאה
     ps = str(new_ticket.get("position_side") or new_ticket.get("positionSide") or "").upper()
     if ps == "BOTH":
         new_ticket.pop("positionSide", None)
@@ -691,6 +731,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
 
+        # חלק מלקוחות Redis “מחליקים” שמות מפתחות — נוסיף key חלופי למקרה חריג
         key_good = f"{NS}:expired_log"
         key_bad  = key_good + "}"
 
@@ -735,6 +776,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 
 
