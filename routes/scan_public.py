@@ -1,24 +1,29 @@
 # routes/scan_public.py
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from fastapi import APIRouter, Query
-from .scan_top_volume import _compute_signals  # מייבא את החישוב הקיים (RSI/EMA וכו')
+from contextlib import suppress
 
-router = APIRouter(prefix="/scan", tags=["Scanner"])
+router = APIRouter(prefix="/scan", tags=["scan"])
+
+# ננסה למחזר את חישוב הסיגנלים הפנימי
+_compute_signals = None
+with suppress(Exception):
+    from routes.scan_top_volume import _compute_signals  # type: ignore
 
 def _project_public(sig: Dict[str, Any]) -> Dict[str, Any]:
-    d = sig.get("details") or {}
+    details = sig.get("details") or {}
     return {
         "symbol": str(sig.get("symbol") or "").upper(),
         "timeframe": str(sig.get("timeframe") or ""),
         "side": sig.get("side"),
         "score": sig.get("score"),
         "note": sig.get("note"),
-        "trend": d.get("trend"),
-        "rsi": d.get("rsi"),
-        "ema21": d.get("ema21"),
-        "ema50": d.get("ema50"),
-        # ללא close/entry_price/ttl או כל דבר שקשור לאישור/הזמנה
+        # שדות אינדיקטיביים בלבד — בלי פרטי הזמנה
+        "trend": details.get("trend"),
+        "rsi": details.get("rsi"),
+        "ema21": details.get("ema21"),
+        "ema50": details.get("ema50"),
     }
 
 @router.get("/public-now", summary="Public scan (read-only, no approvals/alerts)")
@@ -31,6 +36,8 @@ async def scan_public_now(
     min_score: float = Query(7.0),
     require_side: bool = Query(True),
 ):
+    if _compute_signals is None:
+        return {"ok": False, "error": "scanner_unavailable"}
     try:
         raw = await _compute_signals(market, quote, limit, timeframe, kline_limit)
         filtered = [
@@ -42,3 +49,4 @@ async def scan_public_now(
         return {"ok": True, "returned": len(filtered), "signals": filtered, "mode": "public"}
     except Exception as e:
         return {"ok": False, "error": f"public_scan_failed: {e}", "signals": [], "mode": "public"}
+
