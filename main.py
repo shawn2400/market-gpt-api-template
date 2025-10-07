@@ -1154,6 +1154,11 @@ try:
 except Exception as e:
     logger.warning("scan_top_volume router not loaded: %s", e)
 
+# NEW: public read-only scan endpoints
+with suppress(Exception):
+    from routes.scan_public import router as scan_public_router  # type: ignore
+    app.include_router(scan_public_router)
+
 try:
     from routes.topk import router as topk_router  # type: ignore
     app.include_router(topk_router)
@@ -1335,17 +1340,18 @@ async def _startup_tasks():
             logger.warning("periodic_scanner_unavailable: %s", e)
             return
 
-        every = int(os.getenv("SCAN_CRON_EVERY_SEC", "45") or "45")
-        tf = os.getenv("SCAN_TIMEFRAME", "15m") or "15m"
-        kline_limit = int(os.getenv("SCAN_KLINES", "200") or "200")
-        limit = int(os.getenv("SCAN_LIMIT", "12") or "12")
-        min_score = float(os.getenv("SCAN_MIN_SCORE", "7.0") or "7.0")
+        every       = int(os.getenv("SCAN_CRON_EVERY_SEC", "45") or "45")
+        tf          = os.getenv("SCAN_CRON_TIMEFRAME", "15m") or "15m"
+        kline_limit = int(os.getenv("SCAN_CRON_KLINES", "200") or "200")
+        limit       = int(os.getenv("SCAN_CRON_LIMIT", "12") or "12")
+        min_score   = float(os.getenv("SCAN_CRON_MIN_SCORE", "7.0") or "7.0")
         rearm_score = float(os.getenv("SCAN_REARM_SCORE", "6.0") or "6.0")
-        dedupe_sec = int(os.getenv("SCAN_DEDUPE_WINDOW_SEC", "300") or "300")
-        leverage = float(os.getenv("DEFAULT_LEVERAGE", "5") or "5")
-        stake = float(os.getenv("DEFAULT_STAKE_USDT", "50") or "50")
-        ttl_sec = int(os.getenv("SCAN_TTL_SEC", "900") or "900")
-        chat = os.getenv("TELEGRAM_CHAT_ID")
+        dedupe_sec  = int(os.getenv("SCAN_DEDUPE_WINDOW_SEC", "300") or "300")
+        ttl_sec     = int(os.getenv("SCAN_TTL_SEC", "900") or "900")
+        leverage    = float(os.getenv("DEFAULT_LEVERAGE", "5") or "5")
+        stake       = float(os.getenv("DEFAULT_STAKE_USDT", "50") or "50")
+        rich        = (os.getenv("SCAN_RICH", "1").lower() in ("1","true","yes","on"))
+        chat        = os.getenv("TELEGRAM_CHAT_ID")
 
         if not chat:
             logger.info("periodic_scanner: TELEGRAM_CHAT_ID missing; skipping")
@@ -1363,7 +1369,7 @@ async def _startup_tasks():
                     require_side=True,
                     notify="telegram",
                     chat_id=str(chat),
-                    rich=True,
+                    rich=rich,
                     ttl_sec=ttl_sec,
                     rearm_score=rearm_score,
                     dedupe_window_sec=dedupe_sec,
@@ -1403,7 +1409,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
-
 
 
 
