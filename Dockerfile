@@ -36,9 +36,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     MPLCONFIGDIR=/app/.cache/matplotlib \
     TZ=Asia/Jerusalem \
-    DEBIAN_FRONTEND=noninteractive
-
-# שים לב: НЕ מגדירים כאן PORT — הפלטפורמה תזריק PORT דינמי.
+    DEBIAN_FRONTEND=noninteractive \
+    PORT=10000
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     curl tini ca-certificates tzdata \
@@ -66,25 +65,20 @@ RUN test -f /app/prestart.sh && chmod +x /app/prestart.sh || true \
 USER appuser
 
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
-  CMD ["/bin/sh", "-c", "[ -x /app/health_full.sh ] && /app/health_full.sh || curl -fsS http://127.0.0.1:${PORT}/health || exit 1"]
+  CMD ["/bin/sh","-c","[ -x /app/health_full.sh ] && /app/health_full.sh || curl -fsS http://127.0.0.1:${PORT:-10000}/health || exit 1"]
 
-# EXPOSE לא הכרחי ברנדר, נשאיר לדיוק מקומי
 EXPOSE 10000
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# מריצים עם קובץ קונפיג (נקרא gunicorn_conf.py)
-CMD bash -lc "bash /app/prestart.sh 2>/dev/null || true && \
-  gunicorn ${APP_MODULE} \
-    -c gunicorn_conf.py \
+CMD ["/bin/sh","-lc","/app/prestart.sh 2>/dev/null || true; \
+  gunicorn ${APP_MODULE} -c gunicorn_conf.py \
     --workers ${WEB_CONCURRENCY:-1} \
     --bind 0.0.0.0:${PORT:-10000} \
     --timeout ${GUNICORN_TIMEOUT:-120} \
     --graceful-timeout 30 \
     --keep-alive 5 \
-    --worker-class uvicorn.workers.UvicornWorker"
-
-
+    --worker-class uvicorn.workers.UvicornWorker"]
 
 
 
