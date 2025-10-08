@@ -57,13 +57,13 @@ EXPLAIN_COOLDOWN_SEC = int(os.getenv("OPS_EXPLAIN_COOLDOWN_SEC", "45"))
 EXPLAIN_MAX_PER_MIN  = int(os.getenv("OPS_EXPLAIN_MAX_PER_MIN", "6"))
 EXPLAIN_MIN_SCORE    = float(os.getenv("OPS_EXPLAIN_MIN_SCORE", "0"))
 
-def set_explain_enabled(enabled: bool) -> None:
-    """הדלקה/כיבוי דינמי של הודעות הסבר טריידים במהלך ריצה."""
+def set_explain_enabled(on: bool) -> None:
+    """מאפשר/מכבה Explain-on-Trade בזמן ריצה (נשמר בזיכרון)."""
     global _EXPLAIN_ON
-    _EXPLAIN_ON = bool(enabled)
+    _EXPLAIN_ON = bool(on)
 
 def get_explain_enabled() -> bool:
-    """בדיקה האם מצב הסבר טריידים פעיל כרגע."""
+    """מחזיר את המצב הנוכחי של Explain-on-Trade."""
     return bool(_EXPLAIN_ON)
 
 # ===================== Bundling / Rate-limit =====================
