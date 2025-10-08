@@ -1001,7 +1001,6 @@ async def ui_pending(request: Request = None):
         "</body>"
     )
     return HTMLResponse(body)
-
 # --- Approve/Reject flows ---
 @router.get("/ops/approve")
 async def approve(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
@@ -1590,8 +1589,6 @@ if __name__ == "__main__":
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     module_target = os.getenv("UVICORN_APP") or f"{os.path.splitext(os.path.basename(__file__))[0]}:app"
     uvicorn.run(module_target, host=host, port=port, reload=reload_)
-
-
 
 
 
