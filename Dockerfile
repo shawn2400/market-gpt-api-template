@@ -29,7 +29,6 @@ FROM python:3.11-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONOPTIMIZE=1 \
-    PORT=10000 \
     WEB_CONCURRENCY=1 \
     GUNICORN_TIMEOUT=120 \
     PYTHONPATH=/app \
@@ -39,32 +38,28 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TZ=Asia/Jerusalem \
     DEBIAN_FRONTEND=noninteractive
 
+# שים לב: НЕ מגדירים כאן PORT — הפלטפורמה תזריק PORT דינמי.
+
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     curl tini ca-certificates tzdata \
     libopenblas0-openmp liblapack3 \
     libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
     procps psmisc \
-    # כלי דיבאג HMAC (xxd מגיע מ-vim-common):
     openssl vim-common \
  && rm -rf /var/lib/apt/lists/*
 
-# שכבת ההתקנות מה-builder
 COPY --from=builder /install /usr/local
 
-# משתמש לא-שורש
 RUN useradd -ms /bin/bash appuser
 
-# קוד האפליקציה
 WORKDIR /app
 COPY . .
 
-# תיקיות בסיס + ניקוי __pycache__
 RUN mkdir -p /app/static /app/logs /app/data /app/.cache \
  && chmod 755 /app/static /app/logs /app/.cache /app/data || true \
  && chown -R appuser:appuser /app \
  && (find /usr/local /app -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true)
 
-# prestart & health (אופציונלי)
 RUN test -f /app/prestart.sh && chmod +x /app/prestart.sh || true \
  && test -f /app/health_full.sh && chmod +x /app/health_full.sh || true
 
@@ -73,18 +68,22 @@ USER appuser
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
   CMD ["/bin/sh", "-c", "[ -x /app/health_full.sh ] && /app/health_full.sh || curl -fsS http://127.0.0.1:${PORT}/health || exit 1"]
 
+# EXPOSE לא הכרחי ברנדר, נשאיר לדיוק מקומי
 EXPOSE 10000
+
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# מריצים את main:app דרך Gunicorn+UvicornWorker
+# מריצים עם קובץ קונפיג (נקרא gunicorn_conf.py)
 CMD bash -lc "bash /app/prestart.sh 2>/dev/null || true && \
   gunicorn ${APP_MODULE} \
+    -c gunicorn_conf.py \
     --workers ${WEB_CONCURRENCY:-1} \
     --bind 0.0.0.0:${PORT:-10000} \
     --timeout ${GUNICORN_TIMEOUT:-120} \
     --graceful-timeout 30 \
     --keep-alive 5 \
     --worker-class uvicorn.workers.UvicornWorker"
+
 
 
 
