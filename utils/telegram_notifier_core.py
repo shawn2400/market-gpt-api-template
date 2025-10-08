@@ -57,6 +57,15 @@ EXPLAIN_COOLDOWN_SEC = int(os.getenv("OPS_EXPLAIN_COOLDOWN_SEC", "45"))
 EXPLAIN_MAX_PER_MIN  = int(os.getenv("OPS_EXPLAIN_MAX_PER_MIN", "6"))
 EXPLAIN_MIN_SCORE    = float(os.getenv("OPS_EXPLAIN_MIN_SCORE", "0"))
 
+def set_explain_enabled(enabled: bool) -> None:
+    """הדלקה/כיבוי דינמי של הודעות הסבר טריידים במהלך ריצה."""
+    global _EXPLAIN_ON
+    _EXPLAIN_ON = bool(enabled)
+
+def get_explain_enabled() -> bool:
+    """בדיקה האם מצב הסבר טריידים פעיל כרגע."""
+    return bool(_EXPLAIN_ON)
+
 # ===================== Bundling / Rate-limit =====================
 BUNDLE_ENABLE     = os.getenv("OPS_ALERT_BUNDLING", "1").lower() in ("1","true","yes","on")
 BUNDLE_WINDOW_SEC = int(os.getenv("OPS_ALERT_BUNDLE_WINDOW_SEC", "30"))
