@@ -554,87 +554,6 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.error("armed_execute failed: %s", e)
         return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
-
-# --- ETA helpers ---
-def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optional[float]:
-    try:
-        from utils.get_klines import get_klines_sync  # type: ignore
-        m = {"1m":1, "3m":3, "5m":5, "15m":15, "30m":30, "1h":60}.get(interval, 15)
-        n = max(10, math.ceil(window_min / m) + 5)
-        kl = get_klines_sync(symbol, interval=interval, limit=n) or []
-
-        closes: List[float]
-        try:
-            if 'DataFrame' in str(type(kl)):
-                cols = getattr(kl, 'columns', [])
-                if hasattr(kl, 'columns') and ('close' in cols):
-                    closes = [float(x) for x in kl['close'].tolist()]
-                else:
-                    closes = [float(x) for x in kl.iloc[:, 4].tolist()]
-            else:
-                closes = [float(x[4]) for x in kl if len(x) >= 5]
-        except Exception:
-            closes = [float(x[4]) for x in kl if isinstance(x, (list, tuple)) and len(x) >= 5]
-
-        if len(closes) < 2:
-            return None
-        deltas = [abs(closes[i] - closes[i-1]) for i in range(1, len(closes))]
-        avg_per_candle = sum(deltas) / len(deltas)
-        per_min = avg_per_candle / m
-        return per_min if per_min > 0 else None
-    except Exception as e:
-        (logger.info if VELOCITY_LOG_LEVEL == "INFO" else logger.warning)("velocity_calc_failed: %s", e)
-        return None
-
-def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp2=None, tp3=None,
-                interval: str = DEFAULT_INTERVAL, window_min: int = ETA_VELOCITY_WINDOW) -> Dict[str, Optional[int]]:
-    vpm = _calc_velocity_per_min(symbol, interval, window_min)
-    if not (price_now and isinstance(vpm, (int, float)) and vpm > 0):
-        return {"eta_tp1_min": None, "eta_tp2_min": None, "eta_tp3_min": None}
-    def _eta(tgt):
-        if tgt is None: return None
-        dist = abs(float(tgt) - float(price_now))
-        return int(math.ceil(dist / vpm)) if vpm > 0 else None
-    return {"eta_tp1_min": _eta(tp1), "eta_tp2_min": _eta(tp2), "eta_tp3_min": _eta(tp3)}
-
-# --- Ticket storage ---
-import json as _json
-
-async def _load_ticket(tid: str) -> Tuple[Optional[Dict[str, Any]], str]:
-    if aioredis and REDIS_URL:
-        try:
-            r = await _get_redis_cached()
-            if r:
-                raw = await r.get(f"{NS}:ticket:{tid}")
-                if raw:
-                    rec = _json.loads(raw)
-                    from time import time as _now
-                    if (_now() - float(rec.get("ts", 0))) <= TICKET_TTL_SEC:
-                        return (rec.get("req") or rec), "redis"
-        except Exception as e:
-            logger.warning("redis_load_failed: %s", e)
-    try:
-        for it in (ConfirmStore.pending() or []):
-            if str(it.get("ticket_id")) == str(tid):
-                return (it.get("req") or it), "confirmstore"
-    except Exception as e:
-        logger.warning("confirmstore_load_failed: %s", e)
-    return None, "none"
-
-# Do NOT overwrite status unless explicitly provided; also remove after decision
-async def _delete_ticket(tid: str, source: str, final_status: Optional[bool] = None) -> None:
-    if source == "redis" and aioredis and REDIS_URL:
-        try:
-            r = await _get_redis_cached()
-            if r:
-                await r.delete(f"{NS}:ticket:{tid}")
-        except Exception as e:
-            logger.warning("redis_delete_failed: %s", e)
-    if final_status is not None:
-        with suppress(Exception):
-            ConfirmStore.decide(tid, approved=final_status)
-        with suppress(Exception):
-            ConfirmStore.remove(tid)
 # main_part2.py  (המשך ישיר — חבר אחרי main_part1.py)
 
 # --- Smart manage after approve ---
@@ -900,7 +819,7 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
         "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
         f"{_rows_kv_html(rec)}"
         "</table>"
-        "<p style='color:#777;margin-top:1rem'>טיפ: ניתן לקרוא/לאשר גם מהטלגרם.</p>"
+        "<p style='	color:#777;margin-top:1rem'>טיפ: ניתן לקרוא/לאשר גם מהטלגרם.</p>"
         "</body>"
     )
     return HTMLResponse(body)
@@ -1064,6 +983,9 @@ async def reject(ticket_id: str = Query(..., description="ticket_id"), request: 
         await _send_telegram_html(
             f"❌ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n— — —\nNo action was taken."
         )
+    # ✅ מטריקה על דחייה (תיקון)
+    with suppress(Exception):
+        record_approval_rejected()
     return _html("❌ נדחה. לא בוצעה פעולה.")
 
 @router.post("/ops/approve/signed")
@@ -1174,7 +1096,8 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
 
-        key_good = f"{NS}:expired_log}"
+        # ✅ תיקון הטייפו (הוסר סוגר מסולסל מיותר)
+        key_good = f"{NS}:expired_log"
         key_bad  = f"{NS}:expired_log_bad"
 
         items: List[str] = []
@@ -1507,6 +1430,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
