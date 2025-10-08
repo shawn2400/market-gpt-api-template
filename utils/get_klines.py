@@ -1,13 +1,19 @@
 # utils/get_klines.py
 from __future__ import annotations
-import asyncio
+import asyncio, random, os
 from typing import List, Dict, Any
-import httpx
 import pandas as pd
-from utils.symbols import normalize_symbol
 
-BINANCE_FAPI = "https://fapi.binance.com"
-BINANCE_SPOT = "https://api.binance.com"
+from utils.symbols import normalize_symbol
+from utils.http_client import safe_get
+
+BINANCE_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
+BINANCE_SPOT = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").rstrip("/")
+
+# קונקרנסי נשלט ע"י http_client; כאן נוסיף jitter עדין כדי לפזר עומס
+_BASE_PAUSE_MS = int(os.getenv("KLINES_BASE_PAUSE_MS", "60"))
+_JITTER_MS_MIN = int(os.getenv("KLINES_JITTER_MS_MIN", "20"))
+_JITTER_MS_MAX = int(os.getenv("KLINES_JITTER_MS_MAX", "120"))
 
 _last_ts: Dict[str, int] = {}
 
@@ -31,41 +37,44 @@ def _to_dataframe(kl: List[List[Any]]) -> pd.DataFrame:
     df["timestamp"] = df["close_time"]
     return df
 
-async def _rest_klines(symbol: str, interval: str, limit: int, market_type: str) -> pd.DataFrame:
-    norm = normalize_symbol(symbol) if market_type == "futures" else symbol
-    params = {"symbol": norm, "interval": interval, "limit": int(limit)}
-    async with httpx.AsyncClient(timeout=8.0) as x:
-        r = await x.get(_endpoint_for(market_type), params=params)
-        r.raise_for_status()
-        return _to_dataframe(r.json())
+async def _sleep_jitter():
+    ms = _BASE_PAUSE_MS + random.randint(_JITTER_MS_MIN, _JITTER_MS_MAX)
+    await asyncio.sleep(ms / 1000.0)
+
+async def _rest_klines(symbol: str, interval: str, limit: int, market_type: str, start_time: int | None) -> pd.DataFrame:
+    params: Dict[str, Any] = {"symbol": normalize_symbol(symbol) if market_type == "futures" else symbol,
+                               "interval": interval, "limit": int(limit)}
+    if start_time:
+        params["startTime"] = int(start_time)
+    await _sleep_jitter()
+    r = await safe_get(_endpoint_for(market_type), params=params, retries=3, retry_base=0.5)
+    r.raise_for_status()
+    return _to_dataframe(r.json())
 
 async def get_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> pd.DataFrame:
     key = _cache_key(market_type, symbol, interval)
     since = _last_ts.get(key, 0)
 
-    async def _fetch(mtype: str, use_since: bool) -> pd.DataFrame:
-        try:
-            params = {"symbol": normalize_symbol(symbol) if mtype == "futures" else symbol,
-                      "interval": interval, "limit": int(limit)}
-            if use_since and since:
-                params["startTime"] = since + 1
-            async with httpx.AsyncClient(timeout=8.0) as x:
-                r = await x.get(_endpoint_for(mtype), params=params)
-                r.raise_for_status()
-                df = _to_dataframe(r.json())
-                if not df.empty:
-                    _last_ts[key] = int(df["close_time"].iloc[-1].timestamp() * 1000)
-                return df
-        except Exception:
-            return pd.DataFrame()
-
     # 1) Futures עם since (אינקרמנטלי), אם אין – פולפאץ'
-    df = await _fetch("futures", use_since=True)
+    df = pd.DataFrame()
+    try:
+        df = await _rest_klines(symbol, interval, limit, "futures", since + 1 if since else None)
+    except Exception:
+        df = pd.DataFrame()
     if df.empty:
-        df = await _fetch("futures", use_since=False)
+        try:
+            df = await _rest_klines(symbol, interval, limit, "futures", None)
+        except Exception:
+            df = pd.DataFrame()
     # 2) פולבאק ל־Spot
     if df.empty:
-        df = await _fetch("spot", use_since=False)
+        try:
+            df = await _rest_klines(symbol, interval, limit, "spot", None)
+        except Exception:
+            df = pd.DataFrame()
+
+    if not df.empty:
+        _last_ts[key] = int(df["close_time"].iloc[-1].timestamp() * 1000)
     return df
 
 def get_klines_sync(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> pd.DataFrame:
@@ -73,11 +82,12 @@ def get_klines_sync(symbol: str, interval: str, limit: int = 150, market_type: s
         loop = asyncio.get_running_loop()
         if loop.is_running():
             fut = asyncio.run_coroutine_threadsafe(get_klines(symbol, interval, limit, market_type), loop)
-            return fut.result(timeout=10)
+            return fut.result(timeout=15)
     except RuntimeError:
         return asyncio.run(get_klines(symbol, interval, limit, market_type))
     except Exception:
         return pd.DataFrame()
+
 
 
 
