@@ -193,7 +193,7 @@ services:
         value: "7"
       - key: SCAN_REARM_SCORE
         value: "6"
-      - key: SCAN_DEDUPLE_WINDOW_SEC
+      - key: SCAN_DEDUPE_WINDOW_SEC
         value: "300"
       - key: SCAN_TTL_SEC
         value: "900"
@@ -218,7 +218,7 @@ services:
       - key: TELEGRAM_AUTO_WEBHOOK
         value: "1"
       - key: TELEGRAM_PARSE_MODE
-        value: HTML
+        value: "HTML"
       - key: APPROVAL_PUBSUB_CHANNEL
         value: ops:ticket:events
       - key: APPROVAL_RR_MIN
@@ -533,6 +533,7 @@ services:
         value: shaharabecassis8@gmail.com
       - key: DEBUG_ALERTS_HMAC_CHECK
         value: "1"
+
 
 
 
