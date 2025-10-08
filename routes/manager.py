@@ -4,72 +4,59 @@ import os, json, time, hashlib, asyncio, logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import httpx  # ← חדש: נדרש לשליחת ה-POST ל-/alerts/ingest
+import httpx
 from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 
-from utils.anti_replay import verify_request  # ← Anti-Replay
+from utils.anti_replay import verify_request
+from utils.telegram_notifier import TelegramNotifier, build_ticket_buttons
 
 logger = logging.getLogger("algogpt.manager")
 router = APIRouter(tags=["manager"])
 
-# ---- Config / Paths ----
 BASE_DIR   = Path(os.getenv("BASE_DIR", "/app"))
 INGEST_DIR = Path(os.getenv("INGEST_DIR", str(BASE_DIR / "static" / "cache")))
 MANAGER_ENABLE       = os.getenv("MANAGER_ENABLE", "1").lower() in ("1","true","yes","on")
 MANAGER_INTERVAL_SEC = int(os.getenv("MANAGER_INTERVAL_SEC", "10"))
+CONFIRMSTORE_ENABLE  = os.getenv("CONFIRMSTORE_ENABLE", "1").lower() in ("1","true","yes","on")
 
-# ---- Alerts ingest target / auth ----
 PUBLIC_HOST = (os.getenv("PUBLIC_HOST", "") or os.getenv("WEBHOOK_HOST", "")).rstrip("/")
 ALERTS_INGEST_URL = os.getenv("ALERTS_INGEST_URL", f"{PUBLIC_HOST}/alerts/ingest").strip()
 API_TOKEN = os.getenv("API_TOKEN", os.getenv("PRIMARY_API_TOKEN", "")).strip()
 
-# ברירות מחדל כדי לעבור ולידציה בצד /alerts/ingest (גם אם דורשים אישור)
 DEFAULT_QTY = float(os.getenv("DEFAULT_QTY", "0.001"))
 DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "5"))
-
 HTTP_TIMEOUT = float(os.getenv("MANAGER_HTTP_TIMEOUT", "10.0"))
 
-# ---- ConfirmStore (מ-utils.trade_executor) – משמש *נפילה אחורה* בלבד ----
+# ConfirmStore — מכבד את CONFIRMSTORE_ENABLE
 try:
+    if not CONFIRMSTORE_ENABLE:
+        raise RuntimeError("ConfirmStore disabled by env")
     from utils.trade_executor import ConfirmStore  # type: ignore
 except Exception as e:
-    logger.error("ConfirmStore missing (fallback dummy will be used): %s", e)
-    class _Dummy:
-        _P: Dict[str, Dict[str, Any]] = {}
+    logger.error("ConfirmStore unavailable (%s). Fallback disabled=%s", e, not CONFIRMSTORE_ENABLE)
+    class _NoConfirm:
         @classmethod
-        def pending(cls) -> List[Dict[str, Any]]:
-            return list(cls._P.values())
+        def pending(cls) -> List[Dict[str, Any]]: return []
         @classmethod
-        def create(cls, payload: Dict[str, Any]) -> str:
-            tid = payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}"
-            payload["ticket_id"] = tid
-            cls._P[tid] = payload
-            return tid
+        def create(cls, payload: Dict[str, Any]) -> str: raise RuntimeError("ConfirmStore disabled")
         @classmethod
         def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]:
-            it = cls._P.pop(ticket_id, None)
-            if not it: return {"ok": False, "error": "not_found"}
-            return {"ok": True, "approved": approved, "ticket_id": ticket_id}
+            raise RuntimeError("ConfirmStore disabled")
         @classmethod
-        def flush_all(cls) -> None:
-            cls._P.clear()
-        flush = reset = flush_all
-    ConfirmStore = _Dummy  # type: ignore
+        def flush_all(cls) -> None: return None
+    ConfirmStore = _NoConfirm  # type: ignore
 
-# ---- Telemetry (גלובלי) ----
 TICK_COUNT: int = 0
 LAST_TICK_TS: int = 0
 LAST_CREATED: List[str] = []
 LAST_PENDING: int = 0
 LAST_ERROR: Optional[str] = None
 
-# ---- Models ----
 class UpdateTicketReq(BaseModel):
     ticket_id: str
     action: str  # APPROVE | REJECT
 
-# ---- Helpers ----
 def _ticket_id_for(obj: Dict[str, Any]) -> str:
     key = {
         "symbol": obj.get("symbol"),
@@ -102,19 +89,10 @@ def _load_ingests() -> List[Dict[str, Any]]:
 
 def _get_pending_safe() -> List[Dict[str, Any]]:
     try:
-        if hasattr(ConfirmStore, "pending") and callable(getattr(ConfirmStore, "pending")):
-            res = ConfirmStore.pending()  # type: ignore
-            if isinstance(res, list): return [x for x in res if isinstance(x, dict)]
+        res = ConfirmStore.pending()  # type: ignore
+        return [x for x in res if isinstance(x, dict)]
     except Exception:
-        pass
-    for attr in ("_P", "pending"):
-        try:
-            data = getattr(ConfirmStore, attr, None)
-            if isinstance(data, dict): return list(data.values())
-            if isinstance(data, list): return [x for x in data if isinstance(x, dict)]
-        except Exception:
-            pass
-    return []
+        return []
 
 def _already_pending(tid: str) -> bool:
     try:
@@ -133,6 +111,7 @@ async def _post_alerts_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("ALERTS_INGEST_URL/PUBLIC_HOST not configured")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as cli:
         r = await cli.post(ALERTS_INGEST_URL, json=payload, headers=_auth_headers())
+        data = {}
         try:
             data = r.json()
         except Exception:
@@ -162,21 +141,10 @@ def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
         "require_approval": require_approval,
         "timeframe": obj.get("timeframe","15m"),
     }
-    for k_src, k_dst in [
-        ("tp1","tp1"),("tp2","tp2"),("tp3","tp3"),
-        ("sl","sl"),
-        ("prob_overall_pct","prob_overall_pct"),
-        ("prob_tp1_pct","prob_tp1_pct"),
-        ("prob_tp2_pct","prob_tp2_pct"),
-        ("prob_tp3_pct","prob_tp3_pct"),
-        ("eta_open_min","eta_open_min"),
-        ("eta_tp1_min","eta_tp1_min"),
-        ("eta_tp2_min","eta_tp2_min"),
-        ("eta_tp3_min","eta_tp3_min"),
-        ("expiry_ts","expiry_ts"),
-    ]:
-        if obj.get(k_src) is not None:
-            payload[k_dst] = obj.get(k_src)
+    for k in ["tp1","tp2","tp3","sl","prob_overall_pct","prob_tp1_pct","prob_tp2_pct","prob_tp3_pct",
+              "eta_open_min","eta_tp1_min","eta_tp2_min","eta_tp3_min","expiry_ts"]:
+        if obj.get(k) is not None:
+            payload[k] = obj.get(k)
 
     if not symbol or side not in ("BUY","SELL"):
         raise ValueError("bad symbol/side in ingest payload")
@@ -185,6 +153,8 @@ def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 def _create_ticket_fallback(obj: Dict[str, Any]) -> Optional[str]:
+    if not CONFIRMSTORE_ENABLE:
+        return None
     if not obj.get("symbol") or not obj.get("side"):
         return None
     payload = {
@@ -222,10 +192,38 @@ async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
             payload = _build_ingest_payload(obj)
             resp = await _post_alerts_ingest(payload)
             logger.info("alerts/ingest ok: %s", resp)
+            # שלח טלגרם עם כפתורים
+            try:
+                await TelegramNotifier.send_ticket(
+                    trade_id=payload["trade_id"],
+                    symbol=payload["symbol"],
+                    side=payload["side"],
+                    timeframe=payload["timeframe"],
+                    reason=payload.get("reason",""),
+                    score=payload.get("score", 0),
+                    extra=obj,
+                )
+            except Exception as te:
+                logger.warning("telegram notify failed: %s", te)
             return tid
         except Exception as e:
-            logger.warning("alerts/ingest failed (%s) — falling back to ConfirmStore", e)
-    return _create_ticket_fallback(obj)
+            logger.warning("alerts/ingest failed (%s) — fallback ConfirmStore", e)
+
+    tid_fb = _create_ticket_fallback(obj)
+    if tid_fb:
+        try:
+            await TelegramNotifier.send_ticket(
+                trade_id=tid_fb,
+                symbol=str(obj.get("symbol","")),
+                side=str(obj.get("side","")),
+                timeframe=str(obj.get("timeframe","15m")),
+                reason=obj.get("reason",""),
+                score=float(obj.get("score",0)),
+                extra=obj,
+            )
+        except Exception as te:
+            logger.warning("telegram notify failed (fallback): %s", te)
+    return tid_fb
 
 async def _tick_once() -> Dict[str, Any]:
     global TICK_COUNT, LAST_TICK_TS, LAST_CREATED, LAST_PENDING, LAST_ERROR
@@ -247,7 +245,6 @@ async def _tick_once() -> Dict[str, Any]:
         logger.error("tick error: %s", e)
         return {"ok": False, "error": str(e), "created": created}
 
-# ---- Endpoints ----
 @router.post("/manage-once")
 async def manage_once():
     return await _tick_once()
@@ -275,7 +272,6 @@ async def alerts_trades_update(
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
-    # Anti-Replay (רך): אין כישלון “אבטחני” אם כבוי, אבל אם פעיל – נאכף כאן
     ok, why = verify_request(
         ts_header=x_timestamp,
         nonce_header=x_nonce,
@@ -312,7 +308,6 @@ async def ops_manager_health():
         "public_host": PUBLIC_HOST or None,
     }
 
-# ---- Background worker (optional) ----
 async def _manager_loop():
     logger.info("manager_loop start: enable=%s interval=%ss ingest_dir=%s alerts_ingest=%s",
                 MANAGER_ENABLE, MANAGER_INTERVAL_SEC, INGEST_DIR, ALERTS_INGEST_URL or "DISABLED")
@@ -328,7 +323,6 @@ async def _startup():
     if MANAGER_ENABLE:
         asyncio.create_task(_manager_loop())
 
-# ---- Standalone runner ----
 def main() -> None:
     if not MANAGER_ENABLE:
         print("MANAGER_ENABLE=0 — exiting.")
