@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from contextlib import suppress
 
 from fastapi import APIRouter, Body, Header
+from fastapi import HTTPException  # רק לצורך סוג החריגה, לא נזרוק בראוטים
 
 logger = logging.getLogger("algogpt.position_ops")
 router = APIRouter(prefix="/position-ops", tags=["position-ops"])
@@ -188,8 +189,6 @@ with suppress(Exception):
 # =========================
 # Position & price helpers (עשויים לזרוק — נתפוס בראוטים)
 # =========================
-from fastapi import HTTPException  # רק לצורך סוג החריגה, לא נזרוק בראוטים
-
 def _fetch_position_side_qty_entry(client, symbol: str) -> Tuple[str, float, float]:
     infos = client.futures_position_information(symbol=symbol) or []
     if not infos:
@@ -786,7 +785,7 @@ async def auto_start(payload: Dict[str, Any] = Body(...), Authorization: Optiona
     cb_rate = payload.get("callbackRate")
     atr_mult = payload.get("atr_mult") or (float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None)
     pcts = payload.get("pcts") or _parse_csv_floats(os.getenv("SMART_MANAGE_PCTS"))
-    splits = payload.get("splits") or _parse_csv_flots(os.getenv("SMART_MANAGE_SPLITS"))
+    splits = payload.get("splits") or _parse_csv_floats(os.getenv("SMART_MANAGE_SPLITS"))
 
     global _SCHED_TASK, _SCHED_ACTIVE
     if _SCHED_ACTIVE and _SCHED_TASK and not _SCHED_TASK.done():
