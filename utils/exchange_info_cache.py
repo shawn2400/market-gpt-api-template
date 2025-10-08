@@ -1,12 +1,17 @@
 # utils/exchange_info_cache.py
 from __future__ import annotations
-import threading, time
+import threading, time, logging
 from typing import Dict, Any, Optional
-from utils.binance_client import futures_exchange_info_safe, DEFAULT_QTY_STEP_STR, DEFAULT_PRICE_TICK_STR, DEFAULT_MIN_NOTIONAL
+from utils.binance_client import (
+    futures_exchange_info_safe, DEFAULT_QTY_STEP_STR,
+    DEFAULT_PRICE_TICK_STR, DEFAULT_MIN_NOTIONAL
+)
+
+logger = logging.getLogger("algogpt.exchange_info_cache")
 
 _lock = threading.Lock()
 _cache: Dict[str, Any] = {"ts": 0.0, "symbols": {}}
-_TTL_SEC = 900
+_TTL_SEC = 900  # ניתן לכוון דרך ENV ב-binance_client (EXCHANGE_INFO_TTL_SEC)
 
 def preload(force: bool = False) -> None:
     now = time.time()
@@ -14,6 +19,10 @@ def preload(force: bool = False) -> None:
         if not force and (_cache["symbols"] and now - _cache["ts"] < _TTL_SEC):
             return
         data = futures_exchange_info_safe(force_refresh=force)
+        if not data:
+            # נשארים עם cache ישן אם יש
+            logger.warning("exchange_info_cache.preload: no fresh data; keeping stale cache")
+            return
         out: Dict[str, Any] = {}
         for s in (data.get("symbols") or []):
             sym = (s.get("symbol") or "").upper()
@@ -25,7 +34,7 @@ def preload(force: bool = False) -> None:
                 t = f.get("filterType")
                 if t == "PRICE_FILTER":
                     tick = f.get("tickSize") or tick
-                elif t in ("LOT_SIZE","MARKET_LOT_SIZE"):
+                elif t in ("LOT_SIZE","MARKET_LOT_SIZE","MARKET_Lot_SIZE"):
                     step = f.get("stepSize") or step
                     if f.get("minQty") is not None:
                         try: min_qty = float(f.get("minQty"))
