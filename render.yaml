@@ -49,15 +49,23 @@ services:
 
       # ================== Security (לא סודי) ==================
       - key: PROTECT_APPROVE_ROUTES
-        value: "1"          # ✅ להגן על approve/reject בפרודקשן
+        value: "1"
       - key: PROTECT_DIGEST_ROUTES
-        value: "1"          # ✅ להגן גם על /ops/digest/expired
+        value: "1"
       - key: ENABLE_HSTS
-        value: "1"          # ✅ מאחורי HTTPS
+        value: "1"
       - key: SECURITY_PUBLIC_PATHS
         value: /readyz,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now
       - key: SECURITY_PUBLIC_PREFIXES
         value: /public,/price,/static,/risk
+
+      # ================== Anti-Replay ==================
+      - key: ANTI_REPLAY_ENABLE
+        value: "1"
+      - key: ANTI_REPLAY_WINDOW_SEC
+        value: "60"
+      - key: ANTI_REPLAY_REQUIRE_SIGNATURE
+        value: "1"
 
       # ================== Rate Limit backend ==================
       - key: RATE_LIMIT_ENABLE
@@ -73,13 +81,13 @@ services:
 
       # ================== Redis client (פרמטרים לא-סודיים) ==================
       - key: REQUIRE_REDIS
-        value: "1"          # ✅ fail-closed אם Redis לא זמין
+        value: "1"
       - key: CONFIRMSTORE_ENABLE
-        value: "0"          # ✅ אין fallback בזיכרון בפרודקשן
+        value: "0"
       - key: USE_REDIS_IDEM
         value: "1"
       - key: SETEX_STRICT
-        value: "1"          # ✅ השתמש ב-SET NX EX לאטומיות ticket_id
+        value: "1"
       - key: REDIS_CONNECT_TIMEOUT
         value: "5.0"
       - key: REDIS_SOCKET_TIMEOUT
@@ -497,7 +505,7 @@ services:
       - key: INSTANCE_ID
         value: algogpt-docker
       - key: ROUTES_ONLY
-        value: routes.manager,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.scan_top_volume,routes.scan_public,routes.topk,routes.ops_flags,routes.guard_smoke,routes.status,routes.debug
+        value: routes.manager,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.scan_top_volume,routes.scan_public,routes.topk,routes.ops_flags,routes.guard_smoke,routes.status,routes.debug,routes.telegram
       - key: METRICS_ENABLE
         value: "true"
       - key: PNL_TRACKING
@@ -522,7 +530,9 @@ services:
         sync: false
       - key: PRIMARY_API_TOKEN
         sync: false
-      - key: OPS_SIGN_SECRET
+      - key: API_SIGNING_SECRET            # ✅ לחתימות Anti-Replay
+        sync: false
+      - key: OPS_SIGN_SECRET              # ✅ חתימת callback טלגרם
         sync: false
       - key: REDIS_URL
         sync: false
