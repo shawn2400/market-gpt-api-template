@@ -1,4 +1,3 @@
-# main.py
 from __future__ import annotations
 
 import os
@@ -84,6 +83,10 @@ class ConfirmStore:
     @classmethod
     def pending(cls) -> List[Dict[str, Any]]:
         return [v for v in cls._items.values() if v.get("approved") is None]
+
+    @classmethod
+    def remove(cls, ticket_id: str) -> None:
+        cls._items.pop(str(ticket_id), None)
 
 # =================================================
 # FastAPI App
@@ -176,6 +179,9 @@ HEALTH_TP1_ENABLE = _bool_env("HEALTH_TP1_ENABLE", True)
 HEALTH_TP1_INTERVAL_SEC = int(os.getenv("HEALTH_TP1_INTERVAL_SEC", "600"))
 TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS","") or "").split(",") if t.strip()]
 SL_TAGS = [t.strip() for t in (os.getenv("SL_TAGS","SL,STOP,STOP_LOSS,STOP_LOSS_LIMIT,STOP_MARKET") or "").split(",") if t.strip()]
+
+# Optional: protect approve/reject with Bearer behind ENV flag
+PROTECT_APPROVE_ROUTES = _bool_env("PROTECT_APPROVE_ROUTES", False)
 
 # Order ID helper
 try:
@@ -377,10 +383,15 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
     try:
         cli = _get_shared_async_client()
         r = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
-        try:
+        # תמיד נחזיר גם סטטוס וטקסט גלמי לדיבאג נוח
+        data: Dict[str, Any]
+        with suppress(Exception):
             data = r.json()
-        except Exception:
-            data = {"ok": False, "status": r.status_code, "text": r.text}
+        if not isinstance(locals().get("data"), dict):
+            data = {"ok": False}
+        data.setdefault("ok", bool(data.get("ok")))
+        data.setdefault("status", r.status_code)
+        data.setdefault("text_raw", r.text)
         return data
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -598,20 +609,21 @@ async def _load_ticket(tid: str) -> Tuple[Optional[Dict[str, Any]], str]:
         logger.warning("confirmstore_load_failed: %s", e)
     return None, "none"
 
-# ✅ BUGFIX: do NOT overwrite status unless explicitly provided
+# ✅ Do not overwrite status unless explicitly provided
 async def _delete_ticket(tid: str, source: str, final_status: Optional[bool] = None) -> None:
     if source == "redis" and aioredis and REDIS_URL:
         try:
             r = await _redis()
             if r:
                 await r.delete(f"{NS}:ticket:{tid}")
-                # keep going to maybe mark in-memory store, but only if asked
         except Exception as e:
             logger.warning("redis_delete_failed: %s", e)
     if final_status is not None:
         with suppress(Exception):
             ConfirmStore.decide(tid, approved=final_status)
-
+        # אופציונלי: נקה זכרון אחרי החלטה
+        with suppress(Exception):
+            ConfirmStore.remove(tid)
 # --- Smart manage after approve ---
 async def _smart_manage_now(symbol: str,
                             offset_bps: Optional[int] = None,
@@ -816,6 +828,10 @@ def _require_bearer(request: Request) -> None:
     if not auth.startswith("Bearer ") or auth.split(" ", 1)[1].strip() != API_BEARER_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+def _maybe_protect_routes(request: Request) -> None:
+    if PROTECT_APPROVE_ROUTES:
+        _require_bearer(request)
+
 def _badge(text: str, color: str) -> str:
     return f"<span style='display:inline-block;padding:.15rem .45rem;border-radius:999px;font-size:.8rem;color:#fff;background:{color}'>{_md_html(text)}</span>"
 
@@ -953,9 +969,11 @@ async def ui_pending(request: Request = None):
         "</body>"
     )
     return HTMLResponse(body)
+
 # --- Approve/Reject flows ---
 @router.get("/ops/approve")
-async def approve(ticket_id: str = Query(..., description="ticket_id")):
+async def approve(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
+    _maybe_protect_routes(request)
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור.")
@@ -1025,7 +1043,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     with suppress(Exception):
         (record_approval_approved if ok else record_approval_rejected)()
 
-    # ✅ BUGFIX: אל תדרוס סטטוס — העבר explicit
+    # אל תדרוס סטטוס — העבר explicit
     await _delete_ticket(ticket_id, source, final_status=ok)
 
     if ok:
@@ -1035,13 +1053,14 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     return _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
 
 @router.get("/ops/approve-link")
-async def approve_link(id: str = Query(..., description="ticket_id")):
-    return await approve(ticket_id=id)
+async def approve_link(id: str = Query(..., description="ticket_id"), request: Request = None):
+    return await approve(ticket_id=id, request=request)
 
 @router.get("/ops/reject")
-async def reject(ticket_id: str = Query(..., description="ticket_id")):
-    ticket, source = await _load_ticket(ticket_id)
-    # ✅ BUGFIX: העבר final_status=False במקום לדרוס תמיד
+async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
+    _maybe_protect_routes(request)
+    _, source = await _load_ticket(ticket_id)
+    # העבר final_status=False במקום לדרוס תמיד
     await _delete_ticket(ticket_id, source, final_status=False)
     with suppress(Exception):
         await _send_telegram_html(
@@ -1337,6 +1356,7 @@ async def _startup_tasks():
                 try:
                     await health_check_tp1_tags(watch, interval_sec=int(os.getenv("HEALTH_TP1_INTERVAL_SEC","600")))
                 except asyncio.CancelledError:
+                    logger.info("health_tp1 background: cancelled, exiting cleanly")
                     raise
                 except Exception as e:
                     logger.warning("health_tp1 background error: %s", e)
@@ -1385,7 +1405,7 @@ async def _startup_tasks():
                         logger.warning("periodic_manager_error: %r (backoff now %.1fs)", e, _manager_backoff)
                 await asyncio.sleep(every_sec)
         except asyncio.CancelledError:
-            # graceful exit on shutdown
+            logger.info("periodic_manager: cancelled, exiting cleanly")
             raise
 
     if os.getenv("MANAGER_ENABLE","1").lower() in ("1","true","yes","on"):
@@ -1407,6 +1427,7 @@ async def _startup_tasks():
                     pass
                 await asyncio.sleep(int(os.getenv("GUARDER_INTERVAL_SEC","45")))
         except asyncio.CancelledError:
+            logger.info("periodic_guarder: cancelled, exiting cleanly")
             raise
     if os.getenv("GUARDER_ENABLE","1").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_guarder())
@@ -1461,6 +1482,7 @@ async def _startup_tasks():
                     logger.warning("periodic_scanner_error: %s", e)
                 await asyncio.sleep(max(10, every))
         except asyncio.CancelledError:
+            logger.info("periodic_scanner: cancelled, exiting cleanly")
             raise
 
     if os.getenv("SCAN_CRON_ENABLE","1").lower() in ("1","true","yes","on"):
@@ -1473,11 +1495,14 @@ async def _shutdown_tasks():
     if cli and not cli.is_closed:
         with suppress(Exception):
             await cli.aclose()
-    # close redis if present
+    # close redis if present (try both close and pool disconnect for different redis-py versions)
     r = getattr(app.state, "redis", None)
     if r:
         with suppress(Exception):
             await r.close()
+        with suppress(Exception):
+            await r.connection_pool.disconnect()
+    logger.info("shutdown: resources closed, goodbye")
 
 # =================================================
 # Uvicorn entry
@@ -1488,6 +1513,8 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
+
 
 
 
