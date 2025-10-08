@@ -10,17 +10,31 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import suppress
 
-from fastapi import APIRouter, Body, HTTPException, Header
+from fastapi import APIRouter, Body, Header
 
 logger = logging.getLogger("algogpt.position_ops")
 router = APIRouter(prefix="/position-ops", tags=["position-ops"])
 
+# =========================
+# Utils: uniform OK/ERR payloads
+# =========================
+def _ok(**data) -> Dict[str, Any]:
+    d = {"ok": True}
+    d.update(data)
+    return d
+
+def _err(reason: str, **data) -> Dict[str, Any]:
+    d = {"ok": False, "reason": reason}
+    d.update(data)
+    return d
+
+
+# =========================
 # Guard (אופציונלי, שקט אם חסר)
+# =========================
 GUARD_ENSURE_AFTER_OPS = (os.getenv("GUARD_ENSURE_AFTER_OPS", "1").lower() in ("1", "true", "yes", "on"))
 with suppress(Exception):
     from utils.guard_stop import ensure_protective_stop  # type: ignore
-
-
 def _ensure_guard(symbol: str, *, prefer_mode: str = "native") -> None:
     if not GUARD_ENSURE_AFTER_OPS:
         return
@@ -29,16 +43,16 @@ def _ensure_guard(symbol: str, *, prefer_mode: str = "native") -> None:
 
 
 # =========================
-# Helpers: auth (Bearer)
+# Helpers: auth (Bearer) — רכה
 # =========================
 API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
 
-
-def _require_bearer(auth_header: Optional[str]) -> None:
+def _auth_ok(auth_header: Optional[str]) -> bool:
     if not API_BEARER_TOKEN:
-        return
-    if (not auth_header) or (not auth_header.startswith("Bearer ")) or (auth_header.split(" ", 1)[1].strip() != API_BEARER_TOKEN):
-        raise HTTPException(status_code=401, detail="Unauthorized")
+        return True
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return False
+    return (auth_header.split(" ", 1)[1].strip() == API_BEARER_TOKEN)
 
 
 # =========================
@@ -50,7 +64,6 @@ def _coid_fit(s: str, limit: int = 32) -> str:
     h = hashlib.md5(s.encode("utf-8")).hexdigest()[:7]
     return s[: limit - (1 + len(h))] + "_" + h
 
-
 def _build_client_order_id(symbol: str, side: str, role: str = "ENTRY") -> str:
     prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
     sym = str(symbol).upper()
@@ -58,7 +71,6 @@ def _build_client_order_id(symbol: str, side: str, role: str = "ENTRY") -> str:
     role = str(role).upper()
     ts = int(time.time())
     return _coid_fit(f"{prefix}_{sym}_{side}_{role}_{ts}", 32)
-
 
 with suppress(Exception):
     from utils.order_ids import build_client_order_id  # type: ignore
@@ -74,48 +86,43 @@ def _fallback_filters() -> Dict[str, Any]:
         "qty_step": float(os.getenv("DEFAULT_QTY_STEP", "0.001")),
     }
 
-
 def _round_step(v: float, step: float) -> float:
     if step <= 0:
         return v
     return math.floor(v / step + 1e-12) * step
 
-
 def _quantize_price(symbol: str, price: float, flt: Dict[str, Any]) -> float:
     step = float(flt.get("price_tick", 0.0) or 0.0)
     return round(_round_step(price, step), 8) if step > 0 else round(price, 8)
-
 
 def _quantize_qty(symbol: str, qty: float, flt: Dict[str, Any]) -> float:
     step = float(flt.get("qty_step", 0.0) or 0.0)
     return round(_round_step(qty, step), 8) if step > 0 else round(qty, 8)
 
-
-# אם קיימים quantize_* חיצוניים – נשתמש בהם, אבל לא נעקוף את _get_filters (כי אנחנו מוסיפים קאש כאן)
 with suppress(Exception):
     from utils.quantize import quantize_price as _qp, quantize_qty as _qq  # type: ignore
-
     def _quantize_price(symbol: str, price: float, flt: Dict[str, Any]) -> float:  # type: ignore
         return _qp(symbol, price, flt)
-
     def _quantize_qty(symbol: str, qty: float, flt: Dict[str, Any]) -> float:  # type: ignore
         return _qq(symbol, qty, flt)
 
 
 # =========================
-# Binance client
+# Binance client (soft)
 # =========================
-def _get_client():
+def _get_client_soft() -> Tuple[Optional[Any], Optional[str]]:
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"binance import failed: {e}")
+        return None, f"binance_import_failed: {e}"
     api_key = os.getenv("BINANCE_API_KEY", "").strip()
     api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
     if not api_key or not api_sec:
-        raise HTTPException(status_code=500, detail="BINANCE keys missing")
-    return Client(api_key, api_sec)
-
+        return None, "binance_keys_missing"
+    try:
+        return Client(api_key, api_sec), None
+    except Exception as e:
+        return None, f"binance_client_init_failed: {e}"
 
 def _align_position_mode(client) -> None:
     mode_override = (os.getenv("POSITION_MODE_OVERRIDE", "") or "").strip().lower()
@@ -132,7 +139,6 @@ def _align_position_mode(client) -> None:
 _EXINFO_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
 _EXINFO_TTL = float(os.getenv("EXCHANGE_INFO_TTL_SEC", "900") or 900)
 _EXINFO_WARNED_AT = 0.0
-
 
 def _fetch_exchange_info_cached(client) -> Dict[str, Any]:
     global _EXINFO_CACHE, _EXINFO_WARNED_AT
@@ -154,10 +160,6 @@ def _fetch_exchange_info_cached(client) -> Dict[str, Any]:
             _EXINFO_WARNED_AT = now
         return {}
 
-
-# =========================
-# Filters (עם קאש)
-# =========================
 def _get_filters(client, symbol: str) -> Dict[str, Any]:
     try:
         ex = _fetch_exchange_info_cached(client) or {}
@@ -179,15 +181,15 @@ def _get_filters(client, symbol: str) -> Dict[str, Any]:
         pass
     return _fallback_filters()
 
-
-# אם קיים get_filters חיצוני – אל נעקוף; נשמור על שלנו כדי שהקאש יעבוד.
 with suppress(Exception):
     from utils.quantize import get_filters as _unused_gf  # type: ignore
 
 
 # =========================
-# Position & price helpers
+# Position & price helpers (עשויים לזרוק — נתפוס בראוטים)
 # =========================
+from fastapi import HTTPException  # רק לצורך סוג החריגה, לא נזרוק בראוטים
+
 def _fetch_position_side_qty_entry(client, symbol: str) -> Tuple[str, float, float]:
     infos = client.futures_position_information(symbol=symbol) or []
     if not infos:
@@ -200,11 +202,9 @@ def _fetch_position_side_qty_entry(client, symbol: str) -> Tuple[str, float, flo
     side = "BUY" if qty > 0 else "SELL"
     return side, abs(qty), ep
 
-
 def _last_price(client, symbol: str) -> float:
     p = client.futures_symbol_ticker(symbol=symbol.upper())
     return float(p["price"])
-
 
 def _cancel_open_conditional(client, symbol: str, kinds=("STOP", "TAKE_PROFIT", "TRAILING_STOP_MARKET")) -> int:
     n = 0
@@ -235,13 +235,11 @@ def _tp1_filled(client, symbol: str) -> bool:
         pass
     return False
 
-
 def _profit_ok(entry: float, last: float, side: str, min_pct: float) -> bool:
     if min_pct <= 0 or entry <= 0 or last <= 0:
         return True
     move = (last - entry) / entry * 100.0 if side == "BUY" else (entry - last) / entry * 100.0
     return move >= min_pct
-
 
 def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, str]:
     want_tp1 = (os.getenv("SMART_MANAGE_AFTER_TP1", "0").lower() in ("1", "true", "yes", "on"))
@@ -264,8 +262,7 @@ def _be_impl(client, *, symbol: str, offset_bps: int) -> Dict[str, Any]:
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
     ok, why = _gate_be_trail(client, symbol, side, entry)
     if not ok:
-        return {"ok": False, "reason": why, "skipped": "be"}
-
+        return _err(why, skipped="be")
     flt = _get_filters(client, symbol)
     if side == "BUY":
         be_px = _quantize_price(symbol, entry * (1 + offset_bps / 10000.0), flt)
@@ -273,28 +270,14 @@ def _be_impl(client, *, symbol: str, offset_bps: int) -> Dict[str, Any]:
     else:
         be_px = _quantize_price(symbol, entry * (1 - offset_bps / 10000.0), flt)
         opp = "BUY"
-
     _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
     order = client.futures_create_order(
-        symbol=symbol,
-        side=opp,
-        type="STOP_MARKET",
-        stopPrice=be_px,
-        closePosition=True,
+        symbol=symbol, side=opp, type="STOP_MARKET",
+        stopPrice=be_px, closePosition=True,
         workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
         newClientOrderId=_build_client_order_id(symbol, opp, role="BE"),
     )
-    out = {
-        "ok": True,
-        "symbol": symbol,
-        "pos_side": side,
-        "qty": abs_qty,
-        "entry": entry,
-        "be_price": be_px,
-        "orderId": order.get("orderId"),
-    }
-    return out
-
+    return _ok(symbol=symbol, pos_side=side, qty=abs_qty, entry=entry, be_price=be_px, orderId=order.get("orderId"))
 
 def _trail_impl(client, *, symbol: str, callbackRate: Optional[float], atr_mult: Optional[float]) -> Dict[str, Any]:
     _align_position_mode(client)
@@ -302,11 +285,10 @@ def _trail_impl(client, *, symbol: str, callbackRate: Optional[float], atr_mult:
     last = _last_price(client, symbol)
     ok, why = _gate_be_trail(client, symbol, side, entry)
     if not ok:
-        return {"ok": False, "reason": why, "skipped": "trail"}
+        return _err(why, skipped="trail")
 
     cb_min = float(os.getenv("TRAIL_CALLBACK_MIN_PCT", "0.1"))
     cb_max = float(os.getenv("TRAIL_CALLBACK_MAX_PCT", "4.9"))
-
     cb = callbackRate
     if cb is None:
         try:
@@ -330,34 +312,17 @@ def _trail_impl(client, *, symbol: str, callbackRate: Optional[float], atr_mult:
 
     opp = "SELL" if side == "BUY" else "BUY"
     flt = _get_filters(client, symbol)
-
     _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
-
     qty = _quantize_qty(symbol, abs_qty, flt)
     if qty <= 0:
-        return {"ok": False, "error": "trail qty rounds to zero"}
-
+        return _err("trail_qty_rounds_to_zero")
     order = client.futures_create_order(
-        symbol=symbol,
-        side=opp,
-        type="TRAILING_STOP_MARKET",
-        callbackRate=float(cb),
-        quantity=qty,
-        reduceOnly=True,
+        symbol=symbol, side=opp, type="TRAILING_STOP_MARKET",
+        callbackRate=float(cb), quantity=qty, reduceOnly=True,
         newClientOrderId=_build_client_order_id(symbol, opp, role="TRAIL"),
         workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
     )
-    out = {
-        "ok": True,
-        "symbol": symbol,
-        "pos_side": side,
-        "qty": qty,
-        "entry": entry,
-        "callbackRate": float(cb),
-        "orderId": order.get("orderId"),
-    }
-    return out
-
+    return _ok(symbol=symbol, pos_side=side, qty=qty, entry=entry, callbackRate=float(cb), orderId=order.get("orderId"))
 
 def _tp_ladder_impl(client, *, symbol: str, pcts: List[float], splits: List[float]) -> Dict[str, Any]:
     _align_position_mode(client)
@@ -383,140 +348,173 @@ def _tp_ladder_impl(client, *, symbol: str, pcts: List[float], splits: List[floa
             trig = _quantize_price(symbol, last * (1.0 + float(pct) / 100.0), flt)
         else:
             trig = _quantize_price(symbol, last * (1.0 - float(pct) / 100.0), flt)
-
         order = client.futures_create_order(
-            symbol=symbol,
-            side=opp,
-            type="TAKE_PROFIT_MARKET",
-            stopPrice=trig,
-            quantity=q,
-            reduceOnly=True,
-            timeInForce="GTC",
+            symbol=symbol, side=opp, type="TAKE_PROFIT_MARKET",
+            stopPrice=trig, quantity=q, reduceOnly=True, timeInForce="GTC",
             newClientOrderId=_build_client_order_id(symbol, opp, role=f"TP{i}"),
             workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
         )
         placed.append({"i": i, "pct": float(pct), "split": float(split), "qty": q, "stop": trig, "orderId": order.get("orderId")})
-
-    result = {
-        "ok": True,
-        "symbol": symbol,
-        "side": side,
-        "qty": abs_qty,
-        "entry": entry,
-        "built": len(placed),
-        "orders": placed,
-    }
-    return result
+    return _ok(symbol=symbol, side=side, qty=abs_qty, entry=entry, built=len(placed), orders=placed)
 
 
 # =========================
-# BE (route)
+# Routes — הכול רך (200 תמיד)
 # =========================
 @router.post("/be", summary="Move SL to BE ± offset_bps (STOP_MARKET closePosition)")
 def be(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
-    _require_bearer(Authorization)
-    symbol = (payload.get("symbol") or "").upper()
+    if not _auth_ok(Authorization):
+        return _err("unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
     offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS") or 8)
     if not symbol:
-        raise HTTPException(status_code=422, detail="symbol required")
-
-    client = _get_client()
-    out = _be_impl(client, symbol=symbol, offset_bps=offset_bps)
+        return _err("invalid_input", detail="symbol required")
+    client, cerr = _get_client_soft()
+    if not client:
+        return _err(cerr or "binance_client_error")
+    try:
+        out = _be_impl(client, symbol=symbol, offset_bps=offset_bps)
+    except HTTPException as he:
+        if he.status_code in (404, 409):
+            out = _err("no_open_position", skipped="be")
+        else:
+            out = _err("http_error", status=he.status_code, detail=str(he.detail))
+    except Exception as e:
+        out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
     return out
 
 
-# =========================
-# Trail (route)
-# =========================
 @router.post("/trail", summary="Enable/refresh trailing SL (TRAILING_STOP_MARKET reduceOnly quantity)")
 def trail(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
-    _require_bearer(Authorization)
-    symbol = (payload.get("symbol") or "").upper()
+    if not _auth_ok(Authorization):
+        return _err("unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
     cb = payload.get("callbackRate") or payload.get("callback_rate") or payload.get("callback_rate_pct")
     atr_mult = payload.get("atr_mult")
     if not symbol:
-        raise HTTPException(status_code=422, detail="symbol required")
-
-    client = _get_client()
-    out = _trail_impl(client, symbol=symbol, callbackRate=cb, atr_mult=atr_mult)
+        return _err("invalid_input", detail="symbol required")
+    client, cerr = _get_client_soft()
+    if not client:
+        return _err(cerr or "binance_client_error")
+    try:
+        out = _trail_impl(client, symbol=symbol, callbackRate=cb, atr_mult=atr_mult)
+    except HTTPException as he:
+        if he.status_code in (404, 409):
+            out = _err("no_open_position", skipped="trail")
+        else:
+            out = _err("http_error", status=he.status_code, detail=str(he.detail))
+    except Exception as e:
+        out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
     return out
 
 
-# =========================
-# SL לפי מחיר
-# =========================
 @router.post("/sl/move", summary="Move SL to a specific price (STOP_MARKET closePosition)")
 def sl_move(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
-    _require_bearer(Authorization)
-    symbol = (payload.get("symbol") or "").upper()
-    price = float(payload.get("price") or 0)
+    if not _auth_ok(Authorization):
+        return _err("unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    try:
+        price = float(payload.get("price") or 0)
+    except Exception:
+        price = 0.0
     if not symbol or price <= 0:
-        raise HTTPException(status_code=422, detail="symbol, price required")
+        return _err("invalid_input", detail="symbol and positive price required")
 
-    client = _get_client()
+    client, cerr = _get_client_soft()
+    if not client:
+        return _err(cerr or "binance_client_error")
     _align_position_mode(client)
-    side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
-    flt = _get_filters(client, symbol)
+    try:
+        side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    except HTTPException as he:
+        if he.status_code in (404, 409):
+            _ensure_guard(symbol, prefer_mode="native")
+            return _err("no_open_position", skipped="sl_move")
+        return _err("http_error", status=he.status_code, detail=str(he.detail))
+    except Exception as e:
+        return _err("exception", detail=str(e))
 
+    flt = _get_filters(client, symbol)
     opp = "SELL" if side == "BUY" else "BUY"
     px = _quantize_price(symbol, price, flt)
 
-    _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
-    order = client.futures_create_order(
-        symbol=symbol,
-        side=opp,
-        type="STOP_MARKET",
-        stopPrice=px,
-        closePosition=True,
-        newClientOrderId=_build_client_order_id(symbol, opp, role="SL"),
-        workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
-    )
-    res = {"ok": True, "symbol": symbol, "pos_side": side, "qty": abs_qty, "entry": entry, "sl_price": px, "orderId": order.get("orderId")}
+    try:
+        _cancel_open_conditional(client, symbol, kinds=("STOP", "TRAILING_STOP_MARKET"))
+        order = client.futures_create_order(
+            symbol=symbol, side=opp, type="STOP_MARKET",
+            stopPrice=px, closePosition=True,
+            newClientOrderId=_build_client_order_id(symbol, opp, role="SL"),
+            workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+        )
+        res = _ok(symbol=symbol, pos_side=side, qty=abs_qty, entry=entry, sl_price=px, orderId=order.get("orderId"))
+    except Exception as e:
+        res = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
     return res
 
 
-# =========================
-# TP Ladder (route)
-# =========================
 @router.post("/tp/ladder", summary="Create/refresh TP ladder (TAKE_PROFIT_MARKET reduce-only partials)")
 def tp_ladder(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
-    _require_bearer(Authorization)
-    symbol = (payload.get("symbol") or "").upper()
-    pcts: List[float] = payload.get("pcts") or [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5").split(","))]
-    splits: List[float] = payload.get("splits") or [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25").split(","))]
+    if not _auth_ok(Authorization):
+        return _err("unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    try:
+        pcts: List[float] = payload.get("pcts") or [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5").split(","))]
+        splits: List[float] = payload.get("splits") or [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25").split(","))]
+    except Exception:
+        return _err("invalid_input", detail="pcts/splits must be float lists")
     if not symbol:
-        raise HTTPException(status_code=422, detail="symbol required")
+        return _err("invalid_input", detail="symbol required")
     if not pcts or not splits or len(pcts) != len(splits):
-        raise HTTPException(status_code=422, detail="pcts and splits must be same length")
+        return _err("invalid_input", detail="pcts and splits must be same length")
 
-    client = _get_client()
-    out = _tp_ladder_impl(client, symbol=symbol, pcts=pcts, splits=splits)
+    client, cerr = _get_client_soft()
+    if not client:
+        return _err(cerr or "binance_client_error")
+    try:
+        out = _tp_ladder_impl(client, symbol=symbol, pcts=pcts, splits=splits)
+    except HTTPException as he:
+        if he.status_code in (404, 409):
+            out = _err("no_open_position", skipped="tp_ladder", pcts=pcts, splits=splits)
+        else:
+            out = _err("http_error", status=he.status_code, detail=str(he.detail))
+    except Exception as e:
+        out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
     return out
 
 
-# =========================
-# TP יחיד
-# =========================
 @router.post("/tp/one", summary="Create/refresh a single native TP (TAKE_PROFIT_MARKET reduce-only)")
 def tp_one(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
-    _require_bearer(Authorization)
-    symbol = (payload.get("symbol") or "").upper()
+    if not _auth_ok(Authorization):
+        return _err("unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
     pct = payload.get("pct")
     price = payload.get("price")
     if not symbol or (pct is None and price is None):
-        raise HTTPException(status_code=422, detail="symbol and (pct or price) required")
+        return _err("invalid_input", detail="symbol and (pct or price) required")
 
-    client = _get_client()
+    client, cerr = _get_client_soft()
+    if not client:
+        return _err(cerr or "binance_client_error")
     _align_position_mode(client)
-    side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    try:
+        side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    except HTTPException as he:
+        if he.status_code in (404, 409):
+            _ensure_guard(symbol, prefer_mode="native")
+            return _err("no_open_position", skipped="tp_one")
+        return _err("http_error", status=he.status_code, detail=str(he.detail))
+    except Exception as e:
+        return _err("exception", detail=str(e))
+
     last = _last_price(client, symbol)
     flt = _get_filters(client, symbol)
     opp = "SELL" if side == "BUY" else "BUY"
 
+    # בטל TP קיימים
     for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
         typ = (o.get("type") or "").upper()
         if "TAKE_PROFIT" in typ:
@@ -524,93 +522,115 @@ def tp_one(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = H
                 client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
 
     if price is not None:
-        trig = _quantize_price(symbol, float(price), flt)
+        try:
+            trig = _quantize_price(symbol, float(price), flt)
+        except Exception:
+            return _err("invalid_input", detail="price must be numeric")
     else:
-        pct = float(pct)
+        try:
+            pct = float(pct)
+        except Exception:
+            return _err("invalid_input", detail="pct must be numeric")
         trig = _quantize_price(symbol, (last * (1.0 + pct / 100.0)) if side == "BUY" else (last * (1.0 - pct / 100.0)), flt)
 
     qty = _quantize_qty(symbol, abs_qty, flt)
     if qty <= 0:
-        raise HTTPException(status_code=409, detail="tp qty rounds to zero")
+        _ensure_guard(symbol, prefer_mode="native")
+        return _err("tp_qty_rounds_to_zero")
 
-    order = client.futures_create_order(
-        symbol=symbol,
-        side=opp,
-        type="TAKE_PROFIT_MARKET",
-        stopPrice=trig,
-        quantity=qty,
-        reduceOnly=True,
-        timeInForce="GTC",
-        newClientOrderId=_build_client_order_id(symbol, opp, role="TP1"),
-        workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
-    )
-    res = {"ok": True, "symbol": symbol, "side": side, "qty": qty, "entry": entry, "stop": trig, "orderId": order.get("orderId")}
+    try:
+        order = client.futures_create_order(
+            symbol=symbol, side=opp, type="TAKE_PROFIT_MARKET",
+            stopPrice=trig, quantity=qty, reduceOnly=True, timeInForce="GTC",
+            newClientOrderId=_build_client_order_id(symbol, opp, role="TP1"),
+            workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+        )
+        res = _ok(symbol=symbol, side=side, qty=qty, entry=entry, stop=trig, orderId=order.get("orderId"))
+    except Exception as e:
+        res = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
     return res
 
 
-# =========================
-# ביטול כל ה-TP
-# =========================
 @router.post("/tp/cancel", summary="Cancel all TP orders")
 def tp_cancel(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
-    _require_bearer(Authorization)
-    symbol = (payload.get("symbol") or "").upper()
+    if not _auth_ok(Authorization):
+        return _err("unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
     if not symbol:
-        raise HTTPException(status_code=422, detail="symbol required")
-    client = _get_client()
+        return _err("invalid_input", detail="symbol required")
+    client, cerr = _get_client_soft()
+    if not client:
+        return _err(cerr or "binance_client_error")
     _align_position_mode(client)
     n = 0
-    for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
-        if "TAKE_PROFIT" in (o.get("type") or "").upper():
-            with suppress(Exception):
-                client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
-                n += 1
+    try:
+        for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
+            if "TAKE_PROFIT" in (o.get("type") or "").upper():
+                with suppress(Exception):
+                    client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
+                    n += 1
+        out = _ok(symbol=symbol, cancelled=n)
+    except Exception as e:
+        out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
-    return {"ok": True, "symbol": symbol, "cancelled": n}
+    return out
 
 
-# =========================
-# Close fraction
-# =========================
 @router.post("/close", summary="Close fraction of the position (reduce-only MARKET)")
 def close_fraction(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
-    _require_bearer(Authorization)
-    symbol = (payload.get("symbol") or "").upper()
-    fraction = float(payload.get("fraction") or 1.0)
-    fraction = max(0.0, min(1.0, fraction))
+    if not _auth_ok(Authorization):
+        return _err("unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    try:
+        fraction = float(payload.get("fraction") or 1.0)
+    except Exception:
+        fraction = -1
     if not symbol:
-        raise HTTPException(status_code=422, detail="symbol required")
+        return _err("invalid_input", detail="symbol required")
+    if fraction < 0:
+        return _err("invalid_input", detail="fraction must be numeric between 0..1")
+    fraction = max(0.0, min(1.0, fraction))
 
-    client = _get_client()
+    client, cerr = _get_client_soft()
+    if not client:
+        return _err(cerr or "binance_client_error")
     _align_position_mode(client)
-    side, abs_qty, _ = _fetch_position_side_qty_entry(client, symbol)
-    opp = "SELL" if side == "BUY" else "BUY"
+    try:
+        side, abs_qty, _ = _fetch_position_side_qty_entry(client, symbol)
+    except HTTPException as he:
+        if he.status_code in (404, 409):
+            _ensure_guard(symbol, prefer_mode="native")
+            return _err("no_open_position", skipped="close")
+        return _err("http_error", status=he.status_code, detail=str(he.detail))
+    except Exception as e:
+        return _err("exception", detail=str(e))
 
+    opp = "SELL" if side == "BUY" else "BUY"
     flt = _get_filters(client, symbol)
     qty = _quantize_qty(symbol, abs_qty * fraction, flt)
     if qty <= 0:
-        return {"ok": False, "error": "qty_to_close_zero"}
+        _ensure_guard(symbol, prefer_mode="native")
+        return _err("qty_to_close_zero")
 
-    order = client.futures_create_order(
-        symbol=symbol,
-        side=opp,
-        type="MARKET",
-        quantity=qty,
-        reduceOnly=True,
-        newClientOrderId=_build_client_order_id(symbol, opp, role="CLOSE"),
-    )
+    try:
+        order = client.futures_create_order(
+            symbol=symbol, side=opp, type="MARKET",
+            quantity=qty, reduceOnly=True,
+            newClientOrderId=_build_client_order_id(symbol, opp, role="CLOSE"),
+        )
+        out = _ok(symbol=symbol, fraction=fraction, qty_closed=qty, orderId=order.get("orderId"))
+    except Exception as e:
+        out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
-    return {"ok": True, "symbol": symbol, "fraction": fraction, "qty_closed": qty, "orderId": order.get("orderId")}
+    return out
 
 
-# =========================
-# One-shot manage (BE + Trail + TP ladder)
-# =========================
 @router.post("/manage-once", summary="One-shot smart manage: BE + TRAIL + TP ladder")
 def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
-    _require_bearer(Authorization)
-    symbol = (payload.get("symbol") or "").upper()
+    if not _auth_ok(Authorization):
+        return _err("unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
     do = payload.get("do") or ["be", "trail", "tp_ladder"]
     offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS") or 8)
     callbackRate = payload.get("callbackRate")
@@ -618,14 +638,16 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
     splits = payload.get("splits")
     atr_mult = payload.get("atr_mult") or os.getenv("SMART_MANAGE_TRAIL_ATR_MULT")
     if not symbol:
-        raise HTTPException(status_code=422, detail="symbol required")
+        return _err("invalid_input", detail="symbol required")
+
+    client, cerr = _get_client_soft()
+    if not client:
+        return _err(cerr or "binance_client_error")
+    _align_position_mode(client)
 
     out: Dict[str, Any] = {"symbol": symbol, "ok": True, "steps": {}}
 
-    client = _get_client()
-    _align_position_mode(client)
-
-    # --- אל תזרוק 404/409: החזר JSON ברור
+    # נסה לשלוף פוזיציה — אל תחזיר חריגות
     try:
         side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
     except HTTPException as he:
@@ -639,12 +661,14 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
             }
             _ensure_guard(symbol, prefer_mode="native")
             return out
-        raise
-    except Exception as e:
         out["ok"] = False
-        out["reason"] = f"position_fetch_failed: {e!s}"
+        out["reason"] = "http_error"
+        out["detail"] = str(he.detail)
         _ensure_guard(symbol, prefer_mode="native")
         return out
+    except Exception as e:
+        _ensure_guard(symbol, prefer_mode="native")
+        return _err("position_fetch_failed", detail=str(e))
 
     allow_be_trail, reason = _gate_be_trail(client, symbol, side, entry)
 
@@ -652,19 +676,19 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
         if "be" in do and allow_be_trail:
             out["steps"]["be"] = _be_impl(client, symbol=symbol, offset_bps=offset_bps)
         elif "be" in do and not allow_be_trail:
-            out["steps"]["be"] = {"ok": False, "reason": reason, "skipped": "be"}
+            out["steps"]["be"] = _err(reason, skipped="be")
     except Exception as e:
         out["ok"] = False
-        out["steps"]["be"] = {"ok": False, "error": str(e)}
+        out["steps"]["be"] = _err("exception", detail=str(e))
 
     try:
         if "trail" in do and allow_be_trail:
             out["steps"]["trail"] = _trail_impl(client, symbol=symbol, callbackRate=callbackRate, atr_mult=atr_mult)
         elif "trail" in do and not allow_be_trail:
-            out["steps"]["trail"] = {"ok": False, "reason": reason, "skipped": "trail"}
+            out["steps"]["trail"] = _err(reason, skipped="trail")
     except Exception as e:
         out["ok"] = False
-        out["steps"]["trail"] = {"ok": False, "error": str(e)}
+        out["steps"]["trail"] = _err("exception", detail=str(e))
 
     try:
         if "tp_ladder" in do:
@@ -675,22 +699,20 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
             out["steps"]["tp_ladder"] = _tp_ladder_impl(client, symbol=symbol, pcts=pcts, splits=splits)
     except Exception as e:
         out["ok"] = False
-        out["steps"]["tp_ladder"] = {"ok": False, "error": str(e)}
+        out["steps"]["tp_ladder"] = _err("exception", detail=str(e))
 
     _ensure_guard(symbol, prefer_mode="native")
     return out
 
 
 # =========================
-# Scheduler פנימי (אופציונלי)
+# Scheduler פנימי (אופציונלי) — נשאר רך
 # =========================
 _SCHED_TASK: Optional[asyncio.Task] = None
 _SCHED_ACTIVE = False
 
-
 def _sched_should_run() -> bool:
     return (os.getenv("AUTO_MOVE_ENABLE", "0").lower() in ("1", "true", "yes", "on"))
-
 
 def _parse_csv_floats(val: Optional[str]) -> Optional[List[float]]:
     if not val:
@@ -700,12 +722,14 @@ def _parse_csv_floats(val: Optional[str]) -> Optional[List[float]]:
     except Exception:
         return None
 
-
 async def _auto_loop(symbols: List[str], every_sec: int, steps: List[str],
                      offset_bps: int, cb_rate: Optional[float], atr_mult: Optional[float],
                      pcts: Optional[List[float]], splits: Optional[List[float]]) -> None:
     global _SCHED_ACTIVE
-    client = _get_client()
+    client, cerr = _get_client_soft()
+    if not client:
+        logger.warning("auto_loop.client_unavailable: %s", cerr)
+        return
     _align_position_mode(client)
     while _SCHED_ACTIVE:
         started = time.time()
@@ -743,19 +767,18 @@ async def _auto_loop(symbols: List[str], every_sec: int, steps: List[str],
         sleep_for = max(1.0, every_sec - elapsed)
         await asyncio.sleep(sleep_for)
 
-
 @router.post("/auto/start", summary="Start periodic smart-manage loop (every N sec) for given symbols")
 async def auto_start(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
-    _require_bearer(Authorization)
-    global _SCHED_TASK, _SCHED_ACTIVE
+    if not _auth_ok(Authorization):
+        return _err("unauthorized")
     if not _sched_should_run():
-        return {"ok": False, "error": "AUTO_MOVE_ENABLE is off"}
+        return _err("auto_move_disabled")
     symbols = [str(x).upper() for x in (payload.get("symbols") or [])]
     if not symbols:
         wl = os.getenv("WATCHLIST", "") or ""
         symbols = [s.strip().upper() for s in wl.split(",") if s.strip()]
     if not symbols:
-        raise HTTPException(status_code=422, detail="symbols required or WATCHLIST must be set")
+        return _err("invalid_input", detail="symbols required or WATCHLIST must be set")
 
     every_sec = int(payload.get("every_sec") or os.getenv("AUTO_MOVE_EVERY_SEC", "20"))
     steps = [s.strip().lower() for s in (payload.get("steps") or (os.getenv("AUTO_MOVE_STEPS", "be,trail").split(",")))]
@@ -763,28 +786,28 @@ async def auto_start(payload: Dict[str, Any] = Body(...), Authorization: Optiona
     cb_rate = payload.get("callbackRate")
     atr_mult = payload.get("atr_mult") or (float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None)
     pcts = payload.get("pcts") or _parse_csv_floats(os.getenv("SMART_MANAGE_PCTS"))
-    splits = payload.get("splits") or _parse_csv_floats(os.getenv("SMART_MANAGE_SPLITS"))
+    splits = payload.get("splits") or _parse_csv_flots(os.getenv("SMART_MANAGE_SPLITS"))
 
+    global _SCHED_TASK, _SCHED_ACTIVE
     if _SCHED_ACTIVE and _SCHED_TASK and not _SCHED_TASK.done():
-        return {"ok": True, "status": "already_running"}
+        return _ok(status="already_running")
 
     _SCHED_ACTIVE = True
     _SCHED_TASK = asyncio.create_task(
         _auto_loop(symbols, every_sec, steps, offset_bps, cb_rate, atr_mult, pcts, splits)
     )
-    return {"ok": True, "status": "started", "symbols": symbols, "every_sec": every_sec, "steps": steps}
-
+    return _ok(status="started", symbols=symbols, every_sec=every_sec, steps=steps)
 
 @router.post("/auto/stop", summary="Stop periodic smart-manage loop")
 async def auto_stop(Authorization: Optional[str] = Header(None)):
-    _require_bearer(Authorization)
+    if not _auth_ok(Authorization):
+        return _err("unauthorized")
     global _SCHED_TASK, _SCHED_ACTIVE
     _SCHED_ACTIVE = False
     if _SCHED_TASK:
         with suppress(Exception):
             _SCHED_TASK.cancel()
-    return {"ok": True, "status": "stopped"}
-
+    return _ok(status="stopped")
 
 
 
