@@ -1,3 +1,4 @@
+# main_part1.py
 from __future__ import annotations
 
 import os
@@ -112,6 +113,17 @@ app.add_middleware(
     allow_methods=[m.strip() for m in CORS_ALLOW_METHODS.split(",")] if CORS_ALLOW_METHODS else ["*"],
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
 )
+
+# Security headers (basic hardening)
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
+    return resp
 
 # =================================================
 # Helpers
@@ -383,16 +395,16 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
     try:
         cli = _get_shared_async_client()
         r = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
-        # תמיד נחזיר גם סטטוס וטקסט גלמי לדיבאג נוח
-        data: Dict[str, Any]
-        with suppress(Exception):
+        try:
             data = r.json()
-        if not isinstance(locals().get("data"), dict):
-            data = {"ok": False}
-        data.setdefault("ok", bool(data.get("ok")))
-        data.setdefault("status", r.status_code)
-        data.setdefault("text_raw", r.text)
-        return data
+        except Exception:
+            data = {}
+        return {
+            "ok": bool(data.get("ok")),
+            "status": r.status_code,
+            "text_raw": r.text,
+            **({"result": data.get("result")} if "result" in data else {}),
+        }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -591,7 +603,7 @@ import json as _json
 async def _load_ticket(tid: str) -> Tuple[Optional[Dict[str, Any]], str]:
     if aioredis and REDIS_URL:
         try:
-            r = await _redis()
+            r = await _get_redis_cached()
             if r:
                 raw = await r.get(f"{NS}:ticket:{tid}")
                 if raw:
@@ -609,11 +621,11 @@ async def _load_ticket(tid: str) -> Tuple[Optional[Dict[str, Any]], str]:
         logger.warning("confirmstore_load_failed: %s", e)
     return None, "none"
 
-# ✅ Do not overwrite status unless explicitly provided
+# Do NOT overwrite status unless explicitly provided; also remove after decision
 async def _delete_ticket(tid: str, source: str, final_status: Optional[bool] = None) -> None:
     if source == "redis" and aioredis and REDIS_URL:
         try:
-            r = await _redis()
+            r = await _get_redis_cached()
             if r:
                 await r.delete(f"{NS}:ticket:{tid}")
         except Exception as e:
@@ -621,9 +633,10 @@ async def _delete_ticket(tid: str, source: str, final_status: Optional[bool] = N
     if final_status is not None:
         with suppress(Exception):
             ConfirmStore.decide(tid, approved=final_status)
-        # אופציונלי: נקה זכרון אחרי החלטה
         with suppress(Exception):
             ConfirmStore.remove(tid)
+# main_part2.py  (המשך ישיר — חבר אחרי main_part1.py)
+
 # --- Smart manage after approve ---
 async def _smart_manage_now(symbol: str,
                             offset_bps: Optional[int] = None,
@@ -747,7 +760,7 @@ async def create_ticket(
 
     if aioredis and REDIS_URL:
         try:
-            r = await _redis()
+            r = await _get_redis_cached()
             if r:
                 rec = {"ts": time.time(), "req": req_body, "note": note}
                 await r.setex(f"{NS}:ticket:{tid}", TICKET_TTL_SEC, json.dumps(rec, ensure_ascii=False, separators=(",", ":")))
@@ -809,18 +822,6 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket["position_side"] = ""
     return new_ticket
 
-def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    symbol = (ticket.get("symbol") or "").upper()
-    price = _get_last_price(symbol)
-    if not price or float(price) <= 0:
-        return None
-    new_ticket = ensure_final_qty(dict(ticket), float(price))
-    ps = str(new_ticket.get("position_side") or new_ticket.get("positionSide") or "").upper()
-    if ps == "BOTH":
-        new_ticket.pop("positionSide", None)
-        new_ticket["position_side"] = ""
-    return new_ticket
-
 def _require_bearer(request: Request) -> None:
     if not API_BEARER_TOKEN:
         return
@@ -829,8 +830,12 @@ def _require_bearer(request: Request) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 def _maybe_protect_routes(request: Request) -> None:
-    if PROTECT_APPROVE_ROUTES:
-        _require_bearer(request)
+    if not PROTECT_APPROVE_ROUTES:
+        return
+    if not API_BEARER_TOKEN:
+        # fail closed if protection enabled but token missing
+        raise HTTPException(status_code=503, detail="Route protection enabled but API_BEARER_TOKEN missing")
+    _require_bearer(request)
 
 def _badge(text: str, color: str) -> str:
     return f"<span style='display:inline-block;padding:.15rem .45rem;border-radius:999px;font-size:.8rem;color:#fff;background:{color}'>{_md_html(text)}</span>"
@@ -908,7 +913,7 @@ async def ui_pending(request: Request = None):
 
     if aioredis and REDIS_URL:
         with suppress(Exception):
-            r = await _redis()
+            r = await _get_redis_cached()
             if r:
                 cursor: Any = 0
                 while True:
@@ -983,7 +988,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
         for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
             ticket.pop(k, None)
 
-    # חישוב כמות אוטומטי — אסינכרוני
+    # auto sizing
     t2 = await _apply_auto_qty_on_ticket_async(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
@@ -1037,13 +1042,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
     except Exception:
         pass
 
-    with suppress(Exception):
-        ConfirmStore.decide(ticket_id, approved=ok)
-
-    with suppress(Exception):
-        (record_approval_approved if ok else record_approval_rejected)()
-
-    # אל תדרוס סטטוס — העבר explicit
+    # החלטה וניקוי מרוכזים בתוך _delete_ticket
     await _delete_ticket(ticket_id, source, final_status=ok)
 
     if ok:
@@ -1060,16 +1059,11 @@ async def approve_link(id: str = Query(..., description="ticket_id"), request: R
 async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
     _maybe_protect_routes(request)
     _, source = await _load_ticket(ticket_id)
-    # העבר final_status=False במקום לדרוס תמיד
     await _delete_ticket(ticket_id, source, final_status=False)
     with suppress(Exception):
         await _send_telegram_html(
             f"❌ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n— — —\nNo action was taken."
         )
-    with suppress(Exception):
-        ConfirmStore.decide(ticket_id, approved=False)
-    with suppress(Exception):
-        record_approval_rejected()
     return _html("❌ נדחה. לא בוצעה פעולה.")
 
 @router.post("/ops/approve/signed")
@@ -1176,11 +1170,11 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     if not (aioredis and REDIS_URL and BOT_TOKEN and ADMIN_CHAT_ID):
         return {"ok": False, "error": "digest_dependencies_missing"}
     try:
-        r = await _redis()
+        r = await _get_redis_cached()
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
 
-        key_good = f"{NS}:expired_log"
+        key_good = f"{NS}:expired_log}"
         key_bad  = f"{NS}:expired_log_bad"
 
         items: List[str] = []
@@ -1513,6 +1507,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
