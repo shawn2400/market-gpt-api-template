@@ -33,7 +33,7 @@ logging.basicConfig(
 logger = logging.getLogger("algogpt.main")
 
 # =================================================
-# Inline ENV defaults
+# Inline ENV defaults (safe, non-secret)
 # =================================================
 _inline_env_defaults: Dict[str, str] = {
     "GUARD_SL_GRACE_SEC": "2",
@@ -110,7 +110,7 @@ app.add_middleware(
 )
 
 # =================================================
-# Helpers: internal base URL
+# Helpers
 # =================================================
 def _port() -> int:
     try:
@@ -125,7 +125,7 @@ def get_internal_base() -> str:
     return f"http://127.0.0.1:{_port()}"
 
 # =================================================
-# OPS APPROVE (inlined router)
+# OPS APPROVE Router
 # =================================================
 router = APIRouter(tags=["ops-approval"])
 
@@ -176,6 +176,7 @@ HEALTH_TP1_INTERVAL_SEC = int(os.getenv("HEALTH_TP1_INTERVAL_SEC", "600"))
 TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS","") or "").split(",") if t.strip()]
 SL_TAGS = [t.strip() for t in (os.getenv("SL_TAGS","SL,STOP,STOP_LOSS,STOP_LOSS_LIMIT,STOP_MARKET") or "").split(",") if t.strip()]
 
+# Order ID helper
 try:
     from utils.order_ids import build_client_order_id  # type: ignore
 except Exception:
@@ -193,6 +194,7 @@ except Exception:
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
 
+# Position sizing helper
 try:
     from app.utils.position_sizing import ensure_final_qty  # type: ignore
 except Exception:
@@ -202,79 +204,49 @@ except Exception:
         def ensure_final_qty(ticket: Dict[str, Any], price: float) -> Dict[str, Any]:
             return ticket
 
-# =================================================
-# Price helpers — fully async (clean, non-blocking)
-# =================================================
+# Price helpers
 async def _get_last_price_http(symbol: str) -> Optional[float]:
     sym = symbol.upper()
     timeout = httpx.Timeout(6.0, connect=2.0)
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as cli:
-            r = await cli.get("https://fapi.binance.com/fapi/v1/ticker/price", params={"symbol": sym})
-            if r.status_code == 200:
-                data = r.json()
-                p = float(data.get("price"))
-                if p > 0:
-                    return p
-    except Exception:
-        pass
-    try:
-        async with httpx.AsyncClient(timeout=timeout) as cli:
-            r = await cli.get("https://api.binance.com/api/v3/ticker/price", params={"symbol": sym})
-            if r.status_code == 200:
-                data = r.json()
-                p = float(data.get("price"))
-                if p > 0:
-                    return p
-    except Exception:
-        pass
+    for url in (
+        "https://fapi.binance.com/fapi/v1/ticker/price",
+        "https://api.binance.com/api/v3/ticker/price",
+    ):
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as cli:
+                r = await cli.get(url, params={"symbol": sym})
+                if r.status_code == 200:
+                    data = r.json()
+                    p = float(data.get("price"))
+                    if p > 0:
+                        return p
+        except Exception:
+            pass
     return None
 
-async def aget_last_price(symbol: str) -> Optional[float]:
-    """
-    Clean, non-blocking last-price fetcher.
-    Order:
-      1) utils.binance_client.get_price_async (if available)
-      2) public HTTP endpoints via httpx (async)
-      3) Binance Python SDK offloaded to a thread (no event-loop blocking)
-    """
-    # 1) optional user async helper
+def _get_last_price(symbol: str) -> Optional[float]:
     with suppress(Exception):
-        from utils.binance_client import get_price_async  # type: ignore
-        p = await get_price_async(symbol)  # type: ignore
+        from utils.binance_client import get_price  # type: ignore
+        p = get_price(symbol)
         if p:
-            p = float(p)
-            if p > 0:
-                return p
-
-    # 2) public http endpoints
-    p = await _get_last_price_http(symbol)
-    if p:
-        return p
-
-    # 3) SDK in a thread
-    def _block() -> Optional[float]:
-        try:
-            from binance.client import Client  # type: ignore
-        except Exception:
-            return None
+            return float(p)
+    try:
+        return asyncio.get_event_loop().run_until_complete(_get_last_price_http(symbol))
+    except Exception:
+        pass
+    with suppress(Exception):
+        from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
         api_sec = os.getenv("BINANCE_API_SECRET","").strip()
         if not api_key or not api_sec:
             return None
-        try:
-            cli = Client(api_key, api_sec)
-            info = cli.futures_symbol_ticker(symbol=symbol.upper())
-            if info and "price" in info:
-                val = float(info["price"])
-                return val if val > 0 else None
-        except Exception:
-            return None
-        return None
+        cli = Client(api_key, api_sec)
+        info = cli.futures_symbol_ticker(symbol=symbol.upper())
+        if info and "price" in info:
+            return float(info["price"])
+    return None
 
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(None, _block)
-
+# HTML helpers
 def _md_html(s: str) -> str:
     return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
@@ -321,7 +293,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
         if preview_url: row.append({"text":"👁 Preview","url":preview_url})
         if approve_url: row.append({"text":"✅ Approve","url":approve_url})
         if reject_url:  row.append({"text":"❌ Reject","url":reject_url})
-        payload["reply_markup"] = {"inline_keyboard":[[x for x in row]]}
+        payload["reply_markup"] = {"inline_keyboard":[row]}
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as cli:
             r = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
@@ -354,6 +326,7 @@ def _align_position_mode(client) -> None:
         elif mode_override in ("oneway","one_way","single","single_side","oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
 
+# --- Execute trades (MARKET/HYBRID/AUTO) ---
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     with suppress(Exception):
         from utils.trade_executor import place_futures_market  # type: ignore
@@ -480,6 +453,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         logger.error("armed_execute failed: %s", e)
         return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
 
+# --- ETA helpers ---
 def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optional[float]:
     try:
         from utils.get_klines import get_klines_sync  # type: ignore
@@ -521,6 +495,7 @@ def _smart_etas(symbol: str, side: str, price_now: Optional[float], tp1=None, tp
         return int(math.ceil(dist / vpm)) if vpm > 0 else None
     return {"eta_tp1_min": _eta(tp1), "eta_tp2_min": _eta(tp2), "eta_tp3_min": _eta(tp3)}
 
+# --- Ticket storage ---
 import json as _json
 
 async def _load_ticket(tid: str) -> Tuple[Optional[Dict[str, Any]], str]:
@@ -556,6 +531,7 @@ async def _delete_ticket(tid: str, source: str) -> None:
     with suppress(Exception):
         ConfirmStore.decide(tid, approved=False)
 
+# --- Smart manage after approve ---
 async def _smart_manage_now(symbol: str,
                             offset_bps: Optional[int] = None,
                             pcts: Optional[List[float]] = None,
@@ -612,6 +588,7 @@ def _smart_manage_env() -> Dict[str, Any]:
         "atr_mult": float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT","0") or 0) or None,
     }
 
+# --- API: create ticket ---
 @router.post("/ops/ticket")
 async def create_ticket(
     payload: Dict[str, Any] = Body(...),
@@ -631,9 +608,9 @@ async def create_ticket(
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
-        price_now: Optional[float] = None
+        price_now = None
         with suppress(Exception):
-            price_now = await aget_last_price(symbol)
+            price_now = _get_last_price(symbol)
         etas = _smart_etas(symbol, side, price_now, payload.get("tp1"), payload.get("tp2"), payload.get("tp3"))
         for k, v in etas.items():
             payload.setdefault(k, v)
@@ -661,7 +638,7 @@ async def create_ticket(
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
         rr_min_eff  = max(rr_min_flag, rr_env_lo)
         if rr_min_eff > 0 and req_body.get("sl"):
-            current = float(await aget_last_price(symbol) or 0)
+            current = float(_get_last_price(symbol) or 0)
             tp1 = float(req_body.get("tp1") or 0); sl = float(req_body.get("sl") or 0)
             rr  = None
             if side == "BUY" and current > 0 and tp1 > 0 and sl > 0:
@@ -727,9 +704,9 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
         return mode
     return "HYBRID" if TP_LADDER_ON_APPROVE else "MARKET"
 
-async def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
+def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
     symbol = (ticket.get("symbol") or "").upper()
-    price = await aget_last_price(symbol)
+    price = _get_last_price(symbol)
     if not price or float(price) <= 0:
         return None
     new_ticket = ensure_final_qty(dict(ticket), float(price))
@@ -780,6 +757,7 @@ def _rows_kv_html(t: Dict[str, Any]) -> str:
                     f"<td style='padding:.35rem .6rem'>{cv(k)}</td></tr>")
     return "\n".join(rows)
 
+# --- UI routes (HTML) ---
 @router.get("/ops/ui/ticket")
 async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     _require_bearer(request)
@@ -883,6 +861,7 @@ async def ui_pending(request: Request = None):
     )
     return HTMLResponse(body)
 
+# --- Approve/Reject flows ---
 @router.get("/ops/approve")
 async def approve(ticket_id: str = Query(..., description="ticket_id")):
     ticket, source = await _load_ticket(ticket_id)
@@ -894,7 +873,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
             ticket.pop(k, None)
 
-    t2 = await _apply_auto_qty_on_ticket(ticket)
+    t2 = _apply_auto_qty_on_ticket(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
     ticket = t2
@@ -993,7 +972,7 @@ async def approve_signed(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    t2 = await _apply_auto_qty_on_ticket(payload)
+    t2 = _apply_auto_qty_on_ticket(payload)
     if t2 is None:
         raise HTTPException(status_code=400, detail="AUTO_QTY: failed to fetch last price")
     payload = t2
@@ -1036,6 +1015,7 @@ async def approve_signed(request: Request):
         record_approval_approved()
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
 
+# --- Guard smoke run ---
 @router.post("/guard/smoke/run")
 async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
     _require_bearer(request)
@@ -1076,6 +1056,7 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
 
     return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
 
+# --- Ops digest: expired approvals ---
 @router.get("/ops/digest/expired")
 async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     if not (aioredis and REDIS_URL and BOT_TOKEN and ADMIN_CHAT_ID):
@@ -1129,8 +1110,10 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
 
+# --- Register routers ---
 app.include_router(router)
 
+# Extra routers (best-effort)
 with suppress(Exception):
     from routes.position_ops import router as position_ops_router  # type: ignore
     app.include_router(position_ops_router)
@@ -1139,26 +1122,32 @@ with suppress(Exception):
     from routes.locked_report import router as locked_router  # type: ignore
     app.include_router(locked_router)
 
-try:
-    from routes.scan_top_volume import router as scan_router  # type: ignore
-    app.include_router(scan_router)
-except Exception as e:
-    logger.warning("scan_top_volume router not loaded: %s", e)
-
 with suppress(Exception):
     from routes.scan_public import router as scan_public_router  # type: ignore
     app.include_router(scan_public_router)
 
-try:
+with suppress(Exception):
+    from routes.scan_top_volume import router as scan_router  # type: ignore
+    app.include_router(scan_router)
+
+with suppress(Exception):
     from routes.topk import router as topk_router  # type: ignore
     app.include_router(topk_router)
-except Exception as e:
-    logger.warning("topk router not loaded: %s", e)
 
+# >>> YOUR REQUESTED ADDITION <<<
+with suppress(Exception):
+    from routes import root as routes_root  # <— add root aggregate router if exists
+    app.include_router(routes_root.router)
+
+# --- Meta routes ---
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
     name = os.getenv("APP_NAME", "algogpt")
     return f"{name} online"
+
+@app.head("/", response_class=PlainTextResponse, tags=["meta"])
+def root_head() -> str:
+    return ""
 
 @app.get("/health", response_class=PlainTextResponse, tags=["meta"])
 @app.head("/health", response_class=PlainTextResponse)
@@ -1185,106 +1174,63 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
         safe[k] = v
     return {"ok": True, "env": safe}
 
+# --- Health TP1 utils (use real module; no fallback if present) ---
 try:
     from utils.health_tp1 import health_check_tp1_tags, quick_check_tp1  # type: ignore
     _health_tp1_loaded = True
 except Exception as _e:
-    logger.info("health_tp1 utils not found (%s) – using built-in fallback", _e)
-    _health_tp1_loaded = True
+    logger.warning("health_tp1 utils import failed: %s", _e)
+    _health_tp1_loaded = False
 
-    async def quick_check_tp1(symbols, tp1_tags=None, notify_telegram=False):
-        from binance.client import Client  # type: ignore
-        api_key = os.getenv("BINANCE_API_KEY","").strip()
-        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
-        cli = Client(api_key, api_sec)
+@app.get("/health/tp1", tags=["meta"])
+async def health_tp1_now(symbols: Optional[str] = Query(None, description="CSV of symbols; default from WATCHLIST")):
+    if not _health_tp1_loaded:
+        raise HTTPException(status_code=501, detail="health_tp1 module not loaded")
+    sym_list = [s.strip().upper() for s in (symbols.split(",") if symbols else (os.getenv("WATCHLIST","") or "").split(",")) if s.strip()]
+    if not sym_list:
+        raise HTTPException(status_code=400, detail="no symbols")
+    res = await quick_check_tp1(sym_list, tp1_tags=(os.getenv("TP1_TAGS","") or None), notify_telegram=True)
+    return {"ok": True, "result": res}
 
-        tags = tp1_tags or [t.strip() for t in (os.getenv("TP1_TAGS","") or "").split(",") if t.strip()]
-        out: Dict[str, Any] = {}
-        batch_lines: List[str] = ["🩺 <b>TP1 Health</b>"]
+# --- Global error handler ---
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.exception("unhandled_error: %s %s", request.method, request.url)
+    return JSONResponse(
+        status_code=500,
+        content={"ok": False, "error": "internal_error", "detail": str(exc)},
+    )
 
-        for sym in symbols:
-            symu = str(sym).upper().strip()
-
-            try:
-                pos_infos = cli.futures_position_information(symbol=symu) or []
-                pos_qty = 0.0
-                if pos_infos:
-                    q = float(pos_infos[0].get("positionAmt") or 0.0)
-                    pos_qty = abs(q)
-                if pos_qty < 1e-12:
-                    out[symu] = {"skipped_no_position": True}
-                    continue
-            except Exception:
-                pass
-
-            try:
-                orders = cli.futures_get_open_orders(symbol=symu)
-            except Exception:
-                orders = []
-
-            has_tp1 = False
-            found = []
-            for o in (orders or []):
-                coid = ((o.get("clientOrderId") or "") + " " + (o.get("origClientOrderId") or "")).upper()
-                if any(t for t in tags if t and t.upper() in coid):
-                    has_tp1 = True
-                typ = (o.get("type") or "").upper()
-                if typ in ("TAKE_PROFIT","TAKE_PROFIT_MARKET","STOP","STOP_MARKET","STOP_LOSS_LIMIT","TAKE_PROFIT_LIMIT"):
-                    found.append({
-                        "status": o.get("status"),
-                        "type": o.get("type"),
-                        "side": o.get("side"),
-                        "stopPrice": o.get("stopPrice"),
-                        "clientOrderId": o.get("clientOrderId"),
-                        "reduceOnly": o.get("reduceOnly"),
-                        "positionSide": o.get("positionSide","BOTH"),
-                        "time": o.get("time"),
-                    })
-
-            out[symu] = {"tp1_tags": tags, "tp1_present": has_tp1, "open_conditional": found}
-            mark = "✅" if has_tp1 else "⚠️"
-            batch_lines.append(f"• {symu}: {mark} {'TP1 found' if has_tp1 else 'TP1 missing'}")
-
-        if notify_telegram and len(batch_lines) > 1:
-            await _send_telegram_html("\n".join(batch_lines))
-
-        return out
-
-    async def health_check_tp1_tags(symbols, interval_sec=600):
-        while True:
-            try:
-                await quick_check_tp1(symbols, tp1_tags=TP1_TAGS or None, notify_telegram=True)
-            except Exception as e:
-                logger.warning("health_tp1_fallback_loop_error: %s", e)
-            await asyncio.sleep(max(60, int(interval_sec)))
-
+# =================================================
+# Startup background tasks
+# =================================================
 _manager_lock = asyncio.Lock()
 _manager_backoff = 0.0  # seconds
 
 @app.on_event("startup")
 async def _startup_tasks():
-    # prevent double-start of background tasks on worker recycle
     if getattr(app.state, "bg_started", False):
         logger.info("startup: background already started – skipping")
         return
     app.state.bg_started = True
 
     async def _notify_bot_online():
-        try:
+        with suppress(Exception):
             await asyncio.sleep(0.7)
             name = os.getenv("APP_TITLE", "AlgoGPT Supervisor")
             env  = os.getenv("ENV", os.getenv("ENVIRONMENT","prod"))
             await _send_telegram_html(f"🟢 <b>Bot online</b> · <code>{name}</code> · env=<code>{env}</code>")
-        except Exception:
-            pass
     asyncio.create_task(_notify_bot_online())
 
-    if _health_tp1_loaded and HEALTH_TP1_ENABLE:
+    # Health TP1 watchdog
+    if _health_tp1_loaded and _bool_env("HEALTH_TP1_ENABLE", True):
         watch = [s.strip() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
         if watch:
-            asyncio.create_task(health_check_tp1_tags(watch, interval_sec=HEALTH_TP1_INTERVAL_SEC))
-            logger.info("health_tp1 background started (interval=%ss, symbols=%s)", HEALTH_TP1_INTERVAL_SEC, ",".join(watch))
+            asyncio.create_task(health_check_tp1_tags(watch, interval_sec=int(os.getenv("HEALTH_TP1_INTERVAL_SEC","600"))))
+            logger.info("health_tp1 background started (interval=%ss, symbols=%s)",
+                        int(os.getenv("HEALTH_TP1_INTERVAL_SEC","600")), ",".join(watch))
 
+    # Periodic manager calls
     async def periodic_manager():
         global _manager_backoff
         await asyncio.sleep(2.0)
@@ -1297,10 +1243,7 @@ async def _startup_tasks():
             return
         base = get_internal_base()
         every_sec = max(10, int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","60")))
-
-        # generous timeout because this call can trigger exchange ops
         per_req_timeout = httpx.Timeout(connect=2.5, read=15.0, write=10.0, pool=10.0)
-
         while True:
             sleep_extra = _manager_backoff
             if sleep_extra > 0:
@@ -1329,6 +1272,7 @@ async def _startup_tasks():
     if _bool_env("MANAGER_ENABLE", True):
         asyncio.create_task(periodic_manager())
 
+    # Guarder
     async def periodic_guarder():
         await asyncio.sleep(3.0)
         syms = [s.strip().upper() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
@@ -1345,6 +1289,7 @@ async def _startup_tasks():
     if _bool_env("GUARDER_ENABLE", True):
         asyncio.create_task(periodic_guarder())
 
+    # Scanner
     async def periodic_scanner():
         try:
             from routes.scan_top_volume import scan_top_volume  # type: ignore
@@ -1396,30 +1341,16 @@ async def _startup_tasks():
     if _bool_env("SCAN_CRON_ENABLE", True):
         asyncio.create_task(periodic_scanner())
 
-@app.get("/health/tp1", tags=["meta"])
-async def health_tp1_now(symbols: Optional[str] = Query(None, description="CSV of symbols; default from WATCHLIST")):
-    if not _health_tp1_loaded:
-        raise HTTPException(status_code=501, detail="health_tp1 module not loaded")
-    sym_list = [s.strip().upper() for s in (symbols.split(",") if symbols else (os.getenv("WATCHLIST","") or "").split(",")) if s.strip()]
-    if not sym_list:
-        raise HTTPException(status_code=400, detail="no symbols")
-    res = await quick_check_tp1(sym_list, tp1_tags=TP1_TAGS or None, notify_telegram=True)
-    return {"ok": True, "result": res}
-
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    logger.exception("unhandled_error: %s %s", request.method, request.url)
-    return JSONResponse(
-        status_code=500,
-        content={"ok": False, "error": "internal_error", "detail": str(exc)},
-    )
-
+# =================================================
+# Uvicorn entry
+# =================================================
 if __name__ == "__main__":
     import uvicorn
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
