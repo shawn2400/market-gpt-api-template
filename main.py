@@ -225,15 +225,36 @@ async def _get_last_price_http(symbol: str) -> Optional[float]:
     return None
 
 def _get_last_price(symbol: str) -> Optional[float]:
+    # Prefer local client if available
     with suppress(Exception):
         from utils.binance_client import get_price  # type: ignore
         p = get_price(symbol)
         if p:
             return float(p)
+
+    # If an event loop is already running, avoid run_until_complete
+    sym = symbol.upper()
     try:
-        return asyncio.get_event_loop().run_until_complete(_get_last_price_http(symbol))
-    except Exception:
-        pass
+        asyncio.get_running_loop()
+        for url in (
+            "https://fapi.binance.com/fapi/v1/ticker/price",
+            "https://api.binance.com/api/v3/ticker/price",
+        ):
+            try:
+                r = httpx.get(url, params={"symbol": sym}, timeout=6.0)
+                if r.status_code == 200:
+                    p = float((r.json() or {}).get("price") or 0)
+                    if p > 0:
+                        return p
+            except Exception:
+                pass
+        return None
+    except RuntimeError:
+        # No running loop — it's safe to run async
+        with suppress(Exception):
+            return asyncio.run(_get_last_price_http(symbol))
+
+    # Fallback to official client if keys exist
     with suppress(Exception):
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
@@ -313,7 +334,6 @@ def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) 
     except Exception:
         bad = {"tp_kind","sl_kind","entry_kind","entry_offset","tp_offset","sl_offset"}
         return {k: v for k, v in kwargs.items() if k not in bad}
-
 def _is_code_4061(err: Exception | str) -> bool:
     s = str(err)
     return "code=-4061" in s or "position side does not match" in s.lower()
@@ -451,6 +471,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.error("armed_execute failed: %s", e)
         return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
+
 # --- ETA helpers ---
 def _calc_velocity_per_min(symbol: str, interval: str, window_min: int) -> Optional[float]:
     try:
@@ -955,7 +976,6 @@ async def reject(ticket_id: str = Query(..., description="ticket_id")):
     with suppress(Exception):
         record_approval_rejected()
     return _html("❌ נדחה. לא בוצעה פעולה.")
-
 @router.post("/ops/approve/signed")
 async def approve_signed(request: Request):
     if not HMAC_SECRET:
@@ -1064,8 +1084,9 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
 
-        key_good = f"{NS}:expired_log}"
-        key_bad  = f"{NS}:expired_log_bad}"
+        # FIX: removed stray "}"
+        key_good = f"{NS}:expired_log"
+        key_bad  = f"{NS}:expired_log_bad"
 
         items: List[str] = []
         with suppress(Exception):
@@ -1132,15 +1153,10 @@ with suppress(Exception):
     from routes.topk import router as topk_router  # type: ignore
     app.include_router(topk_router)
 
-# >>> YOUR REQUESTED ADDITIONS <<<
-# routes/debug_auth.py + routes/root.py (aggregate) — טעינה בטוחה והוספה ל-app
+# Keep debug_auth, drop routes_root to avoid "/" duplication
 with suppress(Exception):
     from routes import debug_auth as routes_debug_auth  # type: ignore
     app.include_router(routes_debug_auth.router)
-
-with suppress(Exception):
-    from routes import root as routes_root  # type: ignore
-    app.include_router(routes_root.router)
 
 # --- Meta routes ---
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
@@ -1367,8 +1383,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
-
-
 
 
 
