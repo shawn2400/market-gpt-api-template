@@ -1,7 +1,3 @@
-הנה `main.py` מתוקן 1:1 (התיקון היחיד: הורדתי את הסוגר המסולסל המיותר ב־`key_good`):
-
-```python
-# main.py
 from __future__ import annotations
 
 import os
@@ -611,7 +607,7 @@ async def _smart_manage_now(symbol: str,
     return {"ok": False, "error": "smart_manage_exhausted"}
 
 def _smart_manage_env() -> Dict[str, Any]:
-    def _parse_floats_csv(val: Optional:str) -> Optional[List[float]]:
+    def _parse_floats_csv(val: Optional[str]) -> Optional[List[float]]:
         if not val:
             return None
         try:
@@ -1461,9 +1457,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
-```
-
-
 
 
 
