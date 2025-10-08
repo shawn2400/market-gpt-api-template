@@ -1,4 +1,3 @@
-
 # main.py
 from __future__ import annotations
 
@@ -203,6 +202,9 @@ except Exception:
         def ensure_final_qty(ticket: Dict[str, Any], price: float) -> Dict[str, Any]:
             return ticket
 
+# =================================================
+# Price helpers — fully async (clean, non-blocking)
+# =================================================
 async def _get_last_price_http(symbol: str) -> Optional[float]:
     sym = symbol.upper()
     timeout = httpx.Timeout(6.0, connect=2.0)
@@ -228,27 +230,50 @@ async def _get_last_price_http(symbol: str) -> Optional[float]:
         pass
     return None
 
-def _get_last_price(symbol: str) -> Optional[float]:
+async def aget_last_price(symbol: str) -> Optional[float]:
+    """
+    Clean, non-blocking last-price fetcher.
+    Order:
+      1) utils.binance_client.get_price_async (if available)
+      2) public HTTP endpoints via httpx (async)
+      3) Binance Python SDK offloaded to a thread (no event-loop blocking)
+    """
+    # 1) optional user async helper
     with suppress(Exception):
-        from utils.binance_client import get_price  # type: ignore
-        p = get_price(symbol)
+        from utils.binance_client import get_price_async  # type: ignore
+        p = await get_price_async(symbol)  # type: ignore
         if p:
-            return float(p)
-    try:
-        return asyncio.get_event_loop().run_until_complete(_get_last_price_http(symbol))
-    except Exception:
-        pass
-    with suppress(Exception):
-        from binance.client import Client  # type: ignore
+            p = float(p)
+            if p > 0:
+                return p
+
+    # 2) public http endpoints
+    p = await _get_last_price_http(symbol)
+    if p:
+        return p
+
+    # 3) SDK in a thread
+    def _block() -> Optional[float]:
+        try:
+            from binance.client import Client  # type: ignore
+        except Exception:
+            return None
         api_key = os.getenv("BINANCE_API_KEY","").strip()
         api_sec = os.getenv("BINANCE_API_SECRET","").strip()
         if not api_key or not api_sec:
             return None
-        cli = Client(api_key, api_sec)
-        info = cli.futures_symbol_ticker(symbol=symbol.upper())
-        if info and "price" in info:
-            return float(info["price"])
-    return None
+        try:
+            cli = Client(api_key, api_sec)
+            info = cli.futures_symbol_ticker(symbol=symbol.upper())
+            if info and "price" in info:
+                val = float(info["price"])
+                return val if val > 0 else None
+        except Exception:
+            return None
+        return None
+
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _block)
 
 def _md_html(s: str) -> str:
     return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -296,7 +321,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
         if preview_url: row.append({"text":"👁 Preview","url":preview_url})
         if approve_url: row.append({"text":"✅ Approve","url":approve_url})
         if reject_url:  row.append({"text":"❌ Reject","url":reject_url})
-        payload["reply_markup"] = {"inline_keyboard":[row]}
+        payload["reply_markup"] = {"inline_keyboard":[[x for x in row]]}
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as cli:
             r = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
@@ -606,9 +631,9 @@ async def create_ticket(
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
-        price_now = None
+        price_now: Optional[float] = None
         with suppress(Exception):
-            price_now = _get_last_price(symbol)
+            price_now = await aget_last_price(symbol)
         etas = _smart_etas(symbol, side, price_now, payload.get("tp1"), payload.get("tp2"), payload.get("tp3"))
         for k, v in etas.items():
             payload.setdefault(k, v)
@@ -636,7 +661,7 @@ async def create_ticket(
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
         rr_min_eff  = max(rr_min_flag, rr_env_lo)
         if rr_min_eff > 0 and req_body.get("sl"):
-            current = float(_get_last_price(symbol) or 0)
+            current = float(await aget_last_price(symbol) or 0)
             tp1 = float(req_body.get("tp1") or 0); sl = float(req_body.get("sl") or 0)
             rr  = None
             if side == "BUY" and current > 0 and tp1 > 0 and sl > 0:
@@ -702,9 +727,9 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
         return mode
     return "HYBRID" if TP_LADDER_ON_APPROVE else "MARKET"
 
-def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
+async def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
     symbol = (ticket.get("symbol") or "").upper()
-    price = _get_last_price(symbol)
+    price = await aget_last_price(symbol)
     if not price or float(price) <= 0:
         return None
     new_ticket = ensure_final_qty(dict(ticket), float(price))
@@ -869,7 +894,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
             ticket.pop(k, None)
 
-    t2 = _apply_auto_qty_on_ticket(ticket)
+    t2 = await _apply_auto_qty_on_ticket(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
     ticket = t2
@@ -968,7 +993,7 @@ async def approve_signed(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    t2 = _apply_auto_qty_on_ticket(payload)
+    t2 = await _apply_auto_qty_on_ticket(payload)
     if t2 is None:
         raise HTTPException(status_code=400, detail="AUTO_QTY: failed to fetch last price")
     payload = t2
@@ -1273,7 +1298,7 @@ async def _startup_tasks():
         base = get_internal_base()
         every_sec = max(10, int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","60")))
 
-        # timeout נדיב יותר כי הקריאה מפעילה פעולות לבורסה
+        # generous timeout because this call can trigger exchange ops
         per_req_timeout = httpx.Timeout(connect=2.5, read=15.0, write=10.0, pool=10.0)
 
         while True:
@@ -1395,9 +1420,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
-
-
-
 
 
 
