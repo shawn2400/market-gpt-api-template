@@ -5,8 +5,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx  # ← חדש: נדרש לשליחת ה-POST ל-/alerts/ingest
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
+
+from utils.anti_replay import verify_request  # ← Anti-Replay
 
 logger = logging.getLogger("algogpt.manager")
 router = APIRouter(tags=["manager"])
@@ -99,12 +101,6 @@ def _load_ingests() -> List[Dict[str, Any]]:
     return items
 
 def _get_pending_safe() -> List[Dict[str, Any]]:
-    """
-    תומך בכל וריאציה של ConfirmStore:
-    - מתודה pending() שמחזירה list[dict]
-    - שדה dict בשם _P או pending
-    - רשימה גולמית
-    """
     try:
         if hasattr(ConfirmStore, "pending") and callable(getattr(ConfirmStore, "pending")):
             res = ConfirmStore.pending()  # type: ignore
@@ -133,20 +129,10 @@ def _auth_headers() -> Dict[str, str]:
     return h
 
 async def _post_alerts_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    שולח ל-/alerts/ingest. תואם לדרישות הולידציה בצד השרת:
-    - symbol (UPPER)
-    - side (BUY/SELL)
-    - qty > 0
-    - leverage > 0
-    הערה: גם אם require_approval=True, עדיין יש הולידציה על qty/leverage.
-    """
     if not ALERTS_INGEST_URL or not PUBLIC_HOST:
         raise RuntimeError("ALERTS_INGEST_URL/PUBLIC_HOST not configured")
-
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as cli:
         r = await cli.post(ALERTS_INGEST_URL, json=payload, headers=_auth_headers())
-        # במידה וה-alerts מחזירים 401 עם הודעות מפורטות — נרצה אותן בלוג
         try:
             data = r.json()
         except Exception:
@@ -156,28 +142,19 @@ async def _post_alerts_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
         return data
 
 def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    ממפה פורמט הקובץ המקומי לפורמט /alerts/ingest.
-    משלימים qty/leverage מה-ENV כדי לעבור הולידציה.
-    """
     symbol = str(obj.get("symbol","")).upper()
     side = str(obj.get("side","")).upper()
-    # אם לא קיימים qty/leverage במקור – נשתמש בברירות מחדל
     qty = float(obj.get("qty") or DEFAULT_QTY)
     leverage = int(obj.get("leverage") or DEFAULT_LEVERAGE)
     require_approval = bool(obj.get("require_approval", True))
-
-    # ערכים אינפורמטיביים
     reason = obj.get("reason","")
     score = float(obj.get("score", 0.0))
-    expiry_ts = obj.get("expiry_ts")  # אם אין — לא חייבים
 
-    # ניתן להרחיב: tp/sl אם קיימים במקור
     payload: Dict[str, Any] = {
         "trade_id": _ticket_id_for(obj),
         "symbol": symbol,
         "market": str(obj.get("market","futures")).lower(),
-        "side": side,  # BUY/SELL
+        "side": side,
         "qty": qty,
         "leverage": leverage,
         "score": score,
@@ -185,8 +162,6 @@ def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
         "require_approval": require_approval,
         "timeframe": obj.get("timeframe","15m"),
     }
-
-    # מיפויים רלוונטיים אם קיימים (לא חובה):
     for k_src, k_dst in [
         ("tp1","tp1"),("tp2","tp2"),("tp3","tp3"),
         ("sl","sl"),
@@ -203,7 +178,6 @@ def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
         if obj.get(k_src) is not None:
             payload[k_dst] = obj.get(k_src)
 
-    # guard מינימלי
     if not symbol or side not in ("BUY","SELL"):
         raise ValueError("bad symbol/side in ingest payload")
     if qty <= 0 or leverage <= 0:
@@ -211,9 +185,6 @@ def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
     return payload
 
 def _create_ticket_fallback(obj: Dict[str, Any]) -> Optional[str]:
-    """
-    במידה וה-/alerts/ingest לא זמין/נכשל — נשמור ב-ConfirmStore (כמו קודם).
-    """
     if not obj.get("symbol") or not obj.get("side"):
         return None
     payload = {
@@ -242,15 +213,9 @@ def _create_ticket_fallback(obj: Dict[str, Any]) -> Optional[str]:
         return None
 
 async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
-    """
-    ניסיון עיקרי: POST ל-/alerts/ingest (ישלח לטלגרם עם כפתורי אישור/דחייה).
-    נפילה אחורה: ConfirmStore.create (ההתנהגות הישנה).
-    """
     tid = _ticket_id_for(obj)
     if _already_pending(tid):
         return None
-
-    # אם אין host/URL – לא ננסה רשת
     can_network = bool(PUBLIC_HOST and ALERTS_INGEST_URL)
     if can_network:
         try:
@@ -260,8 +225,6 @@ async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
             return tid
         except Exception as e:
             logger.warning("alerts/ingest failed (%s) — falling back to ConfirmStore", e)
-
-    # fallback מקומי
     return _create_ticket_fallback(obj)
 
 async def _tick_once() -> Dict[str, Any]:
@@ -270,7 +233,7 @@ async def _tick_once() -> Dict[str, Any]:
     LAST_ERROR = None
     try:
         for obj in _load_ingests():
-            tid = await _dispatch_signal(obj)  # ← שינוי לוגי מרכזי
+            tid = await _dispatch_signal(obj)
             if tid:
                 created.append(tid)
         pend = _get_pending_safe()
@@ -306,7 +269,24 @@ async def alerts_trades_active():
     return {"ok": True, "count": len(out), "items": out}
 
 @router.post("/alerts/trades/update")
-async def alerts_trades_update(req: UpdateTicketReq):
+async def alerts_trades_update(
+    req: UpdateTicketReq,
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
+    # Anti-Replay (רך): אין כישלון “אבטחני” אם כבוי, אבל אם פעיל – נאכף כאן
+    ok, why = verify_request(
+        ts_header=x_timestamp,
+        nonce_header=x_nonce,
+        signature_header=x_signature,
+        route="/alerts/trades/update",
+        body=req.dict(),
+        require_signature=(os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "0").lower() in ("1","true","yes","on")),
+    )
+    if not ok:
+        raise HTTPException(status_code=400, detail=f"anti_replay_failed: {why}")
+
     act = req.action.upper().strip()
     if act not in ("APPROVE","REJECT"):
         raise HTTPException(status_code=400, detail="action must be APPROVE or REJECT")
