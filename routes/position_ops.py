@@ -4,12 +4,14 @@ from __future__ import annotations
 import os
 import time
 import math
+import hashlib
 import logging
 import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import suppress
 
 from fastapi import APIRouter, Body, HTTPException, Header
+from fastapi.responses import Response
 
 logger = logging.getLogger("algogpt.position_ops")
 router = APIRouter(prefix="/position-ops", tags=["position-ops"])
@@ -40,7 +42,10 @@ def _require_bearer(auth_header: Optional[str]) -> None:
 # Order IDs
 # =========================
 def _coid_fit(s: str, limit: int = 32) -> str:
-    return s if len(s) <= limit else s[: limit - 8] + "_" + str(abs(hash(s)))[:7]
+    if len(s) <= limit:
+        return s
+    h = hashlib.md5(s.encode("utf-8")).hexdigest()[:7]
+    return s[: limit - (1 + len(h))] + "_" + h
 
 def _build_client_order_id(symbol: str, side: str, role: str = "ENTRY") -> str:
     prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
@@ -116,10 +121,8 @@ _EXINFO_WARNED_AT = 0.0
 def _fetch_exchange_info_cached(client) -> Dict[str, Any]:
     global _EXINFO_CACHE, _EXINFO_WARNED_AT
     now = time.time()
-    # אם יש מטמון טרי – נחזיר אותו
     if _EXINFO_CACHE["data"] and (now - _EXINFO_CACHE["ts"] < _EXINFO_TTL):
         return _EXINFO_CACHE["data"]
-    # נסה למשוך מה-API; במקרה של כישלון – השתמש במטמון הישן אם קיים
     try:
         data = client.futures_exchange_info() or {}
         _EXINFO_CACHE = {"ts": now, "data": data}
@@ -162,7 +165,6 @@ def _get_filters(client, symbol: str) -> Dict[str, Any]:
 # אם קיים get_filters חיצוני – אל נעקוף; נשמור על שלנו כדי שהקאש יעבוד.
 with suppress(Exception):
     from utils.quantize import get_filters as _unused_gf  # type: ignore
-    # בכוונה לא מחליפים את _get_filters
 
 # =========================
 # Position & price helpers
@@ -179,9 +181,8 @@ def _fetch_position_side_qty_entry(client, symbol: str) -> Tuple[str, float, flo
     side = "BUY" if qty > 0 else "SELL"
     return side, abs(qty), ep
 
-def _last_price(symbol: str) -> float:
-    cli = _get_client()
-    p = cli.futures_symbol_ticker(symbol=symbol.upper())
+def _last_price(client, symbol: str) -> float:
+    p = client.futures_symbol_ticker(symbol=symbol.upper())
     return float(p["price"])
 
 def _cancel_open_conditional(client, symbol: str, kinds=("STOP", "TAKE_PROFIT", "TRAILING_STOP_MARKET")) -> int:
@@ -223,7 +224,7 @@ def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, 
     min_profit = float(os.getenv("TRAIL_MIN_PROFIT_PCT", "0") or 0)
     last = 0.0
     with suppress(Exception):
-        last = _last_price(symbol)
+        last = _last_price(client, symbol)
     if want_tp1 and not _tp1_filled(client, symbol):
         return (False, "blocked_by_tp1_not_filled")
     if min_profit > 0 and not _profit_ok(entry, last, side, min_profit):
@@ -272,7 +273,7 @@ def _be_impl(client, *, symbol: str, offset_bps: int) -> Dict[str, Any]:
 def _trail_impl(client, *, symbol: str, callbackRate: Optional[float], atr_mult: Optional[float]) -> Dict[str, Any]:
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
-    last = _last_price(symbol)
+    last = _last_price(client, symbol)
     ok, why = _gate_be_trail(client, symbol, side, entry)
     if not ok:
         return {"ok": False, "reason": why, "skipped": "trail"}
@@ -334,7 +335,7 @@ def _trail_impl(client, *, symbol: str, callbackRate: Optional[float], atr_mult:
 def _tp_ladder_impl(client, *, symbol: str, pcts: List[float], splits: List[float]) -> Dict[str, Any]:
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
-    last = _last_price(symbol)
+    last = _last_price(client, symbol)
     flt = _get_filters(client, symbol)
     opp = "SELL" if side == "BUY" else "BUY"
 
@@ -480,7 +481,7 @@ def tp_one(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = H
     client = _get_client()
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
-    last = _last_price(symbol)
+    last = _last_price(client, symbol)
     flt = _get_filters(client, symbol)
     opp = "SELL" if side == "BUY" else "BUY"
 
@@ -611,7 +612,6 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
 
     try:
         if "tp_ladder" in do:
-            # default pcts/splits אם לא סופקו
             if pcts is None:
                 pcts = [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5").split(","))]
             if splits is None:
@@ -622,7 +622,6 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
         out["steps"]["tp_ladder"] = {"ok": False, "error": str(e)}
 
     _ensure_guard(symbol, prefer_mode="native")
-    # אם אין פוזיציה – 409 כבר יוחזר מתוך _fetch_position_side_qty_entry; כאן נחזיר 200 עם פירוט
     return out
 
 # =========================
