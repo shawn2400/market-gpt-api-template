@@ -1327,7 +1327,7 @@ async def _startup_tasks():
         limit       = int(os.getenv("SCAN_CRON_LIMIT", "12") or "12")
         min_score   = float(os.getenv("SCAN_CRON_MIN_SCORE", "7.0") or "7.0")
         rearm_score = float(os.getenv("SCAN_REARM_SCORE", "6.0") or "6.0")
-        dedupe_sec  = int(os.getenv("SCAN_DEDUPE_WINDOW_SEC", "300") or "300"))
+        dedupe_sec  = int(os.getenv("SCAN_DEDUPE_WINDOW_SEC", "300") or "300")
         ttl_sec     = int(os.getenv("SCAN_TTL_SEC", "900") or "900")
         leverage    = float(os.getenv("DEFAULT_LEVERAGE", "5") or "5")
         stake       = float(os.getenv("DEFAULT_STAKE_USDT", "50") or "50")
@@ -1388,7 +1388,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
-
 
 
 
