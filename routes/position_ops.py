@@ -13,6 +13,9 @@ from contextlib import suppress
 from fastapi import APIRouter, Body, Header
 from fastapi import HTTPException  # רק לצורך סוג החריגה, לא נזרוק בראוטים
 
+# Anti-Replay
+from utils.anti_replay import verify_request
+
 logger = logging.getLogger("algogpt.position_ops")
 router = APIRouter(prefix="/position-ops", tags=["position-ops"])
 
@@ -71,7 +74,19 @@ def _build_client_order_id(symbol: str, side: str, role: str = "ENTRY") -> str:
     side = str(side).upper()
     role = str(role).upper()
     ts = int(time.time())
-    return _coid_fit(f"{prefix}_{sym}_{side}_{role}_{ts}", 32)
+    return _coid_fit(f"{prefix}_{sym}_{side}_{ROLE_MAP.get(role, role)}_{ts}", 32)
+
+ROLE_MAP = {
+    "ENTRY": "ENTRY",
+    "BE": "BE",
+    "TRAIL": "TRAIL",
+    "SL": "SL",
+    "TP": "TP",
+    "TP1": "TP1",
+    "TP2": "TP2",
+    "TP3": "TP3",
+    "CLOSE": "CLOSE",
+}
 
 with suppress(Exception):
     from utils.order_ids import build_client_order_id  # type: ignore
@@ -358,12 +373,39 @@ def _tp_ladder_impl(client, *, symbol: str, pcts: List[float], splits: List[floa
 
 
 # =========================
+# Anti-Replay wrapper
+# =========================
+def _ar_check(route: str, body: Any, *, ts: Optional[str], nonce: Optional[str], sig: Optional[str]) -> Optional[Dict[str, Any]]:
+    ok, why = verify_request(
+        ts_header=ts,
+        nonce_header=nonce,
+        signature_header=sig,
+        route=route,
+        body=body,
+        require_signature=(os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "0").lower() in ("1","true","yes","on")),
+    )
+    if not ok:
+        return _err("anti_replay_failed", detail=why, route=route)
+    return None
+
+
+# =========================
 # Routes — הכול רך (200 תמיד)
 # =========================
 @router.post("/be", summary="Move SL to BE ± offset_bps (STOP_MARKET closePosition)")
-def be(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
+def be(
+    payload: Dict[str, Any] = Body(...),
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
+    ar = _ar_check("/position-ops/be", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    if ar:
+        return ar
+
     symbol = (payload.get("symbol") or "").upper().strip()
     offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS") or 8)
     if not symbol:
@@ -385,9 +427,19 @@ def be(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Heade
 
 
 @router.post("/trail", summary="Enable/refresh trailing SL (TRAILING_STOP_MARKET reduceOnly quantity)")
-def trail(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
+def trail(
+    payload: Dict[str, Any] = Body(...),
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
+    ar = _ar_check("/position-ops/trail", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    if ar:
+        return ar
+
     symbol = (payload.get("symbol") or "").upper().strip()
     cb = payload.get("callbackRate") or payload.get("callback_rate") or payload.get("callback_rate_pct")
     atr_mult = payload.get("atr_mult")
@@ -410,9 +462,19 @@ def trail(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = He
 
 
 @router.post("/sl/move", summary="Move SL to a specific price (STOP_MARKET closePosition)")
-def sl_move(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
+def sl_move(
+    payload: Dict[str, Any] = Body(...),
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
+    ar = _ar_check("/position-ops/sl/move", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    if ar:
+        return ar
+
     symbol = (payload.get("symbol") or "").upper().strip()
     try:
         price = float(payload.get("price") or 0)
@@ -455,9 +517,19 @@ def sl_move(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = 
 
 
 @router.post("/tp/ladder", summary="Create/refresh TP ladder (TAKE_PROFIT_MARKET reduce-only partials)")
-def tp_ladder(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
+def tp_ladder(
+    payload: Dict[str, Any] = Body(...),
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
+    ar = _ar_check("/position-ops/tp/ladder", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    if ar:
+        return ar
+
     symbol = (payload.get("symbol") or "").upper().strip()
     try:
         pcts: List[float] = payload.get("pcts") or [float(x) for x in (os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5").split(","))]
@@ -486,9 +558,19 @@ def tp_ladder(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] 
 
 
 @router.post("/tp/one", summary="Create/refresh a single native TP (TAKE_PROFIT_MARKET reduce-only)")
-def tp_one(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
+def tp_one(
+    payload: Dict[str, Any] = Body(...),
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
+    ar = _ar_check("/position-ops/tp/one", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    if ar:
+        return ar
+
     symbol = (payload.get("symbol") or "").upper().strip()
     pct = payload.get("pct")
     price = payload.get("price")
@@ -552,9 +634,19 @@ def tp_one(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = H
 
 
 @router.post("/tp/cancel", summary="Cancel all TP orders")
-def tp_cancel(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
+def tp_cancel(
+    payload: Dict[str, Any] = Body(...),
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
+    ar = _ar_check("/position-ops/tp/cancel", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    if ar:
+        return ar
+
     symbol = (payload.get("symbol") or "").upper().strip()
     if not symbol:
         return _err("invalid_input", detail="symbol required")
@@ -577,9 +669,19 @@ def tp_cancel(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] 
 
 
 @router.post("/close", summary="Close fraction of the position (reduce-only MARKET)")
-def close_fraction(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
+def close_fraction(
+    payload: Dict[str, Any] = Body(...),
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
+    ar = _ar_check("/position-ops/close", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    if ar:
+        return ar
+
     symbol = (payload.get("symbol") or "").upper().strip()
     try:
         fraction = float(payload.get("fraction") or 1.0)
@@ -626,9 +728,19 @@ def close_fraction(payload: Dict[str, Any] = Body(...), Authorization: Optional[
 
 
 @router.post("/manage-once", summary="One-shot smart manage: BE + TRAIL + TP ladder")
-def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
+def manage_once(
+    payload: Dict[str, Any] = Body(...),
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
+    ar = _ar_check("/position-ops/manage-once", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    if ar:
+        return ar
+
     symbol = (payload.get("symbol") or "").upper().strip()
     do = payload.get("do") or ["be", "trail", "tp_ladder"]
     offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS") or 8)
@@ -767,9 +879,19 @@ async def _auto_loop(symbols: List[str], every_sec: int, steps: List[str],
         await asyncio.sleep(sleep_for)
 
 @router.post("/auto/start", summary="Start periodic smart-manage loop (every N sec) for given symbols")
-async def auto_start(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
+async def auto_start(
+    payload: Dict[str, Any] = Body(...),
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
+    ar = _ar_check("/position-ops/auto/start", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    if ar:
+        return ar
+
     if not _sched_should_run():
         return _err("auto_move_disabled")
     symbols = [str(x).upper() for x in (payload.get("symbols") or [])]
@@ -798,17 +920,24 @@ async def auto_start(payload: Dict[str, Any] = Body(...), Authorization: Optiona
     return _ok(status="started", symbols=symbols, every_sec=every_sec, steps=steps)
 
 @router.post("/auto/stop", summary="Stop periodic smart-manage loop")
-async def auto_stop(Authorization: Optional[str] = Header(None)):
+async def auto_stop(
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
+    ar = _ar_check("/position-ops/auto/stop", body={}, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    if ar:
+        return ar
+
     global _SCHED_TASK, _SCHED_ACTIVE
     _SCHED_ACTIVE = False
     if _SCHED_TASK:
         with suppress(Exception):
             _SCHED_TASK.cancel()
     return _ok(status="stopped")
-
-
 
 
 
