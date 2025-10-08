@@ -41,7 +41,7 @@ DEFAULT_MIN_NOTIONAL = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
 # Percent-Guard
 PERCENT_GUARD_ENABLE = os.getenv("PERCENT_GUARD_ENABLE", "1").lower() in ("1","true","yes","on")
-PERCENT_GUARD_BPS = int(os.getenv("PERCENT_GUARD_BPS", "50"))
+PERCENT_GUARD_BPS = int(os.getenv("PERCENT_PRICE_GUARD_BPS", os.getenv("PERCENT_GUARD_BPS", "50")))
 
 # Idempotency
 IDEMP_TTL_SEC = int(os.getenv("IDEMP_TTL_SEC", "900"))
@@ -316,8 +316,7 @@ def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
 
 # ===== Filters & Rounding =====
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
-    info = futures_exchange_info_safe()
-    if not info: return None
+    info = futures_exchange_info_safe() or {}
     su = symbol.upper()
     for s in info.get("symbols", []):
         if (s.get("symbol") or "").upper() == su:
