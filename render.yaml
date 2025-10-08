@@ -7,7 +7,7 @@ services:
     autoDeploy: false
     numInstances: 1
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /health
+    healthCheckPath: /readyz
 
     envVars:
       # ================== Runtime & Logging ==================
@@ -15,6 +15,8 @@ services:
         value: "10000"
       - key: WEB_CONCURRENCY
         value: "1"
+      - key: WEB_THREADS
+        value: "4"
       - key: GUNICORN_TIMEOUT
         value: "120"
       - key: LOG_LEVEL
