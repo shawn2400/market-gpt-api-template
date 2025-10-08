@@ -14,6 +14,7 @@ import logging
 import traceback
 import inspect
 import asyncio
+import threading
 from contextlib import suppress
 from typing import Any, Dict, List, Optional, Callable, Tuple, Union
 from collections import Counter
@@ -205,16 +206,34 @@ except Exception:
             return ticket
 
 # -------------------------------------------------
-# Shared HTTP clients (reuse connections)
+# Shared HTTP & Redis clients (reuse connections)
 # -------------------------------------------------
+_shared_client_lock = threading.Lock()
+
 def _get_shared_async_client() -> httpx.AsyncClient:
     cli: Optional[httpx.AsyncClient] = getattr(app.state, "shared_async_client", None)
-    if cli is None or cli.is_closed:
+    if cli and not cli.is_closed:
+        return cli
+    # create under a lock to avoid races on startup
+    with _shared_client_lock:
+        cli = getattr(app.state, "shared_async_client", None)
+        if cli and not cli.is_closed:
+            return cli
         timeout = httpx.Timeout(connect=2.5, read=15.0, write=10.0)
         limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
         cli = httpx.AsyncClient(timeout=timeout, limits=limits)
         app.state.shared_async_client = cli
-    return cli
+        return cli
+
+async def _get_redis_cached():
+    if not (aioredis and REDIS_URL):
+        return None
+    r = getattr(app.state, "redis", None)
+    if r:
+        return r
+    r = aioredis.from_url(REDIS_URL, decode_responses=True)
+    app.state.redis = r
+    return r
 
 # ------------------------------
 # PRICE HELPERS — async-first + safe sync wrapper
@@ -222,7 +241,7 @@ def _get_shared_async_client() -> httpx.AsyncClient:
 async def get_last_price_async(symbol: str) -> Optional[float]:
     sym = symbol.upper()
 
-    # 1) נסה לקוח מקומי (אם יש) — הרצה ב-thread כדי לא לחסום
+    # 1) local client (thread)
     with suppress(Exception):
         from utils.binance_client import get_price  # type: ignore
         val = await asyncio.to_thread(get_price, sym)
@@ -231,7 +250,7 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
             if v > 0:
                 return v
 
-    # 2) HTTP async ל־Binance (futures ואז spot)
+    # 2) HTTP async
     for url in (
         "https://fapi.binance.com/fapi/v1/ticker/price",
         "https://api.binance.com/api/v3/ticker/price",
@@ -247,7 +266,7 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
         except Exception:
             continue
 
-    # 3) SDK רשמי — גם הוא blocking, נריץ ב-thread
+    # 3) official SDK (thread)
     with suppress(Exception):
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
@@ -268,18 +287,13 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
     return None
 
 def _get_last_price(symbol: str) -> Optional[float]:
-    """
-    גרסה סינכרונית לנתיבים סינכרוניים בלבד.
-    נקרא מעט ככל האפשר. להעדיף get_last_price_async במקום שאפשר.
-    """
-    # Prefer local client first
+    # prefer local client
     with suppress(Exception):
         from utils.binance_client import get_price  # type: ignore
         p = get_price(symbol)
         if p:
             return float(p)
-
-    # Blocking HTTP fallback
+    # blocking HTTP
     try:
         with httpx.Client(
             timeout=httpx.Timeout(6.0, connect=2.0),
@@ -300,7 +314,6 @@ def _get_last_price(symbol: str) -> Optional[float]:
                     continue
     except Exception:
         pass
-
     # SDK fallback
     with suppress(Exception):
         from binance.client import Client  # type: ignore
@@ -332,9 +345,8 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
 async def _redis():
-    if not (aioredis and REDIS_URL):
-        return None
-    return aioredis.from_url(REDIS_URL, decode_responses=True)
+    # return cached instance
+    return await _get_redis_cached()
 
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
 def _parse_mode(note: Optional[str]) -> Optional[str]:
@@ -586,17 +598,19 @@ async def _load_ticket(tid: str) -> Tuple[Optional[Dict[str, Any]], str]:
         logger.warning("confirmstore_load_failed: %s", e)
     return None, "none"
 
-async def _delete_ticket(tid: str, source: str) -> None:
+# ✅ BUGFIX: do NOT overwrite status unless explicitly provided
+async def _delete_ticket(tid: str, source: str, final_status: Optional[bool] = None) -> None:
     if source == "redis" and aioredis and REDIS_URL:
         try:
             r = await _redis()
             if r:
                 await r.delete(f"{NS}:ticket:{tid}")
-                return
+                # keep going to maybe mark in-memory store, but only if asked
         except Exception as e:
             logger.warning("redis_delete_failed: %s", e)
-    with suppress(Exception):
-        ConfirmStore.decide(tid, approved=False)
+    if final_status is not None:
+        with suppress(Exception):
+            ConfirmStore.decide(tid, approved=final_status)
 
 # --- Smart manage after approve ---
 async def _smart_manage_now(symbol: str,
@@ -784,7 +798,6 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
     return new_ticket
 
 def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    # גרסת תאימות קיימת (סינכרונית) — משאיר למקרה שנדרש באזורים לא־async
     symbol = (ticket.get("symbol") or "").upper()
     price = _get_last_price(symbol)
     if not price or float(price) <= 0:
@@ -952,7 +965,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
             ticket.pop(k, None)
 
-    # עדיף לא-חוסם: חישוב כמות אוטומטי אסינכרוני
+    # חישוב כמות אוטומטי — אסינכרוני
     t2 = await _apply_auto_qty_on_ticket_async(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
@@ -1012,7 +1025,8 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     with suppress(Exception):
         (record_approval_approved if ok else record_approval_rejected)()
 
-    await _delete_ticket(ticket_id, source)
+    # ✅ BUGFIX: אל תדרוס סטטוס — העבר explicit
+    await _delete_ticket(ticket_id, source, final_status=ok)
 
     if ok:
         return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.")
@@ -1027,7 +1041,8 @@ async def approve_link(id: str = Query(..., description="ticket_id")):
 @router.get("/ops/reject")
 async def reject(ticket_id: str = Query(..., description="ticket_id")):
     ticket, source = await _load_ticket(ticket_id)
-    await _delete_ticket(ticket_id, source)
+    # ✅ BUGFIX: העבר final_status=False במקום לדרוס תמיד
+    await _delete_ticket(ticket_id, source, final_status=False)
     with suppress(Exception):
         await _send_telegram_html(
             f"❌ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n— — —\nNo action was taken."
@@ -1052,7 +1067,6 @@ async def approve_signed(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # שימוש בגרסה הא-סינכרונית
     t2 = await _apply_auto_qty_on_ticket_async(payload)
     if t2 is None:
         raise HTTPException(status_code=400, detail="AUTO_QTY: failed to fetch last price")
@@ -1194,7 +1208,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
 # --- Register routers ---
 app.include_router(router)
 
-# Extra routers (best-effort)
 with suppress(Exception):
     from routes.position_ops import router as position_ops_router  # type: ignore
     app.include_router(position_ops_router)
@@ -1215,7 +1228,6 @@ with suppress(Exception):
     from routes.topk import router as topk_router  # type: ignore
     app.include_router(topk_router)
 
-# Keep debug_auth, drop routes_root to avoid "/" duplication
 with suppress(Exception):
     from routes import debug_auth as routes_debug_auth  # type: ignore
     app.include_router(routes_debug_auth.router)
@@ -1243,7 +1255,6 @@ def healthz() -> str:
 def readyz() -> str:
     return "ok"
 
-# נשמר כבעבר:
 @app.get("/health/live", response_class=PlainTextResponse, tags=["meta"])
 def health_live() -> str:
     return "ok"
@@ -1268,7 +1279,7 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
         safe[k] = v
     return {"ok": True, "env": safe}
 
-# --- Health TP1 utils (use real module; no fallback if present) ---
+# --- Health TP1 utils ---
 try:
     from utils.health_tp1 import health_check_tp1_tags, quick_check_tp1  # type: ignore
     _health_tp1_loaded = True
@@ -1322,7 +1333,14 @@ async def _startup_tasks():
     if _health_tp1_loaded and (os.getenv("HEALTH_TP1_ENABLE","1").lower() in ("1","true","yes","on")):
         watch = [s.strip() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
         if watch:
-            asyncio.create_task(health_check_tp1_tags(watch, interval_sec=int(os.getenv("HEALTH_TP1_INTERVAL_SEC","600"))))
+            async def _run_health():
+                try:
+                    await health_check_tp1_tags(watch, interval_sec=int(os.getenv("HEALTH_TP1_INTERVAL_SEC","600")))
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    logger.warning("health_tp1 background error: %s", e)
+            asyncio.create_task(_run_health())
             logger.info("health_tp1 background started (interval=%ss, symbols=%s)",
                         int(os.getenv("HEALTH_TP1_INTERVAL_SEC","600")), ",".join(watch))
 
@@ -1340,31 +1358,35 @@ async def _startup_tasks():
         base = get_internal_base()
         every_sec = max(10, int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","60")))
         per_req_timeout = httpx.Timeout(connect=2.5, read=15.0, write=10.0)
-        while True:
-            sleep_extra = _manager_backoff
-            if sleep_extra > 0:
-                await asyncio.sleep(sleep_extra)
-            async with _manager_lock:
-                try:
-                    cli = _get_shared_async_client()
-                    for s in syms:
-                        r = await cli.post(
-                            f"{base}/position-ops/manage-once",
-                            headers={"Authorization": f"Bearer {token}"},
-                            json={"symbol": s},
-                            timeout=per_req_timeout,
-                        )
-                        if r.status_code < 400:
-                            _manager_backoff = max(0.0, _manager_backoff * 0.5 - 2.0)
-                        elif r.status_code in (429, 500, 502, 503, 504):
-                            _manager_backoff = min((_manager_backoff or 0) * 1.6 + 5, 90)
-                            logger.warning("periodic_manager_backoff: status=%s backoff=%ss", r.status_code, _manager_backoff)
-                        else:
-                            logger.warning("periodic_manager_unexpected_status: %s %s", r.status_code, r.text[:200])
-                except Exception as e:
-                    _manager_backoff = min((_manager_backoff or 0) * 1.5 + 5, 90)
-                    logger.warning("periodic_manager_error: %r (backoff now %.1fs)", e, _manager_backoff)
-            await asyncio.sleep(every_sec)
+        try:
+            while True:
+                sleep_extra = _manager_backoff
+                if sleep_extra > 0:
+                    await asyncio.sleep(sleep_extra)
+                async with _manager_lock:
+                    try:
+                        cli = _get_shared_async_client()
+                        for s in syms:
+                            r = await cli.post(
+                                f"{base}/position-ops/manage-once",
+                                headers={"Authorization": f"Bearer {token}"},
+                                json={"symbol": s},
+                                timeout=per_req_timeout,
+                            )
+                            if r.status_code < 400:
+                                _manager_backoff = max(0.0, _manager_backoff * 0.5 - 2.0)
+                            elif r.status_code in (429, 500, 502, 503, 504):
+                                _manager_backoff = min((_manager_backoff or 0) * 1.6 + 5, 90)
+                                logger.warning("periodic_manager_backoff: status=%s backoff=%ss", r.status_code, _manager_backoff)
+                            else:
+                                logger.warning("periodic_manager_unexpected_status: %s %s", r.status_code, r.text[:200])
+                    except Exception as e:
+                        _manager_backoff = min((_manager_backoff or 0) * 1.5 + 5, 90)
+                        logger.warning("periodic_manager_error: %r (backoff now %.1fs)", e, _manager_backoff)
+                await asyncio.sleep(every_sec)
+        except asyncio.CancelledError:
+            # graceful exit on shutdown
+            raise
 
     if os.getenv("MANAGER_ENABLE","1").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_manager())
@@ -1375,14 +1397,17 @@ async def _startup_tasks():
         syms = [s.strip().upper() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
         if not syms:
             return
-        while True:
-            try:
-                for s in syms:
-                    with suppress(Exception):
-                        ensure_protective_stop(s, prefer_mode="quantities")
-            except Exception:
-                pass
-            await asyncio.sleep(int(os.getenv("GUARDER_INTERVAL_SEC","45")))
+        try:
+            while True:
+                try:
+                    for s in syms:
+                        with suppress(Exception):
+                            ensure_protective_stop(s, prefer_mode="quantities")
+                except Exception:
+                    pass
+                await asyncio.sleep(int(os.getenv("GUARDER_INTERVAL_SEC","45")))
+        except asyncio.CancelledError:
+            raise
     if os.getenv("GUARDER_ENABLE","1").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_guarder())
 
@@ -1412,39 +1437,47 @@ async def _startup_tasks():
             logger.info("periodic_scanner: TELEGRAM_CHAT_ID missing; skipping")
             return
 
-        while True:
-            try:
-                await scan_top_volume(
-                    market="futures",
-                    quote="USDT",
-                    limit=limit,
-                    timeframe=tf,
-                    kline_limit=kline_limit,
-                    min_score=min_score,
-                    require_side=True,
-                    notify="telegram",
-                    chat_id=str(chat),
-                    rich=rich,
-                    ttl_sec=ttl_sec,
-                    rearm_score=rearm_score,
-                    dedupe_window_sec=dedupe_sec,
-                    leverage=leverage,
-                    stake_usdt=stake,
-                )
-            except Exception as e:
-                logger.warning("periodic_scanner_error: %s", e)
-            await asyncio.sleep(max(10, every))
+        try:
+            while True:
+                try:
+                    await scan_top_volume(
+                        market="futures",
+                        quote="USDT",
+                        limit=limit,
+                        timeframe=tf,
+                        kline_limit=kline_limit,
+                        min_score=min_score,
+                        require_side=True,
+                        notify="telegram",
+                        chat_id=str(chat),
+                        rich=rich,
+                        ttl_sec=ttl_sec,
+                        rearm_score=rearm_score,
+                        dedupe_window_sec=dedupe_sec,
+                        leverage=leverage,
+                        stake_usdt=stake,
+                    )
+                except Exception as e:
+                    logger.warning("periodic_scanner_error: %s", e)
+                await asyncio.sleep(max(10, every))
+        except asyncio.CancelledError:
+            raise
 
     if os.getenv("SCAN_CRON_ENABLE","1").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_scanner())
 
 @app.on_event("shutdown")
 async def _shutdown_tasks():
-    # סגירה נקייה של ה-HTTP client המשותף
+    # close shared HTTP client
     cli: Optional[httpx.AsyncClient] = getattr(app.state, "shared_async_client", None)
     if cli and not cli.is_closed:
         with suppress(Exception):
             await cli.aclose()
+    # close redis if present
+    r = getattr(app.state, "redis", None)
+    if r:
+        with suppress(Exception):
+            await r.close()
 
 # =================================================
 # Uvicorn entry
