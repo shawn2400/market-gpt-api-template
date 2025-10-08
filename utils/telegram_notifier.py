@@ -1,7 +1,7 @@
 # utils/telegram_notifier.py
 from __future__ import annotations
 
-import os, asyncio, logging, json, time
+import os, asyncio, logging, json, time, hmac, hashlib
 from typing import Any, Dict, Optional, List
 
 from .telegram_notifier_core import (
@@ -40,6 +40,172 @@ except Exception:
 # ====== Alias לשמירה על תאימות ישנה (מודולים שעדיין קוראים _send) ======
 async def _send(text: str) -> None:
     await _tg_send(text)
+
+# ===================== Callback signing/verification =====================
+_SIGN_SECRET = (os.getenv("OPS_SIGN_SECRET","") or os.getenv("API_SIGNING_SECRET","")).encode("utf-8")
+_CB_TTL_SEC  = int(os.getenv("SIGNED_NONCE_TTL_SEC", os.getenv("ANTI_REPLAY_WINDOW_SEC","120")) or "120")
+_SKEW_SEC    = int(os.getenv("SIGNED_TS_MAX_SKEW_SEC","60") or "60")
+
+def _hmac(data: str) -> str:
+    if not _SIGN_SECRET:
+        return ""
+    return hmac.new(_SIGN_SECRET, data.encode("utf-8"), hashlib.sha256).hexdigest()
+
+def make_callback(action: str, trade_id: Optional[str] = None, symbol: Optional[str] = None, pct: Optional[float] = None) -> str:
+    """
+    יוצר callback_data חתום (אם יש secret). פורמטים נתמכים:
+    - CONFIRM:<APPROVE|REJECT>:<trade_id>[:<ts>:<sig>]
+    - POS:<ACTION>:<symbol>[:<pct>][:<ts>:<sig>]
+    """
+    base: List[str] = []
+    now = int(time.time())
+    if action in ("APPROVE","REJECT"):
+        base = ["CONFIRM", action, str(trade_id or "")]
+    else:
+        # MANAGE_AGAIN / CANCEL_TPS / CLOSE_50 / ...
+        base = ["POS", action, str(symbol or "")]
+        if pct is not None:
+            base.append(f"{float(pct)}")
+    data = ":".join(base)
+    if not _SIGN_SECRET:
+        return data
+    raw = f"{data}:{now}"
+    sig = _hmac(raw)
+    return f"{raw}:{sig}"
+
+def verify_callback_data(data: str) -> Dict[str, Any]:
+    """
+    מחזיר dict עם action / trade_id / symbol / pct
+    תומך גם ב-callback לא חתום (בסביבה ללא SECRET), וגם חתום עם ts+sig.
+    """
+    parts = (data or "").split(":")
+    if len(parts) < 3:
+        raise ValueError("bad_format")
+
+    if parts[0] == "CONFIRM":
+        # CONFIRM:<APPROVE|REJECT>:<trade_id>[:<ts>:<sig>]
+        action   = parts[1].upper()
+        trade_id = parts[2]
+        if action not in ("APPROVE","REJECT"):
+            raise ValueError("bad_action")
+        if _SIGN_SECRET and len(parts) >= 5:
+            ts  = int(float(parts[-2]))
+            sig = parts[-1]
+            raw = ":".join(parts[:-1])  # בלי ה-sig
+            if sig != _hmac(raw):
+                raise ValueError("bad_sig")
+            now = int(time.time())
+            if abs(now - ts) > max(_CB_TTL_SEC, _SKEW_SEC):
+                raise ValueError("expired")
+        return {"action": action, "trade_id": trade_id}
+
+    if parts[0] == "POS":
+        # POS:<ACTION>:<symbol>[:<pct>][:<ts>:<sig>]
+        action = parts[1].upper()
+        symbol = parts[2]
+        pct    = None
+        # tail יכול להכיל pct ואח"כ ts+sig
+        tail = parts[3:]
+        ts = None; sig = None
+        if tail:
+            # בדיקה אם שני האחרונים הם ts+sig
+            if len(tail) >= 2:
+                try:
+                    maybe_ts = int(float(tail[-2]))
+                    ts  = maybe_ts
+                    sig = tail[-1]
+                    tail = tail[:-2]
+                except Exception:
+                    ts = None; sig = None
+            if tail:
+                try:
+                    pct = float(tail[0])
+                except Exception:
+                    pct = None
+        if _SIGN_SECRET and ts is not None and sig is not None:
+            raw = ":".join(parts[:-1])  # בלי ה-sig
+            if sig != _hmac(raw):
+                raise ValueError("bad_sig")
+            now = int(time.time())
+            if abs(now - ts) > max(_CB_TTL_SEC, _SKEW_SEC):
+                raise ValueError("expired")
+        return {"action": action, "symbol": symbol, "pct": pct}
+
+    raise ValueError("unknown_prefix")
+
+# ===================== Inline keyboards (local builders) =====================
+def _approval_kb_for_trade(idem: str, ticket_url: Optional[str] = None) -> Dict[str, Any]:
+    rows: List[List[Dict[str,Any]]] = [
+        [
+            {"text": "✅ אישור / Approve", "callback_data": make_callback("APPROVE", trade_id=idem)},
+            {"text": "❌ דחייה / Reject",  "callback_data": make_callback("REJECT",  trade_id=idem)},
+        ]
+    ]
+    if ticket_url:
+        rows.append([{"text": "🧾 Ticket", "url": ticket_url}])
+    return {"inline_keyboard": rows}
+
+def _ops_action_kb(symbol: str) -> Dict[str,Any]:
+    return {"inline_keyboard":[
+        [{"text":"⚙️ Manage Again","callback_data": make_callback("MANAGE_AGAIN", symbol=symbol)}],
+        [{"text":"🧹 Cancel TPs","callback_data": make_callback("CANCEL_TPS", symbol=symbol)},
+         {"text":"➗ Close 50%","callback_data": make_callback("CLOSE_50", symbol=symbol, pct=50.0)}],
+    ]}
+
+# ===================== שירות לטלגרם (answer/edit/webhook/results) =====================
+class TelegramNotifier:
+    @staticmethod
+    async def ensure_webhook() -> bool:
+        # best-effort: שימוש ברגיסטר הקיים
+        try:
+            from .telegram_notifier import register_webhook as _reg  # self-import-safe
+            return await _reg()
+        except Exception:
+            return False
+
+    @staticmethod
+    async def answer_callback(cb_id: str, text: str = "", show_alert: bool = False) -> None:
+        if not API_BASE or not cb_id:
+            return
+        import httpx
+        async with httpx.AsyncClient(timeout=8.0) as cli:
+            await cli.post(f"{API_BASE}/answerCallbackQuery", json={
+                "callback_query_id": cb_id,
+                "text": text or "",
+                "show_alert": bool(show_alert),
+            })
+
+    @staticmethod
+    async def edit_message_buttons(chat_id: str | int, message_id: int, disable_all: bool = False,
+                                   new_kb: Optional[Dict[str,Any]] = None) -> None:
+        """
+        אם disable_all=True — ננטרל את הכפתורים (למשל אחרי Approve/Reject).
+        אחרת ניתן להעביר new_kb להחלפה חופשית.
+        """
+        if not API_BASE:
+            return
+        kb: Dict[str,Any] = new_kb or {}
+        if disable_all and not new_kb:
+            kb = {"inline_keyboard":[
+                [{"text":"✅ Approved","callback_data":"DISABLED"},
+                 {"text":"❌ Rejected","callback_data":"DISABLED"}]
+            ]}
+        import httpx
+        async with httpx.AsyncClient(timeout=8.0) as cli:
+            await cli.post(f"{API_BASE}/editMessageReplyMarkup", json={
+                "chat_id": chat_id,
+                "message_id": int(message_id),
+                "reply_markup": kb
+            })
+
+    @staticmethod
+    async def send_ops_action_result(symbol: str, action_name: str, chat_id: Optional[int] = None) -> None:
+        """
+        הודעת תוצאה קצרה אחרי פעולה ב-/position-ops, עם כפתורי inline לניהול נוסף.
+        """
+        text = f"✅ {symbol} · {action_name} done"
+        kb   = _ops_action_kb(symbol)
+        await _tg_send_with_markup(text, kb, chat_id=chat_id)
 
 # ===================== Basic Ops Notifications =====================
 async def notify_no_trades(reason: str | None = None, low_scores: Optional[List[Dict[str, Any]]] = None) -> None:
@@ -248,16 +414,7 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     lines.append(f"🕒 {_fmt_il(time.time())}")
 
     urls = _build_trade_urls(idem, plan)
-    kb_rows: List[List[Dict[str, Any]]] = [
-        [
-            {"text": "✅ אישור / Approve", "callback_data": f"CONFIRM:APPROVE:{idem}"},
-            {"text": "❌ דחייה / Reject",  "callback_data": f"CONFIRM:REJECT:{idem}"},
-        ]
-    ]
-    if urls.get("ticket"):
-        kb_rows.append([{"text": "🧾 Ticket", "url": urls["ticket"]}])
-
-    kb = {"inline_keyboard": kb_rows}
+    kb = _approval_kb_for_trade(idem, ticket_url=urls.get("ticket"))
     await _tg_send_with_markup("\n".join(lines), kb, chat_id=chat_id)
 
 # ===================== Trade lifecycle short notifiers =====================
@@ -347,8 +504,10 @@ __all__ = [
     "format_change_approval_he", "send_change_approval_he", "route_change_ticket",
     "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
     "should_auto_approve_trade",
+    "make_callback", "verify_callback_data", "TelegramNotifier",
     "_send",
 ]
+
 
 
 
