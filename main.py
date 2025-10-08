@@ -331,7 +331,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     with suppress(Exception):
         from utils.trade_executor import place_futures_market  # type: ignore
         return await place_futures_market(ticket)
-
+    # fallback to direct binance client
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
@@ -697,7 +697,6 @@ async def create_ticket(
         "approve_url": approve_url, "reject_url": reject_url, "preview_url": preview_url,
         "telegram_result": tg_resp
     }
-
 def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
     mode = _parse_mode(ticket.get("note"))
     if mode in ("MARKET", "HYBRID", "AUTO"):
@@ -1135,6 +1134,7 @@ with suppress(Exception):
     app.include_router(topk_router)
 
 # >>> YOUR REQUESTED ADDITION <<<
+# מאפשר לטעון Router מאוחד אם יש קובץ routes/root.py שמייצא router
 with suppress(Exception):
     from routes import root as routes_root  # <— add root aggregate router if exists
     app.include_router(routes_root.router)
@@ -1170,7 +1170,6 @@ def health_live() -> str:
 @app.get("/health/strategy-version", tags=["meta"])
 def health_strategy_version() -> Dict[str, str]:
     return {"ok": True, "version": os.getenv("ALGOGPT_VERSION", "unknown")}
-# -------------------------------------------
 
 @app.get("/debug/env", tags=["debug"])
 def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
@@ -1210,7 +1209,6 @@ async def global_exception_handler(request: Request, exc: Exception):
         status_code=500,
         content={"ok": False, "error": "internal_error", "detail": str(exc)},
     )
-
 # =================================================
 # Startup background tasks
 # =================================================
@@ -1233,7 +1231,7 @@ async def _startup_tasks():
     asyncio.create_task(_notify_bot_online())
 
     # Health TP1 watchdog
-    if _health_tp1_loaded and _bool_env("HEALTH_TP1_ENABLE", True):
+    if _health_tp1_loaded and (os.getenv("HEALTH_TP1_ENABLE","1").lower() in ("1","true","yes","on")):
         watch = [s.strip() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
         if watch:
             asyncio.create_task(health_check_tp1_tags(watch, interval_sec=int(os.getenv("HEALTH_TP1_INTERVAL_SEC","600"))))
@@ -1279,7 +1277,7 @@ async def _startup_tasks():
                     logger.warning("periodic_manager_error: %r (backoff now %.1fs)", e, _manager_backoff)
             await asyncio.sleep(every_sec)
 
-    if _bool_env("MANAGER_ENABLE", True):
+    if os.getenv("MANAGER_ENABLE","1").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_manager())
 
     # Guarder
@@ -1296,7 +1294,7 @@ async def _startup_tasks():
             except Exception:
                 pass
             await asyncio.sleep(int(os.getenv("GUARDER_INTERVAL_SEC","45")))
-    if _bool_env("GUARDER_ENABLE", True):
+    if os.getenv("GUARDER_ENABLE","1").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_guarder())
 
     # Scanner
@@ -1348,7 +1346,7 @@ async def _startup_tasks():
                 logger.warning("periodic_scanner_error: %s", e)
             await asyncio.sleep(max(10, every))
 
-    if _bool_env("SCAN_CRON_ENABLE", True):
+    if os.getenv("SCAN_CRON_ENABLE","1").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_scanner())
 
 # =================================================
@@ -1360,6 +1358,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
