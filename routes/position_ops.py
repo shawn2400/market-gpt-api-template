@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Tuple
 from contextlib import suppress
 
 from fastapi import APIRouter, Body, HTTPException, Header
-from fastapi.responses import Response
 
 logger = logging.getLogger("algogpt.position_ops")
 router = APIRouter(prefix="/position-ops", tags=["position-ops"])
@@ -21,22 +20,26 @@ GUARD_ENSURE_AFTER_OPS = (os.getenv("GUARD_ENSURE_AFTER_OPS", "1").lower() in ("
 with suppress(Exception):
     from utils.guard_stop import ensure_protective_stop  # type: ignore
 
+
 def _ensure_guard(symbol: str, *, prefer_mode: str = "native") -> None:
     if not GUARD_ENSURE_AFTER_OPS:
         return
     with suppress(Exception):
         ensure_protective_stop(symbol, prefer_mode=prefer_mode)  # type: ignore
 
+
 # =========================
 # Helpers: auth (Bearer)
 # =========================
 API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
+
 
 def _require_bearer(auth_header: Optional[str]) -> None:
     if not API_BEARER_TOKEN:
         return
     if (not auth_header) or (not auth_header.startswith("Bearer ")) or (auth_header.split(" ", 1)[1].strip() != API_BEARER_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
 
 # =========================
 # Order IDs
@@ -47,6 +50,7 @@ def _coid_fit(s: str, limit: int = 32) -> str:
     h = hashlib.md5(s.encode("utf-8")).hexdigest()[:7]
     return s[: limit - (1 + len(h))] + "_" + h
 
+
 def _build_client_order_id(symbol: str, side: str, role: str = "ENTRY") -> str:
     prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
     sym = str(symbol).upper()
@@ -55,9 +59,11 @@ def _build_client_order_id(symbol: str, side: str, role: str = "ENTRY") -> str:
     ts = int(time.time())
     return _coid_fit(f"{prefix}_{sym}_{side}_{role}_{ts}", 32)
 
+
 with suppress(Exception):
     from utils.order_ids import build_client_order_id  # type: ignore
     _build_client_order_id = build_client_order_id  # override אם קיים
+
 
 # =========================
 # Quantize
@@ -68,26 +74,33 @@ def _fallback_filters() -> Dict[str, Any]:
         "qty_step": float(os.getenv("DEFAULT_QTY_STEP", "0.001")),
     }
 
+
 def _round_step(v: float, step: float) -> float:
     if step <= 0:
         return v
     return math.floor(v / step + 1e-12) * step
 
+
 def _quantize_price(symbol: str, price: float, flt: Dict[str, Any]) -> float:
     step = float(flt.get("price_tick", 0.0) or 0.0)
     return round(_round_step(price, step), 8) if step > 0 else round(price, 8)
+
 
 def _quantize_qty(symbol: str, qty: float, flt: Dict[str, Any]) -> float:
     step = float(flt.get("qty_step", 0.0) or 0.0)
     return round(_round_step(qty, step), 8) if step > 0 else round(qty, 8)
 
+
 # אם קיימים quantize_* חיצוניים – נשתמש בהם, אבל לא נעקוף את _get_filters (כי אנחנו מוסיפים קאש כאן)
 with suppress(Exception):
     from utils.quantize import quantize_price as _qp, quantize_qty as _qq  # type: ignore
+
     def _quantize_price(symbol: str, price: float, flt: Dict[str, Any]) -> float:  # type: ignore
         return _qp(symbol, price, flt)
+
     def _quantize_qty(symbol: str, qty: float, flt: Dict[str, Any]) -> float:  # type: ignore
         return _qq(symbol, qty, flt)
+
 
 # =========================
 # Binance client
@@ -103,6 +116,7 @@ def _get_client():
         raise HTTPException(status_code=500, detail="BINANCE keys missing")
     return Client(api_key, api_sec)
 
+
 def _align_position_mode(client) -> None:
     mode_override = (os.getenv("POSITION_MODE_OVERRIDE", "") or "").strip().lower()
     with suppress(Exception):
@@ -111,12 +125,14 @@ def _align_position_mode(client) -> None:
         elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
 
+
 # =========================
 # EXCHANGE INFO CACHE (anti-burst)
 # =========================
 _EXINFO_CACHE: Dict[str, Any] = {"ts": 0.0, "data": None}
 _EXINFO_TTL = float(os.getenv("EXCHANGE_INFO_TTL_SEC", "900") or 900)
 _EXINFO_WARNED_AT = 0.0
+
 
 def _fetch_exchange_info_cached(client) -> Dict[str, Any]:
     global _EXINFO_CACHE, _EXINFO_WARNED_AT
@@ -137,6 +153,7 @@ def _fetch_exchange_info_cached(client) -> Dict[str, Any]:
             logger.warning("exchange_info_unavailable_no_cache_yet: %s (using fallback filters)", e)
             _EXINFO_WARNED_AT = now
         return {}
+
 
 # =========================
 # Filters (עם קאש)
@@ -162,9 +179,11 @@ def _get_filters(client, symbol: str) -> Dict[str, Any]:
         pass
     return _fallback_filters()
 
+
 # אם קיים get_filters חיצוני – אל נעקוף; נשמור על שלנו כדי שהקאש יעבוד.
 with suppress(Exception):
     from utils.quantize import get_filters as _unused_gf  # type: ignore
+
 
 # =========================
 # Position & price helpers
@@ -181,9 +200,11 @@ def _fetch_position_side_qty_entry(client, symbol: str) -> Tuple[str, float, flo
     side = "BUY" if qty > 0 else "SELL"
     return side, abs(qty), ep
 
+
 def _last_price(client, symbol: str) -> float:
     p = client.futures_symbol_ticker(symbol=symbol.upper())
     return float(p["price"])
+
 
 def _cancel_open_conditional(client, symbol: str, kinds=("STOP", "TAKE_PROFIT", "TRAILING_STOP_MARKET")) -> int:
     n = 0
@@ -194,6 +215,7 @@ def _cancel_open_conditional(client, symbol: str, kinds=("STOP", "TAKE_PROFIT", 
                 client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
                 n += 1
     return n
+
 
 # =========================
 # Gates (TP1/min profit)
@@ -213,11 +235,13 @@ def _tp1_filled(client, symbol: str) -> bool:
         pass
     return False
 
+
 def _profit_ok(entry: float, last: float, side: str, min_pct: float) -> bool:
     if min_pct <= 0 or entry <= 0 or last <= 0:
         return True
     move = (last - entry) / entry * 100.0 if side == "BUY" else (entry - last) / entry * 100.0
     return move >= min_pct
+
 
 def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, str]:
     want_tp1 = (os.getenv("SMART_MANAGE_AFTER_TP1", "0").lower() in ("1", "true", "yes", "on"))
@@ -230,6 +254,7 @@ def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, 
     if min_profit > 0 and not _profit_ok(entry, last, side, min_profit):
         return (False, "blocked_by_min_profit")
     return (True, "ok")
+
 
 # =========================
 # Internal impls (no auth)
@@ -269,6 +294,7 @@ def _be_impl(client, *, symbol: str, offset_bps: int) -> Dict[str, Any]:
         "orderId": order.get("orderId"),
     }
     return out
+
 
 def _trail_impl(client, *, symbol: str, callbackRate: Optional[float], atr_mult: Optional[float]) -> Dict[str, Any]:
     _align_position_mode(client)
@@ -332,6 +358,7 @@ def _trail_impl(client, *, symbol: str, callbackRate: Optional[float], atr_mult:
     }
     return out
 
+
 def _tp_ladder_impl(client, *, symbol: str, pcts: List[float], splits: List[float]) -> Dict[str, Any]:
     _align_position_mode(client)
     side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
@@ -381,6 +408,7 @@ def _tp_ladder_impl(client, *, symbol: str, pcts: List[float], splits: List[floa
     }
     return result
 
+
 # =========================
 # BE (route)
 # =========================
@@ -396,6 +424,7 @@ def be(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Heade
     out = _be_impl(client, symbol=symbol, offset_bps=offset_bps)
     _ensure_guard(symbol, prefer_mode="native")
     return out
+
 
 # =========================
 # Trail (route)
@@ -413,6 +442,7 @@ def trail(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = He
     out = _trail_impl(client, symbol=symbol, callbackRate=cb, atr_mult=atr_mult)
     _ensure_guard(symbol, prefer_mode="native")
     return out
+
 
 # =========================
 # SL לפי מחיר
@@ -447,6 +477,7 @@ def sl_move(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = 
     _ensure_guard(symbol, prefer_mode="native")
     return res
 
+
 # =========================
 # TP Ladder (route)
 # =========================
@@ -465,6 +496,7 @@ def tp_ladder(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] 
     out = _tp_ladder_impl(client, symbol=symbol, pcts=pcts, splits=splits)
     _ensure_guard(symbol, prefer_mode="native")
     return out
+
 
 # =========================
 # TP יחיד
@@ -516,6 +548,7 @@ def tp_one(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = H
     _ensure_guard(symbol, prefer_mode="native")
     return res
 
+
 # =========================
 # ביטול כל ה-TP
 # =========================
@@ -535,6 +568,7 @@ def tp_cancel(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] 
                 n += 1
     _ensure_guard(symbol, prefer_mode="native")
     return {"ok": True, "symbol": symbol, "cancelled": n}
+
 
 # =========================
 # Close fraction
@@ -569,6 +603,7 @@ def close_fraction(payload: Dict[str, Any] = Body(...), Authorization: Optional[
     _ensure_guard(symbol, prefer_mode="native")
     return {"ok": True, "symbol": symbol, "fraction": fraction, "qty_closed": qty, "orderId": order.get("orderId")}
 
+
 # =========================
 # One-shot manage (BE + Trail + TP ladder)
 # =========================
@@ -589,7 +624,28 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
 
     client = _get_client()
     _align_position_mode(client)
-    side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+
+    # --- אל תזרוק 404/409: החזר JSON ברור
+    try:
+        side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    except HTTPException as he:
+        if he.status_code in (404, 409):
+            out["ok"] = False
+            out["reason"] = "no_open_position"
+            out["steps"] = {
+                "be": {"ok": False, "skipped": "be"},
+                "trail": {"ok": False, "skipped": "trail"},
+                "tp_ladder": {"ok": False, "skipped": "tp_ladder"},
+            }
+            _ensure_guard(symbol, prefer_mode="native")
+            return out
+        raise
+    except Exception as e:
+        out["ok"] = False
+        out["reason"] = f"position_fetch_failed: {e!s}"
+        _ensure_guard(symbol, prefer_mode="native")
+        return out
+
     allow_be_trail, reason = _gate_be_trail(client, symbol, side, entry)
 
     try:
@@ -624,14 +680,17 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
     _ensure_guard(symbol, prefer_mode="native")
     return out
 
+
 # =========================
 # Scheduler פנימי (אופציונלי)
 # =========================
 _SCHED_TASK: Optional[asyncio.Task] = None
 _SCHED_ACTIVE = False
 
+
 def _sched_should_run() -> bool:
     return (os.getenv("AUTO_MOVE_ENABLE", "0").lower() in ("1", "true", "yes", "on"))
+
 
 def _parse_csv_floats(val: Optional[str]) -> Optional[List[float]]:
     if not val:
@@ -640,6 +699,7 @@ def _parse_csv_floats(val: Optional[str]) -> Optional[List[float]]:
         return [float(x.strip()) for x in str(val).split(",") if str(x).strip()]
     except Exception:
         return None
+
 
 async def _auto_loop(symbols: List[str], every_sec: int, steps: List[str],
                      offset_bps: int, cb_rate: Optional[float], atr_mult: Optional[float],
@@ -683,6 +743,7 @@ async def _auto_loop(symbols: List[str], every_sec: int, steps: List[str],
         sleep_for = max(1.0, every_sec - elapsed)
         await asyncio.sleep(sleep_for)
 
+
 @router.post("/auto/start", summary="Start periodic smart-manage loop (every N sec) for given symbols")
 async def auto_start(payload: Dict[str, Any] = Body(...), Authorization: Optional[str] = Header(None)):
     _require_bearer(Authorization)
@@ -713,6 +774,7 @@ async def auto_start(payload: Dict[str, Any] = Body(...), Authorization: Optiona
     )
     return {"ok": True, "status": "started", "symbols": symbols, "every_sec": every_sec, "steps": steps}
 
+
 @router.post("/auto/stop", summary="Stop periodic smart-manage loop")
 async def auto_stop(Authorization: Optional[str] = Header(None)):
     _require_bearer(Authorization)
@@ -722,6 +784,9 @@ async def auto_stop(Authorization: Optional[str] = Header(None)):
         with suppress(Exception):
             _SCHED_TASK.cancel()
     return {"ok": True, "status": "stopped"}
+
+
+
 
 
 
