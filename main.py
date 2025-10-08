@@ -1162,6 +1162,16 @@ def healthz() -> str:
 def readyz() -> str:
     return "ok"
 
+# ---- Added to satisfy your curl checks ----
+@app.get("/health/live", response_class=PlainTextResponse, tags=["meta"])
+def health_live() -> str:
+    return "ok"
+
+@app.get("/health/strategy-version", tags=["meta"])
+def health_strategy_version() -> Dict[str, str]:
+    return {"ok": True, "version": os.getenv("ALGOGPT_VERSION", "unknown")}
+# -------------------------------------------
+
 @app.get("/debug/env", tags=["debug"])
 def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
     allowlist = set([k.strip() for k in (keys or "").split(",") if k.strip()]) if keys else set()
@@ -1350,7 +1360,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
-
 
 
 
