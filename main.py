@@ -1,3 +1,4 @@
+
 # main.py
 from __future__ import annotations
 
@@ -1271,18 +1272,24 @@ async def _startup_tasks():
             return
         base = get_internal_base()
         every_sec = max(10, int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","60")))
+
+        # timeout נדיב יותר כי הקריאה מפעילה פעולות לבורסה
+        per_req_timeout = httpx.Timeout(connect=2.5, read=15.0, write=10.0, pool=10.0)
+
         while True:
             sleep_extra = _manager_backoff
             if sleep_extra > 0:
                 await asyncio.sleep(sleep_extra)
             async with _manager_lock:
                 try:
-                    async with httpx.AsyncClient(timeout=10.0) as cli:
+                    async with httpx.AsyncClient(timeout=per_req_timeout) as cli:
                         for s in syms:
-                            r = await cli.post(f"{base}/position-ops/manage-once",
-                                               headers={"Authorization": f"Bearer {token}"},
-                                               json={"symbol": s})
-                            if r.status_code in (200, 201, 202, 204, 304, 409):
+                            r = await cli.post(
+                                f"{base}/position-ops/manage-once",
+                                headers={"Authorization": f"Bearer {token}"},
+                                json={"symbol": s}
+                            )
+                            if r.status_code < 400:
                                 _manager_backoff = max(0.0, _manager_backoff * 0.5 - 2.0)
                             elif r.status_code in (429, 500, 502, 503, 504):
                                 _manager_backoff = min((_manager_backoff or 0) * 1.6 + 5, 90)
@@ -1388,6 +1395,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
