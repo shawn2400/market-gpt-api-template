@@ -204,80 +204,104 @@ except Exception:
         def ensure_final_qty(ticket: Dict[str, Any], price: float) -> Dict[str, Any]:
             return ticket
 
+# -------------------------------------------------
+# Shared HTTP clients (reuse connections)
+# -------------------------------------------------
+def _get_shared_async_client() -> httpx.AsyncClient:
+    cli: Optional[httpx.AsyncClient] = getattr(app.state, "shared_async_client", None)
+    if cli is None or cli.is_closed:
+        timeout = httpx.Timeout(connect=2.5, read=15.0, write=10.0)
+        limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
+        cli = httpx.AsyncClient(timeout=timeout, limits=limits)
+        app.state.shared_async_client = cli
+    return cli
+
 # ------------------------------
-# PRICE HELPERS — async + safe sync wrapper (threadpool inside loop)
+# PRICE HELPERS — async-first + safe sync wrapper
 # ------------------------------
-async def _get_last_price_http(symbol: str) -> Optional[float]:
+async def get_last_price_async(symbol: str) -> Optional[float]:
     sym = symbol.upper()
-    timeout = httpx.Timeout(6.0, connect=2.0)
+
+    # 1) נסה לקוח מקומי (אם יש) — הרצה ב-thread כדי לא לחסום
+    with suppress(Exception):
+        from utils.binance_client import get_price  # type: ignore
+        val = await asyncio.to_thread(get_price, sym)
+        if val:
+            v = float(val)
+            if v > 0:
+                return v
+
+    # 2) HTTP async ל־Binance (futures ואז spot)
     for url in (
         "https://fapi.binance.com/fapi/v1/ticker/price",
         "https://api.binance.com/api/v3/ticker/price",
     ):
         try:
-            async with httpx.AsyncClient(timeout=timeout) as cli:
-                r = await cli.get(url, params={"symbol": sym})
-                if r.status_code == 200:
-                    data = r.json()
-                    p = float(data.get("price"))
-                    if p > 0:
-                        return p
+            cli = _get_shared_async_client()
+            r = await cli.get(url, params={"symbol": sym})
+            if r.status_code == 200:
+                data = r.json()
+                p = float(data.get("price"))
+                if p > 0:
+                    return p
         except Exception:
-            pass
+            continue
+
+    # 3) SDK רשמי — גם הוא blocking, נריץ ב-thread
+    with suppress(Exception):
+        from binance.client import Client  # type: ignore
+        api_key = os.getenv("BINANCE_API_KEY","").strip()
+        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
+        if api_key and api_sec:
+            def _sdk_call() -> Optional[float]:
+                try:
+                    cli_ = Client(api_key, api_sec)
+                    info = cli_.futures_symbol_ticker(symbol=sym)
+                    if info and "price" in info:
+                        return float(info["price"])
+                except Exception:
+                    return None
+                return None
+            v = await asyncio.to_thread(_sdk_call)
+            if v and v > 0:
+                return v
     return None
 
 def _get_last_price(symbol: str) -> Optional[float]:
-    # Prefer local client if available
+    """
+    גרסה סינכרונית לנתיבים סינכרוניים בלבד.
+    נקרא מעט ככל האפשר. להעדיף get_last_price_async במקום שאפשר.
+    """
+    # Prefer local client first
     with suppress(Exception):
         from utils.binance_client import get_price  # type: ignore
         p = get_price(symbol)
         if p:
             return float(p)
 
-    # Blocking HTTP helper (used either directly, or via threadpool)
-    def _blocking_http() -> Optional[float]:
-        sym = symbol.upper()
-        try:
-            with httpx.Client(
-                timeout=httpx.Timeout(6.0, connect=2.0),
-                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-            ) as cli:
-                for url in (
-                    "https://fapi.binance.com/fapi/v1/ticker/price",
-                    "https://api.binance.com/api/v3/ticker/price",
-                ):
-                    try:
-                        r = cli.get(url, params={"symbol": sym})
-                        if r.status_code == 200:
-                            p = float((r.json() or {}).get("price") or 0)
-                            if p > 0:
-                                return p
-                    except Exception:
-                        continue
-        except Exception:
-            return None
-        return None
-
-    # If an event loop is running, offload the blocking I/O to a threadpool
+    # Blocking HTTP fallback
     try:
-        asyncio.get_running_loop()
-        import concurrent.futures
-        res: Optional[float] = None
-        try:
-            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
-                fut = ex.submit(_blocking_http)
-                res = fut.result(timeout=7)  # wait without blocking I/O on the event-loop thread
-        except Exception:
-            res = None
-        if res is not None and res > 0:
-            return res
-    except RuntimeError:
-        # No running loop — it's safe to run blocking HTTP here
-        res = _blocking_http()
-        if res is not None and res > 0:
-            return res
+        with httpx.Client(
+            timeout=httpx.Timeout(6.0, connect=2.0),
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+        ) as cli:
+            sym = symbol.upper()
+            for url in (
+                "https://fapi.binance.com/fapi/v1/ticker/price",
+                "https://api.binance.com/api/v3/ticker/price",
+            ):
+                try:
+                    r = cli.get(url, params={"symbol": sym})
+                    if r.status_code == 200:
+                        p = float((r.json() or {}).get("price") or 0)
+                        if p > 0:
+                            return p
+                except Exception:
+                    continue
+    except Exception:
+        pass
 
-    # Fallback to official client if keys exist
+    # SDK fallback
     with suppress(Exception):
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
@@ -339,8 +363,8 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
         if reject_url:  row.append({"text":"❌ Reject","url":reject_url})
         payload["reply_markup"] = {"inline_keyboard":[row]}
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as cli:
-            r = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
+        cli = _get_shared_async_client()
+        r = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
         try:
             data = r.json()
         except Exception:
@@ -600,10 +624,10 @@ async def _smart_manage_now(symbol: str,
     retries = 2
     for attempt in range(retries + 1):
         try:
-            async with httpx.AsyncClient(timeout=timeout) as cli:
-                r = await cli.post(f"{base}/position-ops/manage-once",
-                                   headers={"Authorization": f"Bearer {token}"},
-                                   json=body)
+            cli = _get_shared_async_client()
+            r = await cli.post(f"{base}/position-ops/manage-once",
+                               headers={"Authorization": f"Bearer {token}"},
+                               json=body, timeout=timeout)
             if r.status_code in (200, 201, 202, 204, 304, 409):
                 return {"ok": r.status_code < 400, "status": r.status_code, "text": r.text}
             await asyncio.sleep(0.5 + attempt * 0.75)
@@ -653,7 +677,7 @@ async def create_ticket(
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         with suppress(Exception):
-            price_now = _get_last_price(symbol)
+            price_now = await get_last_price_async(symbol)
         etas = _smart_etas(symbol, side, price_now, payload.get("tp1"), payload.get("tp2"), payload.get("tp3"))
         for k, v in etas.items():
             payload.setdefault(k, v)
@@ -681,7 +705,7 @@ async def create_ticket(
         rr_env_lo   = float(os.getenv("APPROVAL_RR_MIN", "0") or "0")
         rr_min_eff  = max(rr_min_flag, rr_env_lo)
         if rr_min_eff > 0 and req_body.get("sl"):
-            current = float(_get_last_price(symbol) or 0)
+            current = float((await get_last_price_async(symbol)) or 0)
             tp1 = float(req_body.get("tp1") or 0); sl = float(req_body.get("sl") or 0)
             rr  = None
             if side == "BUY" and current > 0 and tp1 > 0 and sl > 0:
@@ -747,7 +771,20 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
         return mode
     return "HYBRID" if TP_LADDER_ON_APPROVE else "MARKET"
 
+async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    symbol = (ticket.get("symbol") or "").upper()
+    price = await get_last_price_async(symbol)
+    if not price or float(price) <= 0:
+        return None
+    new_ticket = ensure_final_qty(dict(ticket), float(price))
+    ps = str(new_ticket.get("position_side") or new_ticket.get("positionSide") or "").upper()
+    if ps == "BOTH":
+        new_ticket.pop("positionSide", None)
+        new_ticket["position_side"] = ""
+    return new_ticket
+
 def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    # גרסת תאימות קיימת (סינכרונית) — משאיר למקרה שנדרש באזורים לא־async
     symbol = (ticket.get("symbol") or "").upper()
     price = _get_last_price(symbol)
     if not price or float(price) <= 0:
@@ -915,7 +952,8 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
         for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
             ticket.pop(k, None)
 
-    t2 = _apply_auto_qty_on_ticket(ticket)
+    # עדיף לא-חוסם: חישוב כמות אוטומטי אסינכרוני
+    t2 = await _apply_auto_qty_on_ticket_async(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
     ticket = t2
@@ -1014,7 +1052,8 @@ async def approve_signed(request: Request):
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    t2 = _apply_auto_qty_on_ticket(payload)
+    # שימוש בגרסה הא-סינכרונית
+    t2 = await _apply_auto_qty_on_ticket_async(payload)
     if t2 is None:
         raise HTTPException(status_code=400, detail="AUTO_QTY: failed to fetch last price")
     payload = t2
@@ -1108,7 +1147,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
 
-        # FIX: removed stray "}"
         key_good = f"{NS}:expired_log"
         key_bad  = f"{NS}:expired_log_bad"
 
@@ -1205,7 +1243,7 @@ def healthz() -> str:
 def readyz() -> str:
     return "ok"
 
-# שמרתי על הקיים שלך:
+# נשמר כבעבר:
 @app.get("/health/live", response_class=PlainTextResponse, tags=["meta"])
 def health_live() -> str:
     return "ok"
@@ -1214,7 +1252,6 @@ def health_live() -> str:
 def health_strategy_version() -> Dict[str, str]:
     return {"ok": True, "version": os.getenv("ALGOGPT_VERSION", "unknown")}
 
-# אופציונלי: alias קטן אם תרצה גם /meta/version (לא חובה)
 @app.get("/meta/version", tags=["meta"])
 def meta_version() -> Dict[str, str]:
     return {"ok": True, "version": os.getenv("ALGOGPT_VERSION", "unknown")}
@@ -1261,7 +1298,7 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content=payload)
 
 # =================================================
-# Startup background tasks
+# Startup / Shutdown background tasks
 # =================================================
 _manager_lock = asyncio.Lock()
 _manager_backoff = 0.0  # seconds
@@ -1303,27 +1340,27 @@ async def _startup_tasks():
         base = get_internal_base()
         every_sec = max(10, int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","60")))
         per_req_timeout = httpx.Timeout(connect=2.5, read=15.0, write=10.0)
-        limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
         while True:
             sleep_extra = _manager_backoff
             if sleep_extra > 0:
                 await asyncio.sleep(sleep_extra)
             async with _manager_lock:
                 try:
-                    async with httpx.AsyncClient(timeout=per_req_timeout, limits=limits) as cli:
-                        for s in syms:
-                            r = await cli.post(
-                                f"{base}/position-ops/manage-once",
-                                headers={"Authorization": f"Bearer {token}"},
-                                json={"symbol": s}
-                            )
-                            if r.status_code < 400:
-                                _manager_backoff = max(0.0, _manager_backoff * 0.5 - 2.0)
-                            elif r.status_code in (429, 500, 502, 503, 504):
-                                _manager_backoff = min((_manager_backoff or 0) * 1.6 + 5, 90)
-                                logger.warning("periodic_manager_backoff: status=%s backoff=%ss", r.status_code, _manager_backoff)
-                            else:
-                                logger.warning("periodic_manager_unexpected_status: %s %s", r.status_code, r.text[:200])
+                    cli = _get_shared_async_client()
+                    for s in syms:
+                        r = await cli.post(
+                            f"{base}/position-ops/manage-once",
+                            headers={"Authorization": f"Bearer {token}"},
+                            json={"symbol": s},
+                            timeout=per_req_timeout,
+                        )
+                        if r.status_code < 400:
+                            _manager_backoff = max(0.0, _manager_backoff * 0.5 - 2.0)
+                        elif r.status_code in (429, 500, 502, 503, 504):
+                            _manager_backoff = min((_manager_backoff or 0) * 1.6 + 5, 90)
+                            logger.warning("periodic_manager_backoff: status=%s backoff=%ss", r.status_code, _manager_backoff)
+                        else:
+                            logger.warning("periodic_manager_unexpected_status: %s %s", r.status_code, r.text[:200])
                 except Exception as e:
                     _manager_backoff = min((_manager_backoff or 0) * 1.5 + 5, 90)
                     logger.warning("periodic_manager_error: %r (backoff now %.1fs)", e, _manager_backoff)
@@ -1401,6 +1438,14 @@ async def _startup_tasks():
     if os.getenv("SCAN_CRON_ENABLE","1").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_scanner())
 
+@app.on_event("shutdown")
+async def _shutdown_tasks():
+    # סגירה נקייה של ה-HTTP client המשותף
+    cli: Optional[httpx.AsyncClient] = getattr(app.state, "shared_async_client", None)
+    if cli and not cli.is_closed:
+        with suppress(Exception):
+            await cli.aclose()
+
 # =================================================
 # Uvicorn entry
 # =================================================
@@ -1410,6 +1455,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
