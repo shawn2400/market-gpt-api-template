@@ -15,7 +15,7 @@ import traceback
 import inspect
 import asyncio
 from contextlib import suppress
-from typing import Any, Dict, List, Optional, Callable, Tuple
+from typing import Any, Dict, List, Optional, Callable, Tuple, Union
 from collections import Counter
 
 from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter
@@ -248,7 +248,7 @@ def _get_last_price(symbol: str) -> Optional[float]:
                         return p
             except Exception:
                 pass
-        return None
+        # NOTE: לא מחזירים כאן None — נותנים להמשיך ל-SDK fallback למטה
     except RuntimeError:
         # No running loop — it's safe to run async
         with suppress(Exception):
@@ -334,10 +334,10 @@ def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) 
     except Exception:
         bad = {"tp_kind","sl_kind","entry_kind","entry_offset","tp_offset","sl_offset"}
         return {k: v for k, v in kwargs.items() if k not in bad}
-def _is_code_4061(err: Exception | str) -> bool:
+
+def _is_code_4061(err: Union[Exception, str]) -> bool:
     s = str(err)
     return "code=-4061" in s or "position side does not match" in s.lower()
-
 def _align_position_mode(client) -> None:
     mode_override = (os.getenv("POSITION_MODE_OVERRIDE","") or "").strip().lower()
     with suppress(Exception):
@@ -723,7 +723,7 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
         return mode
     return "HYBRID" if TP_LADDER_ON_APPROVE else "MARKET"
 
-def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Dict[str, Any] | None:
+def _apply_auto_qty_on_ticket(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     symbol = (ticket.get("symbol") or "").upper()
     price = _get_last_price(symbol)
     if not price or float(price) <= 0:
@@ -976,6 +976,7 @@ async def reject(ticket_id: str = Query(..., description="ticket_id")):
     with suppress(Exception):
         record_approval_rejected()
     return _html("❌ נדחה. לא בוצעה פעולה.")
+
 @router.post("/ops/approve/signed")
 async def approve_signed(request: Request):
     if not HMAC_SECRET:
@@ -1032,7 +1033,6 @@ async def approve_signed(request: Request):
     with suppress(Exception):
         record_approval_approved()
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
-
 # --- Guard smoke run ---
 @router.post("/guard/smoke/run")
 async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
@@ -1231,7 +1231,9 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.exception("unhandled_error: %s %s", request.method, request.url)
     return JSONResponse(
         status_code=500,
-        content={"ok": False, "error": "internal_error", "detail": str(exc)},
+        content={"ok": False,
+                 "error": "internal_error",
+                 "detail": str(exc)},
     )
 
 # =================================================
@@ -1383,6 +1385,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
