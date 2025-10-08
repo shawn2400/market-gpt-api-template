@@ -1,11 +1,9 @@
-# main.py
 from __future__ import annotations
 
 import os
 import json
 import time
 import hmac
-import math
 import re
 import httpx
 import hashlib
@@ -63,7 +61,7 @@ for _k, _v in _inline_env_defaults.items():
     os.environ.setdefault(_k, _v)
 
 # =================================================
-# Simple in-memory ConfirmStore (fallback)
+# Simple in-memory ConfirmStore (fallback; behind flag)
 # =================================================
 class ConfirmStore:
     _items: Dict[str, Dict[str, Any]] = {}
@@ -133,7 +131,7 @@ async def _security_headers(request: Request, call_next):
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
-    # בונוס: HSTS אם מאחורי HTTPS ומופעל ב-ENV
+    # HSTS אם מאחורי HTTPS ומופעל ב-ENV
     if os.getenv("ENABLE_HSTS","0").lower() in ("1","true","yes","on"):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
     return resp
@@ -207,6 +205,16 @@ SL_TAGS = [t.strip() for t in (os.getenv("SL_TAGS","SL,STOP,STOP_LOSS,STOP_LOSS_
 
 # Optional: protect approve/reject with Bearer behind ENV flag
 PROTECT_APPROVE_ROUTES = _bool_env("PROTECT_APPROVE_ROUTES", False)
+# Optional: protect digest routes
+PROTECT_DIGEST_ROUTES  = _bool_env("PROTECT_DIGEST_ROUTES", False)
+
+# --- New flags: prod behavior ---
+CONFIRMSTORE_ENABLE = _bool_env("CONFIRMSTORE_ENABLE", False)  # default off
+REQUIRE_REDIS       = _bool_env("REQUIRE_REDIS", True)         # default on (fail-closed)
+
+# Signed approve anti-replay
+SIGNED_TS_MAX_SKEW_SEC = int(os.getenv("SIGNED_TS_MAX_SKEW_SEC", "60") or "60")
+SIGNED_NONCE_TTL_SEC   = int(os.getenv("SIGNED_NONCE_TTL_SEC", "120") or "120")
 
 # Order ID helper
 try:
@@ -266,8 +274,131 @@ async def _get_redis_cached():
     app.state.redis = r
     return r
 
+# --- Ticket helpers (Redis + optional ConfirmStore fallback) ---
+async def _load_ticket(ticket_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    """
+    מחזיר (ticket, source) כאשר source ∈ {"redis","memory","none"}
+    """
+    # Redis קודם
+    if aioredis and REDIS_URL:
+        try:
+            r = await _get_redis_cached()
+            if r:
+                raw = await r.get(f"{NS}:ticket:{ticket_id}")
+                if raw:
+                    obj = json.loads(raw)
+                    req = obj.get("req") or obj
+                    return dict(req), "redis"
+        except Exception as e:
+            logger.warning("load_ticket_redis_failed: %s", e)
+
+    # ConfirmStore fallback — רק אם מאופשר
+    if CONFIRMSTORE_ENABLE:
+        with suppress(Exception):
+            for it in ConfirmStore.pending():
+                if str(it.get("ticket_id")) == str(ticket_id):
+                    return dict(it.get("req") or it), "memory"
+
+    return None, "none"
+
+async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[bool] = None) -> None:
+    """
+    מוחק את הכרטיס ממקור האחסון, ומוסיף לוג ל-Redis על expirations/decisions.
+    אם לא נמצא – שקט.
+    """
+    # --- Build event for digest (/ops/digest/expired) ---
+    event: Dict[str, Any] = {
+        "ts": time.time(),
+        "ticket_id": ticket_id,
+        "status": final_status,                 # True/False/None
+        "src": source,                          # "redis" | "memory" | "none"
+        "ns": NS,
+        "reason": ("expired" if final_status is None else ("approved" if final_status else "rejected")),
+    }
+
+    # Try enrich event with symbol/side/idempotency (idem)
+    fetched_req: Optional[Dict[str, Any]] = None
+    if aioredis and REDIS_URL:
+        with suppress(Exception):
+            r = await _get_redis_cached()
+            if r:
+                if source == "redis":
+                    raw = await r.get(f"{NS}:ticket:{ticket_id}")
+                    if raw:
+                        obj = json.loads(raw)
+                        fetched_req = obj.get("req") or obj
+                elif source == "memory":
+                    pass
+    if not fetched_req and source in ("memory",):
+        if CONFIRMSTORE_ENABLE:
+            with suppress(Exception):
+                for it in ConfirmStore.pending():
+                    if str(it.get("ticket_id")) == str(ticket_id):
+                        fetched_req = it.get("req") or it
+                        break
+
+    if fetched_req:
+        event["symbol"] = str(fetched_req.get("symbol","")).upper()
+        event["side"]   = str(fetched_req.get("side","")).upper()
+        event["expiry_ts"] = fetched_req.get("expiry_ts")
+        event["note"] = fetched_req.get("note")
+        base = f"{ticket_id}:{event.get('symbol','')}:{event.get('side','')}"
+        event["idem"] = hashlib.md5(base.encode("utf-8")).hexdigest()[:10]
+    else:
+        event["symbol"] = ""
+        event["side"] = ""
+        event["idem"] = hashlib.md5(f"{ticket_id}".encode("utf-8")).hexdigest()[:10]
+
+    # Push to Redis list(s)
+    if aioredis and REDIS_URL:
+        with suppress(Exception):
+            r = await _get_redis_cached()
+            if r:
+                key_good = f"{NS}:expired_log"
+                key_bad  = f"{NS}:expired_log_bad"
+                key = key_good if (event.get("symbol") and event.get("side")) else key_bad
+                payload = json.dumps(event, ensure_ascii=False, separators=(",", ":"))
+                await r.lpush(key, payload)
+                await r.ltrim(key, 0, 2999)  # keep last ~3000 events
+
+    # --- Actual deletion ---
+    if source in ("redis", "none"):
+        if aioredis and REDIS_URL:
+            with suppress(Exception):
+                r = await _get_redis_cached()
+                if r:
+                    await r.delete(f"{NS}:ticket:{ticket_id}")
+
+    with suppress(Exception):
+        ConfirmStore.remove(ticket_id)
+
+    logger.info("ticket_deleted: id=%s source=%s status=%s", ticket_id, source, final_status)
+
+def _smart_etas(symbol: str, side: str, price_now: Optional[float],
+                tp1: Optional[float], tp2: Optional[float], tp3: Optional[float]) -> Dict[str, Any]:
+    """
+    חישוב ETA גס לפי חלון מהירות מוגדר (ETA_VELOCITY_WINDOW).
+    """
+    try:
+        if not price_now:
+            return {}
+        targets = []
+        for i, tp in enumerate([tp1, tp2, tp3], start=1):
+            if tp and tp > 0:
+                dist_bps = abs((tp - price_now) / price_now) * 10_000
+                eta_min = max(1, int(dist_bps / max(1, ETA_VELOCITY_WINDOW)))
+                targets.append((i, eta_min))
+        out: Dict[str, Any] = {}
+        for i, eta in targets:
+            out[f"eta_tp{i}_min"] = eta
+        out.setdefault("eta_open_min", out.get("eta_tp1_min", 2))
+        return out
+    except Exception as e:
+        logger.debug("smart_etas_failed: %s", e)
+        return {}
+
 # ------------------------------
-# PRICE HELPERS — async-first + safe sync wrapper
+# PRICE HELPERS — async-first
 # ------------------------------
 async def get_last_price_async(symbol: str) -> Optional[float]:
     sym = symbol.upper()
@@ -317,47 +448,6 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
                 return v
     return None
 
-def _get_last_price(symbol: str) -> Optional[float]:
-    # prefer local client
-    with suppress(Exception):
-        from utils.binance_client import get_price  # type: ignore
-        p = get_price(symbol)
-        if p:
-            return float(p)
-    # blocking HTTP
-    try:
-        with httpx.Client(
-            timeout=httpx.Timeout(6.0, connect=2.0),
-            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
-        ) as cli:
-            sym = symbol.upper()
-            for url in (
-                "https://fapi.binance.com/fapi/v1/ticker/price",
-                "https://api.binance.com/api/v3/ticker/price",
-            ):
-                try:
-                    r = cli.get(url, params={"symbol": sym})
-                    if r.status_code == 200:
-                        p = float((r.json() or {}).get("price") or 0)
-                        if p > 0:
-                            return p
-                except Exception:
-                    continue
-    except Exception:
-        pass
-    # SDK fallback
-    with suppress(Exception):
-        from binance.client import Client  # type: ignore
-        api_key = os.getenv("BINANCE_API_KEY","").strip()
-        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
-        if not api_key or not api_sec:
-            return None
-        cli = Client(api_key, api_sec)
-        info = cli.futures_symbol_ticker(symbol=symbol.upper())
-        if info and "price" in info:
-            return float(info["price"])
-    return None
-
 # HTML helpers
 def _md_html(s: str) -> str:
     return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
@@ -374,10 +464,6 @@ def _html(msg: str) -> HTMLResponse:
 def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
     key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text)==64 else secret_hex_or_text.encode("utf-8")
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
-
-async def _redis():
-    # return cached instance
-    return await _get_redis_cached()
 
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
 def _parse_mode(note: Optional[str]) -> Optional[str]:
@@ -405,21 +491,41 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
         if approve_url: row.append({"text":"✅ Approve","url":approve_url})
         if reject_url:  row.append({"text":"❌ Reject","url":reject_url})
         payload["reply_markup"] = {"inline_keyboard":[row]}
-    try:
-        cli = _get_shared_async_client()
-        r = await cli.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", json=payload)
+
+    # retry קטן עבור 429/5xx + כיבוד retry_after אם קיים
+    for attempt in range(3):
         try:
-            data = r.json()
-        except Exception:
-            data = {}
-        return {
-            "ok": bool(data.get("ok")),
-            "status": r.status_code,
-            "text_raw": r.text,
-            **({"result": data.get("result")} if "result" in data else {}),
-        }
-    except Exception as e:
-        return {"ok": False, "error": str(e)}
+            cli = _get_shared_async_client()
+            r = await cli.post(
+                f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                json=payload,
+                timeout=httpx.Timeout(10.0, connect=2.5)
+            )
+            try:
+                data = r.json()
+            except Exception:
+                data = {}
+            if r.status_code < 400 and data.get("ok"):
+                return {
+                    "ok": True,
+                    "status": r.status_code,
+                    "text_raw": r.text,
+                    **({"result": data.get("result")} if "result" in data else {}),
+                }
+            if r.status_code in (429, 500, 502, 503, 504):
+                retry_after = 0.0
+                try:
+                    retry_after = float(r.headers.get("Retry-After","0"))
+                except Exception:
+                    pass
+                await asyncio.sleep(max(retry_after, 0.6 * (attempt + 1)))
+                continue
+            return {"ok": False, "status": r.status_code, "text_raw": r.text}
+        except Exception as e:
+            if attempt == 2:
+                return {"ok": False, "error": str(e)}
+            await asyncio.sleep(0.6 * (attempt + 1))
+    return {"ok": False, "error": "telegram_send_exhausted"}
 
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
     try:
@@ -568,8 +674,6 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         logger.error("armed_execute failed: %s", e)
         return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
 
-# main_part2.py  (המשך ישיר — חבר אחרי main_part1.py)
-
 # --- Smart manage after approve ---
 async def _smart_manage_now(symbol: str,
                             offset_bps: Optional[int] = None,
@@ -687,18 +791,28 @@ async def create_ticket(
             if rr is not None and rr < rr_min_eff:
                 req_body["blocked_by_rr_min"] = True
 
-    with suppress(Exception):
-        ConfirmStore.create(dict(req_body))
-    record_approval_created()
-
+    # --- Persist ticket ---
+    persisted = False
+    # Redis = מקור אמת חובה אם REQUIRE_REDIS=True
     if aioredis and REDIS_URL:
         try:
             r = await _get_redis_cached()
             if r:
                 rec = {"ts": time.time(), "req": req_body, "note": note}
                 await r.setex(f"{NS}:ticket:{tid}", TICKET_TTL_SEC, json.dumps(rec, ensure_ascii=False, separators=(",", ":")))
+                persisted = True
         except Exception as e:
             logger.warning("redis_set_failed: %s", e)
+
+    if not persisted:
+        if REQUIRE_REDIS:
+            raise HTTPException(status_code=503, detail="storage_unavailable: redis_required")
+        if CONFIRMSTORE_ENABLE:
+            with suppress(Exception):
+                ConfirmStore.create(dict(req_body))
+            persisted = True
+
+    record_approval_created()
 
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     approve_url = f"{base}/ops/approve?ticket_id={tid}" if base else ""
@@ -708,7 +822,7 @@ async def create_ticket(
     lines = []
     lines.append("⚠️ <b>Approval Needed</b>")
     lines.append(f"• Ticket: <code>{_md_html(tid)}</code>")
-    lines.append(f"• {_md_html(symbol)} {_md_html(side)} qty=<code>{qty}</code> lev=<code>{lev}</code>")
+    lines.append(f"• {_md_html(symbol)} {_md_html(side)} qty=<code>{_md_html(qty)}</code> lev=<code>{_md_html(lev)}</code>")
     if req_body.get("score") is not None:       lines.append(f"• Score: <code>{req_body['score']}</code>")
     if req_body.get("eta_open_min") is not None:lines.append(f"• ETA Open: <code>{req_body['eta_open_min']}m</code>")
     for i in (1,2,3):
@@ -770,27 +884,6 @@ def _maybe_protect_routes(request: Request) -> None:
         raise HTTPException(status_code=503, detail="Route protection enabled but API_BEARER_TOKEN missing")
     _require_bearer(request)
 
-def _badge(text: str, color: str) -> str:
-    return f"<span style='display:inline-block;padding:.15rem .45rem;border-radius:999px;font-size:.8rem;color:#fff;background:{color}'>{_md_html(text)}</span>"
-
-def _status_badge(status: str) -> str:
-    s = (status or "").upper()
-    color = "#6b7280"
-    if s == "NEW": color = "#3b82f6"
-    elif s == "PARTIALLY_FILLED": color = "#f59e0b"
-    elif s == "FILLED": color = "#10b981"
-    elif s in ("CANCELED","EXPIRED","REJECTED"): color = "#ef4444"
-    return _badge(s, color)
-
-def _role_badge(role: str) -> str:
-    r = (role or "").upper()
-    color = "#6b7280"
-    if r.startswith("TP"): color = "#16a34a"
-    elif r == "SL": color = "#dc2626"
-    elif r == "ENTRY": color = "#3b82f6"
-    elif r in ("BE","TRAIL"): color = "#a855f7"
-    return _badge(r, color)
-
 def _rows_kv_html(t: Dict[str, Any]) -> str:
     def cv(k, default="—"):
         v = t.get(k, default)
@@ -809,7 +902,7 @@ def _rows_kv_html(t: Dict[str, Any]) -> str:
 async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     _require_bearer(request)
     rec, _ = await _load_ticket(ticket_id)
-    if not rec:
+    if not rec and CONFIRMSTORE_ENABLE:
         with suppress(Exception):
             for it in ConfirmStore.pending():
                 if str(it.get("ticket_id")) == str(ticket_id):
@@ -833,7 +926,7 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
         "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
         f"{_rows_kv_html(rec)}"
         "</table>"
-        "<p style='	color:#777;margin-top:1rem'>טיפ: ניתן לקרוא/לאשר גם מהטלגרם.</p>"
+        "<p style='color:#777;margin-top:1rem'>טיפ: ניתן לקרוא/לאשר גם מהטלגרם.</p>"
         "</body>"
     )
     return HTMLResponse(body)
@@ -863,10 +956,11 @@ async def ui_pending(request: Request = None):
                     if cursor == 0:
                         break
 
-    with suppress(Exception):
-        for it in ConfirmStore.pending() or []:
-            req = it.get("req") or it
-            items.append(req)
+    if CONFIRMSTORE_ENABLE:
+        with suppress(Exception):
+            for it in ConfirmStore.pending() or []:
+                req = it.get("req") or it
+                items.append(req)
 
     if not items:
         return _html("אין כרטיסים ממתינים כרגע.")
@@ -965,17 +1059,16 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
         sym, side, qty = ticket.get("symbol",""), ticket.get("side",""), ticket.get("qty","")
         msg = (
             f"✅ <b>Approved</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
-            f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n• Flow: <code>{flow}</code>\n— — —\nבוצע והועבר לניהול."
+            f"• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n• Flow: <code>{flow}</code>\n— — —\nבוצע והועבר לניהול."
             if ok else
             f"⚠️ <b>Approve Failed</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
-            f"• {_md_html(sym)} {_md_html(side)} qty={qty}\n• Flow: <code>{flow}</code>\n— — —\n"
+            f"• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n• Flow: <code>{flow}</code>\n— — —\n"
             f"שגיאה: <code>{_md_html(json.dumps(exec_res, ensure_ascii=False))}</code>"
         )
         await _send_telegram_html(msg)
     except Exception:
         pass
 
-    # ✅ מטריקות גם במסלול approve (כמו שביקשת)
     if ok:
         with suppress(Exception):
             record_approval_approved()
@@ -983,7 +1076,6 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
         with suppress(Exception):
             record_approval_rejected()
 
-    # החלטה וניקוי מרוכזים בתוך _delete_ticket
     await _delete_ticket(ticket_id, source, final_status=ok)
 
     if ok:
@@ -1005,7 +1097,6 @@ async def reject(ticket_id: str = Query(..., description="ticket_id"), request: 
         await _send_telegram_html(
             f"❌ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n— — —\nNo action was taken."
         )
-    # ✅ מטריקה על דחייה (תיקון שכבר ביצעת)
     with suppress(Exception):
         record_approval_rejected()
     return _html("❌ נדחה. לא בוצעה פעולה.")
@@ -1014,11 +1105,41 @@ async def reject(ticket_id: str = Query(..., description="ticket_id"), request: 
 async def approve_signed(request: Request):
     if not HMAC_SECRET:
         raise HTTPException(status_code=500, detail="HMAC secret not set")
+
+    # --- Anti-replay headers ---
+    ts_hdr = request.headers.get("X-Timestamp")
+    nonce  = request.headers.get("X-Nonce") or ""
+    if not ts_hdr or not nonce:
+        raise HTTPException(status_code=400, detail="Missing X-Timestamp or X-Nonce")
+    try:
+        ts = float(ts_hdr)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Bad X-Timestamp")
+
+    now = time.time()
+    if abs(now - ts) > SIGNED_TS_MAX_SKEW_SEC:
+        raise HTTPException(status_code=401, detail="Timestamp skew too large")
+
+    # Nonce once-only via Redis (if available)
+    if aioredis and REDIS_URL:
+        r = await _get_redis_cached()
+        if not r:
+            return JSONResponse(status_code=503, content={"ok": False, "error": "redis_unavailable"})
+        used = await r.set(f"{NS}:nonce:{nonce}", "1", ex=SIGNED_NONCE_TTL_SEC, nx=True)
+        if not used:
+            raise HTTPException(status_code=409, detail="Replay detected")
+    elif REQUIRE_REDIS:
+        # If Redis is required, fail-closed
+        raise HTTPException(status_code=503, detail="Nonce store unavailable")
+
     raw = await request.body()
     got = request.headers.get("X-Signature", "") or ""
-    want = _sign_hex(HMAC_SECRET, raw)
+    # signature covers ts + nonce + raw body
+    to_sign = f"{ts_hdr}.{nonce}.".encode("utf-8") + raw
+    want = _sign_hex(HMAC_SECRET, to_sign)
     if not hmac.compare_digest(got, want):
         raise HTTPException(status_code=401, detail="Bad signature")
+
     try:
         payload = json.loads(raw.decode("utf-8"))
     except Exception:
@@ -1110,7 +1231,9 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
 
 # --- Ops digest: expired approvals ---
 @router.get("/ops/digest/expired")
-async def digest_expired(hours: int = Query(6, ge=1, le=48)):
+async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = None):
+    if PROTECT_DIGEST_ROUTES:
+        _require_bearer(request)
     if not (aioredis and REDIS_URL and BOT_TOKEN and ADMIN_CHAT_ID):
         return {"ok": False, "error": "digest_dependencies_missing"}
     try:
@@ -1118,7 +1241,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
 
-        # ✅ תיקון הטייפו
         key_good = f"{NS}:expired_log"
         key_bad  = f"{NS}:expired_log_bad"
 
@@ -1210,7 +1332,21 @@ def healthz() -> str:
     return "ok"
 
 @app.get("/readyz", response_class=PlainTextResponse, tags=["meta"])
-def readyz() -> str:
+async def readyz() -> str:
+    # אם נדרשת זמינות Redis בפרודקשן, בדוק PING
+    if REQUIRE_REDIS:
+        if not (aioredis and REDIS_URL):
+            return PlainTextResponse("redis_unconfigured", status_code=503)
+        try:
+            r = await _get_redis_cached()
+            if not r:
+                return PlainTextResponse("redis_unavailable", status_code=503)
+            pong = await r.ping()
+            if not pong:
+                return PlainTextResponse("redis_ping_failed", status_code=503)
+        except Exception as e:
+            logger.warning("readyz redis ping failed: %s", e)
+            return PlainTextResponse("redis_exception", status_code=503)
     return "ok"
 
 @app.get("/health/live", response_class=PlainTextResponse, tags=["meta"])
@@ -1252,7 +1388,8 @@ async def health_tp1_now(symbols: Optional[str] = Query(None, description="CSV o
     sym_list = [s.strip().upper() for s in (symbols.split(",") if symbols else (os.getenv("WATCHLIST","") or "").split(",")) if s.strip()]
     if not sym_list:
         raise HTTPException(status_code=400, detail="no symbols")
-    res = await quick_check_tp1(sym_list, tp1_tags=(os.getenv("TP1_TAGS","") or None), notify_telegram=True)
+    # שימוש ברשימה המעובדת (TP1_TAGS) ולא במחרוזת
+    res = await quick_check_tp1(sym_list, tp1_tags=(TP1_TAGS or None), notify_telegram=True)
     return {"ok": True, "result": res}
 
 # --- Global error handler ---
@@ -1451,9 +1588,9 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
-    # ✅ טוען את המודול לפי שם הקובץ בפועל, עם אפשרות override דרך UVICORN_APP
     module_target = os.getenv("UVICORN_APP") or f"{os.path.splitext(os.path.basename(__file__))[0]}:app"
     uvicorn.run(module_target, host=host, port=port, reload=reload_)
+
 
 
 
