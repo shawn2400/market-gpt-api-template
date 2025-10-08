@@ -1,13 +1,17 @@
 # utils/health_tp1.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-
 import os
+import time
 import asyncio
 from typing import Dict, Any, List, Optional, Tuple
 from contextlib import suppress
 
-from utils.binance_client import get_all_orders, futures_mark_price, get_price
+import httpx
+
+# נשתמש ב־helpers אם קיימים; אחרת ניפול לפולבקים של python-binance בזמן ריצה
+with suppress(Exception):
+    from utils.binance_client import get_all_orders, futures_mark_price, get_price  # type: ignore
 
 TP_STATUSES = {"NEW", "PARTIALLY_FILLED"}
 TP_TYPES = {"TAKE_PROFIT", "TAKE_PROFIT_MARKET", "TAKE_PROFIT_LIMIT"}
@@ -28,25 +32,46 @@ def _is_sl_order(o: Dict[str, Any]) -> bool:
     return (typ in SL_TYPES) and (st in TP_STATUSES)
 
 def _has_tp1_tag(o: Dict[str, Any], tags: List[str]) -> bool:
-    coid = str(o.get("clientOrderId") or "")
-    return any(t for t in tags if t and t in coid)
+    coid = str((o.get("clientOrderId") or "")).upper()
+    return any(t.upper() in coid for t in tags)
 
-def _price_float(v: Any) -> Optional[float]:
+def _f(v: Any) -> Optional[float]:
+    try:
+        return float(v) if v is not None else None
+    except Exception:
+        return None
+
+def _get_mark_price(symbol: str) -> Optional[float]:
+    # 1) utils helper
     with suppress(Exception):
-        if v is None:
-            return None
-        return float(v)
+        p = futures_mark_price(symbol)
+        pf = _f(p)
+        if pf and pf > 0:
+            return pf
+    # 2) utils get_price (ספוט/פוטצ’רז—לא קריטי, רק קירוב)
+    with suppress(Exception):
+        p = get_price(symbol)  # type: ignore
+        pf = _f(p)
+        if pf and pf > 0:
+            return pf
+    # 3) Binance REST מהיר (ללא מפתח)
+    with suppress(Exception):
+        import httpx
+        with httpx.Client(timeout=5.0) as cli:
+            r = cli.get("https://fapi.binance.com/fapi/v1/ticker/price", params={"symbol": symbol.upper()})
+            if r.status_code == 200:
+                j = r.json()
+                pf = _f(j.get("price"))
+                if pf and pf > 0:
+                    return pf
     return None
 
 def _best_tp_by_price(symbol: str, orders: List[Dict[str, Any]]) -> Optional[str]:
     """
-    Heuristic: בלי תג—מזהה TP1 כ-TP הקרוב ביותר בכיוון “רווחי”.
-    • אם side=SELL → כנראה לונג: טייק הקרוב ביותר שמעל מחיר הסימן.
-    • אם side=BUY  → כנראה שורט: טייק הקרוב ביותר שמתחת למחיר הסימן.
+    בלי תג — מזהה TP1 כטייק הקרוב ביותר בכיוון הרווח:
+      לונג → SELL שמעל המחיר; שורט → BUY שמתחת למחיר.
     """
-    mark = _price_float(futures_mark_price(symbol))
-    if not mark:
-        mark = _price_float(get_price(symbol))
+    mark = _get_mark_price(symbol)
     if not mark:
         return None
 
@@ -57,7 +82,7 @@ def _best_tp_by_price(symbol: str, orders: List[Dict[str, Any]]) -> Optional[str
     best: Tuple[float, Dict[str, Any]] | None = None
     for o in tps:
         side = (o.get("side") or "").upper()
-        p = _price_float(o.get("price")) or _price_float(o.get("stopPrice"))
+        p = _f(o.get("price")) or _f(o.get("stopPrice"))
         if not p:
             continue
         good = (side == "SELL" and p > mark) or (side == "BUY" and p < mark)
@@ -68,8 +93,25 @@ def _best_tp_by_price(symbol: str, orders: List[Dict[str, Any]]) -> Optional[str
             best = (dist, o)
     return str(best[1].get("clientOrderId")) if best else None
 
+def _get_all_orders(symbol: str) -> List[Dict[str, Any]]:
+    # אם יש helper — נשתמש בו
+    with suppress(Exception):
+        lst = get_all_orders(symbol, limit=100)  # type: ignore
+        if isinstance(lst, list):
+            return lst
+    # פולבק מהיר ל־python-binance (רק אם יש מפתחות)
+    with suppress(Exception):
+        from binance.client import Client  # type: ignore
+        api_key = os.getenv("BINANCE_API_KEY", "")
+        api_sec = os.getenv("BINANCE_API_SECRET", "")
+        if not api_key or not api_sec:
+            return []
+        cli = Client(api_key, api_sec)
+        return cli.futures_get_open_orders(symbol=symbol.upper()) or []
+    return []
+
 def health_tp1_for_symbol(symbol: str) -> Dict[str, Any]:
-    lst = get_all_orders(symbol, limit=100) or []
+    lst = _get_all_orders(symbol)
     tags = _env_tags()
     tp_orders = [o for o in lst if _is_tp_order(o)]
     sl_orders = [o for o in lst if _is_sl_order(o)]
@@ -93,28 +135,11 @@ def health_tp1_for_symbol(symbol: str) -> Dict[str, Any]:
         "tp_count": len(tp_orders),
         "sl_count": len(sl_orders),
         "tp1_clientOrderId": tp1_id,
-        "open_conditional": [
-            {
-                "orderId": o.get("orderId"),
-                "clientOrderId": o.get("clientOrderId"),
-                "type": o.get("type"),
-                "side": o.get("side"),
-                "positionSide": o.get("positionSide","BOTH"),
-                "status": o.get("status"),
-                "price": o.get("price"),
-                "stopPrice": o.get("stopPrice"),
-                "origQty": o.get("origQty"),
-                "executedQty": o.get("executedQty"),
-                "updateTime": o.get("updateTime"),
-            }
-            for o in tp_orders + sl_orders
-            if (o.get("status") or "").upper() in TP_STATUSES
-        ],
     }
 
 def live_orders_for_symbol(symbol: str) -> List[Dict[str, Any]]:
-    """Raw (but trimmed) live orders for UI."""
-    lst = get_all_orders(symbol, limit=100) or []
+    """להצגה ב-UI: רק הזמנות פעילות."""
+    lst = _get_all_orders(symbol)
     keep = []
     for o in lst:
         st = (o.get("status") or "").upper()
@@ -134,51 +159,55 @@ def live_orders_for_symbol(symbol: str) -> List[Dict[str, Any]]:
             })
     return keep
 
-# -------- Telegram notify helpers --------
-async def _send_telegram_html(text: str) -> None:
-    bot = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-    chat = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
-    if not bot or not chat:
-        return
-    url = f"https://api.telegram.org/bot{bot}/sendMessage"
-    payload = {"chat_id": int(chat) if str(chat).isdigit() else chat,
-               "text": text, "parse_mode": "HTML", "disable_web_page_preview": True}
-    with suppress(Exception):
-        import httpx
-        async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=5.0)) as cli:
-            await cli.post(url, json=payload)
+# ---------- Telegram helpers ----------
+def _tg_info() -> Tuple[Optional[str], Optional[str]]:
+    return (os.getenv("TELEGRAM_BOT_TOKEN") or None,
+            os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID") or None)
 
-# -------- Periodic checks --------
-async def quick_check_tp1(symbols: List[str], tp1_tags: Optional[str] = None, notify_telegram: bool = False):
-    tags = [t.strip() for t in str(tp1_tags or os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1")).split(",") if t.strip()]
+async def _send_telegram_html(text: str) -> None:
+    bot, chat = _tg_info()
+    if not (bot and chat):
+        return
+    try:
+        with httpx.Client(timeout=10.0) as cli:
+            cli.post(f"https://api.telegram.org/bot{bot}/sendMessage",
+                     json={"chat_id": int(chat) if str(chat).isdigit() else chat,
+                           "text": text, "parse_mode": "HTML",
+                           "disable_web_page_preview": True})
+    except Exception:
+        pass
+
+# ---------- Async periodic checks ----------
+async def quick_check_tp1(symbols: List[str],
+                          tp1_tags: Optional[List[str]] = None,
+                          notify_telegram: bool = False) -> Dict[str, Any]:
+    tags = tp1_tags or _env_tags()
     out: Dict[str, Any] = {}
-    lines: List[str] = ["🩺 <b>TP1 Health</b>"]
+    lines: List[str] = [f"🩺 <b>TP1 Health</b> · tags=<code>{','.join(tags)}</code>"]
 
     for sym in symbols:
-        symu = str(sym).upper().strip()
-        res = health_tp1_for_symbol(symu)
-        out[symu] = res
-        mark = "✅" if (res.get("has_tp") and (res.get("has_tp1_tag") or res.get("tp1_clientOrderId"))) else "⚠️"
-        extra = ""
-        if not res.get("has_tp"):
-            extra = " (no TP orders)"
-        elif not res.get("has_tp1_tag") and not res.get("tp1_clientOrderId"):
-            extra = " (no TP1)"
-        lines.append(f"• {symu}: {mark}{extra}")
+        s = sym.strip().upper()
+        if not s:
+            continue
+        res = health_tp1_for_symbol(s)
+        out[s] = res
+        mark = "✅" if res.get("has_tp") else "⚠️"
+        note = "TP1 tagged" if res.get("has_tp1_tag") else ("TP present" if res.get("has_tp") else "TP missing")
+        lines.append(f"• {s}: {mark} <code>{note}</code> (TP={res.get('tp_count')}, SL={res.get('sl_count')})")
 
     if notify_telegram and len(lines) > 1:
         await _send_telegram_html("\n".join(lines))
     return out
 
-async def health_check_tp1_tags(symbols: List[str], interval_sec: int = 600):
-    interval_sec = max(60, int(interval_sec))
+async def health_check_tp1_tags(symbols: List[str], interval_sec: int = 600) -> None:
+    """לולאה אסינכרונית—מריצה quick_check_tp1 כל interval_sec ושולחת לטלגרם."""
+    sec = max(60, int(interval_sec))
     while True:
         try:
-            await quick_check_tp1(symbols, tp1_tags=os.getenv("TP1_TAGS"), notify_telegram=True)
-        except Exception as e:
-            with suppress(Exception):
-                await _send_telegram_html(f"⚠️ <b>TP1 watcher error</b>\n<code>{e}</code>")
-        await asyncio.sleep(interval_sec)
+            await quick_check_tp1(symbols, tp1_tags=_env_tags(), notify_telegram=True)
+        except Exception:
+            pass
+        await asyncio.sleep(sec)
 
 
 
