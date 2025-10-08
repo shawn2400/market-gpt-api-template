@@ -204,7 +204,9 @@ except Exception:
         def ensure_final_qty(ticket: Dict[str, Any], price: float) -> Dict[str, Any]:
             return ticket
 
-# Price helpers
+# ------------------------------
+# PRICE HELPERS — async + safe sync wrapper (threadpool inside loop)
+# ------------------------------
 async def _get_last_price_http(symbol: str) -> Optional[float]:
     sym = symbol.upper()
     timeout = httpx.Timeout(6.0, connect=2.0)
@@ -232,31 +234,48 @@ def _get_last_price(symbol: str) -> Optional[float]:
         if p:
             return float(p)
 
-    # If an event loop is already running, avoid run_until_complete
-    sym = symbol.upper()
+    # Blocking HTTP helper (used either directly, or via threadpool)
+    def _blocking_http() -> Optional[float]:
+        sym = symbol.upper()
+        try:
+            with httpx.Client(
+                timeout=httpx.Timeout(6.0, connect=2.0),
+                limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+            ) as cli:
+                for url in (
+                    "https://fapi.binance.com/fapi/v1/ticker/price",
+                    "https://api.binance.com/api/v3/ticker/price",
+                ):
+                    try:
+                        r = cli.get(url, params={"symbol": sym})
+                        if r.status_code == 200:
+                            p = float((r.json() or {}).get("price") or 0)
+                            if p > 0:
+                                return p
+                    except Exception:
+                        continue
+        except Exception:
+            return None
+        return None
+
+    # If an event loop is running, offload the blocking I/O to a threadpool
     try:
         asyncio.get_running_loop()
-        # שים לב: הקריאה כאן סינכרונית ועלולה לחסום; להשבחה, העבר לשימוש בגרסה א-סינכרונית בנקודות קריטיות.
-        for url in (
-            "https://fapi.binance.com/fapi/v1/ticker/price",
-            "https://api.binance.com/api/v3/ticker/price",
-        ):
-            try:
-                r = httpx.get(url, params={"symbol": sym}, timeout=6.0)
-                if r.status_code == 200:
-                    p = float((r.json() or {}).get("price") or 0)
-                    if p > 0:
-                        return p
-            except Exception:
-                pass
-        # אל תחזיר כאן None; המשך ל־SDK fallback למטה
+        import concurrent.futures
+        res: Optional[float] = None
+        try:
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as ex:
+                fut = ex.submit(_blocking_http)
+                res = fut.result(timeout=7)  # wait without blocking I/O on the event-loop thread
+        except Exception:
+            res = None
+        if res is not None and res > 0:
+            return res
     except RuntimeError:
-        # No running loop — it's safe to run async
-        with suppress(Exception):
-            p_async = asyncio.run(_get_last_price_http(symbol))
-            if p_async and p_async > 0:
-                return p_async
-        # נמשיך ל־SDK fallback למטה
+        # No running loop — it's safe to run blocking HTTP here
+        res = _blocking_http()
+        if res is not None and res > 0:
+            return res
 
     # Fallback to official client if keys exist
     with suppress(Exception):
@@ -884,7 +903,6 @@ async def ui_pending(request: Request = None):
         "</body>"
     )
     return HTMLResponse(body)
-
 # --- Approve/Reject flows ---
 @router.get("/ops/approve")
 async def approve(ticket_id: str = Query(..., description="ticket_id")):
@@ -1284,14 +1302,15 @@ async def _startup_tasks():
             return
         base = get_internal_base()
         every_sec = max(10, int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","60")))
-        per_req_timeout = httpx.Timeout(connect=2.5, read=15.0, write=10.0, pool=10.0)
+        per_req_timeout = httpx.Timeout(connect=2.5, read=15.0, write=10.0)
+        limits = httpx.Limits(max_connections=100, max_keepalive_connections=20)
         while True:
             sleep_extra = _manager_backoff
             if sleep_extra > 0:
                 await asyncio.sleep(sleep_extra)
             async with _manager_lock:
                 try:
-                    async with httpx.AsyncClient(timeout=per_req_timeout) as cli:
+                    async with httpx.AsyncClient(timeout=per_req_timeout, limits=limits) as cli:
                         for s in syms:
                             r = await cli.post(
                                 f"{base}/position-ops/manage-once",
