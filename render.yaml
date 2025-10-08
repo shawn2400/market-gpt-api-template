@@ -1,4 +1,3 @@
-```yaml
 services:
   - type: web
     name: algogpt-docker
@@ -43,7 +42,7 @@ services:
       - key: READONLY_ENDPOINTS
         value: summary,prices_top,news_cache,health
       - key: OPENAPI_INCLUDE_TAGS
-        value: "Status,status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug"
+        value: "Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug"
       - key: OPENAPI_HIDE_PATTERNS
         value: /telegram/*,/executor/*,/manage-once,/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
 
@@ -194,7 +193,7 @@ services:
         value: "7"
       - key: SCAN_REARM_SCORE
         value: "6"
-      - key: SCAN_DEDUPE_WINDOW_SEC
+      - key: SCAN_DEDUPLE_WINDOW_SEC
         value: "300"
       - key: SCAN_TTL_SEC
         value: "900"
@@ -534,7 +533,6 @@ services:
         value: shaharabecassis8@gmail.com
       - key: DEBUG_ALERTS_HMAC_CHECK
         value: "1"
-```
 
 
 
