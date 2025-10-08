@@ -1,4 +1,4 @@
-# main_part1.py
+# main.py
 from __future__ import annotations
 
 import os
@@ -106,9 +106,19 @@ CORS_ALLOW_HEADERS = os.getenv("CORS_ALLOW_HEADERS", "*")
 CORS_ALLOW_METHODS = os.getenv("CORS_ALLOW_METHODS", "*")
 CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "0").lower() in ("1", "true", "yes", "on")
 
+# אם יש צורך באישורים (credentials) אסור '*' — ניתן לספק רשימת דומיינים ב-ENV חלופי
+_origins_list = [o.strip() for o in CORS_ALLOW_ORIGINS.split(",")] if CORS_ALLOW_ORIGINS else ["*"]
+if CORS_ALLOW_CREDENTIALS and _origins_list == ["*"]:
+    strict_env = [o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS_STRICT","")).split(",") if o.strip()]
+    if strict_env:
+        _origins_list = strict_env
+    else:
+        logger.warning("CORS: allow_credentials=True but allow_origins='*'. "
+                       "Consider setting CORS_ALLOW_ORIGINS_STRICT with explicit domains.")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[o.strip() for o in CORS_ALLOW_ORIGINS.split(",")] if CORS_ALLOW_ORIGINS else ["*"],
+    allow_origins=_origins_list,
     allow_credentials=CORS_ALLOW_CREDENTIALS,
     allow_methods=[m.strip() for m in CORS_ALLOW_METHODS.split(",")] if CORS_ALLOW_METHODS else ["*"],
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
@@ -123,6 +133,9 @@ async def _security_headers(request: Request, call_next):
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
+    # בונוס: HSTS אם מאחורי HTTPS ומופעל ב-ENV
+    if os.getenv("ENABLE_HSTS","0").lower() in ("1","true","yes","on"):
+        resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
     return resp
 
 # =================================================
@@ -554,6 +567,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         logger.error("armed_execute failed: %s", e)
         return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
+
 # main_part2.py  (המשך ישיר — חבר אחרי main_part1.py)
 
 # --- Smart manage after approve ---
@@ -961,6 +975,14 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
     except Exception:
         pass
 
+    # ✅ מטריקות גם במסלול approve (כמו שביקשת)
+    if ok:
+        with suppress(Exception):
+            record_approval_approved()
+    else:
+        with suppress(Exception):
+            record_approval_rejected()
+
     # החלטה וניקוי מרוכזים בתוך _delete_ticket
     await _delete_ticket(ticket_id, source, final_status=ok)
 
@@ -983,7 +1005,7 @@ async def reject(ticket_id: str = Query(..., description="ticket_id"), request: 
         await _send_telegram_html(
             f"❌ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n— — —\nNo action was taken."
         )
-    # ✅ מטריקה על דחייה (תיקון)
+    # ✅ מטריקה על דחייה (תיקון שכבר ביצעת)
     with suppress(Exception):
         record_approval_rejected()
     return _html("❌ נדחה. לא בוצעה פעולה.")
@@ -1096,7 +1118,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
 
-        # ✅ תיקון הטייפו (הוסר סוגר מסולסל מיותר)
+        # ✅ תיקון הטייפו
         key_good = f"{NS}:expired_log"
         key_bad  = f"{NS}:expired_log_bad"
 
@@ -1429,7 +1451,10 @@ if __name__ == "__main__":
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
-    uvicorn.run("main:app", host=host, port=port, reload=reload_)
+    # ✅ טוען את המודול לפי שם הקובץ בפועל, עם אפשרות override דרך UVICORN_APP
+    module_target = os.getenv("UVICORN_APP") or f"{os.path.splitext(os.path.basename(__file__))[0]}:app"
+    uvicorn.run(module_target, host=host, port=port, reload=reload_)
+
 
 
 
