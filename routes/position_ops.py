@@ -10,6 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from contextlib import suppress
 
 from fastapi import APIRouter, Body, HTTPException, Header
+from fastapi.responses import Response  # <-- added
 
 logger = logging.getLogger("algogpt.position_ops")
 router = APIRouter(prefix="/position-ops", tags=["position-ops"])
@@ -550,7 +551,16 @@ def manage_once(payload: Dict[str, Any] = Body(...), Authorization: Optional[str
 
     client = _get_client()
     _align_position_mode(client)
-    side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+
+    # ---- change: treat "no open position" as 204 No Content instead of 409
+    try:
+        side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    except HTTPException as e:
+        if e.status_code == 409 and str(e.detail).lower().startswith("no open position"):
+            return Response(status_code=204)
+        raise
+    # ---- end change
+
     allow_be_trail, reason = _gate_be_trail(client, symbol, side, entry)
 
     try:
@@ -684,6 +694,7 @@ async def auto_stop(Authorization: Optional[str] = Header(None)):
         with suppress(Exception):
             _SCHED_TASK.cancel()
     return {"ok": True, "status": "stopped"}
+
 
 
 
