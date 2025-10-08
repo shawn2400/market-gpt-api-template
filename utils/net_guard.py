@@ -1,31 +1,47 @@
 # utils/net_guard.py
-import time, random
+import time
+import random
+import logging
 from contextlib import suppress
-from httpx import ReadTimeout, ConnectTimeout
-from binance.error import BinanceAPIException  # אם קיים אצלכם
 
-def with_retries(fn, *, tries=4, base_ms=200, max_ms=3200, on_error=None):
+logger = logging.getLogger("algogpt.net_guard")
+
+try:
+    from httpx import ReadTimeout, ConnectTimeout  # type: ignore
+except Exception:  # אם httpx לא קיים בסביבה הספציפית
+    class ReadTimeout(Exception): ...
+    class ConnectTimeout(Exception): ...
+
+def _is_retryable(exc: Exception) -> bool:
+    # שגיאות רשת/טיים-אאוט/429/5xx
+    if isinstance(exc, (ReadTimeout, ConnectTimeout)):
+        return True
+    status = getattr(exc, "status_code", None)
+    if isinstance(status, int) and (status == 429 or 500 <= status <= 599):
+        return True
+    s = str(exc)
+    return ("429" in s) or ("timeout" in s.lower()) or ("temporarily" in s.lower())
+
+def with_retries(fn, *, tries: int = 4, base_ms: int = 200, max_ms: int = 3200, on_error=None):
     """
-    מריץ fn() עם ריטריים אקספוננציאליים + jitter. מחזיר ערך fn או מעלה חריג אחרון.
+    מריץ fn() עם ריטריים אקספוננציאליים + jitter.
+    מחזיר את תוצאת fn או מעלה את החריג האחרון (אחרי כל הנסיונות).
     """
-    last = None
+    last_exc = None
     for i in range(tries):
         try:
             return fn()
-        except (ReadTimeout, ConnectTimeout) as e:
-            last = e
-        except Exception as e:
-            # שגיאות זמניות של בורסה
-            if '429' in str(e) or '5' == str(getattr(e, 'status_code', '')).startswith('5'):
-                last = e
-            else:
+        except Exception as e:  # noqa: BLE001
+            last_exc = e
+            if not _is_retryable(e):
                 raise
-        # backoff + jitter
-        sleep_ms = min(max_ms, base_ms * (2 ** i))
-        sleep_ms = int(sleep_ms * (0.8 + random.random()*0.4))
-        if callable(on_error):
-            with suppress(Exception):
-                on_error(i+1, last, sleep_ms)
-        time.sleep(sleep_ms/1000.0)
-    # אם נכשל אחרי כל הניסיונות – אל תפיל את הלופ: תחזיר ערך "ריק" על פי הקונטקסט
-    raise last or RuntimeError("request failed")
+            sleep_ms = min(max_ms, base_ms * (2 ** i))
+            # jitter 20%±
+            sleep_ms = int(sleep_ms * (0.9 + random.random() * 0.2))
+            if callable(on_error):
+                with suppress(Exception):
+                    on_error(i + 1, e, sleep_ms)
+            time.sleep(sleep_ms / 1000.0)
+    # נכשל אחרי כל הנסיונות
+    assert last_exc is not None
+    raise last_exc
