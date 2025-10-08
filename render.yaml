@@ -1,3 +1,4 @@
+```yaml
 services:
   - type: web
     name: algogpt-docker
@@ -184,7 +185,7 @@ services:
       - key: SCAN_CRON_EVERY_SEC
         value: "45"
       - key: SCAN_CRON_TIMEFRAME
-        value: 15m
+        value: "15m"
       - key: SCAN_CRON_KLINES
         value: "200"
       - key: SCAN_CRON_LIMIT
@@ -464,7 +465,7 @@ services:
       - key: ETA_VELOCITY_WINDOW
         value: "30"
       - key: DEFAULT_INTERVAL
-        value: 15m
+        value: "15m"
 
       # ================== Guarder (optional) ==================
       - key: GUARDER_ENABLE
@@ -533,8 +534,7 @@ services:
         value: shaharabecassis8@gmail.com
       - key: DEBUG_ALERTS_HMAC_CHECK
         value: "1"
-
-
+```
 
 
 
