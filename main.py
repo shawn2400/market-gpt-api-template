@@ -236,6 +236,7 @@ def _get_last_price(symbol: str) -> Optional[float]:
     sym = symbol.upper()
     try:
         asyncio.get_running_loop()
+        # שים לב: הקריאה כאן סינכרונית ועלולה לחסום; להשבחה, העבר לשימוש בגרסה א-סינכרונית בנקודות קריטיות.
         for url in (
             "https://fapi.binance.com/fapi/v1/ticker/price",
             "https://api.binance.com/api/v3/ticker/price",
@@ -248,11 +249,14 @@ def _get_last_price(symbol: str) -> Optional[float]:
                         return p
             except Exception:
                 pass
-        # NOTE: לא מחזירים כאן None — נותנים להמשיך ל-SDK fallback למטה
+        # אל תחזיר כאן None; המשך ל־SDK fallback למטה
     except RuntimeError:
         # No running loop — it's safe to run async
         with suppress(Exception):
-            return asyncio.run(_get_last_price_http(symbol))
+            p_async = asyncio.run(_get_last_price_http(symbol))
+            if p_async and p_async > 0:
+                return p_async
+        # נמשיך ל־SDK fallback למטה
 
     # Fallback to official client if keys exist
     with suppress(Exception):
@@ -338,6 +342,7 @@ def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) 
 def _is_code_4061(err: Union[Exception, str]) -> bool:
     s = str(err)
     return "code=-4061" in s or "position side does not match" in s.lower()
+
 def _align_position_mode(client) -> None:
     mode_override = (os.getenv("POSITION_MODE_OVERRIDE","") or "").strip().lower()
     with suppress(Exception):
@@ -1033,6 +1038,7 @@ async def approve_signed(request: Request):
     with suppress(Exception):
         record_approval_approved()
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
+
 # --- Guard smoke run ---
 @router.post("/guard/smoke/run")
 async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
@@ -1228,13 +1234,13 @@ async def health_tp1_now(symbols: Optional[str] = Query(None, description="CSV o
 # --- Global error handler ---
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.exception("unhandled_error: %s %s", request.method, request.url)
-    return JSONResponse(
-        status_code=500,
-        content={"ok": False,
-                 "error": "internal_error",
-                 "detail": str(exc)},
-    )
+    error_id = secrets.token_hex(6)
+    logger.exception("unhandled_error [%s]: %s %s", error_id, request.method, request.url)
+    show_detail = os.getenv("SHOW_INTERNAL_ERRORS", "0").lower() in ("1","true","yes","on") or LOG_LEVEL == "DEBUG"
+    payload: Dict[str, Any] = {"ok": False, "error": "internal_error", "id": error_id}
+    if show_detail:
+        payload["detail"] = str(exc)
+    return JSONResponse(status_code=500, content=payload)
 
 # =================================================
 # Startup background tasks
@@ -1385,6 +1391,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_)
+
 
 
 
