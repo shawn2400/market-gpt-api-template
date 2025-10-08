@@ -50,6 +50,10 @@ services:
       # ================== Security (לא סודי) ==================
       - key: PROTECT_APPROVE_ROUTES
         value: "1"          # ✅ להגן על approve/reject בפרודקשן
+      - key: PROTECT_DIGEST_ROUTES
+        value: "1"          # ✅ להגן גם על /ops/digest/expired
+      - key: ENABLE_HSTS
+        value: "1"          # ✅ מאחורי HTTPS
       - key: SECURITY_PUBLIC_PATHS
         value: /readyz,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now
       - key: SECURITY_PUBLIC_PREFIXES
@@ -74,6 +78,8 @@ services:
         value: "0"          # ✅ אין fallback בזיכרון בפרודקשן
       - key: USE_REDIS_IDEM
         value: "1"
+      - key: SETEX_STRICT
+        value: "1"          # ✅ השתמש ב-SET NX EX לאטומיות ticket_id
       - key: REDIS_CONNECT_TIMEOUT
         value: "5.0"
       - key: REDIS_SOCKET_TIMEOUT
@@ -244,6 +250,12 @@ services:
         value: "120"
       - key: OPS_TICKET_TTL_SEC
         value: "1800"
+
+      # --- Signed approve anti-replay (headers) ---
+      - key: SIGNED_TS_MAX_SKEW_SEC
+        value: "60"
+      - key: SIGNED_NONCE_TTL_SEC
+        value: "120"
 
       # ================== Smart-Manage right after approve ==================
       - key: SMART_MANAGE_ON_APPROVE
