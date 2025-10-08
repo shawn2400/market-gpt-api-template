@@ -532,7 +532,7 @@ services:
         sync: false
       - key: API_SIGNING_SECRET            # ✅ לחתימות Anti-Replay
         sync: false
-      - key: OPS_SIGN_SECRET              # ✅ חתימת callback טלגרם
+      - key: OPS_SIGN_SECRET              # ✅ חתימת callback טלגרם/קישורים
         sync: false
       - key: REDIS_URL
         sync: false
@@ -562,6 +562,7 @@ services:
         value: shaharabecassis8@gmail.com
       - key: DEBUG_ALERTS_HMAC_CHECK
         value: "1"
+
 
 
 
