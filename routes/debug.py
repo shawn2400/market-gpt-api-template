@@ -1,82 +1,67 @@
-# routes/debug.py
+# FILE: routes/debug.py
 from __future__ import annotations
 
 import os
-from typing import Any, Dict
-
+import logging
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
 
-# מסתמכים על utils.auth הקיים בפרויקט
-from utils.auth import (
-    extract_token,
-    token_matches,
-    refresh_tokens,
-    get_loaded_tokens,
-)
+# מודולי auth — אם חסר משהו, נתמודד בעדינות
+try:
+    from utils.auth import extract_token, token_matches, refresh_tokens, get_loaded_tokens
+except Exception:  # noqa: BLE001
+    # נפילות סביבה לא יפילו את הראוטים
+    def extract_token(request: Request, auth_header: str | None, x_api_key: str | None) -> str | None:
+        if x_api_key:
+            return x_api_key.strip()
+        if auth_header and auth_header.lower().startswith("bearer "):
+            return auth_header.split(None, 1)[1].strip()
+        return None
 
-router = APIRouter(tags=["debug"])
+    def token_matches(tok: str | None) -> bool:
+        env_token = os.getenv("API_TOKEN") or os.getenv("API_BEARER_TOKEN")
+        return bool(tok and env_token and tok == env_token)
 
+    def refresh_tokens() -> dict:
+        # אם אין מימוש — נחזיר מידע בסיסי
+        return {"reloaded": False, "reason": "refresh_tokens not available"}
 
-@router.get("/_debug/auth", include_in_schema=False)
-async def _debug_auth(request: Request) -> Dict[str, Any]:
-    """
-    בדיקת אימות: מציג כותרות רלוונטיות, הטוקן שהופק, האם יש התאמה לטוקנים הטעונים,
-    ורשימת טוקנים במסכה (mask=True).
-    """
-    auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
-    x_api_key = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
-    token = extract_token(request, auth_header, x_api_key)
+    def get_loaded_tokens(mask: bool = True):
+        t = os.getenv("API_TOKEN") or os.getenv("API_BEARER_TOKEN") or ""
+        if mask and t:
+            t = f"{t[:2]}…{t[-2:]}"
+        return {"count": int(bool(t)), "tokens": [t] if t else []}
 
-    return {
+log = logging.getLogger("algogpt.debug")
+router = APIRouter(prefix="/debug", tags=["debug"])
+
+@router.get("/auth", include_in_schema=False)
+async def debug_auth(request: Request):
+    a = request.headers.get("authorization") or request.headers.get("Authorization")
+    x = request.headers.get("x-api-key") or request.headers.get("X-API-Key")
+    t = extract_token(request, a, x)
+    return JSONResponse({
         "ok": True,
-        "auth_header": auth_header,
-        "x_api_key": x_api_key,
+        "auth_header": a,
+        "x_api_key": x,
         "query": dict(request.query_params),
-        "extracted_token": token,
-        "matches": bool(token_matches(token)),
+        "extracted_token": t,
+        "matches": bool(token_matches(t)),
         "tokens_loaded": get_loaded_tokens(mask=True),
-    }
+    })
 
-
-@router.post("/debug/refresh-auth", include_in_schema=False)
-async def _debug_refresh_auth() -> Dict[str, Any]:
-    """
-    רענון טוקנים מתוך הסביבה/קובץ (הלוגיקה ב־utils.auth) והחזרת סטטוס + תצוגה במסכה.
-    """
+@router.post("/refresh-auth", include_in_schema=False)
+async def debug_refresh_auth():
     info = refresh_tokens()
-    return {
-        "ok": True,
-        "detail": "Tokens reloaded from environment",
-        **info,
-        "tokens_masked": get_loaded_tokens(mask=True),
-    }
+    return JSONResponse({"ok": True, "detail": "Tokens (re)loaded", **info, "tokens_masked": get_loaded_tokens(mask=True)})
 
-
-@router.get("/debug/env", include_in_schema=False)
-async def _debug_env() -> Dict[str, Any]:
-    """
-    החזרת חלק ממשתני הסביבה הרלוונטיים לדיבאג אימות.
-    (אל תוסיף לכאן סודות — ההחזרה היא גולמית)
-    """
+@router.get("/env", include_in_schema=False)
+async def debug_env():
     keys = (
-        "API_TOKEN",
-        "API_TOKENS",
-        "TOKENS_FILE",
-        "SECURITY_ALLOW_ALL",
-        "ENABLE_READONLY_HTTP",
-        "OPENAPI_INCLUDE_TAGS",
-        "OPENAPI_HIDE_PATTERNS",
+        "API_TOKEN","API_BEARER_TOKEN","PRIMARY_API_TOKEN","API_TOKENS",
+        "TOKENS_FILE","SECURITY_ALLOW_ALL","ENABLE_READONLY_HTTP",
     )
-    return {"ok": True, "env": {k: os.getenv(k) for k in keys}}
-
-
-@router.get("/_debug/ping", include_in_schema=False)
-async def _debug_ping() -> JSONResponse:
-    """
-    פינג דיבאג בסיסי לבדיקת זמינות ראוט הדיבאג.
-    """
-    return JSONResponse({"ok": True, "pong": True})
+    return JSONResponse({"ok": True, "env": {k: os.getenv(k) for k in keys}})
 
 
 
