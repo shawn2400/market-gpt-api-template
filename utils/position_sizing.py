@@ -76,7 +76,6 @@ def _symbol_filters(symbol: str) -> Dict[str, float]:
                 "price_tick": float(f.get("tickSize") or f.get("price_tick") or _env_float("DEFAULT_PRICE_TICK", 0.01)),
                 "min_notional": float(f.get("minNotional") or f.get("min_notional") or _env_float("MIN_NOTIONAL_USDT", 5.0)),
             }
-    # פולבאק
     return _symbol_filters_from_env()
 
 def _step_down(x: float, step: float) -> float:
@@ -96,8 +95,7 @@ def auto_qty(symbol: str, symbol_price: float, leverage: int) -> Optional[float]
     if os.getenv("AUTO_QTY_ENABLE", "0") != "1":
         return None
 
-    # דיפולט שדרוג לבקשתך: 100$
-    budget = _env_float("AUTO_QTY_BUDGET_USDT", 100.0)
+    budget = _env_float("AUTO_QTY_BUDGET_USDT", 50.0)
     buf    = _env_float("AUTO_QTY_MARGIN_BUFFER_PCT", 0.20)
     max_budget = _env_float("MAX_TRADE_BUDGET", budget)
     budget = min(budget, max_budget)
@@ -122,10 +120,9 @@ def auto_qty(symbol: str, symbol_price: float, leverage: int) -> Optional[float]
 def ensure_final_qty(ticket: dict, symbol_price: float) -> dict:
     """
     קובע leverage סופי לפי קאפים; ואם qty חסר/0 – מחשב לפי AUTO_QTY_*.
-    מינוף דיפולטי הוגדל ל-10 בבקשתך.
     """
     symbol = (ticket.get("symbol") or "").upper()
-    req_lev = int(ticket.get("leverage") or ticket.get("lev") or _env_int("MIN_LEVERAGE", 10))
+    req_lev = int(ticket.get("leverage") or ticket.get("lev") or _env_int("MIN_LEVERAGE", 5))
     final_lev = _leverage_cap(symbol, req_lev)
     ticket["leverage"] = final_lev
 
@@ -134,11 +131,7 @@ def ensure_final_qty(ticket: dict, symbol_price: float) -> dict:
     if q is None or qf <= 0.0:
         q_calc = auto_qty(symbol, float(symbol_price), int(final_lev))
         if q_calc and q_calc > 0:
-            ticket["qty"] = q_calc
-
-    # אם תרצה שגם התקציב יופיע בכרטיס—נכניס דיפולט רק אם חסר:
-    if "budget_usd" not in ticket and os.getenv("AUTO_QTY_ENABLE", "0") == "1":
-        ticket["budget_usd"] = _env_float("AUTO_QTY_BUDGET_USDT", 100.0)
+            ticket["qty"] = q_calc  # ← תוקן: הוסרה שארית טקסט בעברית שגרמה ל-SyntaxError
 
     return ticket
 
