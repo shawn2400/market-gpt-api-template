@@ -1,6 +1,7 @@
+
 # routes/ops_ui.py
 from __future__ import annotations
-from typing import Optional, List
+from typing import Optional, List, Callable, Any, Tuple
 from fastapi import APIRouter, Body, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 import os, json, httpx
@@ -135,35 +136,19 @@ HTML_PAGE = """<!doctype html>
   </div></div>
 
 <script>
-/* ===== Globals & cache ===== */
 let LAST_PRICE = null;
-const STEP_CACHE = {}; // { SYMBOL: step }
+const STEP_CACHE = {};
 window.DEFAULT_QTY_STEP = Number('%DEFAULT_QTY_STEP%') || 0.001;
-
-/* ===== API helpers ===== */
-function apiHeaders(){
-  return { ...(window.API_KEY ? {'x-api-key': window.API_KEY} : {}) };
-}
-async function fetchJSON(url){
-  const r = await fetch(url, { headers: apiHeaders() });
-  return r.ok ? r.json() : null;
-}
-
-/* ----- Live price ----- */
+function apiHeaders(){ return { ...(window.API_KEY ? {'x-api-key': window.API_KEY} : {}) }; }
+async function fetchJSON(url){ const r = await fetch(url, { headers: apiHeaders() }); return r.ok ? r.json() : null; }
 async function fetchPrice(symbol){
-  const base = (window.API_BASE || '').replace(/\/$/,'');
-  if(!base || !symbol) return null;
+  const base = (window.API_BASE || '').replace(/\/$/,''); if(!base || !symbol) return null;
   try{
     const data = await fetchJSON(base + '/price/' + encodeURIComponent(symbol.toUpperCase()));
-    if(data && data.ok && data.price!=null){
-      LAST_PRICE = Number(data.price);
-      return LAST_PRICE;
-    }
+    if(data && data.ok && data.price!=null){ LAST_PRICE = Number(data.price); return LAST_PRICE; }
   }catch(e){}
   return null;
 }
-
-/* ----- Per-symbol step detection ----- */
 function parseStepFromExchangeInfo(symbol, exInfo){
   try{
     if(!exInfo) return null;
@@ -175,10 +160,8 @@ function parseStepFromExchangeInfo(symbol, exInfo){
     }
     const s = exInfo[symbol] || exInfo[symbol.toUpperCase()];
     if (s && (s.stepSize || s.step_size)) return Number(s.stepSize || s.step_size);
-  }catch(e){}
-  return null;
+  }catch(e){} return null;
 }
-
 function parseStepFromList(symbol, list){
   try{
     if(!Array.isArray(list)) return null;
@@ -186,126 +169,57 @@ function parseStepFromList(symbol, list){
     if(!row) return null;
     const cand = row.step || row.qty_step || row.lotStep || row.stepSize || row.step_size;
     return cand ? Number(cand) : null;
-  }catch(e){}
-  return null;
+  }catch(e){} return null;
 }
-
 async function fetchQtyStep(symbol){
-  const base = (window.API_BASE || '').replace(/\/$/,'');
-  if(!base || !symbol) return window.DEFAULT_QTY_STEP;
-
-  const sym = symbol.toUpperCase();
-  if (STEP_CACHE[sym]) return STEP_CACHE[sym];
-
+  const base = (window.API_BASE || '').replace(/\/$/,''); if(!base || !symbol) return window.DEFAULT_QTY_STEP;
+  const sym = symbol.toUpperCase(); if (STEP_CACHE[sym]) return STEP_CACHE[sym];
   let step = null;
-
-  // Try 1: /market/info/{symbol}
   try{
     const data1 = await fetchJSON(base + '/market/info/' + encodeURIComponent(sym));
     if (data1) {
       if (data1.stepSize || data1.step_size) step = Number(data1.stepSize || data1.step_size);
       else if (data1.filters && data1.filters.LOT_SIZE && (data1.filters.LOT_SIZE.stepSize||data1.filters.LOT_SIZE.step_size)) {
         step = Number(data1.filters.LOT_SIZE.stepSize || data1.filters.LOT_SIZE.step_size);
-      } else {
-        step = parseStepFromExchangeInfo(sym, data1);
-      }
+      } else { step = parseStepFromExchangeInfo(sym, data1); }
     }
   }catch(e){}
-
-  // Try 2: /market/symbols  (list)
   if (step==null){
-    try{
-      const list = await fetchJSON(base + '/market/symbols');
-      step = parseStepFromList(sym, list);
-    }catch(e){}
+    try{ const list = await fetchJSON(base + '/market/symbols'); step = parseStepFromList(sym, list); }catch(e){}
   }
-
-  // Try 3: /market/exchangeInfo (binance-like)
   if (step==null){
-    try{
-      const exInfo = await fetchJSON(base + '/market/exchangeInfo');
-      step = parseStepFromExchangeInfo(sym, exInfo);
-    }catch(e){}
+    try{ const exInfo = await fetchJSON(base + '/market/exchangeInfo'); step = parseStepFromExchangeInfo(sym, exInfo); }catch(e){}
   }
-
   if (step==null || !(step>0)) step = window.DEFAULT_QTY_STEP;
-  STEP_CACHE[sym] = step;
-  return step;
+  STEP_CACHE[sym] = step; return step;
 }
-
-/* ===== Utils ===== */
-function roundQty(qty, step){
-  step = Number(step)||0.001;
-  return Math.floor(qty/step)*step; // round down to step
-}
-function show(obj){
-  const out = document.getElementById('out');
-  out.hidden = false;
-  out.textContent = JSON.stringify(obj, null, 2);
-}
-
-/* ===== Live hints (min budget + suggested qty) ===== */
+function roundQty(qty, step){ step = Number(step)||0.001; return Math.floor(qty/step)*step; }
+function show(obj){ const out = document.getElementById('out'); out.hidden = false; out.textContent = JSON.stringify(obj, null, 2); }
 async function updateBudgetHint(){
   const sym = document.getElementById('symbol').value.trim().toUpperCase();
   const lev = Number(document.getElementById('lev').value||0);
   const bud = Number(document.getElementById('budget').value||0);
   const hintEl = document.getElementById('budget_hint');
   const suggBtn = document.getElementById('use_suggested_qty');
-  hintEl.classList.remove('warn');
-  suggBtn.style.display = 'none';
-  suggBtn.onclick = null;
-
+  hintEl.classList.remove('warn'); suggBtn.style.display = 'none'; suggBtn.onclick = null;
   if(!sym || lev<=0){ hintEl.textContent=''; return; }
-
-  const [price, step] = await Promise.all([
-    (LAST_PRICE==null ? fetchPrice(sym) : Promise.resolve(LAST_PRICE)),
-    fetchQtyStep(sym),
-  ]);
-
+  const [price, step] = await Promise.all([(LAST_PRICE==null ? fetchPrice(sym) : Promise.resolve(LAST_PRICE)), fetchQtyStep(sym),]);
   if(!price || !step){ hintEl.textContent=''; return; }
-
-  const minNotional = price * step;
-  const minBudget   = minNotional / lev;
-  const suggested   = (bud>0) ? roundQty((bud*lev)/price, step) : 0;
-
-  const parts = [
-    `Price≈ ${price.toFixed(2)} | step=${step}`,
-    `Min budget≈ ${minBudget.toFixed(2)} USDT`,
-    (bud>0 ? `Suggested qty≈ ${suggested}` : '')
-  ].filter(Boolean);
+  const minNotional = price * step; const minBudget = minNotional / lev; const suggested = (bud>0) ? roundQty((bud*lev)/price, step) : 0;
+  const parts = [`Price≈ ${price.toFixed(2)} | step=${step}`, `Min budget≈ ${minBudget.toFixed(2)} USDT`, (bud>0 ? `Suggested qty≈ ${suggested}` : '')].filter(Boolean);
   hintEl.textContent = parts.join(' · ');
-
-  if(bud>0 && suggested>0){
-    suggBtn.style.display = 'inline-block';
-    suggBtn.onclick = ()=>{
-      document.getElementById('qty').value = suggested;
-    };
-  }
-  if(bud>0 && bud < minBudget){
-    hintEl.classList.add('warn');
-  }
+  if(bud>0 && suggested>0){ suggBtn.style.display = 'inline-block'; suggBtn.onclick = ()=>{ document.getElementById('qty').value = suggested; }; }
+  if(bud>0 && bud < minBudget){ hintEl.classList.add('warn'); }
 }
-
-/* ===== Auto-fill qty if needed (uses per-symbol step) ===== */
 async function autoFillQtyIfNeeded(payload){
   if((!payload.qty || payload.qty<=0) && payload.budget>0 && payload.leverage>0){
     const step = await fetchQtyStep(payload.symbol);
     const price = LAST_PRICE ?? await fetchPrice(payload.symbol);
-    if(price){
-      const raw = (payload.budget * payload.leverage) / price;
-      payload.qty = roundQty(raw, step);
-    }
+    if(price){ const raw = (payload.budget * payload.leverage) / price; payload.qty = roundQty(raw, step); }
   }
 }
-
-/* ===== Submit ===== */
-['symbol','lev','budget'].forEach(id=>{
-  const el = document.getElementById(id);
-  el.addEventListener('input', ()=>updateBudgetHint());
-  el.addEventListener('change', ()=>updateBudgetHint());
-});
+['symbol','lev','budget'].forEach(id=>{ const el = document.getElementById(id); el.addEventListener('input', ()=>updateBudgetHint()); el.addEventListener('change', ()=>updateBudgetHint()); });
 window.addEventListener('load', ()=>updateBudgetHint());
-
 async function send(mode){
   const el = id => document.getElementById(id);
   const payload = {
@@ -314,45 +228,27 @@ async function send(mode){
     qty: Number(el('qty').value||0),
     leverage: Number(el('lev').value||0),
     position_side: el('position_side').value,
-    budget: Number(el('budget').value||0) || 0,
+    budget: Number(el('budget').value)||0,
     tp1: el('tp1').value? Number(el('tp1').value): null,
     tp2: el('tp2').value? Number(el('tp2').value): null,
     tp3: el('tp3').value? Number(el('tp3').value): null,
     sl:  el('sl').value?  Number(el('sl').value):  null,
     note: `[mode: ${mode}] ` + (el('note').value||'')
   };
-
   await autoFillQtyIfNeeded(payload);
-
-  if(!payload.symbol || !payload.side || !(payload.leverage>0)){
-    show({ok:false, error:"Missing required fields (symbol/side/leverage)."});
-    return;
-  }
-  if(!(payload.qty>0) && !(payload.budget>0)){
-    show({ok:false, error:"Provide qty or budget (or let auto-qty compute)."});
-    return;
-  }
-
+  if(!payload.symbol || !payload.side || !(payload.leverage>0)){ show({ok:false, error:"Missing required fields (symbol/side/leverage)."}); return; }
+  if(!(payload.qty>0) && !(payload.budget>0)){ show({ok:false, error:"Provide qty or budget (or let auto-qty compute)."}); return; }
   try{
-    const base = (window.API_BASE || '%API_BASE%').replace(/\\/$/,'');
+    const base = (window.API_BASE || '%API_BASE%').replace(/\\/$,'');
     const url  = base ? (base + '/ops/ticket') : '/ops/ui/ticket';
-    const headers = {
-      'content-type': 'application/json',
-      ...(window.API_KEY ? {'x-api-key': window.API_KEY} : {})
-    };
+    const headers = { 'content-type': 'application/json', ...(window.API_KEY ? {'x-api-key': window.API_KEY} : {}) };
     const res  = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
     const data = await res.json();
-    if(data && data.approve_url){
-      data.quick = `Approve: ${data.approve_url}\\nReject : ${data.reject_url}`;
-    }
+    if(data && data.approve_url){ data.quick = `Approve: ${data.approve_url}\\nReject : ${data.reject_url}`; }
     show(data);
-  }catch(e){
-    show({ok:false, error:String(e)});
-  }
+  }catch(e){ show({ok:false, error:String(e)}); }
 }
-
-window.API_BASE = '%API_BASE%';
-window.API_KEY  = '%API_KEY%';
+window.API_BASE = '%API_BASE%'; window.API_KEY  = '%API_KEY%';
 </script>
 """
 
@@ -389,7 +285,7 @@ async def ui_proxy(payload: dict = Body(...)):
   except Exception as e:
     return JSONResponse(status_code=502, content={"ok": False, "error": "proxy_failed", "detail": str(e)})
 
-# ===== Helpers for orders filtering/args =====
+# ===== Helpers =====
 def _csv_list(val: Optional[str]) -> List[str]:
   if not val:
     return []
@@ -397,6 +293,25 @@ def _csv_list(val: Optional[str]) -> List[str]:
 
 def _norm_upper(x: Optional[str]) -> str:
   return (x or "").strip().upper()
+
+def _as_float(v: Any) -> float:
+  try:
+    if v is None: return float("nan")
+    return float(v)
+  except Exception:
+    try:
+      return float(str(v))
+    except Exception:
+      return float("nan")
+
+def _as_int(v: Any) -> int:
+  try:
+    return int(v)
+  except Exception:
+    try:
+      return int(float(v))
+    except Exception:
+      return 0
 
 def _filter_by_status(orders: List[dict], statuses: List[str]) -> List[dict]:
   if not statuses:
@@ -409,16 +324,23 @@ def _filter_by_status(orders: List[dict], statuses: List[str]) -> List[dict]:
       out.append(o)
   return out
 
+def _filter_by_side(orders: List[dict], sides: List[str]) -> List[dict]:
+  if not sides:
+    return orders
+  want = {s.upper() for s in sides if s}
+  out: List[dict] = []
+  for o in orders:
+    sd = _norm_upper(o.get("side"))
+    if not want or sd in want:
+      out.append(o)
+  return out
+
 def _fetch_orders_multi(symbols: List[str]) -> List[dict]:
-  """
-  מריץ get_open_orders על כל סימבול בנפרד (או בלעדיו אם הרשימה ריקה) ומחבר.
-  """
   try:
     from utils.binance_client import get_open_orders  # type: ignore
   except Exception as e:
     raise RuntimeError(f"binance_client unavailable: {e}")
   all_rows: List[dict] = []
-  # אם לא נמסרו סימבולים — נשוך הכל בבקשה אחת
   if not symbols:
     return get_open_orders(None) or []
   for s in symbols:
@@ -426,14 +348,140 @@ def _fetch_orders_multi(symbols: List[str]) -> List[dict]:
     all_rows.extend(rows)
   return all_rows
 
-# ====== HTML רשימת הזמנות פתוחות ======
+def _sort_key_factory(field: str) -> Callable[[dict], Tuple]:
+  f = field.strip()
+  fu = f.upper()
+  def k(o: dict) -> Tuple:
+    raw = {
+      "orderId": o.get("orderId"),
+      "symbol": o.get("symbol"),
+      "side": o.get("side"),
+      "type": o.get("type"),
+      "status": o.get("status"),
+      "reduceOnly": o.get("reduceOnly"),
+      "timeInForce": o.get("timeInForce"),
+      "activatePrice": o.get("activatePrice"),
+      "priceRate": o.get("priceRate"),
+      "price": o.get("price") or o.get("avgPrice"),
+      "origQty": o.get("origQty") or o.get("orig_quantity") or o.get("quantity"),
+      "executedQty": o.get("executedQty") or o.get("executed_quantity"),
+      "clientOrderId": o.get("clientOrderId") or o.get("origClientOrderId"),
+      "updateTime": o.get("updateTime") or o.get("time"),
+      "time": o.get("time") or o.get("updateTime"),
+    }
+    if fu in ("UPDATETIME", "TIME"):
+      return (_as_int(raw["updateTime"] or raw["time"]),)
+    if fu == "ORDERID":
+      return (_as_int(raw["orderId"]),)
+    if fu == "PRICE":
+      return (_as_float(raw["price"]),)
+    if fu in ("ORIGQTY", "QTY"):
+      return (_as_float(raw["origQty"]),)
+    if fu in ("EXECUTEDQTY",):
+      return (_as_float(raw["executedQty"]),)
+    if fu == "REDUCEONLY":
+      return (1 if raw["reduceOnly"] else 0,)
+    if fu in ("SYMBOL","SIDE","TYPE","STATUS","CLIENTORDERID","TIMEINFORCE"):
+      v = raw["symbol"] if fu=="SYMBOL" else \
+          raw["side"] if fu=="SIDE" else \
+          raw["type"] if fu=="TYPE" else \
+          raw["status"] if fu=="STATUS" else \
+          raw["clientOrderId"] if fu=="CLIENTORDERID" else \
+          raw["timeInForce"]
+      return (str(v or ""),)
+    return (str(raw.get(f, "") or ""),)
+  return k
+
+def _apply_sort(orders: List[dict], sort_fields: List[str], order: str) -> List[dict]:
+  if not sort_fields:
+    sort_fields = ["updateTime"]
+  direction_desc = (str(order or "desc").lower() in ("desc", "descending", "down"))
+  out = list(orders)
+  for fld in reversed(sort_fields):
+    keyfn = _sort_key_factory(fld)
+    out.sort(key=keyfn, reverse=direction_desc)
+  return out
+
+def _filter_price_range(orders: List[dict], min_price: Optional[float], max_price: Optional[float]) -> List[dict]:
+  if min_price is None and max_price is None:
+    return orders
+  lo = float(min_price) if min_price is not None else None
+  hi = float(max_price) if max_price is not None else None
+  out: List[dict] = []
+  for o in orders:
+    p = _as_float(o.get("price") or o.get("avgPrice"))
+    if (p != p):  # NaN
+      continue
+    if lo is not None and p < lo:
+      continue
+    if hi is not None and p > hi:
+      continue
+    out.append(o)
+  return out
+
+def _filter_qty_range(orders: List[dict], min_qty: Optional[float], max_qty: Optional[float]) -> List[dict]:
+  if min_qty is None and max_qty is None:
+    return orders
+  lo = float(min_qty) if min_qty is not None else None
+  hi = float(max_qty) if max_qty is not None else None
+  out: List[dict] = []
+  for o in orders:
+    q = _as_float(o.get("origQty") or o.get("orig_quantity") or o.get("quantity"))
+    if (q != q):  # NaN
+      continue
+    if lo is not None and q < lo:
+      continue
+    if hi is not None and q > hi:
+      continue
+    out.append(o)
+  return out
+
+def _filter_time_range(orders: List[dict], since_ts: Optional[int], until_ts: Optional[int]) -> List[dict]:
+  if since_ts is None and until_ts is None:
+    return orders
+  lo = int(since_ts) if since_ts is not None else None
+  hi = int(until_ts) if until_ts is not None else None
+  out: List[dict] = []
+  for o in orders:
+    ts = _as_int(o.get("updateTime") or o.get("time"))
+    if lo is not None and ts < lo:
+      continue
+    if hi is not None and ts > hi:
+      continue
+    out.append(o)
+  return out
+
+def _filter_client_order_id(orders: List[dict], exact: Optional[str], like: Optional[str]) -> List[dict]:
+  if not exact and not like:
+    return orders
+  ex = (exact or "").strip()
+  lk = (like or "").strip().lower()
+  out: List[dict] = []
+  for o in orders:
+    coid = (o.get("clientOrderId") or o.get("origClientOrderId") or "")
+    if ex and coid == ex:
+      out.append(o); continue
+    if lk and lk in str(coid).lower():
+      out.append(o); continue
+  return out
+
+# ====== HTML (סינון בסיסי: symbol/symbols, status, side) ======
 @router.get("/ops/ui/orders", response_class=HTMLResponse, summary="List open futures orders (HTML)")
 async def ops_ui_orders(
   symbol: Optional[str] = Query(None, description="e.g. BTCUSDT (single)"),
   symbols: Optional[List[str]] = Query(None, description="repeatable ?symbols=BTCUSDT&symbols=ETHUSDT or CSV"),
   status: Optional[List[str]] = Query(None, description="filter by status: e.g. NEW,FILLED or repeatable"),
+  side: Optional[List[str]] = Query(None, description="filter by side: BUY/SELL (repeatable or CSV)"),
 ):
-  # Build symbols list (symbol OR symbols[])
+  try:
+    from utils.binance_client import get_open_orders  # type: ignore
+  except Exception as e:
+    return HTMLResponse(
+      f"<!doctype html><meta charset='utf-8'><body style='font-family:sans-serif;margin:2rem'>"
+      f"<h2>Open Orders</h2><p style='color:#b91c1c'>binance_client unavailable: {e}</p></body>"
+    )
+
+  # symbols list
   sym_list: List[str] = []
   if symbols:
     for item in symbols:
@@ -441,21 +489,24 @@ async def ops_ui_orders(
   elif symbol:
     sym_list = [_norm_upper(symbol)]
 
-  # Fetch orders
   try:
     orders = _fetch_orders_multi(sym_list)
   except Exception as e:
     return HTMLResponse(
       f"<!doctype html><meta charset='utf-8'><body style='font-family:sans-serif;margin:2rem'>"
-      f"<h2>Open Orders</h2><p style='color:#b91c1c'>Error: {str(e)}</p></body>"
+      f"<h2>Open Orders</h2><p style='color:#b91c1c'>Error fetching orders: {str(e)}</p></body>"
     )
 
-  # Filter by status if provided
+  # filters
   status_list: List[str] = []
   if status:
-    for item in status:
-      status_list.extend(_csv_list(item))
+    for item in status: status_list.extend(_csv_list(item))
+  side_list: List[str] = []
+  if side:
+    for item in side: side_list.extend(_csv_list(item))
+
   orders = _filter_by_status(orders, status_list)
+  orders = _filter_by_side(orders, side_list)
 
   def esc(v):
     return ("" if v is None else str(v)).replace("<", "&lt;").replace(">", "&gt;")
@@ -463,14 +514,13 @@ async def ops_ui_orders(
   if not orders:
     filt_sym = ", ".join(sym_list) if sym_list else "ALL"
     filt_sts = ", ".join([s.upper() for s in status_list]) if status_list else "ANY"
+    filt_side = ", ".join([s.upper() for s in side_list]) if side_list else "ANY"
     return HTMLResponse(
       f"<!doctype html><meta charset='utf-8'><body style='font-family:sans-serif;margin:2rem'>"
       f"<h2>Open Orders</h2>"
-      f"<p>No open orders for <b>{esc(filt_sym)}</b> with status <b>{esc(filt_sts)}</b>.</p>"
+      f"<p>No open orders for <b>{esc(filt_sym)}</b> with status <b>{esc(filt_sts)}</b> and side <b>{esc(filt_side)}</b>.</p>"
       f"<p style='color:#777'>Tips: "
-      f"<code>?symbol=BTCUSDT</code> | "
-      f"<code>?symbols=BTCUSDT,ETHUSDT</code> | "
-      f"<code>?status=NEW</code></p>"
+      f"<code>?symbol=BTCUSDT</code> | <code>?symbols=BTCUSDT,ETHUSDT</code> | <code>?status=NEW</code> | <code>?side=BUY</code></p>"
       f"</body>"
     )
 
@@ -507,13 +557,14 @@ async def ops_ui_orders(
     "<p style='color:#777;margin-top:.8rem'>"
     "סינון: <code>?symbol=BTCUSDT</code> | "
     "<code>?symbols=BTCUSDT,ETHUSDT</code> | "
-    "<code>?status=NEW</code>"
+    "<code>?status=NEW</code> | "
+    "<code>?side=BUY,SELL</code>"
     "</p>"
     "</body>"
   )
   return HTMLResponse(html)
 
-# ====== JSON רשימת הזמנות פתוחות (עם pagination) ======
+# ====== JSON (סינונים, מיון ופאג'ינציה) ======
 @router.get(
     "/ops/ui/orders.json",
     response_class=JSONResponse,
@@ -523,13 +574,27 @@ async def ops_ui_orders_json(
   symbol: Optional[str] = Query(None, description="e.g. BTCUSDT (single)"),
   symbols: Optional[List[str]] = Query(None, description="repeatable ?symbols=BTCUSDT&symbols=ETHUSDT or CSV"),
   status: Optional[List[str]] = Query(None, description="filter by status: e.g. NEW,FILLED or repeatable"),
+  side: Optional[List[str]] = Query(None, description="filter by side: BUY/SELL (repeatable or CSV)"),
+  # Range filters
+  min_price: Optional[float] = Query(None, description="minimum order price (inclusive)"),
+  max_price: Optional[float] = Query(None, description="maximum order price (inclusive)"),
+  min_qty: Optional[float] = Query(None, description="minimum origQty/quantity (inclusive)"),
+  max_qty: Optional[float] = Query(None, description="maximum origQty/quantity (inclusive)"),
+  since_ts: Optional[int] = Query(None, description="min updateTime/time (ms, inclusive)"),
+  until_ts: Optional[int] = Query(None, description="max updateTime/time (ms, inclusive)"),
+  # Client order id filters
+  client_order_id: Optional[str] = Query(None, description="exact match for clientOrderId/origClientOrderId"),
+  client_order_like: Optional[str] = Query(None, description="substring match, case-insensitive"),
+  # Sorting
+  sort_by: Optional[List[str]] = Query(None, description="repeatable or CSV, e.g. sort_by=updateTime&sort_by=symbol or sort_by=updateTime,symbol"),
+  order: Optional[str] = Query("desc", description="asc|desc (applies to all sort_by fields)"),
   # Pagination
   limit: Optional[int] = Query(100, ge=1, le=1000, description="items per page"),
   offset: Optional[int] = Query(0, ge=0, description="start index (0-based)"),
   page: Optional[int] = Query(None, ge=1, description="1-based page number (alias)"),
   per_page: Optional[int] = Query(None, ge=1, le=1000, description="items per page (alias)"),
 ):
-  # Build symbols list
+  # symbols list
   sym_list: List[str] = []
   if symbols:
     for item in symbols:
@@ -545,30 +610,42 @@ async def ops_ui_orders_json(
       content={"ok": False, "error": "binance_client_unavailable_or_fetch_failed", "detail": str(e)},
     )
 
-  # Status filter
+  # filters
   status_list: List[str] = []
   if status:
-    for item in status:
-      status_list.extend(_csv_list(item))
+    for item in status: status_list.extend(_csv_list(item))
+  side_list: List[str] = []
+  if side:
+    for item in side: side_list.extend(_csv_list(item))
+
   orders = _filter_by_status(orders, status_list)
+  orders = _filter_by_side(orders, side_list)
+  orders = _filter_price_range(orders, min_price, max_price)
+  orders = _filter_qty_range(orders, min_qty, max_qty)
+  orders = _filter_time_range(orders, since_ts, until_ts)
+  orders = _filter_client_order_id(orders, client_order_id, client_order_like)
+
+  # sorting
+  sort_fields: List[str] = []
+  if sort_by:
+    for item in sort_by:
+      sort_fields.extend(_csv_list(item))
+  orders = _apply_sort(orders, sort_fields, (order or "desc"))
 
   total = len(orders)
 
-  # Resolve pagination (page/per_page override limit/offset if provided)
+  # pagination
   eff_per_page = int(per_page or limit or 100)
   eff_page = int(page) if page is not None else None
   if eff_page is not None:
     eff_offset = (eff_page - 1) * eff_per_page
   else:
     eff_offset = int(offset or 0)
-
-  # Clamp bounds
   if eff_offset < 0: eff_offset = 0
   if eff_per_page < 1: eff_per_page = 1
   end = min(total, eff_offset + eff_per_page)
   sliced = orders[eff_offset:end]
 
-  # Normalize & slim fields
   def pick(o: dict, *keys: str) -> dict:
     return {k: o.get(k) for k in keys}
 
@@ -576,15 +653,8 @@ async def ops_ui_orders_json(
     {
       **pick(
         o,
-        "orderId",
-        "symbol",
-        "side",
-        "type",
-        "status",
-        "reduceOnly",
-        "timeInForce",
-        "activatePrice",
-        "priceRate",
+        "orderId","symbol","side","type","status","reduceOnly",
+        "timeInForce","activatePrice","priceRate",
       ),
       "price": o.get("price") or o.get("avgPrice"),
       "origQty": o.get("origQty") or o.get("orig_quantity") or o.get("quantity"),
@@ -595,7 +665,6 @@ async def ops_ui_orders_json(
     for o in sliced
   ]
 
-  # Pagination metadata
   has_prev = eff_offset > 0
   has_next = end < total
   prev_offset = max(0, eff_offset - eff_per_page) if has_prev else None
@@ -608,6 +677,16 @@ async def ops_ui_orders_json(
       "ok": True,
       "symbols": sym_list or None,
       "status_filter": [s.upper() for s in status_list] or None,
+      "side_filter": [s.upper() for s in side_list] or None,
+      "filters": {
+        "min_price": min_price, "max_price": max_price,
+        "min_qty": min_qty, "max_qty": max_qty,
+        "since_ts": since_ts, "until_ts": until_ts,
+        "client_order_id": client_order_id,
+        "client_order_like": client_order_like,
+      },
+      "sort_by": sort_fields or ["updateTime"],
+      "order": (order or "desc").lower(),
       "count": len(items),
       "items": items,
       "total": total,
@@ -623,6 +702,7 @@ async def ops_ui_orders_json(
       "total_pages": total_pages,
     }
   )
+
 
 
 
