@@ -46,7 +46,7 @@ _inline_env_defaults: Dict[str, str] = {
 for _k, _v in _inline_env_defaults.items():
     os.environ.setdefault(_k, _v)
 
-# ========= Notification policy (defaults tuned to your request) =========
+# ========= Notification policy =========
 ONLY_TRADE_NOTIFICATIONS = os.getenv("ONLY_TRADE_NOTIFICATIONS", "1").lower() in ("1","true","yes","on")
 STARTUP_NOTIFY_ENABLE    = os.getenv("STARTUP_NOTIFY_ENABLE", "0").lower() in ("1","true","yes","on")
 HEALTH_TP1_ENABLE        = os.getenv("HEALTH_TP1_ENABLE", "0").lower() in ("1","true","yes","on")
@@ -816,7 +816,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
 async def approve_link(id: str = Query(..., description="ticket_id"), request: Request = None):
     return await approve(ticket_id=id, request=request)
 
-# ============ NEW: explicit reject endpoints so the links actually work ============
+# ============ explicit reject endpoints ============
 @router.get("/ops/reject")
 async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
     _maybe_protect_routes(request)
@@ -838,11 +838,6 @@ async def reject_link(id: str = Query(..., description="ticket_id"), request: Re
 # ==================== Real-time TRADE EVENTS (TP/SL etc.) ====================
 @router.post("/ops/trade-event")
 async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = None):
-    """
-    Endpoint לדיווחי מצב טרייד בזמן אמת (ביצוע, TP1/2/3, SL, שינוי מינוף/כמות וכו׳) מה־executor.
-    שולח לטלגרם רק אם זה אירוע טרייד — גם כשONLY_TRADE_NOTIFICATIONS=1.
-    הגנה: Bearer (אם מופעל PROTECT_APPROVE_ROUTES).
-    """
     _maybe_protect_routes(request)
     etype = str(payload.get("event") or "").upper().strip()
     symbol = str(payload.get("symbol") or "").upper()
@@ -853,7 +848,6 @@ async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = No
     if not etype or not symbol:
         raise HTTPException(status_code=422, detail="Missing event or symbol")
 
-    # Compose message
     lines = [f"📣 <b>Trade update</b> · <code>{_md_html(symbol)}</code>"]
     if side: lines.append(f"• Side: <code>{_md_html(side)}</code>")
     lines.append(f"• Event: <b>{_md_html(etype)}</b>")
@@ -873,6 +867,7 @@ async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = No
 
     await _send_telegram_html("\n".join(lines))
     return {"ok": True}
+
 # ==================== Digest endpoints ====================
 @router.get("/ops/ui/pending")
 async def ui_pending(request: Request = None):
@@ -967,7 +962,6 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
         except Exception as e:
             results[s] = {"ok": False, "error": str(e)}
 
-    # respect ONLY_TRADE_NOTIFICATIONS: אל תשלח בזמן אמת אם זה לא טרייד
     if emergencies and not ONLY_TRADE_NOTIFICATIONS:
         await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>"+",".join(emergencies)+"</code>")
     return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
@@ -1025,7 +1019,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
 
-# ==================== Telegram webhook (with alias) ====================
+# ==================== Telegram webhook ====================
 async def _telegram_webhook_core(request: Request) -> Dict[str, Any]:
     secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token","")
     if TELEGRAM_WEBHOOK_SECRET and secret != TELEGRAM_WEBHOOK_SECRET:
@@ -1042,13 +1036,33 @@ async def telegram_hook_alias(request: Request):
     return await _telegram_webhook_core(request)
 
 # ==================== Register routers ====================
-# FIX 404: include manager router so /manage-once exists, AND call the correct path in periodic manager.
+# מנהל
 try:
     from routes.manager import router as manager_router  # type: ignore
     app.include_router(manager_router)
 except Exception as e:
     logger.warning("manager router not loaded: %s", e)
 
+# >>>>>>>>>>>>> הוספת ראוטרים החסרים (שורש ה-404) <<<<<<<<<<<<
+try:
+    from routes.price import router as price_router  # type: ignore
+    app.include_router(price_router)
+except Exception as e:
+    logger.warning("price router not loaded: %s", e)
+
+try:
+    from routes.scan import router as scan_router  # type: ignore
+    app.include_router(scan_router)
+except Exception as e:
+    logger.warning("scan router not loaded: %s", e)
+
+try:
+    from routes.topk import router as topk_router  # type: ignore
+    app.include_router(topk_router)
+except Exception as e:
+    logger.warning("topk router not loaded: %s", e)
+
+# ops-approval (הרואטר המקומי של הקובץ הנוכחי)
 app.include_router(router)
 
 # ==================== Meta & health endpoints ====================
@@ -1126,7 +1140,6 @@ async def health_tp1_now(symbols: Optional[str] = Query(None, description="CSV o
     sym_list = [s.strip().upper() for s in (symbols.split(",") if symbols else WATCHLIST) if s.strip()]
     if not sym_list:
         raise HTTPException(status_code=400, detail="no symbols")
-    # כשקוראים ידנית—מותר לשלוח גם אם ONLY_TRADE_NOTIFICATIONS=1
     res = await quick_check_tp1(sym_list, tp1_tags=(TP1_TAGS or None), notify_telegram=True)
     return {"ok": True, "result": res}
 
@@ -1156,7 +1169,6 @@ async def _startup_tasks():
     with suppress(Exception):
         await _ensure_telegram_webhook()
 
-    # Respect STARTUP_NOTIFY_ENABLE
     async def _notify_bot_online():
         with suppress(Exception):
             if not STARTUP_NOTIFY_ENABLE:
@@ -1167,7 +1179,6 @@ async def _startup_tasks():
             await _send_telegram_html(f"🟢 <b>Bot online</b> · <code>{name}</code> · env=<code>{env}</code>")
     asyncio.create_task(_notify_bot_online())
 
-    # Health TP1 watcher
     if _health_tp1_loaded and HEALTH_TP1_ENABLE:
         watch = WATCHLIST[:]
         if watch:
@@ -1183,7 +1194,6 @@ async def _startup_tasks():
             logger.info("health_tp1 background started (interval=%ss, symbols=%s)",
                         int(os.getenv("HEALTH_TP1_INTERVAL_SEC","600")), ",".join(watch))
 
-    # periodic manager (FIX route path)
     async def periodic_manager():
         global _manager_backoff
         await asyncio.sleep(2.0)
@@ -1205,7 +1215,6 @@ async def _startup_tasks():
                 async with _manager_lock:
                     try:
                         cli = _get_shared_async_client()
-                        # הנתיב הנכון הוא /manage-once (כל סמל בנפרד, אם תרצה)
                         for s in syms:
                             r = await cli.post(
                                 f"{base}/manage-once",
@@ -1230,7 +1239,6 @@ async def _startup_tasks():
     if os.getenv("MANAGER_ENABLE","1").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_manager())
 
-    # guarder (לא שולח התראות אם ONLY_TRADE_NOTIFICATIONS=1)
     async def periodic_guarder():
         await asyncio.sleep(3.0)
         syms = WATCHLIST[:]
@@ -1256,7 +1264,6 @@ async def _startup_tasks():
     if os.getenv("GUARDER_ENABLE","1").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_guarder())
 
-    # scanner (ללא שינוי — אתה קובע ב-ENV אם לשלוח לטלגרם)
     async def periodic_scanner():
         try:
             from routes.scan_top_volume import scan_top_volume  # type: ignore
@@ -1321,7 +1328,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1","true","yes","on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
 
 
 
