@@ -1,17 +1,7 @@
+# main.py
 from __future__ import annotations
 
-import os
-import json
-import time
-import hmac
-import re
-import hashlib
-import secrets
-import logging
-import traceback
-import inspect
-import asyncio
-import threading
+import os, json, time, hmac, re, hashlib, secrets, logging, traceback, inspect, asyncio, threading
 from contextlib import suppress
 from collections import Counter
 from typing import Any, Dict, List, Optional, Callable, Tuple, Union
@@ -119,17 +109,15 @@ def get_internal_base() -> str:
     return f"http://127.0.0.1:{_port()}"
 
 PUBLIC_HOST = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip().rstrip("/")
-WATCHLIST = [s.strip().upper() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()]
-if not WATCHLIST:
-    WATCHLIST = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "NEARUSDT"]
+WATCHLIST = [s.strip().upper() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()] or ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","NEARUSDT"]
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
 ADMIN_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
-TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1","true","yes","on")
+TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK","1").lower() in ("1","true","yes","on")
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
 
 API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
-NS = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
+NS = os.getenv("REDIS_NAMESPACE","ops-supervisor-web").strip() or "ops-supervisor-web"
 REDIS_URL = os.getenv("REDIS_URL","").strip()
 REQUIRE_REDIS = os.getenv("REQUIRE_REDIS","1").lower() in ("1","true","yes","on")
 CONFIRMSTORE_ENABLE = os.getenv("CONFIRMSTORE_ENABLE","0").lower() in ("1","true","yes","on")
@@ -145,7 +133,7 @@ PROTECT_APPROVE_ROUTES = os.getenv("PROTECT_APPROVE_ROUTES","1").lower() in ("1"
 PROTECT_DIGEST_ROUTES  = os.getenv("PROTECT_DIGEST_ROUTES","1").lower() in ("1","true","yes","on")
 APPROVE_FALLBACK_TO_MARKET = not (os.getenv("PROPOSE_BLOCK_ON_FAIL","0").lower() in ("1","true","yes","on"))
 
-# ==================== Simple ConfirmStore (memory fallback) ====================
+# ==================== Simple ConfirmStore (in-memory fallback) ====================
 class ConfirmStore:
     _items: Dict[str, Dict[str, Any]] = {}
 
@@ -286,10 +274,7 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
             v = float(val)
             if v > 0:
                 return v
-    for url in (
-        "https://fapi.binance.com/fapi/v1/ticker/price",
-        "https://api.binance.com/api/v3/ticker/price",
-    ):
+    for url in ("https://fapi.binance.com/fapi/v1/ticker/price","https://api.binance.com/api/v3/ticker/price"):
         try:
             cli = _get_shared_async_client()
             r = await cli.get(url, params={"symbol": sym}, timeout=httpx.Timeout(10.0))
@@ -421,10 +406,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
                     order = client.futures_create_order(**retry2_kwargs)
                     return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "derived_positionSide"}
                 except Exception as e3:
-                    return {
-                        "ok": False, "error": "order_failed", "detail": str(e3),
-                        "first_error": str(e1), "second_error": str(e2)
-                    }
+                    return {"ok": False, "error": "order_failed", "detail": str(e3), "first_error": str(e1), "second_error": str(e2)}
     except Exception as e:
         return {"ok": False, "error": "order_failed", "detail": str(e)}
 
@@ -586,7 +568,6 @@ async def _load_ticket(ticket_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
                 if str(it.get("ticket_id")) == str(ticket_id):
                     return dict(it.get("req") or it), "memory"
     return None, "none"
-
 async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[bool] = None) -> None:
     event: Dict[str, Any] = {
         "ts": time.time(), "ticket_id": ticket_id, "status": final_status,
@@ -594,10 +575,10 @@ async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[boo
         "reason": ("expired" if final_status is None else ("approved" if final_status else "rejected")),
     }
     fetched_req: Optional[Dict[str, Any]] = None
-    if aioredis and REDIS_URL:
+    if aioredis and REDIS_URL and source == "redis":
         with suppress(Exception):
             r = await _get_redis_cached()
-            if r and source == "redis":
+            if r:
                 raw = await r.get(f"{NS}:ticket:{ticket_id}")
                 if raw:
                     obj = json.loads(raw); fetched_req = obj.get("req") or obj
@@ -725,11 +706,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     pretty = "\n".join(lines)
     tg_resp = await _send_telegram_html(pretty, approve_url=approve_url or None, reject_url=reject_url or None, preview_url=preview_url or None)
 
-    return {
-        "ok": True, "ticket_id": tid,
-        "approve_url": approve_url, "reject_url": reject_url, "preview_url": preview_url,
-        "telegram_result": tg_resp
-    }
+    return {"ok": True, "ticket_id": tid, "approve_url": approve_url, "reject_url": reject_url, "preview_url": preview_url, "telegram_result": tg_resp}
 
 def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
     mode = _parse_mode(ticket.get("note"))
@@ -767,10 +744,8 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
         "</body>"
     )
     return HTMLResponse(body)
-# ==================== Approve / Reject / Pending / Digest / Guard ====================
 
 def _maybe_protect_routes(request: Request) -> None:
-    # הגנה אופציונלית על approve/reject
     if not PROTECT_APPROVE_ROUTES:
         return
     _require_bearer(request)
@@ -782,12 +757,10 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
     if not ticket:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור.")
 
-    # הסרת דגלי חסימה אם הגיעו מבחוץ
     with suppress(Exception):
         for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
             ticket.pop(k, None)
 
-    # חישוב כמות/מינוף אוטומטי
     t2 = await _apply_auto_qty_on_ticket_async(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
@@ -802,28 +775,21 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
                             else _execute_trade(ticket)))
     ok = bool(exec_res.get("ok"))
 
-    # fallback לשוק אם HYBRID נכשל
     if (not ok) and flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
         retry_res = await _execute_trade(ticket)
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
 
-    # ניהול חכם + SL מגן
     if ok:
         with suppress(Exception):
             sm = _smart_manage_env()
             if sm["enable"]:
                 sym = str(ticket.get("symbol","")).upper()
-                await _smart_manage_now(sym,
-                                        offset_bps=sm["offset_bps"],
-                                        pcts=sm["pcts"],
-                                        splits=sm["splits"],
-                                        atr_mult=sm["atr_mult"])
+                await _smart_manage_now(sym, offset_bps=sm["offset_bps"], pcts=sm["pcts"], splits=sm["splits"], atr_mult=sm["atr_mult"])
         with suppress(Exception):
             from utils.guard_stop import ensure_protective_stop  # type: ignore
             ensure_protective_stop(str(ticket.get("symbol","")).upper(), prefer_mode="quantities")
 
-    # דחיפת הודעה לטלגרם
     with suppress(Exception):
         sym, side, qty = ticket.get("symbol",""), ticket.get("side",""), ticket.get("qty","")
         msg = (
@@ -852,7 +818,6 @@ async def reject(ticket_id: str = Query(..., description="ticket_id"), request: 
         await _send_telegram_html(f"❌ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n— — —\nNo action was taken.")
     return _html("❌ נדחה. לא בוצעה פעולה.")
 
-# === חתום (לקריאות משרת חיצוני) ===
 SIGNED_TS_MAX_SKEW_SEC = int(os.getenv("SIGNED_TS_MAX_SKEW_SEC", "60") or "60")
 SIGNED_NONCE_TTL_SEC   = int(os.getenv("SIGNED_NONCE_TTL_SEC", "120") or "120")
 
@@ -872,7 +837,6 @@ async def approve_signed(request: Request):
     if abs(time.time() - ts) > SIGNED_TS_MAX_SKEW_SEC:
         raise HTTPException(status_code=401, detail="Timestamp skew too large")
 
-    # Anti-replay nonce
     if aioredis and REDIS_URL:
         r = await _get_redis_cached()
         if not r:
@@ -915,13 +879,10 @@ async def approve_signed(request: Request):
     elif not ok:
         raise HTTPException(status_code=502, detail={"execute_error": exec_res})
 
-    # ניהול ו־SL
     with suppress(Exception):
         sm = _smart_manage_env()
         if sm["enable"]:
-            await _smart_manage_now(str(payload.get("symbol","")).upper(),
-                                    offset_bps=sm["offset_bps"], pcts=sm["pcts"],
-                                    splits=sm["splits"], atr_mult=sm["atr_mult"])
+            await _smart_manage_now(str(payload.get("symbol","")).upper(), offset_bps=sm["offset_bps"], pcts=sm["pcts"], splits=sm["splits"], atr_mult=sm["atr_mult"])
     with suppress(Exception):
         from utils.guard_stop import ensure_protective_stop  # type: ignore
         ensure_protective_stop(str(payload.get("symbol","")).upper(), prefer_mode="quantities")
@@ -1080,11 +1041,9 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
 
 # ==================== Telegram webhook (with alias) ====================
 async def _telegram_webhook_core(request: Request) -> Dict[str, Any]:
-    # אימות סודי לפי ההגדרה שלך
     secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token","")
     if TELEGRAM_WEBHOOK_SECRET and secret != TELEGRAM_WEBHOOK_SECRET:
         raise HTTPException(status_code=401, detail="Bad secret")
-    # אם תרצה לעבד הודעות – הוסף כאן לוגיקה.
     _ = await request.body()
     return {"ok": True}
 
@@ -1098,6 +1057,7 @@ async def telegram_hook_alias(request: Request):
 
 # ==================== Register router ====================
 app.include_router(router)
+
 # ==================== Meta & health endpoints ====================
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
@@ -1198,12 +1158,10 @@ async def _startup_tasks():
         return
     app.state.bg_started = True
 
-    # Warm http client + webhook
     _ = _get_shared_async_client()
     with suppress(Exception):
         await _ensure_telegram_webhook()
 
-    # notify
     async def _notify_bot_online():
         with suppress(Exception):
             await asyncio.sleep(0.7)
@@ -1212,7 +1170,6 @@ async def _startup_tasks():
             await _send_telegram_html(f"🟢 <b>Bot online</b> · <code>{name}</code> · env=<code>{env}</code>")
     asyncio.create_task(_notify_bot_online())
 
-    # health TP1 watcher
     if _health_tp1_loaded and (os.getenv("HEALTH_TP1_ENABLE","1").lower() in ("1","true","yes","on")):
         watch = WATCHLIST[:]
         if watch:
@@ -1228,7 +1185,6 @@ async def _startup_tasks():
             logger.info("health_tp1 background started (interval=%ss, symbols=%s)",
                         int(os.getenv("HEALTH_TP1_INTERVAL_SEC","600")), ",".join(watch))
 
-    # periodic manager
     async def periodic_manager():
         global _manager_backoff
         await asyncio.sleep(2.0)
@@ -1274,7 +1230,6 @@ async def _startup_tasks():
     if os.getenv("MANAGER_ENABLE","1").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_manager())
 
-    # guarder
     async def periodic_guarder():
         await asyncio.sleep(3.0)
         syms = WATCHLIST[:]
@@ -1300,7 +1255,6 @@ async def _startup_tasks():
     if os.getenv("GUARDER_ENABLE","1").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_guarder())
 
-    # scanner
     async def periodic_scanner():
         try:
             from routes.scan_top_volume import scan_top_volume  # type: ignore
@@ -1346,12 +1300,10 @@ async def _startup_tasks():
 
 @app.on_event("shutdown")
 async def _shutdown_tasks():
-    # close httpx
     cli: Optional[httpx.AsyncClient] = getattr(app.state, "shared_async_client", None)
     if cli and not cli.is_closed:
         with suppress(Exception):
             await cli.aclose()
-    # close redis
     r = getattr(app.state, "redis", None)
     if r:
         with suppress(Exception):
@@ -1367,7 +1319,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1","true","yes","on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
 
 
 
