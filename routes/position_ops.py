@@ -41,17 +41,15 @@ def _err(reason: str, **data) -> Dict[str, Any]:
 # =========================
 def _notify_ops(symbol: str, action_name: str) -> None:
     """
-    שולח הודעת טלגרם קצרה עם מקלדת אינליין (Manage Again / Cancel TPs / Close 50%)
+    שולח הודעת טלגרם קצרה עם מקלדת אינליין
     לא חוסם את שרשור הראוט. בטוח גם אם אין event loop קיים בת׳רד.
     """
     try:
-        # אם יש לופ רץ (בראוט async אחר) — ניצור משימה
         loop = asyncio.get_running_loop()
         loop.create_task(TelegramNotifier.send_ops_action_result(symbol, action_name))  # type: ignore[attr-defined]
         return
     except Exception:
         pass
-    # אין לופ? נריץ לופ זמני, ונבלע חריגות
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -59,19 +57,11 @@ def _notify_ops(symbol: str, action_name: str) -> None:
     except Exception:
         pass
     finally:
-        try:
+        with suppress(Exception):
             loop.close()
-        except Exception:
-            pass
 
 def _maybe_notify(symbol: Optional[str], action_name: str, res: Dict[str, Any]) -> None:
-    if not symbol:
-        return
-    if not isinstance(res, dict):
-        return
-    if not res.get("ok", False):
-        return
-    if res.get("skipped"):
+    if not symbol or not isinstance(res, dict) or not res.get("ok", False) or res.get("skipped"):
         return
     _notify_ops(symbol, action_name)
 
@@ -405,6 +395,40 @@ def _tp_ladder_impl(client, *, symbol: str, pcts: List[float], splits: List[floa
         placed.append({"i": i, "pct": float(pct), "split": float(split), "qty": q, "stop": trig, "orderId": order.get("orderId")})
     return _ok(symbol=symbol, side=side, qty=abs_qty, entry=entry, built=len(placed), orders=placed)
 
+# === Close fraction impl (חולץ לשימוש גם ב-/close-percent) ===
+def _close_impl(client, *, symbol: str, fraction: float) -> Dict[str, Any]:
+    _align_position_mode(client)
+    try:
+        side, abs_qty, _ = _fetch_position_side_qty_entry(client, symbol)
+    except HTTPException as he:
+        if he.status_code in (404, 409):
+            _ensure_guard(symbol, prefer_mode="native")
+            return _err("no_open_position", skipped="close")
+        return _err("http_error", status=he.status_code, detail=str(he.detail))
+    except Exception as e:
+        return _err("exception", detail=str(e))
+
+    opp = "SELL" if side == "BUY" else "BUY"
+    flt = _get_filters(client, symbol)
+    qty = _quantize_qty(symbol, abs_qty * fraction, flt)
+    if qty <= 0:
+        _ensure_guard(symbol, prefer_mode="native")
+        return _err("qty_to_close_zero")
+
+    try:
+        order = client.futures_create_order(
+            symbol=symbol, side=opp, type="MARKET",
+            quantity=qty, reduceOnly=True,
+            newClientOrderId=_build_client_order_id(symbol, opp, role="CLOSE"),
+        )
+        out = _ok(symbol=symbol, fraction=fraction, qty_closed=qty, orderId=order.get("orderId"))
+    except Exception as e:
+        out = _err("exception", detail=str(e))
+    _ensure_guard(symbol, prefer_mode="native")
+    label = f"Close {int(round(fraction * 100))}%"
+    _maybe_notify(symbol, label, out)
+    return out
+
 # =========================
 # Anti-Replay wrapper
 # =========================
@@ -448,10 +472,7 @@ def be(
     try:
         out = _be_impl(client, symbol=symbol, offset_bps=offset_bps)
     except HTTPException as he:
-        if he.status_code in (404, 409):
-            out = _err("no_open_position", skipped="be")
-        else:
-            out = _err("http_error", status=he.status_code, detail=str(he.detail))
+        out = _err("no_open_position", skipped="be") if he.status_code in (404, 409) else _err("http_error", status=he.status_code, detail=str(he.detail))
     except Exception as e:
         out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
@@ -483,10 +504,7 @@ def trail(
     try:
         out = _trail_impl(client, symbol=symbol, callbackRate=cb, atr_mult=atr_mult)
     except HTTPException as he:
-        if he.status_code in (404, 409):
-            out = _err("no_open_position", skipped="trail")
-        else:
-            out = _err("http_error", status=he.status_code, detail=str(he.detail))
+        out = _err("no_open_position", skipped="trail") if he.status_code in (404, 409) else _err("http_error", status=he.status_code, detail=str(he.detail))
     except Exception as e:
         out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
@@ -579,10 +597,7 @@ def tp_ladder(
     try:
         out = _tp_ladder_impl(client, symbol=symbol, pcts=pcts, splits=splits)
     except HTTPException as he:
-        if he.status_code in (404, 409):
-            out = _err("no_open_position", skipped="tp_ladder", pcts=pcts, splits=splits)
-        else:
-            out = _err("http_error", status=he.status_code, detail=str(he.detail))
+        out = _err("no_open_position", skipped="tp_ladder", pcts=pcts, splits=splits) if he.status_code in (404, 409) else _err("http_error", status=he.status_code, detail=str(he.detail))
     except Exception as e:
         out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
@@ -728,38 +743,8 @@ def close_fraction(
     client, cerr = _get_client_soft()
     if not client:
         return _err(cerr or "binance_client_error")
-    _align_position_mode(client)
-    try:
-        side, abs_qty, _ = _fetch_position_side_qty_entry(client, symbol)
-    except HTTPException as he:
-        if he.status_code in (404, 409):
-            _ensure_guard(symbol, prefer_mode="native")
-            return _err("no_open_position", skipped="close")
-        return _err("http_error", status=he.status_code, detail=str(he.detail))
-    except Exception as e:
-        return _err("exception", detail=str(e))
 
-    opp = "SELL" if side == "BUY" else "BUY"
-    flt = _get_filters(client, symbol)
-    qty = _quantize_qty(symbol, abs_qty * fraction, flt)
-    if qty <= 0:
-        _ensure_guard(symbol, prefer_mode="native")
-        return _err("qty_to_close_zero")
-
-    try:
-        order = client.futures_create_order(
-            symbol=symbol, side=opp, type="MARKET",
-            quantity=qty, reduceOnly=True,
-            newClientOrderId=_build_client_order_id(symbol, opp, role="CLOSE"),
-        )
-        out = _ok(symbol=symbol, fraction=fraction, qty_closed=qty, orderId=order.get("orderId"))
-    except Exception as e:
-        out = _err("exception", detail=str(e))
-    _ensure_guard(symbol, prefer_mode="native")
-    # שם פעולה נעים לטלגרם
-    label = f"Close {int(round(fraction * 100))}%"
-    _maybe_notify(symbol, label, out)
-    return out
+    return _close_impl(client, symbol=symbol, fraction=fraction)
 
 @router.post("/manage-once", summary="One-shot smart manage: BE + TRAIL + TP ladder")
 def manage_once(
@@ -792,7 +777,6 @@ def manage_once(
 
     out: Dict[str, Any] = {"symbol": symbol, "ok": True, "steps": {}}
 
-    # נסה לשלוף פוזיציה — אל תחזיר חריגות
     try:
         side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
     except HTTPException as he:
@@ -848,7 +832,6 @@ def manage_once(
 
     _ensure_guard(symbol, prefer_mode="native")
 
-    # הודעת טלגרם מסכמת (רק אם בוצע לפחות שלב אחד בהצלחה)
     try:
         success_any = any(isinstance(v, dict) and v.get("ok") for v in out.get("steps", {}).values())
         if success_any:
@@ -980,6 +963,54 @@ async def auto_stop(
         with suppress(Exception):
             _SCHED_TASK.cancel()
     return _ok(status="stopped")
+
+# =========================
+# Compatibility aliases (כפי שהאינטגרציה של הטלגרם מצפה)
+# =========================
+
+@router.post("/cancel-tps", summary="[ALIAS] Cancel all TP orders (alias of /tp/cancel)")
+def cancel_tps_alias(
+    payload: Dict[str, Any] = Body(...),
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
+    # נשתמש בלוגיקת tp_cancel כדי לשמור על מקור אמת יחיד
+    return tp_cancel(payload=payload, Authorization=Authorization,
+                     x_timestamp=x_timestamp, x_nonce=x_nonce, x_signature=x_signature)
+
+@router.post("/close-percent", summary="[ALIAS] Close by percent (maps pct→fraction and calls /close)")
+def close_percent_alias(
+    payload: Dict[str, Any] = Body(...),
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
+    if not _auth_ok(Authorization):
+        return _err("unauthorized")
+    # בדיקת Anti-Replay למסלול האליאס
+    ar = _ar_check("/position-ops/close-percent", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    if ar:
+        return ar
+
+    symbol = (payload.get("symbol") or "").upper().strip()
+    try:
+        pct = float(payload.get("pct") if payload.get("pct") is not None else payload.get("percent"))
+    except Exception:
+        return _err("invalid_input", detail="pct (0..100) required")
+    if not symbol:
+        return _err("invalid_input", detail="symbol required")
+    pct = max(0.0, min(100.0, pct))
+    fraction = pct / 100.0
+
+    client, cerr = _get_client_soft()
+    if not client:
+        return _err(cerr or "binance_client_error")
+
+    return _close_impl(client, symbol=symbol, fraction=fraction)
+
 
 
 
