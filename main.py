@@ -183,7 +183,6 @@ def _get_shared_async_client() -> httpx.AsyncClient:
         cli = getattr(app.state, "shared_async_client", None)
         if cli and not cli.is_closed:
             return cli
-        # === FIX: single default timeout ===
         timeout = httpx.Timeout(15.0)
         limits = httpx.Limits(
             max_connections=int(os.getenv("HTTP_MAX_CONNECTIONS","50")),
@@ -199,7 +198,6 @@ async def _get_redis_cached():
     r = getattr(app.state, "redis", None)
     if r:
         return r
-    # שומר על ברירת המחדל שלך; אפשר להרחיב לפי env אם תרצה
     r = aioredis.from_url(REDIS_URL, decode_responses=True)
     app.state.redis = r
     return r
@@ -353,6 +351,7 @@ def _align_position_mode(client) -> None:
             client.futures_change_position_mode(dualSidePosition="true")
         elif mode_override in ("oneway","one_way","single","single_side","oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
+
 # ==================== Order ID helper ====================
 try:
     from utils.order_ids import build_client_order_id  # type: ignore
@@ -768,8 +767,337 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
         "</body>"
     )
     return HTMLResponse(body)
-# main.py (Part 3/3)
+# ==================== Approve / Reject / Pending / Digest / Guard ====================
 
+def _maybe_protect_routes(request: Request) -> None:
+    # הגנה אופציונלית על approve/reject
+    if not PROTECT_APPROVE_ROUTES:
+        return
+    _require_bearer(request)
+
+@router.get("/ops/approve")
+async def approve(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
+    _maybe_protect_routes(request)
+    ticket, source = await _load_ticket(ticket_id)
+    if not ticket:
+        return _html("⚠️ קישור שגוי או שפג תוקף האישור.")
+
+    # הסרת דגלי חסימה אם הגיעו מבחוץ
+    with suppress(Exception):
+        for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
+            ticket.pop(k, None)
+
+    # חישוב כמות/מינוף אוטומטי
+    t2 = await _apply_auto_qty_on_ticket_async(ticket)
+    if t2 is None:
+        return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
+    ticket = t2
+    if float(ticket.get("qty") or 0) <= 0 or int(ticket.get("leverage") or 0) <= 0:
+        return _html("⚠️ שגיאה: qty/leverage חסרים גם לאחר ניסיון חישוב אוטומטי.")
+
+    flow = _decide_flow_by_mode(ticket)
+    exec_res = await (_execute_trade(ticket) if flow=="MARKET"
+                      else _execute_trade_armed(ticket) if flow=="HYBRID"
+                      else (_execute_trade_armed(ticket) if any(ticket.get(k) for k in ("tp1","tp2","tp3","sl"))
+                            else _execute_trade(ticket)))
+    ok = bool(exec_res.get("ok"))
+
+    # fallback לשוק אם HYBRID נכשל
+    if (not ok) and flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
+        retry_res = await _execute_trade(ticket)
+        ok = bool(retry_res.get("ok"))
+        exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
+
+    # ניהול חכם + SL מגן
+    if ok:
+        with suppress(Exception):
+            sm = _smart_manage_env()
+            if sm["enable"]:
+                sym = str(ticket.get("symbol","")).upper()
+                await _smart_manage_now(sym,
+                                        offset_bps=sm["offset_bps"],
+                                        pcts=sm["pcts"],
+                                        splits=sm["splits"],
+                                        atr_mult=sm["atr_mult"])
+        with suppress(Exception):
+            from utils.guard_stop import ensure_protective_stop  # type: ignore
+            ensure_protective_stop(str(ticket.get("symbol","")).upper(), prefer_mode="quantities")
+
+    # דחיפת הודעה לטלגרם
+    with suppress(Exception):
+        sym, side, qty = ticket.get("symbol",""), ticket.get("side",""), ticket.get("qty","")
+        msg = (
+            f"✅ <b>Approved</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
+            f"• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n• Flow: <code>{flow}</code>\n— — —\nבוצע והועבר לניהול."
+            if ok else
+            f"⚠️ <b>Approve Failed</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
+            f"• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n• Flow: <code>{flow}</code>\n— — —\n"
+            f"שגיאה: <code>{_md_html(json.dumps(exec_res, ensure_ascii=False))}</code>"
+        )
+        await _send_telegram_html(msg)
+
+    await _delete_ticket(ticket_id, source, final_status=ok)
+    return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.") if ok else _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
+
+@router.get("/ops/approve-link")
+async def approve_link(id: str = Query(..., description="ticket_id"), request: Request = None):
+    return await approve(ticket_id=id, request=request)
+
+@router.get("/ops/reject")
+async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
+    _maybe_protect_routes(request)
+    _, source = await _load_ticket(ticket_id)
+    await _delete_ticket(ticket_id, source, final_status=False)
+    with suppress(Exception):
+        await _send_telegram_html(f"❌ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n— — —\nNo action was taken.")
+    return _html("❌ נדחה. לא בוצעה פעולה.")
+
+# === חתום (לקריאות משרת חיצוני) ===
+SIGNED_TS_MAX_SKEW_SEC = int(os.getenv("SIGNED_TS_MAX_SKEW_SEC", "60") or "60")
+SIGNED_NONCE_TTL_SEC   = int(os.getenv("SIGNED_NONCE_TTL_SEC", "120") or "120")
+
+@router.post("/ops/approve/signed")
+async def approve_signed(request: Request):
+    if not HMAC_SECRET:
+        raise HTTPException(status_code=500, detail="HMAC secret not set")
+
+    ts_hdr = request.headers.get("X-Timestamp")
+    nonce  = request.headers.get("X-Nonce") or ""
+    if not ts_hdr or not nonce:
+        raise HTTPException(status_code=400, detail="Missing X-Timestamp or X-Nonce")
+    try:
+        ts = float(ts_hdr)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Bad X-Timestamp")
+    if abs(time.time() - ts) > SIGNED_TS_MAX_SKEW_SEC:
+        raise HTTPException(status_code=401, detail="Timestamp skew too large")
+
+    # Anti-replay nonce
+    if aioredis and REDIS_URL:
+        r = await _get_redis_cached()
+        if not r:
+            return JSONResponse(status_code=503, content={"ok": False, "error": "redis_unavailable"})
+        used = await r.set(f"{NS}:nonce:{nonce}", "1", ex=SIGNED_NONCE_TTL_SEC, nx=True)
+        if not used:
+            raise HTTPException(status_code=409, detail="Replay detected")
+    elif REQUIRE_REDIS:
+        raise HTTPException(status_code=503, detail="Nonce store unavailable")
+
+    raw = await request.body()
+    got = request.headers.get("X-Signature", "") or ""
+    want = _sign_hex(HMAC_SECRET, f"{ts_hdr}.{nonce}.".encode("utf-8") + raw)
+    if not hmac.compare_digest(got, want):
+        raise HTTPException(status_code=401, detail="Bad signature")
+
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    t2 = await _apply_auto_qty_on_ticket_async(payload)
+    if t2 is None:
+        raise HTTPException(status_code=400, detail="AUTO_QTY: failed to fetch last price")
+    payload = t2
+    if float(payload.get("qty") or 0) <= 0 or int(payload.get("leverage") or 0) <= 0:
+        raise HTTPException(status_code=400, detail="AUTO_QTY: qty/leverage missing after auto sizing")
+
+    flow = _decide_flow_by_mode(payload)
+    exec_res = await (_execute_trade(payload) if flow=="MARKET"
+                      else _execute_trade_armed(payload) if flow=="HYBRID"
+                      else (_execute_trade_armed(payload) if any(payload.get(k) for k in ("tp1","tp2","tp3","sl"))
+                            else _execute_trade(payload)))
+    ok = bool(exec_res.get("ok"))
+    if not ok and flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
+        retry = await _execute_trade(payload)
+        if not retry.get("ok"):
+            raise HTTPException(status_code=502, detail={"execute_error": exec_res, "fallback_market": retry})
+        exec_res = {"primary": exec_res, "fallback_market": retry}
+    elif not ok:
+        raise HTTPException(status_code=502, detail={"execute_error": exec_res})
+
+    # ניהול ו־SL
+    with suppress(Exception):
+        sm = _smart_manage_env()
+        if sm["enable"]:
+            await _smart_manage_now(str(payload.get("symbol","")).upper(),
+                                    offset_bps=sm["offset_bps"], pcts=sm["pcts"],
+                                    splits=sm["splits"], atr_mult=sm["atr_mult"])
+    with suppress(Exception):
+        from utils.guard_stop import ensure_protective_stop  # type: ignore
+        ensure_protective_stop(str(payload.get("symbol","")).upper(), prefer_mode="quantities")
+
+    return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
+
+@router.get("/ops/ui/pending")
+async def ui_pending(request: Request = None):
+    _require_bearer(request)
+    base = PUBLIC_HOST if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
+    items: List[Dict[str, Any]] = []
+
+    if aioredis and REDIS_URL:
+        with suppress(Exception):
+            r = await _get_redis_cached()
+            if r:
+                cursor: Any = 0
+                while True:
+                    res = await r.scan(cursor, match=f"{NS}:ticket:*", count=200)
+                    cursor = int(res[0]) if not isinstance(res[0], int) else res[0]
+                    keys = res[1]
+                    for k in keys:
+                        raw = await r.get(k)
+                        if not raw: continue
+                        obj = json.loads(raw); req = obj.get("req") or {}
+                        items.append(req)
+                    if cursor == 0:
+                        break
+
+    if CONFIRMSTORE_ENABLE:
+        with suppress(Exception):
+            for it in ConfirmStore.pending() or []:
+                items.append(it.get("req") or it)
+
+    if not items:
+        return _html("אין כרטיסים ממתינים כרגע.")
+
+    rows = []
+    for t in items:
+        raw_tid = str(t.get("ticket_id",""))
+        link = f"{base}/ops/ui/ticket?ticket_id={raw_tid}"
+        rows.append(
+            f"<tr>"
+            f"<td style='padding:.4rem .6rem'><a href='{link}'>👁 {_md_html(raw_tid)}</a></td>"
+            f"<td style='padding:.4rem .6rem'>{_md_html(str(t.get('symbol','')))}</td>"
+            f"<td style='padding:.4rem .6rem'>{_md_html(str(t.get('side','')))}</td>"
+            f"<td style='padding:.4rem .6rem'>{_md_html(str(t.get('qty','')))}</td>"
+            f"<td style='padding:.4rem .6rem'>{_md_html(str(t.get('leverage','')))}</td>"
+            f"</tr>"
+        )
+
+    body = (
+        "<!doctype html><meta charset='utf-8'>"
+        "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.5'>"
+        "<h2 style='margin:0 0 1rem 0'>Pending Approval Tickets</h2>"
+        "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
+        "<thead><tr style='background:#fafafa'><th style='text-align:left;padding:.4rem .6rem'>Ticket</th>"
+        "<th style='text-align:left;padding:.4rem .6rem'>Symbol</th>"
+        "<th style='text-align:left;padding:.4rem .6rem'>Side</th>"
+        "<th style='text-align:left;padding:.4rem .6rem'>Qty</th>"
+        "<th style='text-align:left;padding:.4rem .6rem'>Lev</th>"
+        "</tr></thead>"
+        "<tbody>" + "\n".join(rows) + "</tbody></table>"
+        "</body>"
+    )
+    return HTMLResponse(body)
+
+@router.post("/guard/smoke/run")
+async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
+    _require_bearer(request)
+    try:
+        from utils.guard_stop import ensure_protective_stop  # type: ignore
+    except Exception:
+        raise HTTPException(status_code=501, detail="ensure_protective_stop() not available")
+
+    if isinstance(symbols, str) and symbols.strip():
+        sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    else:
+        sym_list = WATCHLIST[:]
+    if not sym_list:
+        raise HTTPException(status_code=400, detail="no symbols to check")
+
+    results: Dict[str, Any] = {}
+    emergencies: List[str] = []
+    for s in sym_list:
+        try:
+            res = ensure_protective_stop(s, prefer_mode="quantities")
+            results[s] = res
+            flag = False
+            try:
+                if isinstance(res, dict):
+                    flag = bool(res.get("emergency")) or bool(res.get("placed")) or (str(res.get("action","")).lower() in ("emergency","place"))
+            except Exception:
+                pass
+            if flag:
+                emergencies.append(s)
+        except Exception as e:
+            results[s] = {"ok": False, "error": str(e)}
+
+    if emergencies:
+        await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>"+",".join(emergencies)+"</code>")
+    return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
+
+@router.get("/ops/digest/expired")
+async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = None):
+    if PROTECT_DIGEST_ROUTES:
+        _require_bearer(request)
+    if not (aioredis and REDIS_URL and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID):
+        return {"ok": False, "error": "digest_dependencies_missing"}
+
+    try:
+        r = await _get_redis_cached()
+        if not r:
+            return {"ok": False, "error": "redis_unavailable"}
+
+        key_good = f"{NS}:expired_log"
+        key_bad  = f"{NS}:expired_log_bad"
+
+        items: List[str] = []
+        with suppress(Exception):
+            items.extend(await r.lrange(key_good, 0, 2000) or [])
+        with suppress(Exception):
+            items.extend(await r.lrange(key_bad, 0, 2000) or [])
+
+        now = time.time()
+        since = now - (hours * 3600)
+
+        events: List[Dict[str, Any]] = []
+        for it in items:
+            try:
+                obj = json.loads(it)
+                if float(obj.get("ts", 0)) >= since:
+                    events.append(obj)
+            except Exception:
+                continue
+        events.sort(key=lambda x: x.get("ts", 0), reverse=True)
+        total = len(events)
+        if total == 0:
+            await _send_telegram_html(f"ℹ️ No expired approvals in last {hours}h.")
+            return {"ok": True, "sent": True, "count": 0}
+
+        by_sym: Counter = Counter((str(e.get("symbol","")).upper(), str(e.get("side","")).upper()) for e in events)
+        lines = [f"⏱️ <b>Expired approvals</b> (last {hours}h) · total: <b>{total}</b>"]
+        for (sym, side), cnt in by_sym.most_common(20):
+            lines.append(f"• {sym} {side}: <code>{cnt}</code>")
+        lines.append("— — —")
+        lines.append("<b>Last events</b>:")
+        for e in events[:5]:
+            t = int(e.get("ts", now)); idem = e.get("idem",""); sym  = str(e.get("symbol","")).upper(); side = str(e.get("side","")).upper()
+            lines.append(f"• {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(t))}Z · {sym} {side} · <code>{idem}</code>")
+        await _send_telegram_html("\n".join(lines))
+        return {"ok": True, "sent": True, "count": total}
+    except Exception as e:
+        logger.warning("digest_expired_failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
+# ==================== Telegram webhook (with alias) ====================
+async def _telegram_webhook_core(request: Request) -> Dict[str, Any]:
+    # אימות סודי לפי ההגדרה שלך
+    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token","")
+    if TELEGRAM_WEBHOOK_SECRET and secret != TELEGRAM_WEBHOOK_SECRET:
+        raise HTTPException(status_code=401, detail="Bad secret")
+    # אם תרצה לעבד הודעות – הוסף כאן לוגיקה.
+    _ = await request.body()
+    return {"ok": True}
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    return await _telegram_webhook_core(request)
+
+@app.post("/telegram/hook")
+async def telegram_hook_alias(request: Request):
+    return await _telegram_webhook_core(request)
+
+# ==================== Register router ====================
+app.include_router(router)
 # ==================== Meta & health endpoints ====================
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
@@ -913,7 +1241,7 @@ async def _startup_tasks():
             return
         base = get_internal_base()
         every_sec = max(10, int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","60")))
-        per_req_timeout = httpx.Timeout(15.0)  # ✅ FIXED: single default to avoid httpx.ValueError
+        per_req_timeout = httpx.Timeout(15.0)
         try:
             while True:
                 sleep_extra = _manager_backoff
@@ -1039,8 +1367,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1","true","yes","on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
-
 
 
 
