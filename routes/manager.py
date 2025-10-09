@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Header
+from fastapi import APIRouter, HTTPException, Header, Body
 from pydantic import BaseModel
 
 from utils.anti_replay import verify_request
@@ -28,7 +28,7 @@ DEFAULT_QTY = float(os.getenv("DEFAULT_QTY", "0.001"))
 DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "5"))
 HTTP_TIMEOUT = float(os.getenv("MANAGER_HTTP_TIMEOUT", "10.0"))
 
-# ConfirmStore (respect CONFIRMSTORE_ENABLE)
+# ConfirmStore — מכבד את CONFIRMSTORE_ENABLE
 try:
     if not CONFIRMSTORE_ENABLE:
         raise RuntimeError("ConfirmStore disabled by env")
@@ -244,8 +244,10 @@ async def _tick_once() -> Dict[str, Any]:
         logger.error("tick error: %s", e)
         return {"ok": False, "error": str(e), "created": created}
 
+# חשיפה לשימוש פנימי (main.periodic_manager) — הנתיב שתיקַּנו
 @router.post("/manage-once")
-async def manage_once():
+async def manage_once(body: Dict[str, Any] = Body(None)):
+    # אם תרצה לכבד symbol מהבקשה, אפשר לעבד כאן. כרגע הסורק רשימת קבצי ingest.
     return await _tick_once()
 
 @router.post("/ops/manager/tick")
@@ -263,6 +265,11 @@ async def alerts_trades_active():
         tid = it.get("ticket_id") or _ticket_id_for(it)
         out[tid] = it
     return {"ok": True, "count": len(out), "items": out}
+
+class _UpdateTicketHeaders(BaseModel):
+    x_timestamp: Optional[str] = None
+    x_nonce: Optional[str] = None
+    x_signature: Optional[str] = None
 
 @router.post("/alerts/trades/update")
 async def alerts_trades_update(
