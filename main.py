@@ -273,7 +273,6 @@ async def _get_redis_cached():
     r = aioredis.from_url(REDIS_URL, decode_responses=True)
     app.state.redis = r
     return r
-
 # --- Ticket helpers (Redis + optional ConfirmStore fallback) ---
 async def _load_ticket(ticket_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
     """
