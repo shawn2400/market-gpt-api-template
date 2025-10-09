@@ -15,7 +15,7 @@ services:
       sizeGB: 1
 
     envVars:
-      # ================== Runtime & Logging ==================
+      # ============== Runtime & Logging ==============
       - key: PORT
         value: "10000"
       - key: WEB_CONCURRENCY
@@ -37,7 +37,7 @@ services:
       - key: HTTP_MAX_KEEPALIVE
         value: "200"
 
-      # ================== Base URLs ==================
+      # ============== Base URLs ==============
       - key: PUBLIC_HOST
         value: https://algogpt-docker.onrender.com
       - key: CONTEXT_URL
@@ -45,7 +45,7 @@ services:
       - key: WEBHOOK_HOST
         value: https://algogpt-docker.onrender.com
 
-      # ================== CORS ==================
+      # ============== CORS ==============
       - key: CORS_ALLOW_ORIGINS
         value: https://algogpt-docker.onrender.com
       - key: CORS_ALLOW_HEADERS
@@ -55,7 +55,7 @@ services:
       - key: CORS_ALLOW_CREDENTIALS
         value: "0"
 
-      # ================== Public/Readonly ==================
+      # ============== Public/Readonly/OpenAPI ==============
       - key: ENABLE_READONLY_HTTP
         value: "1"
       - key: READONLY_ENDPOINTS
@@ -65,7 +65,8 @@ services:
       - key: OPENAPI_HIDE_PATTERNS
         value: /telegram/*,/executor/*,/manage-once,/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
 
-      # ================== Security (hardening) ==================
+      # ============== Security (hardening) ==============
+      # מאשר לחיצת כפתורים מטלגרם (approve/reject) בלי Bearer
       - key: PROTECT_APPROVE_ROUTES
         value: "0"
       - key: PROTECT_DIGEST_ROUTES
@@ -77,7 +78,7 @@ services:
       - key: SECURITY_PUBLIC_PREFIXES
         value: /public,/price,/static,/risk
 
-      # ================== Anti-Replay ==================
+      # ============== Anti-Replay ==============
       - key: ANTI_REPLAY_ENABLE
         value: "1"
       - key: ANTI_REPLAY_WINDOW_SEC
@@ -89,7 +90,7 @@ services:
       - key: SIGNED_NONCE_TTL_SEC
         value: "120"
 
-      # ================== Rate Limit backend ==================
+      # ============== Rate Limit backend ==============
       - key: RATE_LIMIT_ENABLE
         value: "1"
       - key: RL_FAIL_OPEN
@@ -101,7 +102,7 @@ services:
       - key: ORDERS_QPS_BUCKET
         value: "8"
 
-      # ================== Redis client (non-secret) ==================
+      # ============== Redis client (non-secret) ==============
       - key: REQUIRE_REDIS
         value: "1"
       - key: CONFIRMSTORE_ENABLE
@@ -127,7 +128,7 @@ services:
       - key: REDIS_NAMESPACE
         value: ops-supervisor-web
 
-      # ================== Exchange Defaults ==================
+      # ============== Exchange Defaults ==============
       - key: DEFAULT_MARKET
         value: futures
       - key: POSITION_MODE_OVERRIDE
@@ -159,7 +160,7 @@ services:
       - key: EXCHANGE_INFO_TTL_SEC
         value: "900"
 
-      # ================== Scanner / Universe ==================
+      # ============== Scanner / Universe ==============
       - key: SCAN_SOURCE
         value: binance-futures
       - key: UNIVERSE_MODE
@@ -181,7 +182,7 @@ services:
       - key: SUGGEST_CAP_PER_CYCLE
         value: "30"
 
-      # ================== Indicators / Gates ==================
+      # ============== Indicators / Gates ==============
       - key: INDICATOR_INTERVALS
         value: 15m,1h,4h,1d
       - key: ENABLE_INDICATOR_EXIT
@@ -205,7 +206,7 @@ services:
       - key: MAX_ATR_PCT
         value: "3.0"
 
-      # ================== Watchlist / Allowlist ==================
+      # ============== Watchlist / Allowlist ==============
       - key: ALLOWLIST_MODE
         value: off
       - key: SYMBOLS_ALLOWLIST_PATH
@@ -213,17 +214,7 @@ services:
       - key: WATCHLIST
         value: BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT
 
-      # ================== Scan/Notify quick tuning ==================
-      - key: HEARTBEAT_HOURS
-        value: "2"
-      - key: HEARTBEAT_MIN_SCORE
-        value: "4.0"
-      - key: DEFAULT_LEVERAGE
-        value: "10"
-      - key: DEFAULT_STAKE_USDT
-        value: "50"
-
-      # ================== SCAN CRON ==================
+      # ============== Scan CRON (התראות לטלגרם) ==============
       - key: SCAN_CRON_ENABLE
         value: "1"
       - key: SCAN_CRON_EVERY_SEC
@@ -244,8 +235,12 @@ services:
         value: "900"
       - key: SCAN_RICH
         value: "1"
+      - key: DEFAULT_LEVERAGE
+        value: "10"
+      - key: DEFAULT_STAKE_USDT
+        value: "50"
 
-      # ================== Approvals / Telegram routing ==================
+      # ============== Approvals / Telegram ==============
       - key: APPROVAL_ENABLED
         value: "1"
       - key: REQUIRE_TELEGRAM_APPROVAL
@@ -283,7 +278,7 @@ services:
       - key: OPS_TICKET_TTL_SEC
         value: "1800"
 
-      # ================== Trade & Orders ==================
+      # ============== Trade & Orders ==============
       - key: EXECUTE_TRADES
         value: "1"
       - key: ALLOW_MARKET_ENTRY
@@ -314,16 +309,11 @@ services:
         value: "5"
       - key: MAX_TRADE_BUDGET
         value: "150"
+      # הערה: בקוד הקיים auto-qty דורש פונקציה פנימית; בפועל תשלח qty ידני.
       - key: AUTO_QTY_ENABLE
-        value: "1"
-      - key: AUTO_QTY_MODE
-        value: notional
-      - key: AUTO_QTY_BUDGET_USDT
-        value: "100"
-      - key: AUTO_QTY_MARGIN_BUFFER_PCT
-        value: "0.20"
+        value: "0"
 
-      # ================== SL/TP / BE / Trail / Ladder ==================
+      # ============== SL/TP / BE / Trail / Ladder ==============
       - key: NATIVE_TPSL_ENABLE
         value: "0"
       - key: SL_MONOTONIC
@@ -375,7 +365,7 @@ services:
       - key: TP_BE_OFFSET_BPS
         value: "8"
 
-      # ================== Manager / Intervals ==================
+      # ============== Manager / Intervals ==============
       - key: MANAGER_ENABLE
         value: "1"
       - key: MANAGER_INTERVAL_SEC
@@ -387,7 +377,7 @@ services:
       - key: TM_UPDATE_COOLDOWN_SEC
         value: "30"
 
-      # ================== Health / Ops Digest ==================
+      # ============== Health / Ops Digest ==============
       - key: HEALTH_PRICE_MAX_AGE
         value: "30"
       - key: HEALTH_TP_GRACE_SEC
@@ -407,7 +397,7 @@ services:
       - key: OPS_HEARTBEAT_EVERY_MIN
         value: "5"
 
-      # ================== Notifications Policy ==================
+      # ============== Notifications Policy ==============
       - key: ONLY_TRADE_NOTIFICATIONS
         value: "1"
       - key: STARTUP_NOTIFY_ENABLE
@@ -419,7 +409,7 @@ services:
       - key: DAILY_DIGEST_MIN
         value: "0"
 
-      # ================== Risk / Caps ==================
+      # ============== Risk / Caps ==============
       - key: DAILY_LOSS_CAP_USDT
         value: "150"
       - key: KILL_ON_CAP
@@ -451,59 +441,7 @@ services:
       - key: MIN_TP_SL_DIFF_PCT
         value: "3.0"
 
-      # ================== Dyna-Policy / Auto-Tune ==================
-      - key: DYNAMIC_POLICY_ENABLE
-        value: "1"
-      - key: DYN_TRADE_ENABLE
-        value: "1"
-      - key: DYN_ATR_LOW_PCT
-        value: "0.5"
-      - key: DYN_ATR_HIGH_PCT
-        value: "3.5"
-      - key: DYN_CANCEL_BASE_SEC
-        value: "15"
-      - key: DYN_CANCEL_MIN_SEC
-        value: "5"
-      - key: DYN_CANCEL_MAX_SEC
-        value: "60"
-      - key: DYN_STOP_MIN_BPS
-        value: "6"
-      - key: DYN_STOP_MAX_BPS
-        value: "25"
-      - key: DYN_SLIP_GUARD_MIN_BPS
-        value: "20"
-      - key: DYN_SLIP_GUARD_MAX_BPS
-        value: "80"
-      - key: DYN_ESCALATE_AFTER_MIN
-        value: "5"
-      - key: DYN_ESCALATE_AFTER_MAX
-        value: "25"
-      - key: DYN_ESCALATE_SLIP_MIN_BPS
-        value: "5"
-      - key: DYN_ESCALATE_SLIP_MAX_BPS
-        value: "60"
-
-      # ================== AI / Schedulers ==================
-      - key: AI_SCHED_ENABLE
-        value: "1"
-      - key: AI_SCHED_INTERVAL_SEC
-        value: "60"
-      - key: AI_QUEUE_TO_TELEGRAM
-        value: "1"
-      - key: AI_QUEUE_AUTO_EXECUTE
-        value: "0"
-      - key: AI_REVIEW_IDEMP_TTL_SEC
-        value: "0"
-      - key: AI_REVIEW_RATE_PER_MIN
-        value: "0"
-      - key: OPENAI_MAX_CONCURRENCY
-        value: "4"
-      - key: OPENAI_TIMEOUT_SECONDS
-        value: "30.0"
-      - key: OPENAI_MODEL
-        value: gpt-4o
-
-      # ================== ETA / Velocity / Defaults ==================
+      # ============== ETA / Defaults ==============
       - key: ETA_SMART_ENABLE
         value: "1"
       - key: ETA_VELOCITY_WINDOW
@@ -511,13 +449,13 @@ services:
       - key: DEFAULT_INTERVAL
         value: "15m"
 
-      # ================== Guarder (optional) ==================
+      # ============== Guarder ==============
       - key: GUARDER_ENABLE
         value: "1"
       - key: GUARDER_INTERVAL_SEC
         value: "45"
 
-      # ================== Ops / Misc ==================
+      # ============== Ops / Misc ==============
       - key: ALGOGPT_VERSION
         value: "2.18.0"
       - key: INSTANCE_ID
@@ -541,7 +479,7 @@ services:
       - key: PRICE_SCAN_INTERVAL
         value: "30"
 
-      # ================== Secrets (fromSecret) ==================
+      # ============== Secrets (Render Secrets) ==============
       - key: API_BEARER_TOKEN
         fromSecret: API_BEARER_TOKEN
       - key: API_TOKEN
