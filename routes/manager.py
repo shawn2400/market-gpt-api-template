@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Header, Body
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 
 from utils.anti_replay import verify_request
@@ -28,7 +28,7 @@ DEFAULT_QTY = float(os.getenv("DEFAULT_QTY", "0.001"))
 DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "5"))
 HTTP_TIMEOUT = float(os.getenv("MANAGER_HTTP_TIMEOUT", "10.0"))
 
-# ConfirmStore — מכבד את CONFIRMSTORE_ENABLE
+# ConfirmStore (respect CONFIRMSTORE_ENABLE)
 try:
     if not CONFIRMSTORE_ENABLE:
         raise RuntimeError("ConfirmStore disabled by env")
@@ -130,7 +130,7 @@ def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
     score = float(obj.get("score", 0.0))
 
     payload: Dict[str, Any] = {
-        "trade_id": _ticket_id_for(obj),
+        "ticket_id": _ticket_id_for(obj),
         "symbol": symbol,
         "market": str(obj.get("market","futures")).lower(),
         "side": side,
@@ -140,9 +140,13 @@ def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
         "reason": reason,
         "require_approval": require_approval,
         "timeframe": obj.get("timeframe","15m"),
+        "tp1": obj.get("tp1"),
+        "tp2": obj.get("tp2"),
+        "tp3": obj.get("tp3"),
+        "sl": obj.get("sl"),
     }
-    for k in ["tp1","tp2","tp3","sl","prob_overall_pct","prob_tp1_pct","prob_tp2_pct","prob_tp3_pct",
-              "eta_open_min","eta_tp1_min","eta_tp2_min","eta_tp3_min","expiry_ts"]:
+    for k in ["prob_overall_pct","prob_tp1_pct","prob_tp2_pct","prob_tp3_pct",
+              "eta_open_min","eta_tp1_min","eta_tp2_min","eta_tp3_min","expiry_ts","tp_splits","position_side","note"]:
         if obj.get(k) is not None:
             payload[k] = obj.get(k)
 
@@ -194,7 +198,7 @@ async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
             logger.info("alerts/ingest ok: %s", resp)
             try:
                 await TelegramNotifier.send_ticket(
-                    trade_id=payload["trade_id"],
+                    trade_id=payload["ticket_id"],
                     symbol=payload["symbol"],
                     side=payload["side"],
                     timeframe=payload["timeframe"],
@@ -244,15 +248,30 @@ async def _tick_once() -> Dict[str, Any]:
         logger.error("tick error: %s", e)
         return {"ok": False, "error": str(e), "created": created}
 
-# חשיפה לשימוש פנימי (main.periodic_manager) — הנתיב שתיקַּנו
-@router.post("/manage-once")
-async def manage_once(body: Dict[str, Any] = Body(None)):
-    # אם תרצה לכבד symbol מהבקשה, אפשר לעבד כאן. כרגע הסורק רשימת קבצי ingest.
-    return await _tick_once()
+# === Public Manager Endpoints ===
 
 @router.post("/ops/manager/tick")
 async def ops_manager_tick():
+    """Single tick to ingest files -> tickets -> telegram."""
     return await _tick_once()
+
+@router.get("/ops/manager/health")
+async def ops_manager_health():
+    return {
+        "ok": True,
+        "enabled": MANAGER_ENABLE,
+        "interval_sec": MANAGER_INTERVAL_SEC,
+        "ingest_dir": str(INGEST_DIR),
+        "last_tick_ts": LAST_TICK_TS,
+        "tick_count": TICK_COUNT,
+        "created_last": LAST_CREATED,
+        "pending_count": LAST_PENDING,
+        **({"errors_last": LAST_ERROR} if LAST_ERROR else {}),
+        "alerts_ingest_url": ALERTS_INGEST_URL or None,
+        "public_host": PUBLIC_HOST or None,
+    }
+
+# === Tickets status / actions ===
 
 @router.get("/alerts/trades/active")
 async def alerts_trades_active():
@@ -266,10 +285,9 @@ async def alerts_trades_active():
         out[tid] = it
     return {"ok": True, "count": len(out), "items": out}
 
-class _UpdateTicketHeaders(BaseModel):
-    x_timestamp: Optional[str] = None
-    x_nonce: Optional[str] = None
-    x_signature: Optional[str] = None
+class UpdateTicketReq(BaseModel):
+    ticket_id: str
+    action: str  # APPROVE | REJECT
 
 @router.post("/alerts/trades/update")
 async def alerts_trades_update(
@@ -298,21 +316,7 @@ async def alerts_trades_update(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"decision failed: {e}")
 
-@router.get("/ops/manager/health")
-async def ops_manager_health():
-    return {
-        "ok": True,
-        "enabled": MANAGER_ENABLE,
-        "interval_sec": MANAGER_INTERVAL_SEC,
-        "ingest_dir": str(INGEST_DIR),
-        "last_tick_ts": LAST_TICK_TS,
-        "tick_count": TICK_COUNT,
-        "created_last": LAST_CREATED,
-        "pending_count": LAST_PENDING,
-        **({"errors_last": LAST_ERROR} if LAST_ERROR else {}),
-        "alerts_ingest_url": ALERTS_INGEST_URL or None,
-        "public_host": PUBLIC_HOST or None,
-    }
+# === Background loop (optional) ===
 
 async def _manager_loop():
     logger.info("manager_loop start: enable=%s interval=%ss ingest_dir=%s alerts_ingest=%s",
