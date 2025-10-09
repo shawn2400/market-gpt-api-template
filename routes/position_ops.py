@@ -16,6 +16,10 @@ from fastapi import HTTPException  # רק לצורך סוג החריגה, לא �
 # Anti-Replay
 from utils.anti_replay import verify_request
 
+# Telegram notifier (כפתורי אינליין אחרי פעולות)
+with suppress(Exception):
+    from utils.telegram_notifier import TelegramNotifier  # type: ignore
+
 logger = logging.getLogger("algogpt.position_ops")
 router = APIRouter(prefix="/position-ops", tags=["position-ops"])
 
@@ -32,6 +36,44 @@ def _err(reason: str, **data) -> Dict[str, Any]:
     d.update(data)
     return d
 
+# =========================
+# Telegram notify helpers (fire-and-forget גם מתוך threadpool)
+# =========================
+def _notify_ops(symbol: str, action_name: str) -> None:
+    """
+    שולח הודעת טלגרם קצרה עם מקלדת אינליין (Manage Again / Cancel TPs / Close 50%)
+    לא חוסם את שרשור הראוט. בטוח גם אם אין event loop קיים בת׳רד.
+    """
+    try:
+        # אם יש לופ רץ (בראוט async אחר) — ניצור משימה
+        loop = asyncio.get_running_loop()
+        loop.create_task(TelegramNotifier.send_ops_action_result(symbol, action_name))  # type: ignore[attr-defined]
+        return
+    except Exception:
+        pass
+    # אין לופ? נריץ לופ זמני, ונבלע חריגות
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(TelegramNotifier.send_ops_action_result(symbol, action_name))  # type: ignore[attr-defined]
+    except Exception:
+        pass
+    finally:
+        try:
+            loop.close()
+        except Exception:
+            pass
+
+def _maybe_notify(symbol: Optional[str], action_name: str, res: Dict[str, Any]) -> None:
+    if not symbol:
+        return
+    if not isinstance(res, dict):
+        return
+    if not res.get("ok", False):
+        return
+    if res.get("skipped"):
+        return
+    _notify_ops(symbol, action_name)
 
 # =========================
 # Guard (אופציונלי, שקט אם חסר)
@@ -45,7 +87,6 @@ def _ensure_guard(symbol: str, *, prefer_mode: str = "native") -> None:
     with suppress(Exception):
         ensure_protective_stop(symbol, prefer_mode=prefer_mode)  # type: ignore
 
-
 # =========================
 # Helpers: auth (Bearer) — רכה
 # =========================
@@ -57,7 +98,6 @@ def _auth_ok(auth_header: Optional[str]) -> bool:
     if not auth_header or not auth_header.startswith("Bearer "):
         return False
     return (auth_header.split(" ", 1)[1].strip() == API_BEARER_TOKEN)
-
 
 # =========================
 # Order IDs
@@ -92,7 +132,6 @@ with suppress(Exception):
     from utils.order_ids import build_client_order_id  # type: ignore
     _build_client_order_id = build_client_order_id  # override אם קיים
 
-
 # =========================
 # Quantize
 # =========================
@@ -122,7 +161,6 @@ with suppress(Exception):
     def _quantize_qty(symbol: str, qty: float, flt: Dict[str, Any]) -> float:  # type: ignore
         return _qq(symbol, qty, flt)
 
-
 # =========================
 # Binance client (soft)
 # =========================
@@ -147,7 +185,6 @@ def _align_position_mode(client) -> None:
             client.futures_change_position_mode(dualSidePosition="true")
         elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
-
 
 # =========================
 # EXCHANGE INFO CACHE (anti-burst)
@@ -200,7 +237,6 @@ def _get_filters(client, symbol: str) -> Dict[str, Any]:
 with suppress(Exception):
     from utils.quantize import get_filters as _unused_gf  # type: ignore
 
-
 # =========================
 # Position & price helpers (עשויים לזרוק — נתפוס בראוטים)
 # =========================
@@ -229,7 +265,6 @@ def _cancel_open_conditional(client, symbol: str, kinds=("STOP", "TAKE_PROFIT", 
                 client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
                 n += 1
     return n
-
 
 # =========================
 # Gates (TP1/min profit)
@@ -266,7 +301,6 @@ def _gate_be_trail(client, symbol: str, side: str, entry: float) -> Tuple[bool, 
     if min_profit > 0 and not _profit_ok(entry, last, side, min_profit):
         return (False, "blocked_by_min_profit")
     return (True, "ok")
-
 
 # =========================
 # Internal impls (no auth)
@@ -371,7 +405,6 @@ def _tp_ladder_impl(client, *, symbol: str, pcts: List[float], splits: List[floa
         placed.append({"i": i, "pct": float(pct), "split": float(split), "qty": q, "stop": trig, "orderId": order.get("orderId")})
     return _ok(symbol=symbol, side=side, qty=abs_qty, entry=entry, built=len(placed), orders=placed)
 
-
 # =========================
 # Anti-Replay wrapper
 # =========================
@@ -387,7 +420,6 @@ def _ar_check(route: str, body: Any, *, ts: Optional[str], nonce: Optional[str],
     if not ok:
         return _err("anti_replay_failed", detail=why, route=route)
     return None
-
 
 # =========================
 # Routes — הכול רך (200 תמיד)
@@ -423,8 +455,8 @@ def be(
     except Exception as e:
         out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
+    _maybe_notify(symbol, "BE", out)
     return out
-
 
 @router.post("/trail", summary="Enable/refresh trailing SL (TRAILING_STOP_MARKET reduceOnly quantity)")
 def trail(
@@ -458,8 +490,8 @@ def trail(
     except Exception as e:
         out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
+    _maybe_notify(symbol, "Trail", out)
     return out
-
 
 @router.post("/sl/move", summary="Move SL to a specific price (STOP_MARKET closePosition)")
 def sl_move(
@@ -513,8 +545,8 @@ def sl_move(
     except Exception as e:
         res = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
+    _maybe_notify(symbol, "SL Move", res)
     return res
-
 
 @router.post("/tp/ladder", summary="Create/refresh TP ladder (TAKE_PROFIT_MARKET reduce-only partials)")
 def tp_ladder(
@@ -554,8 +586,8 @@ def tp_ladder(
     except Exception as e:
         out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
+    _maybe_notify(symbol, "TP Ladder", out)
     return out
-
 
 @router.post("/tp/one", summary="Create/refresh a single native TP (TAKE_PROFIT_MARKET reduce-only)")
 def tp_one(
@@ -630,8 +662,8 @@ def tp_one(
     except Exception as e:
         res = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
+    _maybe_notify(symbol, "TP One", res)
     return res
-
 
 @router.post("/tp/cancel", summary="Cancel all TP orders")
 def tp_cancel(
@@ -665,8 +697,8 @@ def tp_cancel(
     except Exception as e:
         out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
+    _maybe_notify(symbol, "Cancel TPs", out)
     return out
-
 
 @router.post("/close", summary="Close fraction of the position (reduce-only MARKET)")
 def close_fraction(
@@ -724,8 +756,10 @@ def close_fraction(
     except Exception as e:
         out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
+    # שם פעולה נעים לטלגרם
+    label = f"Close {int(round(fraction * 100))}%"
+    _maybe_notify(symbol, label, out)
     return out
-
 
 @router.post("/manage-once", summary="One-shot smart manage: BE + TRAIL + TP ladder")
 def manage_once(
@@ -813,8 +847,16 @@ def manage_once(
         out["steps"]["tp_ladder"] = _err("exception", detail=str(e))
 
     _ensure_guard(symbol, prefer_mode="native")
-    return out
 
+    # הודעת טלגרם מסכמת (רק אם בוצע לפחות שלב אחד בהצלחה)
+    try:
+        success_any = any(isinstance(v, dict) and v.get("ok") for v in out.get("steps", {}).values())
+        if success_any:
+            _notify_ops(symbol, "Manage Once")
+    except Exception:
+        pass
+
+    return out
 
 # =========================
 # Scheduler פנימי (אופציונלי) — נשאר רך
@@ -938,7 +980,6 @@ async def auto_stop(
         with suppress(Exception):
             _SCHED_TASK.cancel()
     return _ok(status="stopped")
-
 
 
 
