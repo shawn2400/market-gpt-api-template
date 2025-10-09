@@ -1,6 +1,7 @@
 # routes/ops_ui.py
 from __future__ import annotations
-from fastapi import APIRouter, Body
+from typing import Optional
+from fastapi import APIRouter, Body, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 import os, json, httpx
 
@@ -392,4 +393,70 @@ async def ui_proxy(payload: dict = Body(...)):
   except Exception as e:
     return JSONResponse(status_code=502, content={"ok": False, "error": "proxy_failed", "detail": str(e)})
 
+# ====== HTML רשימת הזמנות פתוחות (אופציונלי) ======
+@router.get("/ops/ui/orders", response_class=HTMLResponse, summary="List open futures orders (HTML)")
+async def ops_ui_orders(symbol: Optional[str] = Query(None, description="e.g. BTCUSDT")):
+  # Lazy import כדי לא לשבור סביבת dev בלי ספרייה/מפתחות
+  try:
+    from utils.binance_client import get_open_orders  # type: ignore
+  except Exception as e:
+    return HTMLResponse(
+      f"<!doctype html><meta charset='utf-8'><body style='font-family:sans-serif;margin:2rem'>"
+      f"<h2>Open Orders</h2><p style='color:#b91c1c'>binance_client unavailable: {e}</p></body>"
+    )
+
+  try:
+    orders = get_open_orders(symbol) or []
+  except Exception as e:
+    return HTMLResponse(
+      f"<!doctype html><meta charset='utf-8'><body style='font-family:sans-serif;margin:2rem'>"
+      f"<h2>Open Orders</h2><p style='color:#b91c1c'>Error fetching orders: {str(e)}</p></body>"
+    )
+
+  if not orders:
+    sym_txt = (symbol or "").upper() or "ALL"
+    return HTMLResponse(
+      f"<!doctype html><meta charset='utf-8'><body style='font-family:sans-serif;margin:2rem'>"
+      f"<h2>Open Orders</h2><p>No open orders for <b>{sym_txt}</b>.</p>"
+      f"<p style='color:#777'>Tip: filter with <code>?symbol=BTCUSDT</code></p>"
+      f"</body>"
+    )
+
+  def cell(v):
+    return ("" if v is None else str(v)).replace("<", "&lt;").replace(">", "&gt;")
+
+  rows = []
+  for o in orders:
+    rows.append(
+      "<tr>"
+      f"<td>{cell(o.get('orderId'))}</td>"
+      f"<td>{cell(o.get('symbol'))}</td>"
+      f"<td>{cell(o.get('side'))}</td>"
+      f"<td>{cell(o.get('type'))}</td>"
+      f"<td>{cell(o.get('origQty') or o.get('orig_quantity') or o.get('quantity'))}</td>"
+      f"<td>{cell(o.get('price'))}</td>"
+      f"<td>{cell(o.get('reduceOnly'))}</td>"
+      f"<td>{cell(o.get('status'))}</td>"
+      "</tr>"
+    )
+
+  html = (
+    "<!doctype html><meta charset='utf-8'>"
+    "<title>Open Orders</title>"
+    "<style>"
+    "body{font-family:ui-sans-serif,system-ui;max-width:1100px;margin:2rem auto;padding:0 1rem;line-height:1.45}"
+    "table{border-collapse:collapse;width:100%;border:1px solid #eee}"
+    "th,td{padding:.4rem .6rem;text-align:left;border-bottom:1px solid #f2f2f2}"
+    "thead tr{background:#fafafa}"
+    "</style><body>"
+    "<h2 style='margin:.2rem 0 1rem 0'>Open Orders</h2>"
+    "<table><thead><tr>"
+    "<th>OrderId</th><th>Symbol</th><th>Side</th><th>Type</th>"
+    "<th>Qty</th><th>Price</th><th>ReduceOnly</th><th>Status</th>"
+    "</tr></thead>"
+    f"<tbody>{''.join(rows)}</tbody></table>"
+    "<p style='color:#777;margin-top:.8rem'>סינון לפי סימבול: <code>?symbol=BTCUSDT</code></p>"
+    "</body>"
+  )
+  return HTMLResponse(html)
 
