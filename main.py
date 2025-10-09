@@ -815,87 +815,6 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
 @router.get("/ops/approve-link")
 async def approve_link(id: str = Query(..., description="ticket_id"), request: Request = None):
     return await approve(ticket_id=id, request=request)
-
-@router.get("/ops/reject")
-async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
-    _maybe_protect_routes(request)
-    _, source = await _load_ticket(ticket_id)
-    await _delete_ticket(ticket_id, source, final_status=False)
-    with suppress(Exception):
-        await _send_telegram_html(f"❌ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n— — —\nNo action was taken.")
-    return _html("❌ נדחה. לא בוצעה פעולה.")
-
-# ======= Signed approve API =======
-SIGNED_TS_MAX_SKEW_SEC = int(os.getenv("SIGNED_TS_MAX_SKEW_SEC", "60") or "60")
-SIGNED_NONCE_TTL_SEC   = int(os.getenv("SIGNED_NONCE_TTL_SEC", "120") or "120")
-
-@router.post("/ops/approve/signed")
-async def approve_signed(request: Request):
-    if not HMAC_SECRET:
-        raise HTTPException(status_code=500, detail="HMAC secret not set")
-
-    ts_hdr = request.headers.get("X-Timestamp")
-    nonce  = request.headers.get("X-Nonce") or ""
-    if not ts_hdr or not nonce:
-        raise HTTPException(status_code=400, detail="Missing X-Timestamp or X-Nonce")
-    try:
-        ts = float(ts_hdr)
-    except Exception:
-        raise HTTPException(status_code=400, detail="Bad X-Timestamp")
-    if abs(time.time() - ts) > SIGNED_TS_MAX_SKEW_SEC:
-        raise HTTPException(status_code=401, detail="Timestamp skew too large")
-
-    if aioredis and REDIS_URL:
-        r = await _get_redis_cached()
-        if not r:
-            return JSONResponse(status_code=503, content={"ok": False, "error": "redis_unavailable"})
-        used = await r.set(f"{NS}:nonce:{nonce}", "1", ex=SIGNED_NONCE_TTL_SEC, nx=True)
-        if not used:
-            raise HTTPException(status_code=409, detail="Replay detected")
-    elif REQUIRE_REDIS:
-        raise HTTPException(status_code=503, detail="Nonce store unavailable")
-
-    raw = await request.body()
-    got = request.headers.get("X-Signature", "") or ""
-    want = _sign_hex(HMAC_SECRET, f"{ts_hdr}.{nonce}.".encode("utf-8") + raw)
-    if not hmac.compare_digest(got, want):
-        raise HTTPException(status_code=401, detail="Bad signature")
-
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-
-    t2 = await _apply_auto_qty_on_ticket_async(payload)
-    if t2 is None:
-        raise HTTPException(status_code=400, detail="AUTO_QTY: failed to fetch last price")
-    payload = t2
-    if float(payload.get("qty") or 0) <= 0 or int(payload.get("leverage") or 0) <= 0:
-        raise HTTPException(status_code=400, detail="AUTO_QTY: qty/leverage missing after auto sizing")
-
-    flow = _decide_flow_by_mode(payload)
-    exec_res = await (_execute_trade(payload) if flow=="MARKET"
-                      else _execute_trade_armed(payload) if flow=="HYBRID"
-                      else (_execute_trade_armed(payload) if any(payload.get(k) for k in ("tp1","tp2","tp3","sl"))
-                            else _execute_trade(payload)))
-    ok = bool(exec_res.get("ok"))
-    if not ok and flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
-        retry = await _execute_trade(payload)
-        if not retry.get("ok"):
-            raise HTTPException(status_code=502, detail={"execute_error": exec_res, "fallback_market": retry})
-        exec_res = {"primary": exec_res, "fallback_market": retry}
-    elif not ok:
-        raise HTTPException(status_code=502, detail={"execute_error": exec_res})
-
-    with suppress(Exception):
-        sm = _smart_manage_env()
-        if sm["enable"]:
-            await _smart_manage_now(str(payload.get("symbol","")).upper(), offset_bps=sm["offset_bps"], pcts=sm["pcts"], splits=sm["splits"], atr_mult=sm["atr_mult"])
-    with suppress(Exception):
-        from utils.guard_stop import ensure_protective_stop  # type: ignore
-        ensure_protective_stop(str(payload.get("symbol","")).upper(), prefer_mode="quantities")
-
-    return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
 # ==================== Real-time TRADE EVENTS (TP/SL etc.) ====================
 @router.post("/ops/trade-event")
 async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = None):
@@ -1383,7 +1302,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1","true","yes","on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
 
 
 
