@@ -1,6 +1,6 @@
 # routes/ops_ui.py
 from __future__ import annotations
-from typing import Optional
+from typing import Optional, List
 from fastapi import APIRouter, Body, Query
 from fastapi.responses import HTMLResponse, JSONResponse
 import os, json, httpx
@@ -165,7 +165,6 @@ async function fetchPrice(symbol){
 
 /* ----- Per-symbol step detection ----- */
 function parseStepFromExchangeInfo(symbol, exInfo){
-  // Supports Binance-like schema: { symbols:[{symbol:'BTCUSDT', filters:[{filterType:'LOT_SIZE', stepSize:'0.001'}]}] }
   try{
     if(!exInfo) return null;
     if (Array.isArray(exInfo.symbols)) {
@@ -174,7 +173,6 @@ function parseStepFromExchangeInfo(symbol, exInfo){
       const step = f && (f.stepSize || f.step_size);
       return step ? Number(step) : null;
     }
-    // Some APIs return direct object per symbol
     const s = exInfo[symbol] || exInfo[symbol.toUpperCase()];
     if (s && (s.stepSize || s.step_size)) return Number(s.stepSize || s.step_size);
   }catch(e){}
@@ -182,7 +180,6 @@ function parseStepFromExchangeInfo(symbol, exInfo){
 }
 
 function parseStepFromList(symbol, list){
-  // Supports [{symbol:'BTCUSDT', step:0.001}] OR [{symbol:'BTCUSDT', lotStep:'0.001'}] etc.
   try{
     if(!Array.isArray(list)) return null;
     const row = list.find(x => (x.symbol||'').toUpperCase() === symbol.toUpperCase());
@@ -206,7 +203,6 @@ async function fetchQtyStep(symbol){
   try{
     const data1 = await fetchJSON(base + '/market/info/' + encodeURIComponent(sym));
     if (data1) {
-      // Accept shapes: {stepSize:'0.001'} or {filters:{LOT_SIZE:{stepSize:'0.001'}}}
       if (data1.stepSize || data1.step_size) step = Number(data1.stepSize || data1.step_size);
       else if (data1.filters && data1.filters.LOT_SIZE && (data1.filters.LOT_SIZE.stepSize||data1.filters.LOT_SIZE.step_size)) {
         step = Number(data1.filters.LOT_SIZE.stepSize || data1.filters.LOT_SIZE.step_size);
@@ -393,50 +389,103 @@ async def ui_proxy(payload: dict = Body(...)):
   except Exception as e:
     return JSONResponse(status_code=502, content={"ok": False, "error": "proxy_failed", "detail": str(e)})
 
-# ====== HTML רשימת הזמנות פתוחות (אופציונלי) ======
-@router.get("/ops/ui/orders", response_class=HTMLResponse, summary="List open futures orders (HTML)")
-async def ops_ui_orders(symbol: Optional[str] = Query(None, description="e.g. BTCUSDT")):
-  # Lazy import כדי לא לשבור סביבת dev בלי ספרייה/מפתחות
+# ===== Helpers for orders filtering/args =====
+def _csv_list(val: Optional[str]) -> List[str]:
+  if not val:
+    return []
+  return [x.strip() for x in str(val).split(",") if x.strip()]
+
+def _norm_upper(x: Optional[str]) -> str:
+  return (x or "").strip().upper()
+
+def _filter_by_status(orders: List[dict], statuses: List[str]) -> List[dict]:
+  if not statuses:
+    return orders
+  want = {s.upper() for s in statuses if s}
+  out: List[dict] = []
+  for o in orders:
+    st = _norm_upper(o.get("status"))
+    if not want or st in want:
+      out.append(o)
+  return out
+
+def _fetch_orders_multi(symbols: List[str]) -> List[dict]:
+  """
+  מריץ get_open_orders על כל סימבול בנפרד (או בלעדיו אם הרשימה ריקה) ומחבר.
+  """
   try:
     from utils.binance_client import get_open_orders  # type: ignore
   except Exception as e:
-    return HTMLResponse(
-      f"<!doctype html><meta charset='utf-8'><body style='font-family:sans-serif;margin:2rem'>"
-      f"<h2>Open Orders</h2><p style='color:#b91c1c'>binance_client unavailable: {e}</p></body>"
-    )
+    raise RuntimeError(f"binance_client unavailable: {e}")
+  all_rows: List[dict] = []
+  # אם לא נמסרו סימבולים — נשוך הכל בבקשה אחת
+  if not symbols:
+    return get_open_orders(None) or []
+  for s in symbols:
+    rows = get_open_orders(s) or []
+    all_rows.extend(rows)
+  return all_rows
 
+# ====== HTML רשימת הזמנות פתוחות ======
+@router.get("/ops/ui/orders", response_class=HTMLResponse, summary="List open futures orders (HTML)")
+async def ops_ui_orders(
+  symbol: Optional[str] = Query(None, description="e.g. BTCUSDT (single)"),
+  symbols: Optional[List[str]] = Query(None, description="repeatable ?symbols=BTCUSDT&symbols=ETHUSDT or CSV"),
+  status: Optional[List[str]] = Query(None, description="filter by status: e.g. NEW,FILLED or repeatable"),
+):
+  # Build symbols list (symbol OR symbols[])
+  sym_list: List[str] = []
+  if symbols:
+    for item in symbols:
+      sym_list.extend(_csv_list(item))
+  elif symbol:
+    sym_list = [_norm_upper(symbol)]
+
+  # Fetch orders
   try:
-    orders = get_open_orders(symbol) or []
+    orders = _fetch_orders_multi(sym_list)
   except Exception as e:
     return HTMLResponse(
       f"<!doctype html><meta charset='utf-8'><body style='font-family:sans-serif;margin:2rem'>"
-      f"<h2>Open Orders</h2><p style='color:#b91c1c'>Error fetching orders: {str(e)}</p></body>"
+      f"<h2>Open Orders</h2><p style='color:#b91c1c'>Error: {str(e)}</p></body>"
     )
+
+  # Filter by status if provided
+  status_list: List[str] = []
+  if status:
+    for item in status:
+      status_list.extend(_csv_list(item))
+  orders = _filter_by_status(orders, status_list)
+
+  def esc(v):
+    return ("" if v is None else str(v)).replace("<", "&lt;").replace(">", "&gt;")
 
   if not orders:
-    sym_txt = (symbol or "").upper() or "ALL"
+    filt_sym = ", ".join(sym_list) if sym_list else "ALL"
+    filt_sts = ", ".join([s.upper() for s in status_list]) if status_list else "ANY"
     return HTMLResponse(
       f"<!doctype html><meta charset='utf-8'><body style='font-family:sans-serif;margin:2rem'>"
-      f"<h2>Open Orders</h2><p>No open orders for <b>{sym_txt}</b>.</p>"
-      f"<p style='color:#777'>Tip: filter with <code>?symbol=BTCUSDT</code></p>"
+      f"<h2>Open Orders</h2>"
+      f"<p>No open orders for <b>{esc(filt_sym)}</b> with status <b>{esc(filt_sts)}</b>.</p>"
+      f"<p style='color:#777'>Tips: "
+      f"<code>?symbol=BTCUSDT</code> | "
+      f"<code>?symbols=BTCUSDT,ETHUSDT</code> | "
+      f"<code>?status=NEW</code></p>"
       f"</body>"
     )
-
-  def cell(v):
-    return ("" if v is None else str(v)).replace("<", "&lt;").replace(">", "&gt;")
 
   rows = []
   for o in orders:
     rows.append(
       "<tr>"
-      f"<td>{cell(o.get('orderId'))}</td>"
-      f"<td>{cell(o.get('symbol'))}</td>"
-      f"<td>{cell(o.get('side'))}</td>"
-      f"<td>{cell(o.get('type'))}</td>"
-      f"<td>{cell(o.get('origQty') or o.get('orig_quantity') or o.get('quantity'))}</td>"
-      f"<td>{cell(o.get('price'))}</td>"
-      f"<td>{cell(o.get('reduceOnly'))}</td>"
-      f"<td>{cell(o.get('status'))}</td>"
+      f"<td>{esc(o.get('orderId'))}</td>"
+      f"<td>{esc(o.get('symbol'))}</td>"
+      f"<td>{esc(o.get('side'))}</td>"
+      f"<td>{esc(o.get('type'))}</td>"
+      f"<td>{esc(o.get('origQty') or o.get('orig_quantity') or o.get('quantity'))}</td>"
+      f"<td>{esc(o.get('price') or o.get('avgPrice'))}</td>"
+      f"<td>{esc(o.get('reduceOnly'))}</td>"
+      f"<td>{esc(o.get('status'))}</td>"
       "</tr>"
     )
 
@@ -455,8 +504,84 @@ async def ops_ui_orders(symbol: Optional[str] = Query(None, description="e.g. BT
     "<th>Qty</th><th>Price</th><th>ReduceOnly</th><th>Status</th>"
     "</tr></thead>"
     f"<tbody>{''.join(rows)}</tbody></table>"
-    "<p style='color:#777;margin-top:.8rem'>סינון לפי סימבול: <code>?symbol=BTCUSDT</code></p>"
+    "<p style='color:#777;margin-top:.8rem'>"
+    "סינון: <code>?symbol=BTCUSDT</code> | "
+    "<code>?symbols=BTCUSDT,ETHUSDT</code> | "
+    "<code>?status=NEW</code>"
+    "</p>"
     "</body>"
   )
   return HTMLResponse(html)
+
+# ====== JSON רשימת הזמנות פתוחות ======
+@router.get(
+    "/ops/ui/orders.json",
+    response_class=JSONResponse,
+    summary="List open futures orders (JSON)",
+)
+async def ops_ui_orders_json(
+  symbol: Optional[str] = Query(None, description="e.g. BTCUSDT (single)"),
+  symbols: Optional[List[str]] = Query(None, description="repeatable ?symbols=BTCUSDT&symbols=ETHUSDT or CSV"),
+  status: Optional[List[str]] = Query(None, description="filter by status: e.g. NEW,FILLED or repeatable"),
+):
+  # Build symbols list
+  sym_list: List[str] = []
+  if symbols:
+    for item in symbols:
+      sym_list.extend(_csv_list(item))
+  elif symbol:
+    sym_list = [_norm_upper(symbol)]
+
+  try:
+    orders = _fetch_orders_multi(sym_list)
+  except Exception as e:
+    return JSONResponse(
+      status_code=503,
+      content={"ok": False, "error": "binance_client_unavailable_or_fetch_failed", "detail": str(e)},
+    )
+
+  # Status filter
+  status_list: List[str] = []
+  if status:
+    for item in status:
+      status_list.extend(_csv_list(item))
+  orders = _filter_by_status(orders, status_list)
+
+  # Normalize & slim fields
+  def pick(o: dict, *keys: str) -> dict:
+    return {k: o.get(k) for k in keys}
+
+  items = [
+    {
+      **pick(
+        o,
+        "orderId",
+        "symbol",
+        "side",
+        "type",
+        "status",
+        "reduceOnly",
+        "timeInForce",
+        "activatePrice",
+        "priceRate",
+      ),
+      "price": o.get("price") or o.get("avgPrice"),
+      "origQty": o.get("origQty") or o.get("orig_quantity") or o.get("quantity"),
+      "executedQty": o.get("executedQty") or o.get("executed_quantity"),
+      "clientOrderId": o.get("clientOrderId") or o.get("origClientOrderId"),
+      "updateTime": o.get("updateTime") or o.get("time"),
+    }
+    for o in orders
+  ]
+
+  return JSONResponse(
+    content={
+      "ok": True,
+      "symbols": sym_list or None,
+      "status_filter": [s.upper() for s in status_list] or None,
+      "count": len(items),
+      "items": items,
+    }
+  )
+
 
