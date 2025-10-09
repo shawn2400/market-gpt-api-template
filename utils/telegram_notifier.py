@@ -62,7 +62,7 @@ def make_callback(action: str, trade_id: Optional[str] = None, symbol: Optional[
     if action in ("APPROVE","REJECT"):
         base = ["CONFIRM", action, str(trade_id or "")]
     else:
-        # MANAGE_AGAIN / CANCEL_TPS / CLOSE_50 / ...
+        # MANAGE_AGAIN / CANCEL_TPS / CLOSE_25 / CLOSE_50 / CLOSE_100 / CLOSE (עם pct)
         base = ["POS", action, str(symbol or "")]
         if pct is not None:
             base.append(f"{float(pct)}")
@@ -91,7 +91,7 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
         if _SIGN_SECRET and len(parts) >= 5:
             ts  = int(float(parts[-2]))
             sig = parts[-1]
-            raw = ":".join(parts[:-1])  # בלי ה-sig
+            raw = ":".join(parts[:-1])  # בלי ה-sig (נשאר data:ts)
             if sig != _hmac(raw):
                 raise ValueError("bad_sig")
             now = int(time.time())
@@ -123,7 +123,7 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
                 except Exception:
                     pct = None
         if _SIGN_SECRET and ts is not None and sig is not None:
-            raw = ":".join(parts[:-1])  # בלי ה-sig
+            raw = ":".join(parts[:-1])  # בלי ה-sig (נשאר ...:ts)
             if sig != _hmac(raw):
                 raise ValueError("bad_sig")
             now = int(time.time())
@@ -146,20 +146,26 @@ def _approval_kb_for_trade(idem: str, ticket_url: Optional[str] = None) -> Dict[
     return {"inline_keyboard": rows}
 
 def _ops_action_kb(symbol: str) -> Dict[str,Any]:
+    # כפתורי ניהול ללייב: ManageAgain / CancelTPs / Close 25/50/100
     return {"inline_keyboard":[
         [{"text":"⚙️ Manage Again","callback_data": make_callback("MANAGE_AGAIN", symbol=symbol)}],
-        [{"text":"🧹 Cancel TPs","callback_data": make_callback("CANCEL_TPS", symbol=symbol)},
-         {"text":"➗ Close 50%","callback_data": make_callback("CLOSE_50", symbol=symbol, pct=50.0)}],
+        [
+            {"text":"🧹 Cancel TPs","callback_data": make_callback("CANCEL_TPS", symbol=symbol)},
+            {"text":"➗ Close 25%","callback_data": make_callback("CLOSE_25",  symbol=symbol)},
+        ],
+        [
+            {"text":"➗ Close 50%","callback_data": make_callback("CLOSE_50",  symbol=symbol)},
+            {"text":"⛔ Close 100%","callback_data": make_callback("CLOSE_100", symbol=symbol)},
+        ],
     ]}
 
 # ===================== שירות לטלגרם (answer/edit/webhook/results) =====================
 class TelegramNotifier:
     @staticmethod
     async def ensure_webhook() -> bool:
-        # best-effort: שימוש ברגיסטר הקיים
+        # best-effort: רישום webhook אם לא קיים
         try:
-            from .telegram_notifier import register_webhook as _reg  # self-import-safe
-            return await _reg()
+            return await register_webhook()
         except Exception:
             return False
 
@@ -438,7 +444,7 @@ async def send_trade_update(info: Dict[str, Any]) -> None:
     side = _fmt_side(plan.get("side", ""))
     tp = _tp_legs_to_lines(plan.get("tp"))
     sl = (plan.get("sl") or {}).get("stopPrice")
-    parts = [f"📈 <b>Update</b> {s} {side}", *tp, f"🛡 SL: <code>{_fmt_num(sl,4)}</code>"]
+    parts = [f"📈 <b>Update</b> {s} {side}"] + (tp or []) + [f"🛡 SL: <code>{_fmt_num(sl,4)}</code>"]
     await _tg_send("\n".join(parts))
 
 async def send_trade_closed(info: Dict[str, Any]) -> None:
@@ -507,6 +513,7 @@ __all__ = [
     "make_callback", "verify_callback_data", "TelegramNotifier",
     "_send",
 ]
+
 
 
 
