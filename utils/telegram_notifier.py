@@ -1,4 +1,4 @@
-# utils/telegram_notifier.py
+utils/telegram_notifier.py-# utils/telegram_notifier.py
 from __future__ import annotations
 
 import os, asyncio, logging, json, time, hmac, hashlib
@@ -37,7 +37,7 @@ except Exception:
             "expected_pnl_usd": plan.get("expected_pnl_usd"),
         }
 
-# ====== תאימות לאחור (מודולים שקוראים _send) ======
+# ====== Alias לשמירה על תאימות ישנה (מודולים שעדיין קוראים _send) ======
 async def _send(text: str) -> None:
     await _tg_send(text)
 
@@ -104,9 +104,11 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
         action = parts[1].upper()
         symbol = parts[2]
         pct    = None
+        # tail יכול להכיל pct ואח"כ ts+sig
         tail = parts[3:]
         ts = None; sig = None
         if tail:
+            # בדיקה אם שני האחרונים הם ts+sig
             if len(tail) >= 2:
                 try:
                     maybe_ts = int(float(tail[-2]))
@@ -149,21 +151,6 @@ def _ops_action_kb(symbol: str) -> Dict[str,Any]:
         [{"text":"🧹 Cancel TPs","callback_data": make_callback("CANCEL_TPS", symbol=symbol)},
          {"text":"➗ Close 50%","callback_data": make_callback("CLOSE_50", symbol=symbol, pct=50.0)}],
     ]}
-
-# ✅ תאימות לאחור: פונקציה עם שם ישן שמייצרת כפתורי URL (לא callback)
-def build_ticket_buttons(
-    approve_url: str,
-    reject_url: str,
-    preview_url: Optional[str] = None
-) -> Dict[str, Any]:
-    row: List[Dict[str, str]] = []
-    if preview_url:
-        row.append({"text": "👁 Preview", "url": preview_url})
-    if approve_url:
-        row.append({"text": "✅ Approve", "url": approve_url})
-    if reject_url:
-        row.append({"text": "❌ Reject", "url": reject_url})
-    return {"inline_keyboard": [row]} if row else {"inline_keyboard": []}
 
 # ===================== שירות לטלגרם (answer/edit/webhook/results) =====================
 class TelegramNotifier:
@@ -518,9 +505,154 @@ __all__ = [
     "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
     "should_auto_approve_trade",
     "make_callback", "verify_callback_data", "TelegramNotifier",
-    "build_ticket_buttons",  # ✅ חשוב לתאימות עם ה-router הישן
     "_send",
-]
+]  utils/position_sizing.py-# app/utils/position_sizing.py
+import os, math, json
+from typing import Optional, Dict
+from contextlib import suppress
+
+def _env_float(name: str, default: float) -> float:
+    try:
+        return float(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except Exception:
+        return default
+
+def _leverage_cap(symbol: str, req_leverage: int) -> int:
+    """
+    קובע מינוף סופי לפי קאפים גלובליים/לסימבול.
+    """
+    max_lev = _env_int("MAX_LEVERAGE", 20)
+
+    # קאפ פר-סימבול מה-ENV אם קיים (עם הקשחה לגרשיים חיצוניים בטעות)
+    sym_cap = None
+    caps_raw = os.getenv("LEVERAGE_SYMBOL_CAPS", "")
+    if caps_raw:
+        caps = None
+        with suppress(Exception):
+            caps = json.loads(caps_raw)
+        if caps is None:
+            with suppress(Exception):
+                caps = json.loads(caps_raw.strip("'\""))
+        if isinstance(caps, dict):
+            with suppress(Exception):
+                sym_cap = int(caps.get(symbol, max_lev))
+
+    # מפת ADX אופציונלית – אם קיימת ולא משולבת במקום אחר, נשמור כמקסימום עליון “רך”
+    adx_cap = None
+    adx_map_raw = os.getenv("LEV_ADX_MAP_JSON", "")
+    if adx_map_raw:
+        adx_map = None
+        with suppress(Exception):
+            adx_map = json.loads(adx_map_raw)
+        if isinstance(adx_map, dict) and adx_map:
+            with suppress(Exception):
+                adx_cap = max(int(v) for v in adx_map.values())
+
+    caps_to_apply = [req_leverage or 0, max_lev]
+    if sym_cap: caps_to_apply.append(sym_cap)
+    if adx_cap: caps_to_apply.append(adx_cap)
+
+    lev = max(1, min([x for x in caps_to_apply if x > 0]))
+    return lev
+
+def _symbol_filters_from_env() -> Dict[str, float]:
+    """
+    אם אין לך cache של exchange info—נשתמש ב-ENV כ-fallback.
+    """
+    qty_step = _env_float("DEFAULT_QTY_STEP", 0.001)
+    price_tick = _env_float("DEFAULT_PRICE_TICK", 0.01)
+    min_notional = _env_float("MIN_NOTIONAL_USDT", 5.0)
+    return {"qty_step": qty_step, "price_tick": price_tick, "min_notional": min_notional}
+
+def _symbol_filters(symbol: str) -> Dict[str, float]:
+    """
+    מנסה למשוך פילטרים אמיתיים מהבורסה (קאש פנימי אם קיים), אחרת נופל ל-ENV.
+    מצופה שפונקציה דומה תחזיר dict עם מפתחות כמו stepSize/tickSize/minNotional.
+    """
+    # נסה utils.exchange_info.get_symbol_filters(symbol)
+    with suppress(Exception):
+        from utils.exchange_info import get_symbol_filters  # type: ignore
+        f = get_symbol_filters(symbol)  # יכול להיות dict או None
+        if f:
+            # נסה שמות מפתחות נפוצים; אם חסר—נפול ל-ENV לערך הספציפי
+            return {
+                "qty_step": float(f.get("stepSize") or f.get("qty_step") or _env_float("DEFAULT_QTY_STEP", 0.001)),
+                "price_tick": float(f.get("tickSize") or f.get("price_tick") or _env_float("DEFAULT_PRICE_TICK", 0.01)),
+                "min_notional": float(f.get("minNotional") or f.get("min_notional") or _env_float("MIN_NOTIONAL_USDT", 5.0)),
+            }
+    # אם אין מודול/קאש — פולבאק
+    return _symbol_filters_from_env()
+
+def _step_down(x: float, step: float) -> float:
+    if step <= 0:
+        return x
+    return max(step, math.floor(x / step) * step)
+
+def auto_qty(symbol: str, symbol_price: float, leverage: int) -> Optional[float]:
+    """
+    מחשב כמות לפי ENV:
+      AUTO_QTY_ENABLE=1
+      AUTO_QTY_BUDGET_USDT=100
+      AUTO_QTY_MARGIN_BUFFER_PCT=0.20
+    ומכבד:
+      MAX_TRADE_BUDGET, DEFAULT_QTY_STEP, MIN_NOTIONAL_USDT
+    """
+    if os.getenv("AUTO_QTY_ENABLE", "0") != "1":
+        return None
+
+    budget = _env_float("AUTO_QTY_BUDGET_USDT", 50.0)
+    buf    = _env_float("AUTO_QTY_MARGIN_BUFFER_PCT", 0.20)
+    max_budget = _env_float("MAX_TRADE_BUDGET", budget)
+    budget = min(budget, max_budget)
+
+    lev = _leverage_cap(symbol, int(leverage or 0))
+
+    effective = max(0.0, budget * (1.0 - buf))
+    if symbol_price <= 0 or lev <= 0 or effective <= 0:
+        return None
+
+    raw_qty = (effective * lev) / symbol_price
+    f = _symbol_filters(symbol)
+    stepped = _step_down(raw_qty, f["qty_step"])
+
+    # ודא notional מינימלי
+    if (stepped * symbol_price) < f["min_notional"]:
+        needed = (f["min_notional"] / symbol_price)
+        stepped = _step_down(needed, f["qty_step"])
+
+    return stepped if stepped > 0 else None
+
+def ensure_final_qty(ticket: dict, symbol_price: float) -> dict:
+    """
+    קובע leverage סופי לפי קאפים; ואם qty חסר/0 – מחשב לפי AUTO_QTY_*.
+    """
+    symbol = (ticket.get("symbol") or "").upper()
+    req_lev = int(ticket.get("leverage") or ticket.get("lev") or _env_int("MIN_LEVERAGE", 5))
+    final_lev = _leverage_cap(symbol, req_lev)
+    ticket["leverage"] = final_lev
+
+    q = ticket.get("qty") or ticket.get("quantity")
+    qf = float(q) if q is not None else 0.0
+    if q is None or qf <= 0.0:
+        q_calc = auto_qty(symbol, float(symbol_price), int(final_lev))
+        if q_calc and q_calc > 0:
+            ticket["qty"] = q_calc תתקן תשלח לי גרסה 1-1 מתוקנות שלמה גרסהאות מלאות  
+
+    return ticket +100$ +מינוף 10   
+
+
+
+
+
+
+
+
 
 
 
