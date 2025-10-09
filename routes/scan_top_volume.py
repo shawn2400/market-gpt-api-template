@@ -38,6 +38,54 @@ except Exception:
     get_klines_sync = None  # type: ignore
 
 
+# ========= Profile Button (ENV: REGIME_PROFILE) =========
+def _apply_profile_overrides() -> None:
+    """
+    REGIME_PROFILE: AUTO | AGGRESSIVE | BALANCED | CONSERVATIVE
+    מחיל override לערכי ENV כך שכל הקוד משתמש בהם מיידית.
+    """
+    prof = (os.getenv("REGIME_PROFILE", "AUTO") or "AUTO").strip().upper()
+    overrides: Dict[str, Any] = {}
+
+    if prof == "AGGRESSIVE":
+        # יותר טריידים + דוחף קצת סיכון כשיש מגמה
+        overrides.update({
+            "AUTO_MIN_SCORE_BASE": "6.6",
+            "TUNE_TABLE_MULT_HIGH": "1.30",
+            "TUNE_SAFE_FRAC_HIGH": "0.92",
+            "RISK_LEV_MAX": "17",
+            # טבלת אחוז הון “עשירה” יותר בקצה:
+            "RISK_SCORE_TO_EQUITY_PCT": "6.5:0.7,7:1.0,7.5:1.3,8:1.6,8.5:2.0,9:2.4,9.5:3.0",
+        })
+
+    elif prof == "CONSERVATIVE":
+        # יותר זהירות בשוק "מת"/חשוד
+        overrides.update({
+            "ADX_MIN": "27",
+            "TUNE_TABLE_MULT_LOW": "0.80",
+            "TUNE_SAFE_FRAC_LOW": "0.75",
+            "RISK_LEV_MAX": "12",
+            # טבלת אחוז הון “עדינה” יותר:
+            "RISK_SCORE_TO_EQUITY_PCT": "6.5:0.5,7:0.8,7.5:1.0,8:1.2,8.5:1.5,9:1.8,9.5:2.2",
+        })
+
+    elif prof == "BALANCED":
+        # איזון קל (בקטנה מול AUTO)
+        overrides.update({
+            "AUTO_MIN_SCORE_BASE": "6.9",
+            "TUNE_TABLE_MULT_HIGH": "1.22",
+            "TUNE_SAFE_FRAC_HIGH": "0.90",
+        })
+
+    # AUTO = בלי overrides ידניים (נשאר הדינמי המלא)
+    if overrides:
+        for k, v in overrides.items():
+            os.environ[k] = str(v)
+
+# החלה מוקדמת כדי שכל os.getenv יתחשבו בפרופיל:
+_apply_profile_overrides()
+
+
 router = APIRouter(prefix="/scan", tags=["scan"], dependencies=[Depends(require_bearer_token)])
 
 # --- זיכרון קטן למניעת ספאם (per symbol+timeframe) ---
@@ -65,10 +113,6 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 def _parse_score_equity_table(raw: str) -> List[Tuple[float, float]]:
-    """
-    "6:0.4,6.5:0.5,7:0.8,8:1.2,9:1.6,9.5:2.0" -> [(score_thresh, pct_equity), ...]
-    pct_equity באחוזים (למשל 1.2 => 1.2% מההון).
-    """
     out: List[Tuple[float, float]] = []
     raw = (raw or "").strip()
     if not raw:
@@ -107,42 +151,33 @@ def _auto_risk(
     default_leverage: float = 10.0,
     default_stake_usdt: float = 50.0,
 ) -> Tuple[float, float]:
-    """
-    (leverage, stake_usdt) דינמי לפי ציון/ADX/ATR ואחוז מההון.
-    """
     enabled = (os.getenv("AUTO_RISK_ENABLE", "1").strip() == "1")
 
-    # בסיסים ומגבלות
     lev_base = _get_env_float("RISK_LEV_BASE", default_leverage)
     lev_min  = _get_env_float("RISK_LEV_MIN",  5.0)
     lev_max  = _get_env_float("RISK_LEV_MAX", 15.0)
 
-    # אחוז בסיס fallback אם אין טבלה/Equity
-    equity_base_pct = _get_env_float("RISK_STAKE_EQUITY_BASE_PCT", 1.0)  # %
-    equity_min_pct  = _get_env_float("RISK_STAKE_EQUITY_MIN_PCT",  0.3)  # %
-    equity_max_pct  = _get_env_float("RISK_STAKE_EQUITY_MAX_PCT",  2.5)  # %
+    equity_base_pct = _get_env_float("RISK_STAKE_EQUITY_BASE_PCT", 1.0)
+    equity_min_pct  = _get_env_float("RISK_STAKE_EQUITY_MIN_PCT",  0.3)
+    equity_max_pct  = _get_env_float("RISK_STAKE_EQUITY_MAX_PCT",  2.5)
 
     stake_min_usd = _get_env_float("RISK_STAKE_MIN_USDT", 25.0)
     stake_max_usd = _get_env_float("RISK_STAKE_MAX_USDT", 500.0)
 
-    # טבלת ציון→אחוז הון
     tbl_raw = os.getenv("RISK_SCORE_TO_EQUITY_PCT", "6.5:0.6,7:0.9,7.5:1.1,8:1.3,8.5:1.7,9:2.0,9.5:2.5")
     score_tbl = _parse_score_equity_table(tbl_raw)
 
-    # טריגרים (תנודתיות/טרנד)
     adx_strong = _get_env_float("RISK_ADX_STRONG", 35.0)
     adx_weak   = _get_env_float("RISK_ADX_WEAK",   20.0)
     atr_hi     = _get_env_float("RISK_ATR_HIGH_PCT", 4.0)
     atr_lo     = _get_env_float("RISK_ATR_LOW_PCT",  0.7)
 
-    # התאמות באחוזים (pos/neg)
     stake_boost_strong = _get_env_float("RISK_STAKE_BOOST_STRONG_PCT", 15.0) / 100.0
     stake_cut_high_atr = _get_env_float("RISK_STAKE_CUT_HIGH_ATR_PCT",  20.0) / 100.0
     lev_boost_strong   = _get_env_float("RISK_LEV_BOOST_STRONG_PCT",   10.0) / 100.0
     lev_cut_high_atr   = _get_env_float("RISK_LEV_CUT_HIGH_ATR_PCT",   20.0) / 100.0
 
-    # הגדלה אוטומטית בטריידים חזקים
-    extra_mode   = (os.getenv("RISK_EXTRA_ADD_MODE", "pct") or "pct").lower()  # "pct" | "usd"
+    extra_mode   = (os.getenv("RISK_EXTRA_ADD_MODE", "pct") or "pct").lower()
     extra_thresh = _get_env_float("RISK_EXTRA_ADD_THRESH", 9.0)
     extra_value  = _get_env_float("RISK_EXTRA_ADD_VALUE",  25.0)
 
@@ -151,10 +186,8 @@ def _auto_risk(
         stake = _clamp(default_stake_usdt, stake_min_usd, stake_max_usd)
         return round(lev, 2), round(stake, 2)
 
-    # מינוף — מהבסיס, מותאם טרנד/תנודתיות
     lev = lev_base
 
-    # סטייק — אחוז הון לפי טבלה; אם אין Equity, fallback ל-default_stake_usdt
     if equity_usdt and equity_usdt > 0:
         score = float(score_total or 0.0)
         pct_equity = _score_to_equity_pct(score, score_tbl, equity_base_pct)
@@ -163,7 +196,6 @@ def _auto_risk(
     else:
         stake = default_stake_usdt
 
-    # התאמות לפי ADX
     if adx is not None:
         if adx >= adx_strong:
             lev *= (1.0 + lev_boost_strong)
@@ -172,7 +204,6 @@ def _auto_risk(
             lev *= 0.9
             stake *= 0.9
 
-    # התאמות לפי ATR%
     if atr_pct is not None:
         if atr_pct >= atr_hi:
             lev *= (1.0 - lev_cut_high_atr)
@@ -180,7 +211,6 @@ def _auto_risk(
         elif atr_pct <= atr_lo:
             stake *= 0.95
 
-    # הגדלה אוטומטית בטריידים חזקים
     if score_total is not None and score_total >= extra_thresh:
         if extra_mode == "pct":
             stake *= (1.0 + (extra_value / 100.0))
@@ -196,9 +226,6 @@ def _auto_risk(
 # ============================
 
 def _auto_tp_sl(*, side: Optional[str], entry: float, atr_pct: Optional[float], adx: Optional[float]) -> Tuple[Dict[str, Any], List[Dict[str, Any]]]:
-    """
-    בונה SL ו־TPs דינמיים לפי מכפילי ATR ו־ADX מה-ENV.
-    """
     if entry <= 0 or atr_pct is None:
         return {"stopPrice": None}, []
 
@@ -213,25 +240,21 @@ def _auto_tp_sl(*, side: Optional[str], entry: float, atr_pct: Optional[float], 
     adx_low_sl_relax_pct = _get_env_float("ADX_LOW_SL_RELAX_PCT", 10.0) / 100.0
     adx_low_tp_shrink_pct = _get_env_float("ADX_LOW_TP_SHRINK_PCT", 10.0) / 100.0
 
-    # ATR אבסולוטי
     atr_abs = entry * (atr_pct / 100.0)
 
-    # התאמות ADX
     if adx is not None:
         if adx >= adx_boost_thr:
-            # TP רחוקים יותר, SL מהודק
             tp1_mult *= (1.0 + adx_tp_boost_pct)
             tp2_mult *= (1.0 + adx_tp_boost_pct)
             tp3_mult *= (1.0 + adx_tp_boost_pct)
             sl_mult  *= (1.0 - adx_sl_tight_pct)
-        elif adx < adx_boost_thr - 10:  # ADX נמוך
+        elif adx < adx_boost_thr - 10:
             tp1_mult *= (1.0 - adx_low_tp_shrink_pct)
             tp2_mult *= (1.0 - adx_low_tp_shrink_pct)
             tp3_mult *= (1.0 - adx_low_tp_shrink_pct)
             sl_mult  *= (1.0 + adx_low_sl_relax_pct)
 
     def _round_px(x: float) -> float:
-        # ריכוך פשוט; אם יש round-to-tick במנהל ההזמנות זה יגבר
         return float(f"{x:.6f}")
 
     if (side or "").upper() == "BUY":
@@ -294,9 +317,6 @@ def _should_notify(sig: Dict[str, Any], min_score: float, rearm_score: float, de
 
 async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
                                min_score: float, found_filtered: bool) -> None:
-    """
-    שולח Heartbeat אם לא נמצאו טריידים ≥min_score במשך HEARTBEAT_HOURS.
-    """
     global _LAST_GOOD_TS
     try:
         hb_hours = float(os.getenv("HEARTBEAT_HOURS", "0") or 0)
@@ -344,7 +364,7 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
 # Routes
 # ============================
 
-@router.get("/top-volume", summary="Scan (real data only) with post-filter, notify/TTL/heartbeat + AutoRisk/TP")
+@router.get("/top-volume", summary="Scan (real data only) with post-filter, notify/TTL/heartbeat + AutoRisk/TP + Profile")
 async def scan_top_volume(
     market: str = Query("futures"),
     quote: str = Query("USDT"),
@@ -365,7 +385,7 @@ async def scan_top_volume(
     leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "10"))),
     stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
 ):
-    if notify not in _ALLOWED_NOTIFY:
+    if notify not in {"telegram", None}:
         LOG.warning({"event": "notify.unsupported", "notify": notify})
         notify = None
 
@@ -485,7 +505,7 @@ async def scan_now(
     dedupe_window_sec: int = Query(300, ge=0, le=3600),
     leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "10"))),
     stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
-    symbol: Optional[str] = Query(None),  # תאימות לאחור; לא בשימוש
+    symbol: Optional[str] = Query(None),
 ):
     return await scan_top_volume(
         market=market,
@@ -507,11 +527,6 @@ async def scan_now(
 
 # -------- מחשב איתותים: אמיתי בלבד (אין fallback דמו) + ADX --------
 async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, kline_limit: int) -> List[Dict[str, Any]]:
-    """
-    מביא klines אמיתיים ומחשב score_total=1..10 + פירוק components.
-    Trend-Aggressive: משקל גבוה ל-EMA gap, ענישת ATR קשיחה יותר,
-    ואכיפת סף ADX_MIN על הכיוון/ציון.
-    """
     import statistics
     out: List[Dict[str, Any]] = []
 
@@ -555,7 +570,6 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             return None
         return (atr / last_close) * 100.0
 
-    # ADX (+DI/-DI) הערכה מיידית
     def _adx_from_raw(rows: List[List[float]], period: int = 14) -> Optional[Dict[str, float]]:
         if len(rows) < period + 2:
             return None
@@ -586,7 +600,6 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         adx = dx
         return {"adx": adx, "plus_di": plus_di, "minus_di": minus_di}
 
-    # universe
     wl = os.getenv("WATCHLIST", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
     wl = [s.strip().upper() for s in wl if s.strip()]
     wl = wl[:max(5, min(limit, 100))]
@@ -606,13 +619,11 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             closes: List[float]
             raw_rows: Optional[List[List[float]]] = None
 
-            # DataFrame
             if hasattr(df, "__getitem__") and "close" in getattr(df, "columns", []):
                 closes = [float(x) for x in df["close"]]
                 if "high" in df.columns and "low" in df.columns:
                     raw_rows = [[None, None, float(h), float(l), float(c)]
                                 for h, l, c in zip(df["high"][-k:], df["low"][-k:], df["close"][-k:])]
-            # List[List]
             elif isinstance(df, list) and len(df) > 0:
                 closes = [float(row[4]) for row in df]
                 raw_rows = df
@@ -634,7 +645,6 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             plus_di = adx_pack["plus_di"] if adx_pack else None
             minus_di = adx_pack["minus_di"] if adx_pack else None
 
-            # SIDE + אכיפת ADX_MIN
             side: Optional[str] = None
             if ema21 > ema50 and (rsi_val or 50) >= 48:
                 side = "BUY"
@@ -644,12 +654,10 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                 side = None
 
             # ===== ניקוד רכיבים =====
-            # 1) RSI distance עד 3.5
             score_1 = 0.0
             if rsi_val is not None:
                 score_1 = min(3.5, abs(rsi_val - 50.0) / 10.0 * 3.5)
 
-            # 2) EMA trend + bonus עד 2.5
             score_2_base = 2.0 if side is not None else 0.0
             conf_bonus = 0.0
             if side == "BUY" and rsi_val is not None and rsi_val >= 55 and close > max(ema21, ema50):
@@ -664,18 +672,16 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                     conf_bonus = min(0.5, conf_bonus + 0.1)
             score_2 = min(2.5, score_2_base + conf_bonus)
 
-            # 3) EMA gap pct עד 4
             score_3 = 0.0
             if ema50 > 0:
                 ema_gap_pct = abs(ema21 - ema50) / ema50 * 100.0
-                score_3 = min(4.0, ema_gap_pct / 1.2)  # 1.2% ~ נקודה
+                score_3 = min(4.0, ema_gap_pct / 1.2)
                 if adx is not None:
                     if adx < adx_min:
                         score_3 *= 0.6
                     elif adx >= 30:
                         score_3 = min(4.0, score_3 * 1.1)
 
-            # 4) ATR penalty עד -3
             score_4 = 0.0
             if atr_pct is not None:
                 if atr_pct > max_atr_pct:
