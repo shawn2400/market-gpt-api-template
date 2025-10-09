@@ -8,9 +8,8 @@ services:
     autoDeploy: false
     numInstances: 1
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /readyz   # ✅ עובר דרך Redis ping
+    healthCheckPath: /readyz
 
-    # Persist DB to avoid loss on restarts
     disk:
       name: data
       mountPath: /app/data
@@ -47,7 +46,7 @@ services:
       - key: WEBHOOK_HOST
         value: https://algogpt-docker.onrender.com
 
-      # ================== CORS (לא חובה, אבל בריא לפרוד)
+      # ================== CORS ==================
       - key: CORS_ALLOW_ORIGINS
         value: https://algogpt-docker.onrender.com
       - key: CORS_ALLOW_HEADERS
@@ -63,7 +62,7 @@ services:
       - key: READONLY_ENDPOINTS
         value: summary,prices_top,news_cache,health
       - key: OPENAPI_INCLUDE_TAGS
-        value: "Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug"
+        value: "Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,meta"
       - key: OPENAPI_HIDE_PATTERNS
         value: /telegram/*,/executor/*,/manage-once,/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
 
@@ -75,7 +74,7 @@ services:
       - key: ENABLE_HSTS
         value: "1"
       - key: SECURITY_PUBLIC_PATHS
-        value: /readyz,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now
+        value: /readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now
       - key: SECURITY_PUBLIC_PREFIXES
         value: /public,/price,/static,/risk
 
@@ -221,7 +220,7 @@ services:
       - key: DEFAULT_STAKE_USDT
         value: "50"
 
-      # ================== SCAN CRON (auto approvals to Telegram) ==================
+      # ================== SCAN CRON ==================
       - key: SCAN_CRON_ENABLE
         value: "1"
       - key: SCAN_CRON_EVERY_SEC
@@ -287,7 +286,7 @@ services:
       - key: SIGNED_NONCE_TTL_SEC
         value: "120"
 
-      # ================== Smart-Manage right after approve ==================
+      # ================== Smart-Manage after approve ==================
       - key: SMART_MANAGE_ON_APPROVE
         value: "1"
       - key: SMART_MANAGE_BE_OFFSET_BPS
@@ -409,7 +408,7 @@ services:
       - key: HEALTH_TP_GRACE_SEC
         value: "8"
       - key: HEALTH_TP1_ENABLE
-        value: "1"
+        value: "0"
       - key: HEALTH_TP1_INTERVAL_SEC
         value: "1200"
       - key: HEALTH_TP1_ONLY_WITH_POSITION
@@ -422,6 +421,18 @@ services:
         value: "1"
       - key: OPS_HEARTBEAT_EVERY_MIN
         value: "5"
+
+      # ================== Notifications Policy ==================
+      - key: ONLY_TRADE_NOTIFICATIONS
+        value: "1"
+      - key: STARTUP_NOTIFY_ENABLE
+        value: "0"
+      - key: DAILY_DIGEST_ENABLE
+        value: "1"
+      - key: DAILY_DIGEST_HOUR
+        value: "21"
+      - key: DAILY_DIGEST_MIN
+        value: "0"
 
       # ================== Risk / Caps ==================
       - key: DAILY_LOSS_CAP_USDT
@@ -487,7 +498,7 @@ services:
       - key: DYN_ESCALATE_SLIP_MAX_BPS
         value: "60"
 
-      # ================== AI / Schedulers (לא-סודי) ==================
+      # ================== AI / Schedulers ==================
       - key: AI_SCHED_ENABLE
         value: "1"
       - key: AI_SCHED_INTERVAL_SEC
@@ -545,45 +556,36 @@ services:
       - key: PRICE_SCAN_INTERVAL
         value: "30"
 
-      # ================== (SECRETS) להגדיר בדשבורד בלבד ==================
+      # ================== Secrets (fromSecret) ==================
       - key: API_BEARER_TOKEN
-        sync: false
+        fromSecret: API_BEARER_TOKEN
       - key: API_TOKEN
-        sync: false
+        fromSecret: API_TOKEN
       - key: PRIMARY_API_TOKEN
-        sync: false
-      - key: API_SIGNING_SECRET           # ✅ Anti-Replay signatures
-        sync: false
-      - key: OPS_SIGN_SECRET              # ✅ חתימת callback/קישורים
-        sync: false
+        fromSecret: PRIMARY_API_TOKEN
+      - key: API_SIGNING_SECRET
+        fromSecret: API_SIGNING_SECRET
+      - key: OPS_SIGN_SECRET
+        fromSecret: OPS_SIGN_SECRET
+      - key: WEBHOOK_HMAC_SECRET
+        fromSecret: WEBHOOK_HMAC_SECRET
       - key: REDIS_URL
-        sync: false
+        fromSecret: REDIS_URL
       - key: BINANCE_API_KEY
-        sync: false
+        fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
-        sync: false
+        fromSecret: BINANCE_API_SECRET
       - key: OPENAI_API_KEY
-        sync: false
+        fromSecret: OPENAI_API_KEY
       - key: TELEGRAM_BOT_TOKEN
-        sync: false
+        fromSecret: TELEGRAM_BOT_TOKEN
       - key: TELEGRAM_WEBHOOK_SECRET
-        sync: false
+        fromSecret: TELEGRAM_WEBHOOK_SECRET
       - key: ALERTS_INGEST_HMAC_SECRET
-        sync: false
+        fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
-        sync: false
+        fromSecret: INTERNAL_JWT_PUBLIC_KEY
 
-      # ================== Alerts / Public (לא-סודי) ==================
-      - key: ALERTS_ACTIVE_URL
-        value: https://algogpt-docker.onrender.com/alerts/trades/active
-      - key: ALERTS_INGEST_URL
-        value: https://algogpt-docker.onrender.com/alerts/ingest
-      - key: ALERTS_ANALYSIS_URL
-        value: https://algogpt-docker.onrender.com/alerts/ingest
-      - key: ALERTS_EMAIL_TO
-        value: shaharabecassis8@gmail.com
-      - key: DEBUG_ALERTS_HMAC_CHECK
-        value: "1"
 
 
 
