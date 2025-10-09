@@ -1,7 +1,7 @@
 # routes/telegram.py
 from __future__ import annotations
-import os, time, json, logging
-from typing import Any, Dict, Optional
+import os, time, json, logging, re
+from typing import Any, Dict, Optional, Tuple
 
 import httpx
 from fastapi import APIRouter, Request, Query, HTTPException, Header
@@ -19,11 +19,24 @@ API_TOKEN    = os.getenv("API_TOKEN", os.getenv("PRIMARY_API_TOKEN","")).strip()
 PUBLIC_HOST  = (os.getenv("PUBLIC_HOST","") or os.getenv("WEBHOOK_HOST","")).rstrip("/")
 WEBHOOK_SEC  = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
 
-# יעדי API פנימיים
-URL_TRADE_UPDATE   = f"{PUBLIC_HOST}/alerts/trades/update"
-URL_MANAGE_ONCE    = f"{PUBLIC_HOST}/position-ops/manage-once"
-URL_POS_CANCEL_TPS = f"{PUBLIC_HOST}/position-ops/cancel-tps"
-URL_POS_CLOSE_PCT  = f"{PUBLIC_HOST}/position-ops/close-percent"
+HOST         = os.getenv("HOST", "127.0.0.1")
+PORT         = int(os.getenv("PORT", "10000") or "10000")
+
+def _base_host() -> str:
+    """Prefer PUBLIC_HOST; otherwise fall back to local host:port."""
+    if PUBLIC_HOST:
+        return PUBLIC_HOST
+    return f"http://{HOST}:{PORT}"
+
+# יעדי API פנימיים (נבנים דינמית כדי לתמוך גם ב־INTERNAL):
+def _urls() -> Dict[str, str]:
+    base = _base_host()
+    return {
+        "trade_update":   f"{base}/alerts/trades/update",
+        "manage_once":    f"{base}/position-ops/manage-once",
+        "pos_cancel_tps": f"{base}/position-ops/cancel-tps",
+        "pos_close_pct":  f"{base}/position-ops/close-percent",
+    }
 
 def _auth_headers() -> Dict[str,str]:
     h: Dict[str,str] = {}
@@ -76,10 +89,11 @@ async def webhook(
     # פענוח / אימות callback_data (תומך גם בחתימות אם צורפו)
     try:
         parsed   = verify_callback_data(data)  # dict
-        action   = parsed["action"]            # e.g. APPROVE / REJECT / MANAGE_AGAIN / CANCEL_TPS / CLOSE_50
+        action   = parsed["action"]            # e.g. APPROVE / REJECT / MANAGE_AGAIN / CANCEL_TPS / CLOSE_50 / CLOSE
         trade_id = parsed.get("trade_id")      # idem / ticket_id (ל-approve/reject)
         symbol   = parsed.get("symbol")        # לכפתורי POS
-        pct      = float(parsed.get("pct", 0) or 0.0)
+        pct_val  = parsed.get("pct", None)     # pct אם הועבר
+        pct      = float(pct_val) if pct_val is not None else None
     except Exception as e:
         try:
             await TelegramNotifier.answer_callback(cb_id, text=f"Callback invalid: {e}", show_alert=True)
@@ -87,13 +101,28 @@ async def webhook(
             pass
         raise HTTPException(status_code=400, detail=f"callback_invalid: {e}")
 
+    urls = _urls()
+
+    # עוזר: זיהוי CLOSE_X דינמי מתוך שם הפעולה (למשל CLOSE_25/50/100)
+    def _extract_close_pct_from_action(act: str) -> Optional[float]:
+        m = re.match(r"^CLOSE_(\d{1,3})$", act)
+        if not m:
+            return None
+        try:
+            n = float(m.group(1))
+        except Exception:
+            return None
+        if n <= 0 or n > 100:
+            return None
+        return n
+
     # שליחת הבקשה הפנימית לפי סוג הפעולה
     try:
         async with httpx.AsyncClient(timeout=20.0) as cli:
             if action in ("APPROVE","REJECT"):
                 body    = {"ticket_id": trade_id, "action": action}
                 headers = {**_auth_headers(), **build_signature_headers("/alerts/trades/update", body)}
-                r       = await cli.post(URL_TRADE_UPDATE, json=body, headers=headers)
+                r       = await cli.post(urls["trade_update"], json=body, headers=headers)
                 ok      = r.status_code < 400
                 txt     = "Approved ✅" if action == "APPROVE" else "Rejected ❌"
 
@@ -106,6 +135,7 @@ async def webhook(
                     pass
 
                 if not ok:
+                    logger.warning("trade_update_downstream_error status=%s text=%s", r.status_code, r.text[:300])
                     raise HTTPException(status_code=502, detail=f"downstream_error: {r.status_code}")
                 return {"ok": True, "action": action, "trade_id": trade_id}
 
@@ -113,34 +143,42 @@ async def webhook(
             elif action == "MANAGE_AGAIN":
                 body    = {"symbol": symbol or "", "do": ["be","trail","tp_ladder"]}
                 headers = {**_auth_headers(), **build_signature_headers("/position-ops/manage-once", body)}
-                r       = await cli.post(URL_MANAGE_ONCE, json=body, headers=headers)
+                r       = await cli.post(urls["manage_once"], json=body, headers=headers)
                 ok      = r.status_code < 400
-                txt     = "ManageOnce triggered ⚙️"
-                await TelegramNotifier.answer_callback(cb_id, text=txt, show_alert=False)
+                await TelegramNotifier.answer_callback(cb_id, text="ManageOnce triggered ⚙️", show_alert=False)
                 if not ok:
+                    logger.warning("manage_once_downstream_error status=%s text=%s", r.status_code, r.text[:300])
                     raise HTTPException(status_code=502, detail=f"downstream_error: {r.status_code}")
                 return {"ok": True, "action": action, "symbol": symbol}
 
             elif action == "CANCEL_TPS":
                 body    = {"symbol": symbol}
                 headers = {**_auth_headers(), **build_signature_headers("/position-ops/cancel-tps", body)}
-                r       = await cli.post(URL_POS_CANCEL_TPS, json=body, headers=headers)
+                r       = await cli.post(urls["pos_cancel_tps"], json=body, headers=headers)
                 ok      = r.status_code < 400
                 await TelegramNotifier.answer_callback(cb_id, text="TPs canceled 🧹", show_alert=False)
                 if not ok:
+                    logger.warning("cancel_tps_downstream_error status=%s text=%s", r.status_code, r.text[:300])
                     raise HTTPException(status_code=502, detail=f"downstream_error: {r.status_code}")
                 return {"ok": True, "action": action, "symbol": symbol}
 
-            elif action == "CLOSE_50":
-                close_pct = pct or 50.0
+            elif action.startswith("CLOSE") or action == "CLOSE":
+                # תמיכה: CLOSE_25/50/100 או CLOSE + pct דינמי מה-callback
+                close_pct = (
+                    pct if pct is not None
+                    else _extract_close_pct_from_action(action)
+                    if _extract_close_pct_from_action(action) is not None
+                    else 50.0
+                )
                 body      = {"symbol": symbol, "pct": close_pct}
                 headers   = {**_auth_headers(), **build_signature_headers("/position-ops/close-percent", body)}
-                r         = await cli.post(URL_POS_CLOSE_PCT, json=body, headers=headers)
+                r         = await cli.post(urls["pos_close_pct"], json=body, headers=headers)
                 ok        = r.status_code < 400
                 await TelegramNotifier.answer_callback(cb_id, text=f"Closed ~{close_pct:.0f}% ➗", show_alert=False)
                 if not ok:
+                    logger.warning("close_pct_downstream_error status=%s text=%s", r.status_code, r.text[:300])
                     raise HTTPException(status_code=502, detail=f"downstream_error: {r.status_code}")
-                return {"ok": True, "action": action, "symbol": symbol, "pct": close_pct}
+                return {"ok": True, "action": "CLOSE", "symbol": symbol, "pct": close_pct}
 
             else:
                 await TelegramNotifier.answer_callback(cb_id, text=f"Unknown action: {action}", show_alert=True)
@@ -150,5 +188,10 @@ async def webhook(
         raise
     except Exception as e:
         logger.exception("webhook handling failed: %s", e)
+        try:
+            await TelegramNotifier.answer_callback(cb_id, text=f"Error: {e}", show_alert=True)
+        except Exception:
+            pass
         raise HTTPException(status_code=500, detail=f"webhook_error: {e}")
+
 
