@@ -60,8 +60,6 @@ services:
         value: "1"
       - key: READONLY_ENDPOINTS
         value: "summary,prices_top,news_cache,health"
-
-      # בטל סינון תגיות כדי להחזיר *כל* ה-OpenAPI (קל לאבחון):
       - key: OPENAPI_INCLUDE_TAGS
         value: ""
       - key: OPENAPI_HIDE_PATTERNS
@@ -199,7 +197,7 @@ services:
       - key: ENABLE_INDICATOR_EXIT
         value: "1"
       - key: ADX_MIN
-        value: "18"
+        value: "20"          # עגול ומקצועי
       - key: FEAT_DAILY_CAPS
         value: "0"
       - key: FEAT_DEBOUNCE_LIMIT
@@ -215,7 +213,7 @@ services:
       - key: FEAT_COOLDOWN
         value: "0"
       - key: MAX_ATR_PCT
-        value: "3.0"
+        value: "3"           # עגול
 
       # ============== Watchlist / Allowlist ==============
       - key: ALLOWLIST_MODE
@@ -237,9 +235,9 @@ services:
       - key: SCAN_CRON_LIMIT
         value: "12"
       - key: SCAN_CRON_MIN_SCORE
-        value: "7"
+        value: "7"           # סף עגול
       - key: SCAN_REARM_SCORE
-        value: "6"
+        value: "6"           # חימוש מחדש עגול
       - key: SCAN_DEDUPE_WINDOW_SEC
         value: "300"
       - key: SCAN_TTL_SEC
@@ -501,25 +499,6 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
