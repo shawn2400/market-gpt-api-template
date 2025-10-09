@@ -1,10 +1,9 @@
 # routes/topk.py
 from __future__ import annotations
-from typing import List, Optional
+from typing import List
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
-# נסה לבנות מאגר סמלים אמיתי; אם חסר יוטיל – נשתמש בפולבאק פשוט
 try:
     from utils.watchlist_utils import build_symbol_pool  # type: ignore
 except Exception:
@@ -25,19 +24,16 @@ class TopKOut(BaseModel):
     ok: bool = True
     symbols: List[str]
 
-@router.get("", response_model=TopKOut, summary="Top-K universe pick")
+@router.get("", response_model=TopKOut, summary="TopK universe")
 def topk_root(
-    k: int = Query(12, ge=1, le=50),
+    # alias=limit לתאימות לאזעקות/בוטים קיימים
+    k: int = Query(12, ge=1, le=50, alias="limit"),
     min_quality: int = Query(6, ge=0, le=10),
     include_anchor: bool = Query(True),
     include_shorts: bool = Query(True),
     balanced: bool = Query(True),
     explore_prob: float = Query(0.15, ge=0.0, le=1.0),
-    # Alias תאימות: limit
-    limit: Optional[int] = Query(None, ge=1, le=50, description="Alias for k"),
 ) -> TopKOut:
-    if limit is not None:
-        k = limit
     syms = build_symbol_pool(
         k=k,
         min_quality=min_quality,
