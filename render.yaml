@@ -379,6 +379,48 @@ services:
       - key: TP_BE_OFFSET_BPS
         value: "8"
 
+      # ============== Auto-Tune (דינמי: מינימום ציון / ADX) ==============
+      - key: AUTO_TUNE_ENABLE
+        value: "1"
+      - key: AUTO_MIN_SCORE_BASE
+        value: "7.0"
+      - key: AUTO_MIN_SCORE_RANGE
+        value: "6.0,7.5"
+      - key: AUTO_ADX_MIN_BASE
+        value: "20"
+      - key: AUTO_ADX_RANGE
+        value: "18,25"
+      - key: TARGET_TRADES_PER_DAY_MIN
+        value: "4"
+      - key: TARGET_TRADES_PER_DAY_MAX
+        value: "10"
+      - key: AUTO_TUNE_LOOKBACK_MIN
+        value: "180"
+      - key: AUTO_BACKOFF_SEC
+        value: "900"
+
+      # ============== Auto-Tune TP/SL (ATR + ADX) ==============
+      - key: AUTO_TP_ENABLE
+        value: "1"
+      - key: SL_ATR_MULT_BASE
+        value: "1.10"
+      - key: TP1_ATR_MULT_BASE
+        value: "1.20"
+      - key: TP2_ATR_MULT_BASE
+        value: "2.20"
+      - key: TP3_ATR_MULT_BASE
+        value: "3.50"
+      - key: ADX_TP_BOOST_THRESH
+        value: "30"
+      - key: ADX_TP_BOOST_PCT
+        value: "10"
+      - key: ADX_STRONG_SL_TIGHTEN_PCT
+        value: "10"
+      - key: ADX_LOW_SL_RELAX_PCT
+        value: "10"
+      - key: ADX_LOW_TP_SHRINK_PCT
+        value: "10"
+
       # ============== Manager / Intervals ==============
       - key: MANAGER_ENABLE
         value: "1"
@@ -416,18 +458,6 @@ services:
       - key: HEARTBEAT_MIN_SCORE
         value: "6"
 
-      # ============== Notifications Policy ==============
-      - key: ONLY_TRADE_NOTIFICATIONS
-        value: "1"
-      - key: STARTUP_NOTIFY_ENABLE
-        value: "0"
-      - key: DAILY_DIGEST_ENABLE
-        value: "1"
-      - key: DAILY_DIGEST_HOUR
-        value: "21"
-      - key: DAILY_DIGEST_MIN
-        value: "0"
-
       # ============== ETA / Defaults ==============
       - key: ETA_SMART_ENABLE
         value: "1"
@@ -447,11 +477,8 @@ services:
         value: "2.18.0"
       - key: INSTANCE_ID
         value: "algogpt-docker"
-
-      # *** חשוב: להסיר את הסינון ROUTES_ONLY כדי לטעון את כל הראוטרים ***
       - key: ROUTES_ONLY
         value: ""
-
       - key: METRICS_ENABLE
         value: "true"
       - key: PNL_TRACKING
@@ -504,6 +531,7 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
+
 
 
 
