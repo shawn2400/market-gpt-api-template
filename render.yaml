@@ -8,7 +8,13 @@ services:
     autoDeploy: false
     numInstances: 1
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /readyz   # ✅ עובר כעת דרך Redis ping
+    healthCheckPath: /readyz   # ✅ עובר דרך Redis ping
+
+    # Persist DB to avoid loss on restarts
+    disk:
+      name: data
+      mountPath: /app/data
+      sizeGB: 1
 
     envVars:
       # ================== Runtime & Logging ==================
@@ -28,6 +34,10 @@ services:
         value: "false"
       - key: UVICORN_LOG_LEVEL
         value: "info"
+      - key: HTTP_MAX_CONNECTIONS
+        value: "50"
+      - key: HTTP_MAX_KEEPALIVE
+        value: "200"
 
       # ================== Base URLs ==================
       - key: PUBLIC_HOST
@@ -36,6 +46,16 @@ services:
         value: https://algogpt-docker.onrender.com
       - key: WEBHOOK_HOST
         value: https://algogpt-docker.onrender.com
+
+      # ================== CORS (לא חובה, אבל בריא לפרוד)
+      - key: CORS_ALLOW_ORIGINS
+        value: https://algogpt-docker.onrender.com
+      - key: CORS_ALLOW_HEADERS
+        value: "*"
+      - key: CORS_ALLOW_METHODS
+        value: "*"
+      - key: CORS_ALLOW_CREDENTIALS
+        value: "0"
 
       # ================== Public/Readonly ==================
       - key: ENABLE_READONLY_HTTP
@@ -47,7 +67,7 @@ services:
       - key: OPENAPI_HIDE_PATTERNS
         value: /telegram/*,/executor/*,/manage-once,/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
 
-      # ================== Security (לא סודי) ==================
+      # ================== Security (לא-סודי) ==================
       - key: PROTECT_APPROVE_ROUTES
         value: "1"
       - key: PROTECT_DIGEST_ROUTES
@@ -79,7 +99,7 @@ services:
       - key: ORDERS_QPS_BUCKET
         value: "8"
 
-      # ================== Redis client (פרמטרים לא-סודיים) ==================
+      # ================== Redis client (לא-סודי) ==================
       - key: REQUIRE_REDIS
         value: "1"
       - key: CONFIRMSTORE_ENABLE
@@ -102,6 +122,8 @@ services:
         value: algogpt
       - key: REDIS_SSL_NO_VERIFY
         value: "0"
+      - key: REDIS_NAMESPACE
+        value: ops-supervisor-web
 
       # ================== Exchange Defaults ==================
       - key: DEFAULT_MARKET
@@ -465,7 +487,7 @@ services:
       - key: DYN_ESCALATE_SLIP_MAX_BPS
         value: "60"
 
-      # ================== AI / Schedulers (לא סודי) ==================
+      # ================== AI / Schedulers (לא-סודי) ==================
       - key: AI_SCHED_ENABLE
         value: "1"
       - key: AI_SCHED_INTERVAL_SEC
@@ -523,16 +545,16 @@ services:
       - key: PRICE_SCAN_INTERVAL
         value: "30"
 
-      # ================== (SECRETS) להגדרה בדשבורד בלבד ==================
+      # ================== (SECRETS) להגדיר בדשבורד בלבד ==================
       - key: API_BEARER_TOKEN
         sync: false
       - key: API_TOKEN
         sync: false
       - key: PRIMARY_API_TOKEN
         sync: false
-      - key: API_SIGNING_SECRET            # ✅ לחתימות Anti-Replay
+      - key: API_SIGNING_SECRET           # ✅ Anti-Replay signatures
         sync: false
-      - key: OPS_SIGN_SECRET              # ✅ חתימת callback טלגרם/קישורים
+      - key: OPS_SIGN_SECRET              # ✅ חתימת callback/קישורים
         sync: false
       - key: REDIS_URL
         sync: false
@@ -562,6 +584,7 @@ services:
         value: shaharabecassis8@gmail.com
       - key: DEBUG_ALERTS_HMAC_CHECK
         value: "1"
+
 
 
 
