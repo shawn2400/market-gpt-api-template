@@ -4,7 +4,6 @@ from fastapi import APIRouter, Query
 from typing import List, Optional
 import os, requests, pandas as pd
 
-# תאימות Pydantic v1/v2
 try:
     from pydantic import BaseModel, Field, ConfigDict
     _PYD_V2 = True
@@ -17,12 +16,10 @@ from utils.indicators import prepare_indicators_for_backtest
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 router = APIRouter(prefix="/scan", tags=["Scan"])
 
-# =====================
-# Models
-# =====================
+# ===================== Models =====================
 if _PYD_V2:
     class IndicatorSet(BaseModel):
-        model_config = ConfigDict(extra="ignore")  # pydantic v2
+        model_config = ConfigDict(extra="ignore")
         rsi: Optional[float] = None
         ema_21: Optional[float] = None
         adx: Optional[float] = None
@@ -37,7 +34,7 @@ if _PYD_V2:
         bb_lower: Optional[float] = None
 else:
     class IndicatorSet(BaseModel):
-        class Config:  # pydantic v1
+        class Config:
             extra = "ignore"
         rsi: Optional[float] = None
         ema_21: Optional[float] = None
@@ -66,9 +63,7 @@ class ScanResponse(BaseModel):
     signals: List[ScanSignal] = Field(default_factory=list)
     error: Optional[str] = None
 
-# =====================
-# Binance helpers
-# =====================
+# ===================== Binance helpers =====================
 def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.DataFrame:
     sym = symbol.strip().upper()
     if not sym.endswith("USDT"):
@@ -88,9 +83,7 @@ def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.Da
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df[["open","high","low","close","volume"]]
 
-# =====================
-# Endpoints
-# =====================
+# ===================== Endpoints =====================
 @router.get("/info", response_model=ScanResponse, summary="Basic Scan Info")
 async def scan_info(
     symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
@@ -133,6 +126,16 @@ async def scan_symbols(
                                   interval=interval, ok=False, error=str(e)))
     return ScanResponse(ok=True, count_total=len(symbols), returned=len(out), signals=out)
 
+# ====== Compatibility alias: /scan/public-now ======
+@router.get("/public-now", response_model=ScanResponse, summary="[compat] quick public scan")
+async def scan_public_now(
+    interval: str = Query("15m"),
+    limit: int = Query(200, ge=50, le=200),
+    symbols_csv: Optional[str] = Query(None, description="CSV of symbols; default WATCHLIST")
+) -> ScanResponse:
+    watch = symbols_csv.split(",") if symbols_csv else os.getenv("WATCHLIST","").split(",")
+    syms = [s.strip().upper() for s in watch if s.strip()] or ["BTCUSDT","ETHUSDT","SOLUSDT"]
+    return await scan_symbols(symbols=syms, interval=interval, limit=limit)
 
 
 
