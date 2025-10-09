@@ -37,7 +37,7 @@ try:
 except Exception:
     get_klines_sync = None  # type: ignore
 
-# מחיר: קודם utils.binance_client.get_price; אם אין/נכשל — פולבאק ל-python-binance
+
 def _safe_get_price(symbol: str) -> float:
     # 1) utils.binance_client
     try:
@@ -47,8 +47,7 @@ def _safe_get_price(symbol: str) -> float:
             return float(p)
     except Exception:
         pass
-
-    # 2) python-binance (אם יש מפתחות)
+    # 2) python-binance futures ticker (אם יש מפתחות)
     try:
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY", "").strip()
@@ -61,22 +60,20 @@ def _safe_get_price(symbol: str) -> float:
             return float(info["price"])
     except Exception as e:
         LOG.debug({"event": "price.fallback_failed", "symbol": symbol, "error": str(e)})
-
     return 0.0
+
 
 router = APIRouter(prefix="/scan", tags=["scan"], dependencies=[Depends(require_bearer_token)])
 
 # --- זיכרון קטן למניעת ספאם (per symbol+timeframe) ---
 _STATE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _LAST_GOOD_TS = 0.0
-
-# ערוצי התראה מותרים (להרחבה עתידית)
 _ALLOWED_NOTIFY = {"telegram", None}
 
 
 def _passes(sig: Dict[str, Any], min_score: float, require_side: bool) -> bool:
     try:
-        score = float(sig.get("score") or 0)
+        score = float(sig.get("score_total") or sig.get("score") or 0)
     except Exception:
         score = 0.0
     side = (sig.get("side") or "").upper()
@@ -91,7 +88,7 @@ def _should_notify(sig: Dict[str, Any], min_score: float, rearm_score: float, de
     now = time.time()
     st = _STATE.get(key) or {"state": "disarmed", "last_ts": 0.0, "last_score": 0.0}
     try:
-        score = float(sig.get("score") or 0)
+        score = float(sig.get("score_total") or sig.get("score") or 0)
     except Exception:
         score = 0.0
 
@@ -113,16 +110,11 @@ def _should_notify(sig: Dict[str, Any], min_score: float, rearm_score: float, de
 
 async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
                                min_score: float, found_filtered: bool) -> None:
-    """
-    שולח Heartbeat אם לא נמצאו טריידים מעל הסף במשך HEARTBEAT_HOURS.
-    לא זורק חריגות — תמיד “כשל בטוח”.
-    """
     global _LAST_GOOD_TS
     try:
         hb_hours = float(os.getenv("HEARTBEAT_HOURS", "0") or 0)
     except Exception:
         hb_hours = 0.0
-
     if hb_hours <= 0 or notify != "telegram" or not chat_id:
         return
 
@@ -140,7 +132,6 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
             low = float(os.getenv("HEARTBEAT_MIN_SCORE", "4.0"))
         except Exception:
             low = 4.0
-
         age_min = int((now - _LAST_GOOD_TS) // 60)
         txt = (
             'בס"ד\n'
@@ -152,7 +143,6 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
             cid = int(chat_id)
         except Exception:
             cid = None
-
         try:
             await _tg_send_text(txt, chat_id=cid)
         except Exception as e:
@@ -161,16 +151,16 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
             _LAST_GOOD_TS = now
 
 
-@router.get("/top-volume", summary="Scan with post-filter, notify/TTL/heartbeat")
+@router.get("/top-volume", summary="Scan (real data only) with post-filter, notify/TTL/heartbeat")
 async def scan_top_volume(
     market: str = Query("futures"),
     quote: str = Query("USDT"),
     limit: int = Query(10, ge=1, le=100),
     timeframe: str = Query("15m"),
     kline_limit: int = Query(200, ge=60, le=1000),
-    # פוסט־פילטר:
-    min_score: float = Query(7.0),
-    require_side: bool = Query(True),
+    # פוסט־פילטר — ברירת מחדל: ללא סינון
+    min_score: float = Query(0.0),
+    require_side: bool = Query(False),
     # התראות:
     notify: Optional[str] = Query(None, description="currently supported: 'telegram'"),
     chat_id: Optional[str] = Query(None),
@@ -183,15 +173,13 @@ async def scan_top_volume(
     stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
 ):
     """
-    סורק, מסנן לפי min_score/side, שולח אישור טרייד עשיר לטלגרם עם TTL בטקסט,
-    + Heartbeat כשאין תוצאות הרבה זמן. תמיד מחזיר JSON (גם בשגיאות פנימיות).
+    סורק ומחזיר *כל* האיתותים (אמיתי בלבד, בלי דמו), עם score_total=1..10 + פירוק components.
+    אם אין דאטה — ok=false ו-error, signals=[]
     """
-    # אימות ערוץ התראה
     if notify not in _ALLOWED_NOTIFY:
         LOG.warning({"event": "notify.unsupported", "notify": notify})
         notify = None
 
-    # חישוב איתותים (לא מפיל החוצה)
     err: Optional[str] = None
     signals_raw: List[Dict[str, Any]] = []
     try:
@@ -202,7 +190,6 @@ async def scan_top_volume(
         err = f"compute_signals_failed: {e}"
         LOG.warning({"event": "scan.compute_failed", "error": str(e)})
 
-    # סינון
     try:
         filtered = [s for s in (signals_raw or []) if isinstance(s, dict) and _passes(s, min_score, require_side)]
     except Exception as e:
@@ -216,21 +203,19 @@ async def scan_top_volume(
         "counts": {"total": len(signals_raw or []), "returned": len(filtered)},
     })
 
-    # התראות — best-effort
     notified = 0
     if notify == "telegram" and chat_id and filtered:
         try:
             cid = int(chat_id)
         except Exception:
             cid = None
-
         for s in filtered:
             try:
-                if _should_notify(s, min_score, rearm_score, dedupe_window_sec):
+                if _should_notify(s, max(min_score, 7.0), rearm_score, dedupe_window_sec):
                     plan: Dict[str, Any] = {
                         "symbol": s.get("symbol"),
                         "side": s.get("side"),
-                        "score": s.get("score"),
+                        "score": s.get("score_total"),
                         "timeframe": s.get("timeframe") or timeframe,
                         "order_type": "MARKET",
                         "entry_price": (s.get("details", {}) or {}).get("close"),
@@ -242,7 +227,7 @@ async def scan_top_volume(
                         "why": s.get("note") or (s.get("details", {}) or {}).get("trend") or "—",
                         "rich": bool(rich),
                     }
-                    idem = f"{(plan['symbol'] or '?')}-{plan['timeframe']}-{int(time.time())}"
+                    idem = f"{(plan['symbol'] or '?')}-{(plan['timeframe'] or timeframe)}-{int(time.time())}"
                     try:
                         await send_trade_approval(idem, plan, chat_id=cid)
                         notified += 1
@@ -251,33 +236,31 @@ async def scan_top_volume(
             except Exception as loop_e:
                 LOG.warning({"event": "notify.loop_failed", "error": str(loop_e)})
 
-    # Heartbeat
     try:
-        await _heartbeat_if_needed(chat_id, notify, min_score, found_filtered=bool(filtered))
+        await _heartbeat_if_needed(chat_id, notify, max(min_score, 7.0), found_filtered=bool(filtered))
     except Exception as hb_e:
         LOG.warning({"event": "heartbeat.failed", "error": str(hb_e)})
 
-    # תמיד נחזיר JSON 200
     return {
         "ok": err is None,
         "count_total": len(signals_raw or []),
         "returned": len(filtered),
         "notified": notified,
-        "signals": filtered,
-        "mode": "compact",
+        "signals": filtered if filtered else (signals_raw or []),  # אם ביקשת min_score=0, זה יהיה זהה
+        "mode": "full",
         "error": err,
     }
 
 
-@router.get("/now", summary="Alias to /scan/top-volume (safe params)")
+@router.get("/now", summary="Alias to /scan/top-volume (real data only)")
 async def scan_now(
     market: str = Query("futures"),
     quote: str = Query("USDT"),
     limit: int = Query(10, ge=1, le=100),
     timeframe: str = Query("15m"),
     kline_limit: int = Query(200, ge=60, le=1000),
-    min_score: float = Query(7.0),
-    require_side: bool = Query(True),
+    min_score: float = Query(0.0),
+    require_side: bool = Query(False),
     notify: Optional[str] = Query(None),
     chat_id: Optional[str] = Query(None),
     rich: bool = Query(True),
@@ -307,14 +290,13 @@ async def scan_now(
     )
 
 
-# -------- מחשב איתותים: ניסיון אמיתי + fallback דמו --------
+# -------- מחשב איתותים: אמיתי בלבד (אין fallback דמו) --------
 async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, kline_limit: int) -> List[Dict[str, Any]]:
     """
-    מנסה להביא klines אמיתיים ולחשב RSI/EMA + side/score.
-    אם אין דאטה/כשל — מחזיר 1–3 איתותי דמו כדי לאפשר בדיקות/התראות.
-    לא זורק חריגות החוצה.
+    מביא klines אמיתיים ומחשב score_total=1..10 + פירוק components.
+    אם אין דאטה/כשל לכל הסימבולים — מוחזר [], ללא דמו.
     """
-    import statistics, time as _t
+    import statistics, math
     out: List[Dict[str, Any]] = []
 
     def _rsi(closes: List[float], period: int = 14) -> Optional[float]:
@@ -324,96 +306,136 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         for i in range(1, period + 1):
             ch = closes[-i] - closes[-i-1]
             gains.append(max(ch, 0.0))
-            losses.append(abs(min(ch, 0.0)))
+        losses = [abs(min(closes[-i] - closes[-i-1], 0.0)) for i in range(1, period + 1)]
         avg_gain = statistics.fmean(gains) if any(gains) else 0.0
         avg_loss = statistics.fmean(losses) if any(losses) else 0.0
         if avg_loss == 0:
             return 100.0
-        rs = avg_gain / avg_loss
+        rs = avg_gain / (avg_loss or 1e-9)
         return 100.0 - (100.0 / (1.0 + rs))
 
-    try:
-        wl = os.getenv("WATCHLIST", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
-        wl = [s.strip().upper() for s in wl if s.strip()]
-        wl = wl[:max(5, min(limit, 20))]
+    def _ema(seq: List[float], n: int) -> float:
+        if not seq:
+            return 0.0
+        k = 2 / (n + 1)
+        ema = seq[0]
+        for v in seq[1:]:
+            ema = v * k + ema * (1 - k)
+        return ema
 
-        tf = timeframe or "15m"
-        k = max(60, min(kline_limit, 500))
+    def _atr_pct_from_raw(rows: List[List[float]], period: int = 14) -> Optional[float]:
+        # rows: ביינאנס raw: [OpenTime,O,H,L,C,Vol,...]
+        if len(rows) < period + 1:
+            return None
+        trs = []
+        prev_close = float(rows[-period-1][4])
+        for r in rows[-period:]:
+            h = float(r[2]); l = float(r[3]); c = float(r[4])
+            tr = max(h - l, abs(h - prev_close), abs(l - prev_close))
+            trs.append(tr)
+            prev_close = c
+        atr = statistics.fmean(trs)
+        last_close = float(rows[-1][4])
+        if last_close <= 0:
+            return None
+        return (atr / last_close) * 100.0  # באחוזים
 
-        # ננסה אמיתי; אם לא — ניפול לדמו
-        for sym in wl:
-            try:
-                if get_klines_sync is None:
-                    raise RuntimeError("klines unavailable")
-                df = get_klines_sync(sym, interval=tf, limit=k)
+    # universe
+    wl = os.getenv("WATCHLIST", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
+    wl = [s.strip().upper() for s in wl if s.strip()]
+    wl = wl[:max(5, min(limit, 100))]
 
-                if hasattr(df, "__getitem__") and "close" in getattr(df, "columns", []):
-                    closes = [float(x) for x in df["close"]]
-                elif isinstance(df, list) and len(df) > 0:
-                    closes = [float(row[4]) for row in df]
-                else:
-                    raise RuntimeError("unknown klines format")
+    tf = timeframe or "15m"
+    k = max(60, min(kline_limit, 1000))
+    max_atr_pct = float(os.getenv("MAX_ATR_PCT", "3.0"))
 
-                if len(closes) < 20:
-                    continue
+    if get_klines_sync is None:
+        raise RuntimeError("get_klines_sync unavailable")
 
-                rsi_val = _rsi(closes, 14)
-                ema21 = statistics.fmean(closes[-21:]) if len(closes) >= 21 else statistics.fmean(closes)
-                ema50 = statistics.fmean(closes[-50:]) if len(closes) >= 50 else statistics.fmean(closes[-21:])
-                close = float(closes[-1])
+    for sym in wl:
+        try:
+            df = get_klines_sync(sym, interval=tf, limit=k)
 
-                side: Optional[str] = None
-                score = 0.0
-                trend = "SIDE"
-                if rsi_val is not None:
-                    if rsi_val <= 32:
-                        side = "BUY"; score += (32 - rsi_val) / 2.0
-                    elif rsi_val >= 68:
-                        side = "SELL"; score += (rsi_val - 68) / 2.0
-                if ema21 and ema50:
-                    if ema21 > ema50:
-                        trend = "UP";  score += 2.5
-                    elif ema21 < ema50:
-                        trend = "DOWN"; score += 2.5
+            closes: List[float]
+            raw_rows: Optional[List[List[float]]] = None
 
-                score = round(max(0.0, min(score, 10.0)), 2)
-                note = f"rsi={rsi_val:.1f} trend={trend}" if rsi_val is not None else f"trend={trend}"
-                out.append({
-                    "symbol": sym,
-                    "timeframe": tf,
-                    "side": side,
-                    "score": score,
-                    "note": note,
-                    "details": {"trend": trend, "rsi": rsi_val, "ema21": ema21, "ema50": ema50, "close": close},
-                })
-            except Exception as e:
-                LOG.debug({"event": "klines.symbol_failed", "symbol": sym, "error": str(e)})
+            if hasattr(df, "__getitem__") and "close" in getattr(df, "columns", []):
+                closes = [float(x) for x in df["close"]]
+                if "high" in df.columns and "low" in df.columns:
+                    raw_rows = [[None, None, float(h), float(l), float(c)]
+                                for h, l, c in zip(df["high"][-k:], df["low"][-k:], df["close"][-k:])]
+            elif isinstance(df, list) and len(df) > 0:
+                closes = [float(row[4]) for row in df]
+                raw_rows = df
+            else:
+                LOG.debug({"event": "klines.format_unknown", "symbol": sym})
                 continue
 
-        if out:
-            return out
+            if len(closes) < 50:
+                continue
 
-        # --- fallback דמו: יייצר 1–3 איתותים כדי לבדוק Notify/TTL/Heartbeat ---
-        now = int(_t.time())
-        base = ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
-        for i, sym in enumerate(base[:max(1, min(3, limit))]):
-            phase = (now // 60 + i) % 10
-            side = "BUY" if phase < 5 else "SELL"
-            score = 7.6 if i == 0 else 6.2 + (i * 0.6)
-            price = _safe_get_price(sym)
+            rsi_val = _rsi(closes, 14)
+            ema21 = _ema(closes[-100:], 21)
+            ema50 = _ema(closes[-200:], 50)
+            close = float(closes[-1])
+
+            atr_pct = _atr_pct_from_raw(raw_rows, 14) if raw_rows else None
+
+            # SIDE:
+            side: Optional[str] = None
+            if ema21 > ema50 and (rsi_val or 50) >= 48:
+                side = "BUY"
+            elif ema21 < ema50 and (rsi_val or 50) <= 52:
+                side = "SELL"
+
+            # ניקוד רכיבים
+            score_1 = 0.0  # RSI distance סביב 50 (עד 5)
+            if rsi_val is not None:
+                score_1 = min(5.0, abs(rsi_val - 50.0) / 10.0 * 5.0)
+
+            score_2 = 2.0 if side is not None else 0.0  # מגמת EMA (0/2)
+
+            score_3 = 0.0  # EMA gap pct (עד 3)
+            if ema50 > 0:
+                ema_gap_pct = abs(ema21 - ema50) / ema50 * 100.0
+                score_3 = min(3.0, ema_gap_pct / 1.5)
+
+            score_4 = 0.0  # ענישת ATR% (שלילי)
+            if atr_pct is not None and atr_pct > max_atr_pct:
+                score_4 = -(atr_pct - max_atr_pct) * 0.5
+
+            score_total = round(max(0.0, min(score_1 + score_2 + score_3 + score_4, 10.0)), 2)
+
+            note_parts = []
+            if rsi_val is not None:
+                note_parts.append(f"rsi={rsi_val:.1f}")
+            note_parts.append(f"ema21{'>':'<'[ema21<ema50]}ema50")
+            if atr_pct is not None:
+                note_parts.append(f"atr%={atr_pct:.2f}")
+            note = " ".join(note_parts)
+
             out.append({
                 "symbol": sym,
                 "timeframe": tf,
-                "side": side,
-                "score": round(score, 2),
-                "note": "demo-fallback",
-                "details": {"trend": "UP" if side == "BUY" else "DOWN", "rsi": 50.0, "ema21": price, "ema50": price, "close": price},
+                "side": side,                         # "BUY"/"SELL"/None
+                "score_total": score_total,           # 1..10 (למעשה 0..10; לרוב 1..10 בשטח)
+                "components": [                       # “ציון 1/2/3/4”
+                    {"id": 1, "name": "rsi_distance", "score": round(score_1, 2)},
+                    {"id": 2, "name": "ema_trend",    "score": round(score_2, 2)},
+                    {"id": 3, "name": "ema_gap_pct",  "score": round(score_3, 2)},
+                    {"id": 4, "name": "atr_penalty",  "score": round(score_4, 2)},
+                ],
+                "note": note,
+                "details": {
+                    "trend": "UP" if ema21 > ema50 else ("DOWN" if ema21 < ema50 else "FLAT"),
+                    "rsi": rsi_val, "ema21": ema21, "ema50": ema50, "close": close, "atr_pct": atr_pct
+                },
             })
-        return out
-    except Exception as e:
-        LOG.warning({"event": "compute_signals.crashed", "error": str(e)})
-        return []
+        except Exception as e:
+            LOG.debug({"event": "klines.symbol_failed", "symbol": sym, "error": str(e)})
+            continue
 
+    return out
 
 
 
