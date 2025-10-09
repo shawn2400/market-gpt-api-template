@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 
 from utils.anti_replay import verify_request
-from utils.telegram_notifier import TelegramNotifier, build_ticket_buttons
+from utils.telegram_notifier import TelegramNotifier, build_ticket_buttons  # noqa: F401
 
 logger = logging.getLogger("algogpt.manager")
 router = APIRouter(tags=["manager"])
@@ -28,7 +28,7 @@ DEFAULT_QTY = float(os.getenv("DEFAULT_QTY", "0.001"))
 DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "5"))
 HTTP_TIMEOUT = float(os.getenv("MANAGER_HTTP_TIMEOUT", "10.0"))
 
-# ConfirmStore — מכבד את CONFIRMSTORE_ENABLE
+# ConfirmStore (respect CONFIRMSTORE_ENABLE)
 try:
     if not CONFIRMSTORE_ENABLE:
         raise RuntimeError("ConfirmStore disabled by env")
@@ -192,7 +192,6 @@ async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
             payload = _build_ingest_payload(obj)
             resp = await _post_alerts_ingest(payload)
             logger.info("alerts/ingest ok: %s", resp)
-            # שלח טלגרם עם כפתורים
             try:
                 await TelegramNotifier.send_ticket(
                     trade_id=payload["trade_id"],
@@ -269,8 +268,8 @@ async def alerts_trades_active():
 async def alerts_trades_update(
     req: UpdateTicketReq,
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
-    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
-    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+    x_nonce: Optional[str]   = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str]= Header(None, alias="X-Signature"),
 ):
     ok, why = verify_request(
         ts_header=x_timestamp,
