@@ -1,4 +1,3 @@
-# services (Render)
 services:
   - type: web
     name: algogpt-docker
@@ -66,16 +65,16 @@ services:
       - key: OPENAPI_HIDE_PATTERNS
         value: /telegram/*,/executor/*,/manage-once,/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
 
-      # ================== Security (לא-סודי) ==================
-      # מאחר ומאשרים מהטלגרם, השאר 0. כשתעבור לזרימה חתומה – החזר ל-1 והסר את מסלולי approve מה-public.
+      # ================== Security (הקשחה) ==================
       - key: PROTECT_APPROVE_ROUTES
-        value: "0"
+        value: "1"          # מאובטח: כל מסלולי approve מוגנים (כולל /ops/approve/signed)
       - key: PROTECT_DIGEST_ROUTES
         value: "1"
       - key: ENABLE_HSTS
         value: "1"
+      # בלי /ops/approve,/ops/reject,/ops/approve-link — לא ציבוריים יותר
       - key: SECURITY_PUBLIC_PATHS
-        value: /readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/approve,/ops/approve-link,/ops/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now
+        value: /readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now
       - key: SECURITY_PUBLIC_PREFIXES
         value: /public,/price,/static,/risk
 
@@ -86,6 +85,11 @@ services:
         value: "60"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
         value: "1"
+      # חתימה בהרשאות חתומות:
+      - key: SIGNED_TS_MAX_SKEW_SEC
+        value: "60"
+      - key: SIGNED_NONCE_TTL_SEC
+        value: "120"
 
       # ================== Rate Limit backend ==================
       - key: RATE_LIMIT_ENABLE
@@ -280,24 +284,6 @@ services:
         value: "120"
       - key: OPS_TICKET_TTL_SEC
         value: "1800"
-
-      # --- Signed approve anti-replay (headers) ---
-      - key: SIGNED_TS_MAX_SKEW_SEC
-        value: "60"
-      - key: SIGNED_NONCE_TTL_SEC
-        value: "120"
-
-      # ================== Smart-Manage after approve ==================
-      - key: SMART_MANAGE_ON_APPROVE
-        value: "1"
-      - key: SMART_MANAGE_BE_OFFSET_BPS
-        value: "8"
-      - key: SMART_MANAGE_PCTS
-        value: 1.8,3.2,5.5
-      - key: SMART_MANAGE_SPLITS
-        value: 0.4,0.35,0.25
-      - key: SMART_MANAGE_TRAIL_ATR_MULT
-        value: "1.5"
 
       # ================== Trade & Orders ==================
       - key: EXECUTE_TRADES
