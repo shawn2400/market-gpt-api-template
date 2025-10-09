@@ -501,9 +501,13 @@ services:
       - key: TUNE_DD_SAFE_FRAC_BUMP_HARD
         value: "0.10"
 
-      # ============== Equity (רשות: כדי “לחיות” מהארנק) ==============
+      # ============== Equity (כדי “לחיות” מהארנק) ==============
       - key: ACCOUNT_EQUITY_USDT
-        value: ""   # ← שים כאן את סכום הארנק (למשל "1000") כדי שהסטייק יחושב כאחוז מההון
+        value: ""   # ← עדכן כאן (למשל "1000") כדי שהסטייק יחושב כאחוז מההון החי
+
+      # ============== Profile Button (לחיצה אחת) ==============
+      - key: REGIME_PROFILE
+        value: "AUTO"   # ערכים: AUTO | AGGRESSIVE | BALANCED | CONSERVATIVE
 
       # ============== Manager / Intervals ==============
       - key: MANAGER_ENABLE
@@ -615,7 +619,6 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
-
 
 
 
