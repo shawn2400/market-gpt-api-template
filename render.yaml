@@ -163,6 +163,12 @@ services:
       - key: USER_STREAM_ENABLE
         value: "1"
 
+      # ============== Router Enablement (חשוב) ==============
+      - key: ENABLE_AI_ROUTES
+        value: "1"
+      - key: PRICE_MONITOR_DISABLE
+        value: "0"
+
       # ============== Scanner / Universe ==============
       - key: SCAN_SOURCE
         value: "binance-futures"
@@ -417,38 +423,6 @@ services:
       - key: DAILY_DIGEST_MIN
         value: "0"
 
-      # ============== Risk / Caps ==============
-      - key: DAILY_LOSS_CAP_USDT
-        value: "150"
-      - key: KILL_ON_CAP
-        value: "1"
-      - key: NO_PROGRESS_TIMEOUT_MIN
-        value: "30"
-      - key: MAX_LEVERAGE
-        value: "35"
-      - key: MIN_LEVERAGE
-        value: "10"
-      - key: LEV_HARD_CAP
-        value: "50"
-      - key: LEVERAGE_SYMBOL_CAPS
-        value: '{"BTCUSDT":15,"1000PEPEUSDT":8}'
-      - key: LEV_ADX_MAP_JSON
-        value: '{"30":15,"25":12,"20":9,"0":7}'
-      - key: LIQ_MAX_NOTIONAL_TOP10
-        value: "200000"
-      - key: LIQ_MAX_NOTIONAL_OTHERS
-        value: "50000"
-      - key: LIQ_USE_SLIPPAGE
-        value: "0"
-      - key: SLIPPAGE_GUARD_BPS
-        value: "80"
-      - key: SLIPPAGE_MAX_PCT_TOP10
-        value: "0.40"
-      - key: SLIPPAGE_MAX_PCT_OTHERS
-        value: "0.80"
-      - key: MIN_TP_SL_DIFF_PCT
-        value: "3.0"
-
       # ============== ETA / Defaults ==============
       - key: ETA_SMART_ENABLE
         value: "1"
@@ -469,7 +443,7 @@ services:
       - key: INSTANCE_ID
         value: "algogpt-docker"
       - key: ROUTES_ONLY
-        value: "routes.manager,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.scan_top_volume,routes.scan_public,routes.topk,routes.ops_flags,routes.guard_smoke,routes.status,routes.debug,routes.telegram,routes.alerts,routes.root_aliases,routes.root"
+        value: "routes.status,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.scan_top_volume,routes.scan_public,routes.topk,routes.ops_flags,routes.guard_smoke,routes.debug,routes.telegram,routes.alerts,routes.root_aliases,routes.root"
       - key: METRICS_ENABLE
         value: "true"
       - key: PNL_TRACKING
@@ -522,6 +496,7 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
+
 
 
 
