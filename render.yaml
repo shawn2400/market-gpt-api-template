@@ -73,7 +73,7 @@ services:
       - key: ENABLE_HSTS
         value: "1"
       - key: SECURITY_PUBLIC_PATHS
-        value: /readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now
+        value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now
       - key: SECURITY_PUBLIC_PREFIXES
         value: /public,/price,/static,/risk
 
@@ -219,7 +219,7 @@ services:
       - key: HEARTBEAT_MIN_SCORE
         value: "4.0"
       - key: DEFAULT_LEVERAGE
-        value: "10"          # ↑ לטסט
+        value: "10"
       - key: DEFAULT_STAKE_USDT
         value: "50"
 
@@ -313,13 +313,13 @@ services:
       - key: MIN_NOTIONAL_USDT
         value: "5"
       - key: MAX_TRADE_BUDGET
-        value: "150"           # ↑ לא לחסום את 100$
+        value: "150"
       - key: AUTO_QTY_ENABLE
         value: "1"
       - key: AUTO_QTY_MODE
         value: notional
       - key: AUTO_QTY_BUDGET_USDT
-        value: "100"           # ↑ לטסט
+        value: "100"
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
         value: "0.20"
 
@@ -429,7 +429,7 @@ services:
       - key: MAX_LEVERAGE
         value: "35"
       - key: MIN_LEVERAGE
-        value: "10"           # ↑ לטסט
+        value: "10"
       - key: LEV_HARD_CAP
         value: "50"
       - key: LEVERAGE_SYMBOL_CAPS
