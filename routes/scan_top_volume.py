@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import time
 import logging
-import statistics
 from typing import Optional, Dict, Any, List, Tuple
 
 from fastapi import APIRouter, Query, Depends
@@ -37,16 +36,6 @@ try:
     from utils.get_klines import get_klines_sync  # type: ignore
 except Exception:
     get_klines_sync = None  # type: ignore
-
-# --- Redis (לא חובה) לצבירת מטריקות ---
-_R = None
-try:
-    import redis  # type: ignore
-    _redis_url = os.getenv("REDIS_URL", "")
-    if _redis_url:
-        _R = redis.from_url(_redis_url, socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT", "5.0")))
-except Exception:
-    _R = None
 
 
 def _safe_get_price(symbol: str) -> float:
@@ -81,13 +70,6 @@ _STATE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _LAST_GOOD_TS = 0.0
 _ALLOWED_NOTIFY = {"telegram", None}
 
-# --- זיכרון Auto-Tune מקומי + מצטברים ---
-_AUTO: Dict[str, Any] = {
-    "last_tune_ts": 0.0,
-    "eff_min_score": None,
-    "eff_adx_min": None,
-    "recent_hits": [],  # [(ts, symbol, score)]
-}
 
 def _passes(sig: Dict[str, Any], min_score: float, require_side: bool) -> bool:
     try:
@@ -152,9 +134,9 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
 
     if (now - _LAST_GOOD_TS) >= hb_hours * 3600:
         try:
-            low = float(os.getenv("HEARTBEAT_MIN_SCORE", "6"))
+            low = float(os.getenv("HEARTBEAT_MIN_SCORE", "4.0"))
         except Exception:
-            low = 6.0
+            low = 4.0
 
         age_min = int((now - _LAST_GOOD_TS) // 60)
         txt = (
@@ -176,125 +158,127 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
             _LAST_GOOD_TS = now
 
 
-def _auto_store_hit(symbol: str, score: float) -> None:
-    """שומר hit במצבר (Redis אם יש, אחרת זיכרון), לקצב יומי/שעתי."""
-    ts = int(time.time())
-    # זיכרון מקומי לפידבק מהיר (120 דק׳)
-    _AUTO["recent_hits"].append((ts, symbol, float(score)))
-    # ניקוי מקומי
-    cutoff = ts - 120 * 60
-    _AUTO["recent_hits"] = [x for x in _AUTO["recent_hits"] if x[0] >= cutoff]
-    # Redis – סופרים פר טרייד שעבר את הסף
+def _get_env_float(key: str, default: float) -> float:
     try:
-        if _R:
-            day_key = f"scan:auto:hits:{time.strftime('%Y%m%d')}"
-            _R.zadd(day_key, {f"{symbol}:{ts}": ts})
-            _R.expire(day_key, 3 * 24 * 3600)
+        return float(os.getenv(key, str(default)))
     except Exception:
-        pass
+        return default
 
 
-def _auto_get_day_hits() -> int:
-    """כמה איתותים עברו סף היום (Redis אם יש; אחרת לפי זיכרון 24ש׳)."""
-    ts = int(time.time())
-    day = time.strftime("%Y%m%d")
+def _parse_splits(env_key: str, default: List[float]) -> List[float]:
+    raw = (os.getenv(env_key, "") or "").strip()
+    if not raw:
+        return default[:]
     try:
-        if _R:
-            day_key = f"scan:auto:hits:{day}"
-            # סופרים את כל האירועים של היום
-            return int(_R.zcount(day_key, ts - 24 * 3600, ts))
+        vals = [float(x) for x in raw.split(",") if str(x).strip() != ""]
+        s = sum(vals)
+        if s <= 0:
+            return default[:]
+        return [v / s for v in vals]
     except Exception:
-        pass
-    # fallback: זיכרון אחרון 24ש׳
-    cutoff = ts - 24 * 3600
-    return sum(1 for t, _, _ in _AUTO.get("recent_hits", []) if t >= cutoff)
+        return default[:]
 
 
-def _clamp(v: float, lo: float, hi: float) -> float:
-    return max(lo, min(hi, v))
-
-
-def _auto_tune_thresholds(adx_values: List[float], base_min_score: float) -> Tuple[float, float, Dict[str, Any]]:
+def _auto_tp_sl(side: Optional[str], close: float, atr_abs: Optional[float], adx: Optional[float]) -> Dict[str, Any]:
     """
-    מחזיר (eff_min_score, eff_adx_min, diagnostics)
-    לוגיקה:
-      - מודד מידת טרנד גלובלית (חציון ADX מהווטצ׳ליסט)
-      - ממפה ADX חציון -> ADX_MIN דינמי
-      - בקרה על קצב טריידים: שומר יעד 4–10 ביום, מתקנן min_score בסולם קטן
+    מייצר SL/TP דינמיים לפי ATR + ADX + env, תוך שמירה על RR מינימלי.
+    מחזיר dict עם sl_price, tp ([{price,fraction},...]), ומטא לשקיפות.
     """
-    # קונפיג מה-ENV
-    tgt_lo = float(os.getenv("TARGET_TRADES_PER_DAY_MIN", "4"))
-    tgt_hi = float(os.getenv("TARGET_TRADES_PER_DAY_MAX", "10"))
-    base_adx = float(os.getenv("AUTO_ADX_MIN_BASE", os.getenv("ADX_MIN", "20")))
-    adx_lo, adx_hi = [float(x) for x in (os.getenv("AUTO_ADX_RANGE", "18,25").split(","))]
-    ms_lo, ms_hi = [float(x) for x in (os.getenv("AUTO_MIN_SCORE_RANGE", "6.0,7.5").split(","))]
-    lookback_min = int(os.getenv("AUTO_TUNE_LOOKBACK_MIN", "180"))  # מינ׳ האחרונות לשיפוט קצב
-    cooldown = int(os.getenv("AUTO_BACKOFF_SEC", "900"))
+    enabled = os.getenv("AUTO_TP_ENABLE", "1") == "1"
+    if not enabled or not side or not close or not atr_abs or atr_abs <= 0:
+        return {
+            "enabled": False,
+            "sl_price": None,
+            "tp": [],
+            "meta": {"reason": "disabled_or_missing_atr_or_side"}
+        }
 
-    now = time.time()
-    if (_AUTO.get("eff_min_score") is not None and
-        _AUTO.get("eff_adx_min") is not None and
-        (now - float(_AUTO.get("last_tune_ts") or 0)) < cooldown):
-        # שמור על יציבות: אל תכוון יותר מדי מהר
-        return float(_AUTO["eff_min_score"]), float(_AUTO["eff_adx_min"]), {"reason": "cooldown"}
+    # בסיס מה-env:
+    sl_mult = _get_env_float("SL_ATR_MULT_BASE", 1.10)
+    tp1_mult = _get_env_float("TP1_ATR_MULT_BASE", 1.20)
+    tp2_mult = _get_env_float("TP2_ATR_MULT_BASE", 2.20)
+    tp3_mult = _get_env_float("TP3_ATR_MULT_BASE", 3.50)
+    tp_mults = [tp1_mult, tp2_mult, tp3_mult]
 
-    # 1) ADX גלובלי
-    adx_med = None
-    if adx_values:
-        try:
-            adx_med = statistics.median(adx_values)
-        except Exception:
-            adx_med = None
+    # ספים/בונוסים לפי ADX:
+    adx_min = _get_env_float("ADX_MIN", 20.0)
+    adx_boost_thresh = _get_env_float("ADX_TP_BOOST_THRESH", 30.0)
+    adx_tp_boost_pct = _get_env_float("ADX_TP_BOOST_PCT", 10.0)   # הגדלת TP כשחזק
+    adx_strong_sl_tighten_pct = _get_env_float("ADX_STRONG_SL_TIGHTEN_PCT", 10.0)  # SL קצר יותר כשחזק
+    adx_low_sl_relax_pct = _get_env_float("ADX_LOW_SL_RELAX_PCT", 10.0)  # SL רחב יותר כשחלש (אם בכלל נגיע לשם)
+    adx_low_tp_shrink_pct = _get_env_float("ADX_LOW_TP_SHRINK_PCT", 10.0)
 
-    # 2) מיפוי ADX מדיאני -> ADX_MIN דינמי (חלונות טרנד/צ׳ופ)
-    eff_adx = base_adx
-    if adx_med is not None:
-        if adx_med < 18:
-            eff_adx = 25.0  # שוק חלש/צ׳ופי -> להיות סלקטיביים מאוד
-        elif adx_med < 22:
-            eff_adx = 22.0
-        elif adx_med < 28:
-            eff_adx = 20.0  # טרנד סביר
-        else:
-            eff_adx = 18.0  # טרנד חזק -> אפשר להקל
-    eff_adx = _clamp(eff_adx, adx_lo, adx_hi)
+    # התאמות ADX:
+    if adx is not None:
+        if adx >= adx_boost_thresh:
+            # טרנד חזק => SL מעט מהודק, TP רחוקים יותר
+            sl_mult *= max(0.1, 1.0 - adx_strong_sl_tighten_pct / 100.0)
+            tp_mults = [m * (1.0 + adx_tp_boost_pct / 100.0) for m in tp_mults]
+        elif adx < adx_min:
+            # טרנד חלש => אם בכל זאת יש צד, נהיה שמרנים
+            sl_mult *= (1.0 + adx_low_sl_relax_pct / 100.0)
+            tp_mults = [m * max(0.1, 1.0 - adx_low_tp_shrink_pct / 100.0) for m in tp_mults]
 
-    # 3) פידבק על קצב טריידים (יעד יומי)
-    hits_day = _auto_get_day_hits()
+    # מרחקים מוחלטים:
+    sl_dist = max(atr_abs * sl_mult, 1e-9)
+    tp_dists = [max(atr_abs * m, 1e-9) for m in tp_mults]
 
-    eff_min_score = base_min_score
-    # אם יש יותר מדי – להקשות טיפה; אם מעט מדי – להקל טיפה.
-    if hits_day > tgt_hi:
-        eff_min_score += 0.2
-    elif hits_day < max(1.0, tgt_lo - 2):
-        eff_min_score -= 0.2
+    # אכיפת RR מינימלי:
+    min_rr = _get_env_float("APPROVAL_RR_MIN", 1.25)
+    rr1 = tp_dists[0] / sl_dist if sl_dist > 0 else 0.0
+    if rr1 < min_rr:
+        scale = min_rr / max(rr1, 1e-9)
+        tp_dists = [d * scale for d in tp_dists]
+        rr1 = tp_dists[0] / sl_dist
 
-    eff_min_score = _clamp(eff_min_score, ms_lo, ms_hi)
+    # בניית מחירים:
+    if side == "BUY":
+        sl_price = close - sl_dist
+        tp_prices = [close + d for d in tp_dists]
+    else:  # SELL
+        sl_price = close + sl_dist
+        tp_prices = [close - d for d in tp_dists]
 
-    # שמירה
-    _AUTO["eff_min_score"] = eff_min_score
-    _AUTO["eff_adx_min"] = eff_adx
-    _AUTO["last_tune_ts"] = now
+    # סולם/חלוקה:
+    splits = _parse_splits("LADDER_TP_DEFAULT_SPLITS", [0.40, 0.35, 0.25])
+    max_ladders = int(float(os.getenv("TP_MAX_LADDERS", "3")))
+    tp_prices = tp_prices[:max_ladders]
+    splits = (splits + [0.0] * len(tp_prices))[:len(tp_prices)]
+    s = sum(splits) or 1.0
+    splits = [x / s for x in splits]
 
-    return eff_min_score, eff_adx, {
-        "adx_median": adx_med,
-        "hits_today": hits_day,
-        "tgt_range": (tgt_lo, tgt_hi)
+    tp_list = [{"price": float(p), "fraction": float(fr)} for p, fr in zip(tp_prices, splits)]
+
+    return {
+        "enabled": True,
+        "sl_price": float(sl_price),
+        "tp": tp_list,
+        "meta": {
+            "close": float(close),
+            "atr_abs": float(atr_abs),
+            "sl_dist": float(sl_dist),
+            "tp_dists": [float(d) for d in tp_dists],
+            "rr1": float(rr1),
+            "adx": None if adx is None else float(adx),
+            "params": {
+                "sl_mult": float(sl_mult),
+                "tp_mults": [float(m) for m in tp_mults],
+                "min_rr": float(min_rr),
+            },
+        },
     }
 
 
-@router.get("/top-volume", summary="Scan (real data only) with auto-tune/filter, notify/TTL/heartbeat")
+@router.get("/top-volume", summary="Scan (real data only) with post-filter, notify/TTL/heartbeat + auto TP/SL")
 async def scan_top_volume(
     market: str = Query("futures"),
     quote: str = Query("USDT"),
     limit: int = Query(10, ge=1, le=100),
     timeframe: str = Query("15m"),
     kline_limit: int = Query(200, ge=60, le=1000),
-    # פוסט־פילטר — אם 0.0 ו-AUTO_TUNE_ENABLE=1 => נקבע דינמically
+    # פוסט־פילטר — ברירת מחדל: כל האיתותים
     min_score: float = Query(0.0),
     require_side: bool = Query(False),
-    # Auto-Tune:
-    auto_tune: bool = Query(bool(int(os.getenv("AUTO_TUNE_ENABLE", "1")))),
     # התראות:
     notify: Optional[str] = Query(None, description="currently supported: 'telegram'"),
     chat_id: Optional[str] = Query(None),
@@ -303,12 +287,12 @@ async def scan_top_volume(
     rearm_score: float = Query(6.0),
     dedupe_window_sec: int = Query(300, ge=0, le=3600),
     # כלכלה:
-    leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "10"))),
+    leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "5"))),
     stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
 ):
     """
-    סורק ומחזיר *כל* האיתותים (אמיתי בלבד, בלי דמו), עם score_total=1..10 + פירוק components (ציון 1/2/3/4),
-    ADX פנימי, ו-Auto-Tune לספים (min_score/ADX_MIN) להבטחת 4–10 טריידים איכותיים ביום.
+    סורק ומחזיר *כל* האיתותים (אמיתי בלבד, בלי דמו), עם score_total=1..10 + פירוק components.
+    כולל ADX/ATR והצעת TP/SL דינמית לפי env. אם אין דאטה — ok=false ו-error, signals=[].
     """
     if notify not in _ALLOWED_NOTIFY:
         LOG.warning({"event": "notify.unsupported", "notify": notify})
@@ -316,49 +300,24 @@ async def scan_top_volume(
 
     err: Optional[str] = None
     signals_raw: List[Dict[str, Any]] = []
-    adx_values_for_tune: List[float] = []  # לאיסוף למדיאן
     try:
-        signals_raw, adx_values_for_tune = await _compute_signals(market, quote, limit, timeframe, kline_limit, collect_adx=True)
+        signals_raw = await _compute_signals(market, quote, limit, timeframe, kline_limit)
         if not isinstance(signals_raw, list):
             raise TypeError("signals_raw is not a list")
     except Exception as e:
         err = f"compute_signals_failed: {e}"
         LOG.warning({"event": "scan.compute_failed", "error": str(e)})
 
-    # קביעת ספים דינמית אם נדרש
-    base_min_score = float(os.getenv("AUTO_MIN_SCORE_BASE", "7.0"))
-    eff_min_score, eff_adx_min, diag = base_min_score, float(os.getenv("ADX_MIN", "20")), {}
-    if auto_tune:
-        try:
-            eff_min_score, eff_adx_min, diag = _auto_tune_thresholds(adx_values_for_tune, base_min_score)
-        except Exception as te:
-            LOG.warning({"event": "autotune.failed", "error": str(te)})
-
-    # אם המשתמש נתן min_score>0 — משתמשים בו כבסיס/override רך: לוקחים המקסימום
-    if min_score and min_score > 0:
-        eff_min_score = max(eff_min_score, float(min_score))
-
-    # סינון לפי eff_min_score
     try:
-        filtered = [s for s in (signals_raw or []) if isinstance(s, dict) and _passes(s, eff_min_score, require_side)]
+        filtered = [s for s in (signals_raw or []) if isinstance(s, dict) and _passes(s, min_score, require_side)]
     except Exception as e:
         err = f"filter_failed: {e}"
         LOG.warning({"event": "scan.filter_failed", "error": str(e)})
         filtered = []
 
-    # עדכון מונה יומי (פידבק) על מה שעבר סף
-    try:
-        for s in filtered:
-            sc = float(s.get("score_total") or 0.0)
-            _auto_store_hit(str(s.get("symbol") or "?"), sc)
-    except Exception:
-        pass
-
     LOG.info({
         "event": "scan.result",
-        "requested": {"limit": limit, "tf": timeframe, "k": kline_limit, "min_score_param": min_score, "require_side": require_side, "auto_tune": auto_tune},
-        "effective": {"min_score": eff_min_score, "adx_min": eff_adx_min},
-        "diag": diag,
+        "requested": {"limit": limit, "tf": timeframe, "k": kline_limit, "min_score": min_score, "require_side": require_side},
         "counts": {"total": len(signals_raw or []), "returned": len(filtered)},
     })
 
@@ -370,22 +329,27 @@ async def scan_top_volume(
             cid = None
         for s in filtered:
             try:
-                # סף התראה: אל תציף — דרוש לפחות max(eff_min_score,7.0)
-                if _should_notify(s, max(eff_min_score, 7.0), rearm_score, dedupe_window_sec):
+                if _should_notify(s, max(min_score, 7.0), rearm_score, dedupe_window_sec):
+                    det = (s.get("details") or {})
+                    prop = (s.get("proposal") or {})
                     plan: Dict[str, Any] = {
                         "symbol": s.get("symbol"),
                         "side": s.get("side"),
                         "score": s.get("score_total"),
                         "timeframe": s.get("timeframe") or timeframe,
                         "order_type": "MARKET",
-                        "entry_price": (s.get("details", {}) or {}).get("close"),
-                        "sl": {"stopPrice": None},
-                        "tp": [],
+                        "entry_price": det.get("close"),
+                        "sl": {"stopPrice": prop.get("sl_price")},
+                        "tp": prop.get("tp") or [],
                         "budget_usd": stake_usdt,
                         "leverage": leverage,
                         "ttl_sec": ttl_sec,
-                        "why": s.get("note") or (s.get("details", {}) or {}).get("trend") or "—",
+                        "why": s.get("note") or det.get("trend") or "—",
                         "rich": bool(rich),
+                        "auto_tune": {
+                            "enabled": bool(prop.get("enabled", False)),
+                            "meta": prop.get("meta"),
+                        },
                     }
                     idem = f"{(plan['symbol'] or '?')}-{(plan['timeframe'] or timeframe)}-{int(time.time())}"
                     try:
@@ -397,7 +361,7 @@ async def scan_top_volume(
                 LOG.warning({"event": "notify.loop_failed", "error": str(loop_e)})
 
     try:
-        await _heartbeat_if_needed(chat_id, notify, max(eff_min_score, 7.0), found_filtered=bool(filtered))
+        await _heartbeat_if_needed(chat_id, notify, max(min_score, 7.0), found_filtered=bool(filtered))
     except Exception as hb_e:
         LOG.warning({"event": "heartbeat.failed", "error": str(hb_e)})
 
@@ -408,17 +372,11 @@ async def scan_top_volume(
         "notified": notified,
         "signals": filtered if filtered else (signals_raw or []),
         "mode": "full",
-        "auto": {
-            "enabled": bool(auto_tune),
-            "effective_min_score": eff_min_score,
-            "effective_adx_min": eff_adx_min,
-            "diag": diag,
-        },
         "error": err,
     }
 
 
-@router.get("/now", summary="Alias to /scan/top-volume (auto-tune aware)")
+@router.get("/now", summary="Alias to /scan/top-volume (real data only)")
 async def scan_now(
     market: str = Query("futures"),
     quote: str = Query("USDT"),
@@ -427,14 +385,13 @@ async def scan_now(
     kline_limit: int = Query(200, ge=60, le=1000),
     min_score: float = Query(0.0),
     require_side: bool = Query(False),
-    auto_tune: bool = Query(bool(int(os.getenv("AUTO_TUNE_ENABLE", "1")))),
     notify: Optional[str] = Query(None),
     chat_id: Optional[str] = Query(None),
     rich: bool = Query(True),
     ttl_sec: int = Query(900, ge=60, le=86400),
     rearm_score: float = Query(6.0),
     dedupe_window_sec: int = Query(300, ge=0, le=3600),
-    leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "10"))),
+    leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "5"))),
     stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
     symbol: Optional[str] = Query(None),  # תאימות לאחור; לא בשימוש
 ):
@@ -446,7 +403,6 @@ async def scan_now(
         kline_limit=kline_limit,
         min_score=min_score,
         require_side=require_side,
-        auto_tune=auto_tune,
         notify=notify,
         chat_id=chat_id,
         rich=rich,
@@ -458,15 +414,17 @@ async def scan_now(
     )
 
 
-# -------- מחשב איתותים: אמיתי בלבד (אין fallback דמו) + ADX --------
-async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, kline_limit: int, collect_adx: bool = False) -> Tuple[List[Dict[str, Any]], List[float]]:
+# -------- מחשב איתותים: אמיתי בלבד (אין fallback דמו) + ADX + Auto TP/SL --------
+async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, kline_limit: int) -> List[Dict[str, Any]]:
     """
     מביא klines אמיתיים ומחשב score_total=1..10 + פירוק components.
-    גרסה Trend-Aggressive עם ADX: משקל גבוה ל-EMA gap, ענישת ATR קשיחה יותר,
-    ADX_MIN מיושם בציון צד/איכות. מחזיר גם רשימת ADX למדיאן (אם collect_adx=True).
+    גרסת Trend-Aggressive + ADX + Auto TP/SL:
+    - משקל גבוה ל-EMA gap, ענישת ATR קשיחה יותר
+    - אכיפת ADX_MIN לכיוון/ציון
+    - הצעת SL/TP לפי ATR/ADX עם אכיפת RR מינימלי
     """
+    import statistics
     out: List[Dict[str, Any]] = []
-    adx_vals: List[float] = []
 
     def _rsi(closes: List[float], period: int = 14) -> Optional[float]:
         if len(closes) < period + 1:
@@ -475,6 +433,8 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         for i in range(1, period + 1):
             ch = closes[-i] - closes[-i-1]
             gains.append(max(ch, 0.0))
+        for i in range(1, period + 1):
+            ch = closes[-i] - closes[-i-1]
             losses.append(abs(min(ch, 0.0)))
         avg_gain = statistics.fmean(gains) if any(gains) else 0.0
         avg_loss = statistics.fmean(losses) if any(losses) else 0.0
@@ -506,7 +466,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         last_close = float(rows[-1][4])
         if last_close <= 0:
             return None
-        return (atr / last_close) * 100.0  # אחוז
+        return (atr / last_close) * 100.0  # באחוזים
 
     # Wilder's ADX (+DI/-DI)
     def _adx_from_raw(rows: List[List[float]], period: int = 14) -> Optional[Dict[str, float]]:
@@ -523,6 +483,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             tr = max(h1 - l1, abs(h1 - c0), abs(l1 - c0))
             trs.append(tr)
 
+        # לשם איתות מיידי: Wilder smoothing בקירוב ממוצע
         def _wilder_smooth(seq: List[float]) -> float:
             return statistics.fmean(seq) if seq else 0.0
 
@@ -536,7 +497,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         diff = abs(plus_di - minus_di)
         summ = plus_di + minus_di if (plus_di + minus_di) != 0 else 1e-9
         dx = 100.0 * (diff / summ)
-        adx = dx  # הערכה מיידית
+        adx = dx  # הערכה מיידית (ללא EMA על DX)
         return {"adx": adx, "plus_di": plus_di, "minus_di": minus_di}
 
     # universe
@@ -546,8 +507,8 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
 
     tf = timeframe or "15m"
     k = max(60, min(kline_limit, 1000))
-    max_atr_pct = float(os.getenv("MAX_ATR_PCT", "3"))
-    adx_min_env = float(os.getenv("ADX_MIN", "20"))
+    max_atr_pct = _get_env_float("MAX_ATR_PCT", 3.0)
+    adx_min = _get_env_float("ADX_MIN", 20.0)
 
     if get_klines_sync is None:
         raise RuntimeError("get_klines_sync unavailable")
@@ -587,18 +548,14 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             plus_di = adx_pack["plus_di"] if adx_pack else None
             minus_di = adx_pack["minus_di"] if adx_pack else None
 
-            if collect_adx and adx is not None:
-                adx_vals.append(adx)
-
-            # SIDE בסיסית + אכיפת ADX_MIN (נעדכן בהמשך ע"י AutoTune, כאן נשתמש ב-env כבסיס)
+            # SIDE בסיסית + אכיפת ADX_MIN:
             side: Optional[str] = None
             if ema21 > ema50 and (rsi_val or 50) >= 48:
                 side = "BUY"
             elif ema21 < ema50 and (rsi_val or 50) <= 52:
                 side = "SELL"
-            # אם ADX נמוך מדי — מבטלים כיוון כדי לא “לצבוע” בכוח
-            if adx is not None and adx < adx_min_env:
-                side = None
+            if adx is not None and adx < adx_min:
+                side = None  # טרנד חלש מדי — לא נכריז על צד
 
             # ===== ניקוד רכיבים (1/2/3/4) =====
             # 1) RSI distance סביב 50: עד 3.5 נק'
@@ -610,29 +567,37 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             score_2_base = 2.0 if side is not None else 0.0
             conf_bonus = 0.0
             if side == "BUY" and rsi_val is not None and rsi_val >= 55 and close > max(ema21, ema50):
-                conf_bonus = 0.5 if (plus_di is not None and minus_di is not None and plus_di > minus_di) else 0.3
+                if plus_di is not None and minus_di is not None and plus_di > minus_di:
+                    conf_bonus = 0.5
+                else:
+                    conf_bonus = 0.3
             elif side == "SELL" and rsi_val is not None and rsi_val <= 45 and close < min(ema21, ema50):
-                conf_bonus = 0.5 if (plus_di is not None and minus_di is not None and minus_di > plus_di) else 0.3
+                if plus_di is not None and minus_di is not None and minus_di > plus_di:
+                    conf_bonus = 0.5
+                else:
+                    conf_bonus = 0.3
             if adx is not None:
-                if adx < adx_min_env:
+                if adx < adx_min:
                     score_2_base *= 0.4
                     conf_bonus = 0.0
-                elif adx >= 30:
+                elif adx >= 25:
+                    score_2_base *= 1.0
+                if adx >= 30:
                     conf_bonus = min(0.5, conf_bonus + 0.1)
             score_2 = min(2.5, score_2_base + conf_bonus)
 
-            # 3) EMA gap pct (עד 4 נק') — טרנד-אגרסיבי, עם scaling לפי ADX:
+            # 3) EMA gap pct (עד 4 נק') — טרנד-אגרסיבי, scaling לפי ADX:
             score_3 = 0.0
             if ema50 > 0:
                 ema_gap_pct = abs(ema21 - ema50) / ema50 * 100.0
-                score_3 = min(4.0, ema_gap_pct / 1.2)  # ~1.2% -> נקודה
+                score_3 = min(4.0, ema_gap_pct / 1.2)  # 1.2% => נק' אחת
                 if adx is not None:
-                    if adx < adx_min_env:
+                    if adx < adx_min:
                         score_3 *= 0.6
                     elif adx >= 30:
                         score_3 = min(4.0, score_3 * 1.1)
 
-            # 4) ענישת ATR% (שלילי), קשיחה; וקצה תחתון "שוק מת"
+            # 4) ענישת ATR% (שלילי), קשיחה יותר; ואופציה לקצה תחתון "שוק מת"
             score_4 = 0.0
             if atr_pct is not None:
                 if atr_pct > max_atr_pct:
@@ -640,9 +605,19 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                 elif atr_pct < 0.5:
                     score_4 = -0.3  # רעש נמוך מדי
 
+            # סכימה וסופית לתחום [0..10]
             raw_total = score_1 + score_2 + score_3 + score_4
             score_total = round(max(0.0, min(raw_total, 10.0)), 2)
 
+            # ATR מוחלט (להצעת SL/TP):
+            atr_abs = None
+            if atr_pct is not None and close > 0:
+                atr_abs = (atr_pct / 100.0) * close
+
+            # Auto-Tune TP/SL (אם יש SIDE + ATR):
+            proposal = _auto_tp_sl(side, close, atr_abs, adx)
+
+            # תיאור (note)
             note_parts = []
             if rsi_val is not None:
                 note_parts.append(f"rsi={rsi_val:.1f}")
@@ -669,15 +644,16 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                 "details": {
                     "trend": "UP" if ema21 > ema50 else ("DOWN" if ema21 < ema50 else "FLAT"),
                     "rsi": rsi_val, "ema21": ema21, "ema50": ema50, "close": close,
-                    "atr_pct": atr_pct, "adx": adx, "plus_di": plus_di, "minus_di": minus_di
+                    "atr_pct": atr_pct, "atr_abs": atr_abs,
+                    "adx": adx, "plus_di": plus_di, "minus_di": minus_di
                 },
+                "proposal": proposal,   # <<=== כאן ה-SL/TP המוצע
             })
         except Exception as e:
             LOG.debug({"event": "klines.symbol_failed", "symbol": sym, "error": str(e)})
             continue
 
-    return out, (adx_vals if collect_adx else [])
-
+    return out
 
 
 
