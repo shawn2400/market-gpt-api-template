@@ -45,9 +45,6 @@ _STATE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _LAST_GOOD_TS = 0.0
 _ALLOWED_NOTIFY = {"telegram", None}
 
-# --- קאש עדין לאקוויטי ---
-_EQUITY_CACHE: Dict[str, Any] = {"ts": 0.0, "equity": None}
-
 
 # ============================
 # Helpers
@@ -59,30 +56,20 @@ def _get_env_float(key: str, default: float) -> float:
     except Exception:
         return default
 
-def _get_env_int(key: str, default: int) -> int:
-    try:
-        return int(float(os.getenv(key, str(default))))
-    except Exception:
-        return default
-
 def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
-
 def _parse_score_equity_table(raw: str) -> List[Tuple[float, float]]:
     """
-    מקבל מחרוזת כמו: "6.5:0.6,7:0.9,7.5:1.1,8:1.3,8.5:1.7,9:2.0,9.5:2.5"
-    ומחזיר [(score_thresh, pct_equity), ...] ממוין.
-    pct_equity = אחוז מההון (לדוג' 1.3 => 1.3%).
+    מחרוזת: "6.5:0.6,7:0.9,7.5:1.1,8:1.3,8.5:1.7,9:2.0,9.5:2.5"
+    => [(score_thresh, pct_equity), ...] ממוין. pct=אחוז מההון (1.3 => 1.3%).
     """
     out: List[Tuple[float, float]] = []
     raw = (raw or "").strip()
     if not raw:
         return out
-    for p in raw.split(","):
-        p = p.strip()
-        if not p or ":" not in p:
-            continue
+    parts = [p.strip() for p in raw.split(",") if p.strip()]
+    for p in parts:
         try:
             k, v = p.split(":")
             out.append((float(k.strip()), float(v.strip())))
@@ -90,7 +77,6 @@ def _parse_score_equity_table(raw: str) -> List[Tuple[float, float]]:
             continue
     out.sort(key=lambda x: x[0])
     return out
-
 
 def _score_to_equity_pct(score: float, table: List[Tuple[float, float]], fallback_pct: float) -> float:
     pct = fallback_pct
@@ -100,7 +86,6 @@ def _score_to_equity_pct(score: float, table: List[Tuple[float, float]], fallbac
         else:
             break
     return pct
-
 
 def _safe_get_price(symbol: str) -> float:
     # 1) utils.binance_client
@@ -127,58 +112,8 @@ def _safe_get_price(symbol: str) -> float:
     return 0.0
 
 
-def _get_live_equity() -> Optional[float]:
-    """
-    מביא Equity דינמי:
-      1) אם EQUITY_SOURCE=auto -> ננסה Binance Futures balance (USDT)
-      2) אחרת משתמש ב-ACCOUNT_EQUITY_USDT אם הוגדר
-      3) אחרת מחזיר None (ייפול ל-DEFAULT_STAKE_USDT בהמשך)
-    כולל קאש עדין לפי EQUITY_REFRESH_SEC.
-    """
-    now = time.time()
-    ttl = _get_env_int("EQUITY_REFRESH_SEC", 30)
-    if (now - float(_EQUITY_CACHE.get("ts", 0.0))) < ttl and _EQUITY_CACHE.get("equity") is not None:
-        return _EQUITY_CACHE.get("equity")
-
-    # 1) auto ממקור הבורסה
-    if (os.getenv("EQUITY_SOURCE", "auto") or "auto").lower() == "auto":
-        try:
-            from binance.client import Client  # type: ignore
-            api_key = os.getenv("BINANCE_API_KEY", "").strip()
-            api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
-            if api_key and api_sec:
-                cli = Client(api_key, api_sec)
-                # futures_account_balance: מחזיר [{asset: 'USDT', balance, crossWalletBalance, availableBalance...}]
-                bal = cli.futures_account_balance()
-                if isinstance(bal, list):
-                    usdt = next((b for b in bal if str(b.get("asset")).upper() == "USDT"), None)
-                    if usdt:
-                        # נשתמש ב-availableBalance (בטוח למסחר)
-                        avail = float(usdt.get("availableBalance") or usdt.get("balance") or 0.0)
-                        if avail > 0:
-                            _EQUITY_CACHE.update({"ts": now, "equity": avail})
-                            return avail
-        except Exception as e:
-            LOG.debug({"event": "equity.auto_failed", "error": str(e)})
-
-    # 2) ידני מה-ENV
-    try:
-        eq_env = os.getenv("ACCOUNT_EQUITY_USDT", "").strip()
-        if eq_env:
-            v = float(eq_env)
-            if v > 0:
-                _EQUITY_CACHE.update({"ts": now, "equity": v})
-                return v
-    except Exception:
-        pass
-
-    # 3) אין
-    _EQUITY_CACHE.update({"ts": now, "equity": None})
-    return None
-
-
 # ============================
-# Auto Risk (Leverage + Stake %Equity)
+# Auto Risk (Leverage + Stake %Equity) — דינמי חי
 # ============================
 
 def _auto_risk(
@@ -191,68 +126,130 @@ def _auto_risk(
     default_stake_usdt: float = 50.0,
 ) -> Tuple[float, float]:
     """
-    מחזיר (leverage, stake_usdt) דינמי:
-      - stake_usdt = סכום נטו ב-USD מתוך ההון (לא קשור למינוף), לפי טבלת אחוזים + התאמות ADX/ATR/Regime.
-      - leverage דינמי לפי ADX/ATR.
+    מחזיר (leverage, stake_usdt) דינמי לגמרי:
+      - stake_usdt = סכום נטו ב-USD מתוך ההון (לא קשור למינוף).
+      - אחוז ההון נגזר מטבלת ציון→%, מוכפל במכפיל דינמי לפי ADX/ATR/דרואודאון/משטר שוק.
+      - Safe Fraction (כרית ביטחון) דינמי.
+      - מינוף מותאם ADX/ATR עם קלמפים קשיחים.
     """
     enabled = (os.getenv("AUTO_RISK_ENABLE", "1") or "1").strip() == "1"
 
+    # בסיסים וקלמפים
     lev_base = _get_env_float("RISK_LEV_BASE", default_leverage)
     lev_min  = _get_env_float("RISK_LEV_MIN",  5.0)
     lev_max  = _get_env_float("RISK_LEV_MAX", 15.0)
 
-    # אחוזי Equity
-    equity_min_pct  = _get_env_float("RISK_STAKE_EQUITY_MIN_PCT",  0.3)  # %
-    equity_max_pct  = _get_env_float("RISK_STAKE_EQUITY_MAX_PCT",  2.5)  # %
-    safe_frac       = _get_env_float("EQUITY_SAFE_FRACTION", 0.85)
+    pct_min  = _get_env_float("RISK_STAKE_EQUITY_MIN_PCT", 0.3)   # %
+    pct_max  = _get_env_float("RISK_STAKE_EQUITY_MAX_PCT", 2.5)   # %
+    stake_min = _get_env_float("RISK_STAKE_MIN_USDT", 25.0)
+    stake_max = _get_env_float("RISK_STAKE_MAX_USDT", 500.0)
 
-    stake_min_usd   = _get_env_float("RISK_STAKE_MIN_USDT", 25.0)
-    stake_max_usd   = _get_env_float("RISK_STAKE_MAX_USDT", 500.0)
-
+    # טבלת ציון→% בסיסית
     table_raw = os.getenv("RISK_SCORE_TO_EQUITY_PCT", "6.5:0.6,7:0.9,7.5:1.1,8:1.3,8.5:1.7,9:2.0,9.5:2.5")
-    score_tbl = _parse_score_equity_table(table_raw)
+    table = _parse_score_equity_table(table_raw)
 
+    # טריגרים בסיסיים
     adx_strong = _get_env_float("RISK_ADX_STRONG", 35.0)
     adx_weak   = _get_env_float("RISK_ADX_WEAK",   20.0)
     atr_hi     = _get_env_float("RISK_ATR_HIGH_PCT", 4.0)
     atr_lo     = _get_env_float("RISK_ATR_LOW_PCT",  0.7)
 
+    # בוסטרים/קאט בסיסיים
     stake_boost_strong = _get_env_float("RISK_STAKE_BOOST_STRONG_PCT", 15.0) / 100.0
     stake_cut_high_atr = _get_env_float("RISK_STAKE_CUT_HIGH_ATR_PCT",  20.0) / 100.0
     lev_boost_strong   = _get_env_float("RISK_LEV_BOOST_STRONG_PCT",   10.0) / 100.0
     lev_cut_high_atr   = _get_env_float("RISK_LEV_CUT_HIGH_ATR_PCT",   20.0) / 100.0
 
-    extra_mode   = (os.getenv("RISK_EXTRA_ADD_MODE", "pct") or "pct").lower()  # "pct" | "usd"
+    # “הגדלה” בטריידים חזקים במיוחד
+    extra_mode   = (os.getenv("RISK_EXTRA_ADD_MODE", "pct") or "pct").lower()  # "pct"|"usd"
     extra_thresh = _get_env_float("RISK_EXTRA_ADD_THRESH", 9.0)
     extra_value  = _get_env_float("RISK_EXTRA_ADD_VALUE",  25.0)
 
+    # כוונון אוטומטי (מצב שוק/דרואודאון)
+    tune_on   = (os.getenv("AUTO_RISK_TUNE_ENABLE", "1") or "1") == "1"
+    adx_hi    = _get_env_float("TUNE_ADX_HIGH", 35.0)
+    adx_lo    = _get_env_float("TUNE_ADX_LOW",  20.0)
+    atr_hi_t  = _get_env_float("TUNE_ATR_HIGH", 4.0)
+    atr_lo_t  = _get_env_float("TUNE_ATR_LOW",  0.7)
+
+    tbl_mult_low  = _get_env_float("TUNE_TABLE_MULT_LOW",  0.90)
+    tbl_mult_norm = _get_env_float("TUNE_TABLE_MULT_NORM", 1.00)
+    tbl_mult_high = _get_env_float("TUNE_TABLE_MULT_HIGH", 1.20)
+
+    sf_low   = _get_env_float("TUNE_SAFE_FRAC_LOW",  0.78)
+    sf_norm  = _get_env_float("TUNE_SAFE_FRAC_NORM", 0.85)
+    sf_high  = _get_env_float("TUNE_SAFE_FRAC_HIGH", 0.90)
+
+    # דרואודאון אופציונלי
+    dd_str = (os.getenv("DRAWDOWN_PCT", "") or "").strip()
+    dd = float(dd_str) if dd_str else None
+    dd_weak_at = _get_env_float("TUNE_DD_WEAKEN_AT", 5.0)
+    dd_hard_at = _get_env_float("TUNE_DD_HARD_AT", 10.0)
+    dd_tbl_weak = _get_env_float("TUNE_DD_TABLE_MULT_WEAK", 0.85)
+    dd_tbl_hard = _get_env_float("TUNE_DD_TABLE_MULT_HARD", 0.70)
+    dd_sf_bump_weak = _get_env_float("TUNE_DD_SAFE_FRAC_BUMP_WEAK", 0.05)
+    dd_sf_bump_hard = _get_env_float("TUNE_DD_SAFE_FRAC_BUMP_HARD", 0.10)
+
+    # אם לא מופעל — החזר בסיס
     if not enabled:
         lev = _clamp(lev_base, lev_min, lev_max)
-        stake = _clamp(default_stake_usdt, stake_min_usd, stake_max_usd)
+        stake = _clamp(default_stake_usdt, stake_min, stake_max)
         return round(lev, 2), round(stake, 2)
 
-    # מינוף — מתחילים מהבסיס
-    lev = lev_base
+    # ===== קביעת “Bucket” מצב שוק + סקייל אגרסיבי/שמרני אוטומטי =====
+    def _bucket(adx_val: Optional[float], atr_val: Optional[float]) -> str:
+        if adx_val is None or atr_val is None:
+            return "norm"
+        if adx_val >= adx_hi and atr_lo_t <= atr_val <= atr_hi_t:
+            return "high"   # טרנד חזק, תנודתיות סבירה
+        if adx_val <= adx_lo or atr_val >= atr_hi_t:
+            return "low"    # טרנד חלש או תנודתיות גבוהה מדי
+        return "norm"
 
-    # סטייק — אם יש equity, מחשבים כאחוז מההון; אם אין, נופל ל-default
+    bucket = _bucket(adx, atr_pct)
+
+    # סקייל רציף עוד יותר: אם ADX ממש גבוה, נרים את table_mult_high עד 1.30; אם ADX נמוך מאוד או ATR גבוה מאוד — נרד עד 0.80
+    dynamic_high_cap = 1.30 if (adx is not None and adx >= (adx_hi + 5)) else tbl_mult_high
+    dynamic_low_floor = 0.80 if (adx is not None and (adx <= (adx_lo - 3) or (atr_pct is not None and atr_pct >= (atr_hi_t + 1)))) else tbl_mult_low
+
+    table_mult = {"low": dynamic_low_floor, "norm": tbl_mult_norm, "high": dynamic_high_cap}[bucket]
+    safe_frac  = {"low": sf_low,            "norm": sf_norm,       "high": sf_high}[bucket]
+
+    # החמרה לפי דרואודאון
+    if tune_on and dd is not None:
+        if dd >= dd_hard_at:
+            table_mult *= dd_tbl_hard
+            safe_frac  = min(0.98, safe_frac + dd_sf_bump_hard)
+        elif dd >= dd_weak_at:
+            table_mult *= dd_tbl_weak
+            safe_frac  = min(0.95, safe_frac + dd_sf_bump_weak)
+
+    # ===== חישוב Stake לפי Equity =====
+    # Equity מה-ENV (אופציונלי). אם ריק → נופל ל-default stake.
+    eq_env = os.getenv("ACCOUNT_EQUITY_USDT", "").strip()
+    if equity_usdt is None and eq_env:
+        try:
+            equity_usdt = float(eq_env)
+        except Exception:
+            equity_usdt = None
+
     if equity_usdt and equity_usdt > 0:
-        eff_equity = equity_usdt * safe_frac  # כרית ביטחון
-        pct_equity = _score_to_equity_pct(float(score_total or 0.0), score_tbl, fallback_pct=1.0)
-        pct_equity = _clamp(pct_equity, equity_min_pct, equity_max_pct)
-        stake = eff_equity * (pct_equity / 100.0)
+        base_pct = _score_to_equity_pct(float(score_total or 0.0), table, fallback_pct=1.0)
+        dyn_pct  = _clamp(base_pct * (table_mult if tune_on else 1.0), pct_min, pct_max)
+        eff_equity = equity_usdt * _clamp(safe_frac, 0.5, 0.98)
+        stake = eff_equity * (dyn_pct / 100.0)
     else:
         stake = default_stake_usdt
 
-    # התאמות לפי ADX
+    # ===== מינוף: בסיס + בוסטרים/קאט =====
+    lev = lev_base
     if adx is not None:
         if adx >= adx_strong:
             lev *= (1.0 + lev_boost_strong)
-            stake *= (1.0 + stake_boost_strong)
         elif adx <= adx_weak:
             lev *= 0.9
             stake *= 0.9
 
-    # התאמות לפי ATR%
     if atr_pct is not None:
         if atr_pct >= atr_hi:
             lev *= (1.0 - lev_cut_high_atr)
@@ -260,16 +257,16 @@ def _auto_risk(
         elif atr_pct <= atr_lo:
             stake *= 0.95
 
-    # “הגדלה” בטריידים חזקים במיוחד
+    # הגדלה בטריידים חזקים במיוחד
     if score_total is not None and score_total >= extra_thresh:
         if extra_mode == "pct":
             stake *= (1.0 + (extra_value / 100.0))
         else:
             stake += extra_value
 
-    # קלמפים ועיגול
+    # ===== קלמפים =====
     lev = _clamp(lev, lev_min, lev_max)
-    stake = _clamp(stake, stake_min_usd, stake_max_usd)
+    stake = _clamp(stake, stake_min, stake_max)
     return round(lev, 2), round(stake, 2)
 
 
@@ -280,7 +277,6 @@ def _passes(sig: Dict[str, Any], min_score: float, require_side: bool) -> bool:
         score = 0.0
     side = (sig.get("side") or "").upper()
     return (score >= float(min_score or 0)) and ((not require_side) or (side in ("BUY", "SELL")))
-
 
 def _should_notify(sig: Dict[str, Any], min_score: float, rearm_score: float, dedupe_window_sec: int) -> bool:
     symbol = str(sig.get("symbol") or "").upper() or "?"
@@ -308,7 +304,6 @@ def _should_notify(sig: Dict[str, Any], min_score: float, rearm_score: float, de
     st["last_score"] = score
     _STATE[key] = st
     return changed and not recently
-
 
 async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
                                min_score: float, found_filtered: bool) -> None:
@@ -367,7 +362,7 @@ async def scan_top_volume(
     limit: int = Query(10, ge=1, le=100),
     timeframe: str = Query("15m"),
     kline_limit: int = Query(200, ge=60, le=1000),
-    # פוסט־פילטר
+    # פוסט־פילטר — ברירת מחדל: כל האיתותים
     min_score: float = Query(0.0),
     require_side: bool = Query(False),
     # התראות:
@@ -377,12 +372,13 @@ async def scan_top_volume(
     ttl_sec: int = Query(900, ge=60, le=86400),
     rearm_score: float = Query(6.0),
     dedupe_window_sec: int = Query(300, ge=0, le=3600),
-    # כלכלה (ברירות מחדל; ישוכתבו דינמית):
+    # כלכלה (ברירות מחדל; ישוכתבו דינמית ב-Auto-Risk):
     leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "10"))),
     stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
 ):
     """
-    סורק ומחזיר *כל* האיתותים (אמיתי בלבד), עם score_total=1..10 + פירוק components + ADX.
+    סורק ומחזיר *כל* האיתותים (אמיתי בלבד, בלי דמו), עם score_total=1..10 + רכיבים + ADX.
+    אם אין דאטה — ok=false ו-error, signals=[]
     """
     if notify not in _ALLOWED_NOTIFY:
         LOG.warning({"event": "notify.unsupported", "notify": notify})
@@ -411,9 +407,6 @@ async def scan_top_volume(
         "counts": {"total": len(signals_raw or []), "returned": len(filtered)},
     })
 
-    # Equity חי
-    live_equity = _get_live_equity()
-
     notified = 0
     if notify == "telegram" and chat_id and filtered:
         try:
@@ -428,12 +421,16 @@ async def scan_top_volume(
                     atr_val = det.get("atr_pct")
                     score_val = s.get("score_total")
 
-                    # === Auto-Risk (leverage + stake %equity) ===
+                    # Equity אופציונלי מה-ENV (אם זמין)
+                    eq_env = os.getenv("ACCOUNT_EQUITY_USDT", "").strip()
+                    equity = float(eq_env) if eq_env else None
+
+                    # === Auto-Risk (leverage + stake %equity, דינמי) ===
                     dyn_lev, dyn_stake = _auto_risk(
                         score_total=score_val,
                         adx=adx_val,
                         atr_pct=atr_val,
-                        equity_usdt=live_equity,
+                        equity_usdt=equity,
                         default_leverage=leverage,
                         default_stake_usdt=stake_usdt,
                     )
@@ -441,16 +438,16 @@ async def scan_top_volume(
                     plan: Dict[str, Any] = {
                         "symbol": s.get("symbol"),
                         "side": s.get("side"),
-                        "score": score_val,
+                        "score": s.get("score_total"),
                         "timeframe": s.get("timeframe") or timeframe,
                         "order_type": "MARKET",
-                        "entry_price": det.get("close"),
+                        "entry_price": (s.get("details", {}) or {}).get("close"),
                         "sl": {"stopPrice": None},
                         "tp": [],
-                        "budget_usd": dyn_stake,      # סכום נטו ב-USD (לא כולל מינוף)
-                        "leverage": dyn_lev,          # מינוף (מגדיל נומינלי, לא משנה את ה"תקציב" המזומן)
+                        "budget_usd": dyn_stake,
+                        "leverage": dyn_lev,
                         "ttl_sec": ttl_sec,
-                        "why": s.get("note") or det.get("trend") or "—",
+                        "why": s.get("note") or (s.get("details", {}) or {}).get("trend") or "—",
                         "rich": bool(rich),
                     }
                     idem = f"{(plan['symbol'] or '?')}-{(plan['timeframe'] or timeframe)}-{int(time.time())}"
@@ -495,7 +492,7 @@ async def scan_now(
     dedupe_window_sec: int = Query(300, ge=0, le=3600),
     leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "10"))),
     stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
-    symbol: Optional[str] = Query(None),
+    symbol: Optional[str] = Query(None),  # תאימות לאחור; לא בשימוש
 ):
     return await scan_top_volume(
         market=market,
@@ -520,7 +517,8 @@ async def scan_now(
 async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, kline_limit: int) -> List[Dict[str, Any]]:
     """
     מביא klines אמיתיים ומחשב score_total=1..10 + פירוק components.
-    גרסת Trend-Aggressive: משקל גבוה ל-EMA gap, ענישת ATR קשיחה, ואכיפת ADX_MIN.
+    Trend-Aggressive עם ADX: משקל גבוה ל-EMA gap, ענישת ATR קשיחה יותר,
+    ואכיפת סף ADX_MIN על הכיוון/ציון.
     """
     import statistics
     out: List[Dict[str, Any]] = []
@@ -563,7 +561,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         last_close = float(rows[-1][4])
         if last_close <= 0:
             return None
-        return (atr / last_close) * 100.0
+        return (atr / last_close) * 100.0  # אחוז
 
     # Wilder's ADX (+DI/-DI) — הערכה מיידית
     def _adx_from_raw(rows: List[List[float]], period: int = 14) -> Optional[Dict[str, float]]:
@@ -665,7 +663,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             if side == "BUY" and rsi_val is not None and rsi_val >= 55 and close > max(ema21, ema50):
                 conf_bonus = 0.5 if (plus_di and minus_di and plus_di > minus_di) else 0.3
             elif side == "SELL" and rsi_val is not None and rsi_val <= 45 and close < min(ema21, ema50):
-                conf_bonus = 0.5 if (plus_di and minus_di and (minus_di > plus_di)) else 0.3
+                conf_bonus = 0.5 if (plus_di and minus_di and minus_di > plus_di) else 0.3
             if adx is not None:
                 if adx < adx_min:
                     score_2_base *= 0.4
@@ -674,11 +672,11 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                     conf_bonus = min(0.5, conf_bonus + 0.1)
             score_2 = min(2.5, score_2_base + conf_bonus)
 
-            # 3) EMA gap pct (עד 4 נק')
+            # 3) EMA gap pct (עד 4 נק') — אגרסיבי בעומק:
             score_3 = 0.0
             if ema50 > 0:
                 ema_gap_pct = abs(ema21 - ema50) / ema50 * 100.0
-                score_3 = min(4.0, ema_gap_pct / 1.2)
+                score_3 = min(4.0, ema_gap_pct / 1.2)  # 1.2% => נק' אחת
                 if adx is not None:
                     if adx < adx_min:
                         score_3 *= 0.6
@@ -729,6 +727,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             continue
 
     return out
+
 
 
 
