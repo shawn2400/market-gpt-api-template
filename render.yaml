@@ -25,9 +25,9 @@ services:
       - key: LOG_LEVEL
         value: "INFO"
       - key: APP_MODULE
-        value: main:app
+        value: "main:app"
       - key: PYTHONPATH
-        value: /app
+        value: "/app"
       - key: UVICORN_ACCESS_LOG
         value: "false"
       - key: UVICORN_LOG_LEVEL
@@ -39,15 +39,15 @@ services:
 
       # ============== Base URLs ==============
       - key: PUBLIC_HOST
-        value: https://algogpt-docker.onrender.com
+        value: "https://algogpt-docker.onrender.com"
       - key: CONTEXT_URL
-        value: https://algogpt-docker.onrender.com
+        value: "https://algogpt-docker.onrender.com"
       - key: WEBHOOK_HOST
-        value: https://algogpt-docker.onrender.com
+        value: "https://algogpt-docker.onrender.com"
 
       # ============== CORS ==============
       - key: CORS_ALLOW_ORIGINS
-        value: https://algogpt-docker.onrender.com
+        value: "https://algogpt-docker.onrender.com"
       - key: CORS_ALLOW_HEADERS
         value: "*"
       - key: CORS_ALLOW_METHODS
@@ -59,11 +59,13 @@ services:
       - key: ENABLE_READONLY_HTTP
         value: "1"
       - key: READONLY_ENDPOINTS
-        value: summary,prices_top,news_cache,health
+        value: "summary,prices_top,news_cache,health"
       - key: OPENAPI_INCLUDE_TAGS
-        value: meta,Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk,alerts,aliases
+        value: "meta,Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk,alerts,aliases"
       - key: OPENAPI_HIDE_PATTERNS
-        value: /_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
+        value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
+      - key: OPENAPI_PUBLIC_MAX_OPS
+        value: "30"
 
       # ============== Security (hardening) ==============
       - key: PROTECT_APPROVE_ROUTES
@@ -73,9 +75,9 @@ services:
       - key: ENABLE_HSTS
         value: "1"
       - key: SECURITY_PUBLIC_PATHS
-        value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active
+        value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active"
       - key: SECURITY_PUBLIC_PREFIXES
-        value: /public,/price,/static,/risk
+        value: "/public,/price,/static,/risk"
 
       # ============== Anti-Replay ==============
       - key: ANTI_REPLAY_ENABLE
@@ -95,7 +97,7 @@ services:
       - key: RL_FAIL_OPEN
         value: "0"
       - key: RATE_LIMIT_BACKEND
-        value: redis
+        value: "redis"
       - key: ORDERS_BUCKET_WINDOW_SEC
         value: "10"
       - key: ORDERS_QPS_BUCKET
@@ -121,29 +123,29 @@ services:
       - key: REDIS_PING_RETRY_BACKOFF_SEC
         value: "0.3"
       - key: REDIS_CLIENT_NAME
-        value: algogpt
+        value: "algogpt"
       - key: REDIS_SSL_NO_VERIFY
         value: "0"
       - key: REDIS_NAMESPACE
-        value: ops-supervisor-web
+        value: "ops-supervisor-web"
 
       # ============== Exchange Defaults ==============
       - key: DEFAULT_MARKET
-        value: futures
+        value: "futures"
       - key: POSITION_MODE_OVERRIDE
-        value: oneway
+        value: "oneway"
       - key: BINANCE_MARGIN_TYPE_DEFAULT
-        value: ISOLATED
+        value: "ISOLATED"
       - key: BINANCE_FUTURES_HTTP_BASE
-        value: https://fapi.binance.com
+        value: "https://fapi.binance.com"
       - key: BINANCE_FUTURES_WS_BASE
-        value: wss://fstream.binance.com
+        value: "wss://fstream.binance.com"
       - key: BINANCE_SPOT_HTTP_BASE
-        value: https://api.binance.com
+        value: "https://api.binance.com"
       - key: BINANCE_TESTNET
         value: "false"
       - key: BINANCE_WORKING_TYPE
-        value: MARK_PRICE
+        value: "MARK_PRICE"
       - key: BINANCE_HTTP_TIMEOUT
         value: "10.0"
       - key: BINANCE_MAX_RETRIES
@@ -158,14 +160,16 @@ services:
         value: "1"
       - key: EXCHANGE_INFO_TTL_SEC
         value: "900"
+      - key: USER_STREAM_ENABLE
+        value: "1"
 
       # ============== Scanner / Universe ==============
       - key: SCAN_SOURCE
-        value: binance-futures
+        value: "binance-futures"
       - key: UNIVERSE_MODE
-        value: exchange
+        value: "exchange"
       - key: SCAN_INTERVALS
-        value: 5m,15m,1h,4h
+        value: "5m,15m,1h,4h"
       - key: SCAN_MAX_SYMBOLS
         value: "150"
       - key: SCAN_MAX_LIMIT
@@ -183,7 +187,7 @@ services:
 
       # ============== Indicators / Gates ==============
       - key: INDICATOR_INTERVALS
-        value: 15m,1h,4h,1d
+        value: "15m,1h,4h,1d"
       - key: ENABLE_INDICATOR_EXIT
         value: "1"
       - key: ADX_MIN
@@ -207,11 +211,11 @@ services:
 
       # ============== Watchlist / Allowlist ==============
       - key: ALLOWLIST_MODE
-        value: off
+        value: "off"
       - key: SYMBOLS_ALLOWLIST_PATH
-        value: config/symbols_allowlist.json
+        value: "config/symbols_allowlist.json"
       - key: WATCHLIST
-        value: BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT
+        value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT"
 
       # ============== Scan CRON (Telegram) ==============
       - key: SCAN_CRON_ENABLE
@@ -259,7 +263,7 @@ services:
       - key: TELEGRAM_PARSE_MODE
         value: "HTML"
       - key: APPROVAL_PUBSUB_CHANNEL
-        value: ops:ticket:events
+        value: "ops:ticket:events"
       - key: APPROVAL_RR_MIN
         value: "1.25"
       - key: APPROVAL_SUCCESS_MIN
@@ -287,7 +291,7 @@ services:
       - key: ORDERS_USE_OCO
         value: "1"
       - key: ORDER_ID_PREFIX
-        value: ALG
+        value: "ALG"
       - key: ORDER_ID_INCLUDE_TS
         value: "1"
       - key: ORDER_BACKOFF_BASE_MS
@@ -299,7 +303,7 @@ services:
       - key: ORD_VERIFY_TIMEOUT_MS
         value: "800"
       - key: ORD_CANCEL_STRATEGY
-        value: MINIMAL
+        value: "MINIMAL"
       - key: USE_EXCHANGE_FILTERS
         value: "1"
       - key: MAX_TRADES_PER_TICK
@@ -313,7 +317,7 @@ services:
       - key: AUTO_QTY_ENABLE
         value: "1"
       - key: AUTO_QTY_MODE
-        value: notional
+        value: "notional"
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
         value: "0.20"
 
@@ -343,9 +347,9 @@ services:
       - key: LADDER_TP_ENABLE
         value: "1"
       - key: LADDER_TP_DEFAULT_PCTS
-        value: 1.8,3.2,5.5
+        value: "1.8,3.2,5.5"
       - key: LADDER_TP_DEFAULT_SPLITS
-        value: 0.4,0.35,0.25
+        value: "0.4,0.35,0.25"
       - key: LADDER_SL_ENABLE
         value: "1"
       - key: LADDER_SL_DEFAULT_PCTS
@@ -393,7 +397,7 @@ services:
       - key: HEALTH_TP1_ONLY_WITH_POSITION
         value: "1"
       - key: TP1_TAGS
-        value: TP1,tp1,tp_1,TAKE_PROFIT_1
+        value: "TP1,tp1,tp_1,TAKE_PROFIT_1"
       - key: OPS_DIGEST_INTERVAL_HOURS
         value: "3"
       - key: OPS_HEARTBEAT_ENABLE
@@ -463,17 +467,17 @@ services:
       - key: ALGOGPT_VERSION
         value: "2.18.0"
       - key: INSTANCE_ID
-        value: algogpt-docker
+        value: "algogpt-docker"
       - key: ROUTES_ONLY
-        value: routes.manager,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.scan_top_volume,routes.scan_public,routes.topk,routes.ops_flags,routes.guard_smoke,routes.status,routes.debug,routes.telegram,routes.alerts,routes.root_aliases,routes.root
+        value: "routes.manager,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.scan_top_volume,routes.scan_public,routes.topk,routes.ops_flags,routes.guard_smoke,routes.status,routes.debug,routes.telegram,routes.alerts,routes.root_aliases,routes.root"
       - key: METRICS_ENABLE
         value: "true"
       - key: PNL_TRACKING
         value: "true"
       - key: PARAMS_DIR
-        value: params/optimized
+        value: "params/optimized"
       - key: DATABASE_URL
-        value: sqlite:////app/data/algogpt.db
+        value: "sqlite:////app/data/algogpt.db"
       - key: PRICE_CACHE_TTL_MS
         value: "250"
       - key: PRICE_MAX_AGE_SEC
@@ -482,6 +486,12 @@ services:
         value: "60"
       - key: PRICE_SCAN_INTERVAL
         value: "30"
+      - key: PRICE_MONITOR_DISABLE
+        value: "0"
+      - key: SINK_ENFORCE_APPROVALS
+        value: "1"
+      - key: RISK_QUICK_URL
+        value: "https://algogpt-docker.onrender.com/risk/quick"
 
       # ============== Secrets (Render Secrets) ==============
       - key: API_BEARER_TOKEN
@@ -512,6 +522,7 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
+
 
 
 
