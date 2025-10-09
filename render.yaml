@@ -78,7 +78,8 @@ services:
       - key: ENABLE_HSTS
         value: "1"
       - key: SECURITY_PUBLIC_PATHS
-        value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active"
+        value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan/now,/scan/top-volume
+ "
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
 
