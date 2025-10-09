@@ -46,6 +46,17 @@ def status_auth_refresh():
     refresh_tokens_from_env()
     return status_auth()
 
+# ===== /status (root) — תאימות / בריאות קצרה =====
+@router.get("", summary="Root status (compat)")
+@router.get("/", summary="Root status (compat)")
+def status_root():
+    return {
+        "ok": True,
+        "ts": int(time.time()),
+        "endpoints": ["/status/ping", "/status/executor", "/status/ws", "/status/all", "/status/auth"],
+        "hint": "see /status/all for a full snapshot",
+    }
+
 # תאימות לנתיבים הישנים
 legacy = APIRouter(tags=["status"])
 
@@ -56,8 +67,6 @@ def legacy_executor():
 @legacy.get("/ws-user/status")
 def legacy_ws_user():
     return {"ok": True, "status": ws_user_status()}
-
-
 
 
 
