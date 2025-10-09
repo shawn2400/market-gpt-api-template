@@ -410,6 +410,11 @@ services:
         value: "1"
       - key: OPS_HEARTBEAT_EVERY_MIN
         value: "5"
+      # Heartbeat for scanner notifications
+      - key: HEARTBEAT_HOURS
+        value: "2"
+      - key: HEARTBEAT_MIN_SCORE
+        value: "6"
 
       # ============== Notifications Policy ==============
       - key: ONLY_TRADE_NOTIFICATIONS
@@ -499,7 +504,6 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
-
 
 
 
