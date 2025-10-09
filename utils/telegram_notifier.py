@@ -1,4 +1,4 @@
-utils/telegram_notifier.py-# utils/telegram_notifier.py
+# utils/telegram_notifier.py
 from __future__ import annotations
 
 import os, asyncio, logging, json, time, hmac, hashlib
@@ -62,7 +62,6 @@ def make_callback(action: str, trade_id: Optional[str] = None, symbol: Optional[
     if action in ("APPROVE","REJECT"):
         base = ["CONFIRM", action, str(trade_id or "")]
     else:
-        # MANAGE_AGAIN / CANCEL_TPS / CLOSE_50 / ...
         base = ["POS", action, str(symbol or "")]
         if pct is not None:
             base.append(f"{float(pct)}")
@@ -83,7 +82,6 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
         raise ValueError("bad_format")
 
     if parts[0] == "CONFIRM":
-        # CONFIRM:<APPROVE|REJECT>:<trade_id>[:<ts>:<sig>]
         action   = parts[1].upper()
         trade_id = parts[2]
         if action not in ("APPROVE","REJECT"):
@@ -91,7 +89,7 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
         if _SIGN_SECRET and len(parts) >= 5:
             ts  = int(float(parts[-2]))
             sig = parts[-1]
-            raw = ":".join(parts[:-1])  # בלי ה-sig
+            raw = ":".join(parts[:-1])
             if sig != _hmac(raw):
                 raise ValueError("bad_sig")
             now = int(time.time())
@@ -100,15 +98,12 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
         return {"action": action, "trade_id": trade_id}
 
     if parts[0] == "POS":
-        # POS:<ACTION>:<symbol>[:<pct>][:<ts>:<sig>]
         action = parts[1].upper()
         symbol = parts[2]
         pct    = None
-        # tail יכול להכיל pct ואח"כ ts+sig
         tail = parts[3:]
         ts = None; sig = None
         if tail:
-            # בדיקה אם שני האחרונים הם ts+sig
             if len(tail) >= 2:
                 try:
                     maybe_ts = int(float(tail[-2]))
@@ -123,7 +118,7 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
                 except Exception:
                     pct = None
         if _SIGN_SECRET and ts is not None and sig is not None:
-            raw = ":".join(parts[:-1])  # בלי ה-sig
+            raw = ":".join(parts[:-1])
             if sig != _hmac(raw):
                 raise ValueError("bad_sig")
             now = int(time.time())
@@ -156,10 +151,9 @@ def _ops_action_kb(symbol: str) -> Dict[str,Any]:
 class TelegramNotifier:
     @staticmethod
     async def ensure_webhook() -> bool:
-        # best-effort: שימוש ברגיסטר הקיים
+        # אין צורך לייבא את עצמנו—פשוט קרא לפונקציה המקומית.
         try:
-            from .telegram_notifier import register_webhook as _reg  # self-import-safe
-            return await _reg()
+            return await register_webhook()
         except Exception:
             return False
 
@@ -178,10 +172,6 @@ class TelegramNotifier:
     @staticmethod
     async def edit_message_buttons(chat_id: str | int, message_id: int, disable_all: bool = False,
                                    new_kb: Optional[Dict[str,Any]] = None) -> None:
-        """
-        אם disable_all=True — ננטרל את הכפתורים (למשל אחרי Approve/Reject).
-        אחרת ניתן להעביר new_kb להחלפה חופשית.
-        """
         if not API_BASE:
             return
         kb: Dict[str,Any] = new_kb or {}
@@ -200,18 +190,12 @@ class TelegramNotifier:
 
     @staticmethod
     async def send_ops_action_result(symbol: str, action_name: str, chat_id: Optional[int] = None) -> None:
-        """
-        הודעת תוצאה קצרה אחרי פעולה ב-/position-ops, עם כפתורי inline לניהול נוסף.
-        """
         text = f"✅ {symbol} · {action_name} done"
         kb   = _ops_action_kb(symbol)
         await _tg_send_with_markup(text, kb, chat_id=chat_id)
 
 # ===================== Basic Ops Notifications =====================
 async def notify_no_trades(reason: str | None = None, low_scores: Optional[List[Dict[str, Any]]] = None) -> None:
-    """
-    שולח הודעת 'אין טריידים' (רק אם SCAN_NO_TRADES_NOTIFY=1).
-    """
     if os.getenv("SCAN_NO_TRADES_NOTIFY", "0").lower() not in ("1", "true", "yes", "on"):
         return
     lines = ["📭 לא נמצאו טריידים תואמים לסף.", "No matching trades at the moment."]
@@ -277,6 +261,19 @@ async def register_webhook() -> bool:
         return False
 
 # ===================== Explain Trade =====================
+def _trim_reason(reason: Any, limit: int = 240) -> str:
+    text = ""
+    if isinstance(reason, str):
+        text = reason
+    elif isinstance(reason, list):
+        text = "; ".join([str(x) for x in reason if x])
+    elif isinstance(reason, dict):
+        text = reason.get("why") or reason.get("explain") or reason.get("summary") or ""
+    text = text.strip()
+    if len(text) > limit:
+        text = text[: limit - 1] + "…"
+    return text or "—"
+
 async def notify_explain_trade(plan: Dict[str, Any]) -> None:
     if not get_explain_enabled():
         return
@@ -329,21 +326,7 @@ async def notify_explain_trade(plan: Dict[str, Any]) -> None:
     await _tg_send("\n".join(lines))
 
 # ===================== Trade Approval (rich) =====================
-def _trim_reason(reason: Any, limit: int = 240) -> str:
-    text = ""
-    if isinstance(reason, str):
-        text = reason
-    elif isinstance(reason, list):
-        text = "; ".join([str(x) for x in reason if x])
-    elif isinstance(reason, dict):
-        text = reason.get("why") or reason.get("explain") or reason.get("summary") or ""
-    text = text.strip()
-    if len(text) > limit:
-        text = text[: limit - 1] + "…"
-    return text or "—"
-
 async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
-    # Estimations (best-effort)
     est     = make_estimations(plan)
     probs   = est.get("probs") or {}
     eta     = est.get("eta") or {}
@@ -364,6 +347,18 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     eta_entry = (eta or {}).get("entry_sec") or (eta or {}).get("entry")
 
     reason  = plan.get("why") or plan.get("explain") or plan.get("reasons")
+    def _trim_reason(reason: Any, limit: int = 240) -> str:
+        text = ""
+        if isinstance(reason, str):
+            text = reason
+        elif isinstance(reason, list):
+            text = "; ".join([str(x) for x in reason if x])
+        elif isinstance(reason, dict):
+            text = reason.get("why") or reason.get("explain") or reason.get("summary") or ""
+        text = text.strip()
+        if len(text) > limit:
+            text = text[: limit - 1] + "…"
+        return text or "—"
     why_txt = _trim_reason(reason)
     kind    = (plan.get("trade_kind") or plan.get("mode") or plan.get("market") or "Futures").capitalize()
 
@@ -506,146 +501,7 @@ __all__ = [
     "should_auto_approve_trade",
     "make_callback", "verify_callback_data", "TelegramNotifier",
     "_send",
-]  utils/position_sizing.py-# app/utils/position_sizing.py
-import os, math, json
-from typing import Optional, Dict
-from contextlib import suppress
-
-def _env_float(name: str, default: float) -> float:
-    try:
-        return float(os.getenv(name, str(default)))
-    except Exception:
-        return default
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except Exception:
-        return default
-
-def _leverage_cap(symbol: str, req_leverage: int) -> int:
-    """
-    קובע מינוף סופי לפי קאפים גלובליים/לסימבול.
-    """
-    max_lev = _env_int("MAX_LEVERAGE", 20)
-
-    # קאפ פר-סימבול מה-ENV אם קיים (עם הקשחה לגרשיים חיצוניים בטעות)
-    sym_cap = None
-    caps_raw = os.getenv("LEVERAGE_SYMBOL_CAPS", "")
-    if caps_raw:
-        caps = None
-        with suppress(Exception):
-            caps = json.loads(caps_raw)
-        if caps is None:
-            with suppress(Exception):
-                caps = json.loads(caps_raw.strip("'\""))
-        if isinstance(caps, dict):
-            with suppress(Exception):
-                sym_cap = int(caps.get(symbol, max_lev))
-
-    # מפת ADX אופציונלית – אם קיימת ולא משולבת במקום אחר, נשמור כמקסימום עליון “רך”
-    adx_cap = None
-    adx_map_raw = os.getenv("LEV_ADX_MAP_JSON", "")
-    if adx_map_raw:
-        adx_map = None
-        with suppress(Exception):
-            adx_map = json.loads(adx_map_raw)
-        if isinstance(adx_map, dict) and adx_map:
-            with suppress(Exception):
-                adx_cap = max(int(v) for v in adx_map.values())
-
-    caps_to_apply = [req_leverage or 0, max_lev]
-    if sym_cap: caps_to_apply.append(sym_cap)
-    if adx_cap: caps_to_apply.append(adx_cap)
-
-    lev = max(1, min([x for x in caps_to_apply if x > 0]))
-    return lev
-
-def _symbol_filters_from_env() -> Dict[str, float]:
-    """
-    אם אין לך cache של exchange info—נשתמש ב-ENV כ-fallback.
-    """
-    qty_step = _env_float("DEFAULT_QTY_STEP", 0.001)
-    price_tick = _env_float("DEFAULT_PRICE_TICK", 0.01)
-    min_notional = _env_float("MIN_NOTIONAL_USDT", 5.0)
-    return {"qty_step": qty_step, "price_tick": price_tick, "min_notional": min_notional}
-
-def _symbol_filters(symbol: str) -> Dict[str, float]:
-    """
-    מנסה למשוך פילטרים אמיתיים מהבורסה (קאש פנימי אם קיים), אחרת נופל ל-ENV.
-    מצופה שפונקציה דומה תחזיר dict עם מפתחות כמו stepSize/tickSize/minNotional.
-    """
-    # נסה utils.exchange_info.get_symbol_filters(symbol)
-    with suppress(Exception):
-        from utils.exchange_info import get_symbol_filters  # type: ignore
-        f = get_symbol_filters(symbol)  # יכול להיות dict או None
-        if f:
-            # נסה שמות מפתחות נפוצים; אם חסר—נפול ל-ENV לערך הספציפי
-            return {
-                "qty_step": float(f.get("stepSize") or f.get("qty_step") or _env_float("DEFAULT_QTY_STEP", 0.001)),
-                "price_tick": float(f.get("tickSize") or f.get("price_tick") or _env_float("DEFAULT_PRICE_TICK", 0.01)),
-                "min_notional": float(f.get("minNotional") or f.get("min_notional") or _env_float("MIN_NOTIONAL_USDT", 5.0)),
-            }
-    # אם אין מודול/קאש — פולבאק
-    return _symbol_filters_from_env()
-
-def _step_down(x: float, step: float) -> float:
-    if step <= 0:
-        return x
-    return max(step, math.floor(x / step) * step)
-
-def auto_qty(symbol: str, symbol_price: float, leverage: int) -> Optional[float]:
-    """
-    מחשב כמות לפי ENV:
-      AUTO_QTY_ENABLE=1
-      AUTO_QTY_BUDGET_USDT=100
-      AUTO_QTY_MARGIN_BUFFER_PCT=0.20
-    ומכבד:
-      MAX_TRADE_BUDGET, DEFAULT_QTY_STEP, MIN_NOTIONAL_USDT
-    """
-    if os.getenv("AUTO_QTY_ENABLE", "0") != "1":
-        return None
-
-    budget = _env_float("AUTO_QTY_BUDGET_USDT", 50.0)
-    buf    = _env_float("AUTO_QTY_MARGIN_BUFFER_PCT", 0.20)
-    max_budget = _env_float("MAX_TRADE_BUDGET", budget)
-    budget = min(budget, max_budget)
-
-    lev = _leverage_cap(symbol, int(leverage or 0))
-
-    effective = max(0.0, budget * (1.0 - buf))
-    if symbol_price <= 0 or lev <= 0 or effective <= 0:
-        return None
-
-    raw_qty = (effective * lev) / symbol_price
-    f = _symbol_filters(symbol)
-    stepped = _step_down(raw_qty, f["qty_step"])
-
-    # ודא notional מינימלי
-    if (stepped * symbol_price) < f["min_notional"]:
-        needed = (f["min_notional"] / symbol_price)
-        stepped = _step_down(needed, f["qty_step"])
-
-    return stepped if stepped > 0 else None
-
-def ensure_final_qty(ticket: dict, symbol_price: float) -> dict:
-    """
-    קובע leverage סופי לפי קאפים; ואם qty חסר/0 – מחשב לפי AUTO_QTY_*.
-    """
-    symbol = (ticket.get("symbol") or "").upper()
-    req_lev = int(ticket.get("leverage") or ticket.get("lev") or _env_int("MIN_LEVERAGE", 5))
-    final_lev = _leverage_cap(symbol, req_lev)
-    ticket["leverage"] = final_lev
-
-    q = ticket.get("qty") or ticket.get("quantity")
-    qf = float(q) if q is not None else 0.0
-    if q is None or qf <= 0.0:
-        q_calc = auto_qty(symbol, float(symbol_price), int(final_lev))
-        if q_calc and q_calc > 0:
-            ticket["qty"] = q_calc תתקן תשלח לי גרסה 1-1 מתוקנות שלמה גרסהאות מלאות  
-
-    return ticket +100$ +מינוף 10   
-
+]
 
 
 
