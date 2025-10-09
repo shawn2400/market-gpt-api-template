@@ -215,7 +215,6 @@ REQUIRE_REDIS       = _bool_env("REQUIRE_REDIS", True)         # default on (fai
 # Signed approve anti-replay
 SIGNED_TS_MAX_SKEW_SEC = int(os.getenv("SIGNED_TS_MAX_SKEW_SEC", "60") or "60")
 SIGNED_NONCE_TTL_SEC   = int(os.getenv("SIGNED_NONCE_TTL_SEC", "120") or "120")
-
 # Order ID helper
 try:
     from utils.order_ids import build_client_order_id  # type: ignore
@@ -273,6 +272,7 @@ async def _get_redis_cached():
     r = aioredis.from_url(REDIS_URL, decode_responses=True)
     app.state.redis = r
     return r
+
 # --- Ticket helpers (Redis + optional ConfirmStore fallback) ---
 async def _load_ticket(ticket_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
     """
@@ -470,7 +470,6 @@ def _parse_mode(note: Optional[str]) -> Optional[str]:
         return None
     m = _MODE_RX.search(str(note))
     return m.group(1).upper() if m else None
-
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                               reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
     if not BOT_TOKEN or not ADMIN_CHAT_ID:
@@ -895,7 +894,6 @@ def _rows_kv_html(t: Dict[str, Any]) -> str:
         rows.append(f"<tr><th style='text-align:left;padding:.35rem .6rem;background:#fafafa'>{k}</th>"
                     f"<td style='padding:.35rem .6rem'>{cv(k)}</td></tr>")
     return "\n".join(rows)
-
 # --- UI routes (HTML) ---
 @router.get("/ops/ui/ticket")
 async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
@@ -1000,13 +998,14 @@ async def ui_pending(request: Request = None):
         "</body>"
     )
     return HTMLResponse(body)
+
 # --- Approve/Reject flows ---
 @router.get("/ops/approve")
 async def approve(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
     _maybe_protect_routes(request)
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
-        return _html("⚠️ קישור שגוי או שפג תוקף האישור.")
+        return _html("⚠️ קישור shגוי או שפג תוקף האישור.")
     flow = _decide_flow_by_mode(ticket)
 
     with suppress(Exception):
@@ -1285,6 +1284,11 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
 
 # --- Register routers ---
 app.include_router(router)
+
+# ⬅️ רוטר הטלגרם (כפתורים/Callbacks) — ייטען רק אם הקובץ קיים
+with suppress(Exception):
+    from routes.telegram import router as telegram_router  # type: ignore
+    app.include_router(telegram_router)
 
 with suppress(Exception):
     from routes.position_ops import router as position_ops_router  # type: ignore
