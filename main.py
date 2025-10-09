@@ -815,6 +815,26 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
 @router.get("/ops/approve-link")
 async def approve_link(id: str = Query(..., description="ticket_id"), request: Request = None):
     return await approve(ticket_id=id, request=request)
+
+# ============ NEW: explicit reject endpoints so the links actually work ============
+@router.get("/ops/reject")
+async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
+    _maybe_protect_routes(request)
+    ticket, source = await _load_ticket(ticket_id)
+    if not ticket:
+        return _html("⚠️ קישור שגוי או שפג תוקף האישור/דחייה.")
+    sym, side, qty = (str(ticket.get("symbol","")) or "").upper(), str(ticket.get("side","")).upper(), ticket.get("qty","")
+    with suppress(Exception):
+        await _send_telegram_html(
+            f"⛔️ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n— — —\nהבקשה נדחתה."
+        )
+    await _delete_ticket(ticket_id, source, final_status=False)
+    return _html("⛔️ נדחה — הכרטיס הוסר.")
+
+@router.get("/ops/reject-link")
+async def reject_link(id: str = Query(..., description="ticket_id"), request: Request = None):
+    return await reject(ticket_id=id, request=request)
+
 # ==================== Real-time TRADE EVENTS (TP/SL etc.) ====================
 @router.post("/ops/trade-event")
 async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = None):
@@ -853,7 +873,6 @@ async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = No
 
     await _send_telegram_html("\n".join(lines))
     return {"ok": True}
-
 # ==================== Digest endpoints ====================
 @router.get("/ops/ui/pending")
 async def ui_pending(request: Request = None):
@@ -1137,7 +1156,7 @@ async def _startup_tasks():
     with suppress(Exception):
         await _ensure_telegram_webhook()
 
-    # Respect STARTUP_NOTIFY_ENABLE (אל תשלח "Bot online" אם לא ביקשת במפורש)
+    # Respect STARTUP_NOTIFY_ENABLE
     async def _notify_bot_online():
         with suppress(Exception):
             if not STARTUP_NOTIFY_ENABLE:
@@ -1148,7 +1167,7 @@ async def _startup_tasks():
             await _send_telegram_html(f"🟢 <b>Bot online</b> · <code>{name}</code> · env=<code>{env}</code>")
     asyncio.create_task(_notify_bot_online())
 
-    # Health TP1 watcher — ברירת מחדל כבוי; הפעלה רק אם HEALTH_TP1_ENABLE=1
+    # Health TP1 watcher
     if _health_tp1_loaded and HEALTH_TP1_ENABLE:
         watch = WATCHLIST[:]
         if watch:
@@ -1302,6 +1321,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1","true","yes","on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
