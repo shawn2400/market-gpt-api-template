@@ -72,7 +72,6 @@ services:
         value: "1"
       - key: ENABLE_HSTS
         value: "1"
-      # אם אינך רוצה /alerts/* ציבוריים — הסר את שלושת הנתיבים של alerts:
       - key: SECURITY_PUBLIC_PATHS
         value: /ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active
       - key: SECURITY_PUBLIC_PREFIXES
@@ -523,7 +522,6 @@ services:
         value: "2.18.0"
       - key: INSTANCE_ID
         value: algogpt-docker
-      # הוספתי routes.alerts + routes.root_aliases כדי לפתור 404 ולספק אליאסים ב-root
       - key: ROUTES_ONLY
         value: routes.manager,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.scan_top_volume,routes.scan_public,routes.topk,routes.ops_flags,routes.guard_smoke,routes.status,routes.debug,routes.telegram,routes.alerts,routes.root_aliases
       - key: METRICS_ENABLE
