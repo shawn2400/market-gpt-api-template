@@ -421,7 +421,7 @@ services:
       - key: ADX_LOW_TP_SHRINK_PCT
         value: "10"
 
-      # ============== Auto-Risk (דינמי לגמרי: Equity% + Safe Fraction + Leverage) ==============
+      # ============== Auto-Risk (Equity% + Leverage) ==============
       - key: AUTO_RISK_ENABLE
         value: "1"
       - key: RISK_LEV_BASE
@@ -500,6 +500,10 @@ services:
         value: "0.05"
       - key: TUNE_DD_SAFE_FRAC_BUMP_HARD
         value: "0.10"
+
+      # ============== Equity (רשות: כדי “לחיות” מהארנק) ==============
+      - key: ACCOUNT_EQUITY_USDT
+        value: ""   # ← שים כאן את סכום הארנק (למשל "1000") כדי שהסטייק יחושב כאחוז מההון
 
       # ============== Manager / Intervals ==============
       - key: MANAGER_ENABLE
@@ -611,6 +615,7 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
+
 
 
 
