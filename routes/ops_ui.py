@@ -513,7 +513,7 @@ async def ops_ui_orders(
   )
   return HTMLResponse(html)
 
-# ====== JSON רשימת הזמנות פתוחות ======
+# ====== JSON רשימת הזמנות פתוחות (עם pagination) ======
 @router.get(
     "/ops/ui/orders.json",
     response_class=JSONResponse,
@@ -523,6 +523,11 @@ async def ops_ui_orders_json(
   symbol: Optional[str] = Query(None, description="e.g. BTCUSDT (single)"),
   symbols: Optional[List[str]] = Query(None, description="repeatable ?symbols=BTCUSDT&symbols=ETHUSDT or CSV"),
   status: Optional[List[str]] = Query(None, description="filter by status: e.g. NEW,FILLED or repeatable"),
+  # Pagination
+  limit: Optional[int] = Query(100, ge=1, le=1000, description="items per page"),
+  offset: Optional[int] = Query(0, ge=0, description="start index (0-based)"),
+  page: Optional[int] = Query(None, ge=1, description="1-based page number (alias)"),
+  per_page: Optional[int] = Query(None, ge=1, le=1000, description="items per page (alias)"),
 ):
   # Build symbols list
   sym_list: List[str] = []
@@ -546,6 +551,22 @@ async def ops_ui_orders_json(
     for item in status:
       status_list.extend(_csv_list(item))
   orders = _filter_by_status(orders, status_list)
+
+  total = len(orders)
+
+  # Resolve pagination (page/per_page override limit/offset if provided)
+  eff_per_page = int(per_page or limit or 100)
+  eff_page = int(page) if page is not None else None
+  if eff_page is not None:
+    eff_offset = (eff_page - 1) * eff_per_page
+  else:
+    eff_offset = int(offset or 0)
+
+  # Clamp bounds
+  if eff_offset < 0: eff_offset = 0
+  if eff_per_page < 1: eff_per_page = 1
+  end = min(total, eff_offset + eff_per_page)
+  sliced = orders[eff_offset:end]
 
   # Normalize & slim fields
   def pick(o: dict, *keys: str) -> dict:
@@ -571,8 +592,16 @@ async def ops_ui_orders_json(
       "clientOrderId": o.get("clientOrderId") or o.get("origClientOrderId"),
       "updateTime": o.get("updateTime") or o.get("time"),
     }
-    for o in orders
+    for o in sliced
   ]
+
+  # Pagination metadata
+  has_prev = eff_offset > 0
+  has_next = end < total
+  prev_offset = max(0, eff_offset - eff_per_page) if has_prev else None
+  next_offset = end if has_next else None
+  eff_page_num = (eff_offset // eff_per_page) + 1
+  total_pages = (total + eff_per_page - 1) // eff_per_page if eff_per_page else 1
 
   return JSONResponse(
     content={
@@ -581,7 +610,19 @@ async def ops_ui_orders_json(
       "status_filter": [s.upper() for s in status_list] or None,
       "count": len(items),
       "items": items,
+      "total": total,
+      "limit": eff_per_page,
+      "offset": eff_offset,
+      "end_offset": end,
+      "has_prev": has_prev,
+      "has_next": has_next,
+      "prev_offset": prev_offset,
+      "next_offset": next_offset,
+      "page": eff_page_num,
+      "per_page": eff_per_page,
+      "total_pages": total_pages,
     }
   )
+
 
 
