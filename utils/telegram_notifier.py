@@ -140,6 +140,11 @@ def _approval_kb_for_trade(idem: str, ticket_url: Optional[str] = None) -> Dict[
         rows.append([{"text": "🧾 Ticket", "url": ticket_url}])
     return {"inline_keyboard": rows}
 
+# ——— PUBLIC helper so routes/manager.py can import it without error ———
+def build_ticket_buttons(trade_id: str, ticket_url: Optional[str] = None) -> Dict[str, Any]:
+    """מחזיר ReplyMarkup לאישור/דחייה + לינק טיקט (אם קיים)."""
+    return _approval_kb_for_trade(trade_id, ticket_url=ticket_url)
+
 def _ops_action_kb(symbol: str) -> Dict[str,Any]:
     return {"inline_keyboard":[
         [{"text":"⚙️ Manage Again","callback_data": make_callback("MANAGE_AGAIN", symbol=symbol)}],
@@ -193,6 +198,37 @@ class TelegramNotifier:
         text = f"✅ {symbol} · {action_name} done"
         kb   = _ops_action_kb(symbol)
         await _tg_send_with_markup(text, kb, chat_id=chat_id)
+
+    # ——— new: used by routes/manager.py after ingest ———
+    @staticmethod
+    async def send_ticket(
+        trade_id: str,
+        symbol: str,
+        side: str,
+        timeframe: str = "15m",
+        reason: str = "",
+        score: float | int = 0,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        שולח הודעת אישור עשירה לטיקט חדש (תואם לשימוש ב־routes/manager.py).
+        """
+        plan: Dict[str, Any] = dict(extra or {})
+        plan.setdefault("symbol", symbol)
+        plan.setdefault("side", side)
+        plan.setdefault("timeframe", timeframe)
+        plan.setdefault("why", reason)
+        plan.setdefault("score", score)
+        # שדות אופציונליים לתצוגה נוחה
+        plan.setdefault("order_type", plan.get("entry_type", "MARKET"))
+        plan.setdefault("leverage", plan.get("lev", plan.get("leverage", 0)))
+        # URLs אם נבנו כבר; אחרת יבנו אוטומטית מתוך trade_id
+        if "approve_url" not in plan or "reject_url" not in plan or "ticket_url" not in plan:
+            urls = _build_trade_urls(trade_id, plan)
+            plan.setdefault("approve_url", urls["approve"])
+            plan.setdefault("reject_url",  urls["reject"])
+            plan.setdefault("ticket_url",  urls["ticket"])
+        await send_trade_approval(trade_id, plan, chat_id=None)
 
 # ===================== Basic Ops Notifications =====================
 async def notify_no_trades(reason: str | None = None, low_scores: Optional[List[Dict[str, Any]]] = None) -> None:
@@ -500,6 +536,7 @@ __all__ = [
     "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
     "should_auto_approve_trade",
     "make_callback", "verify_callback_data", "TelegramNotifier",
+    "build_ticket_buttons",
     "_send",
 ]
 
