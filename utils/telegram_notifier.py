@@ -37,7 +37,7 @@ except Exception:
             "expected_pnl_usd": plan.get("expected_pnl_usd"),
         }
 
-# ====== Alias לשמירה על תאימות ישנה (מודולים שעדיין קוראים _send) ======
+# ====== תאימות לאחור (מודולים שקוראים _send) ======
 async def _send(text: str) -> None:
     await _tg_send(text)
 
@@ -104,11 +104,9 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
         action = parts[1].upper()
         symbol = parts[2]
         pct    = None
-        # tail יכול להכיל pct ואח"כ ts+sig
         tail = parts[3:]
         ts = None; sig = None
         if tail:
-            # בדיקה אם שני האחרונים הם ts+sig
             if len(tail) >= 2:
                 try:
                     maybe_ts = int(float(tail[-2]))
@@ -151,6 +149,21 @@ def _ops_action_kb(symbol: str) -> Dict[str,Any]:
         [{"text":"🧹 Cancel TPs","callback_data": make_callback("CANCEL_TPS", symbol=symbol)},
          {"text":"➗ Close 50%","callback_data": make_callback("CLOSE_50", symbol=symbol, pct=50.0)}],
     ]}
+
+# ✅ תאימות לאחור: פונקציה עם שם ישן שמייצרת כפתורי URL (לא callback)
+def build_ticket_buttons(
+    approve_url: str,
+    reject_url: str,
+    preview_url: Optional[str] = None
+) -> Dict[str, Any]:
+    row: List[Dict[str, str]] = []
+    if preview_url:
+        row.append({"text": "👁 Preview", "url": preview_url})
+    if approve_url:
+        row.append({"text": "✅ Approve", "url": approve_url})
+    if reject_url:
+        row.append({"text": "❌ Reject", "url": reject_url})
+    return {"inline_keyboard": [row]} if row else {"inline_keyboard": []}
 
 # ===================== שירות לטלגרם (answer/edit/webhook/results) =====================
 class TelegramNotifier:
@@ -505,9 +518,9 @@ __all__ = [
     "send_ops_digest_now", "send_eod_report_now", "ensure_ops_schedulers_started",
     "should_auto_approve_trade",
     "make_callback", "verify_callback_data", "TelegramNotifier",
+    "build_ticket_buttons",  # ✅ חשוב לתאימות עם ה-router הישן
     "_send",
 ]
-
 
 
 
