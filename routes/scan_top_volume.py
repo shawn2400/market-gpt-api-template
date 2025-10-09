@@ -37,13 +37,15 @@ try:
 except Exception:
     get_klines_sync = None  # type: ignore
 
-
 router = APIRouter(prefix="/scan", tags=["scan"], dependencies=[Depends(require_bearer_token)])
 
 # --- זיכרון קטן למניעת ספאם (per symbol+timeframe) ---
 _STATE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _LAST_GOOD_TS = 0.0
 _ALLOWED_NOTIFY = {"telegram", None}
+
+# --- Regime state (היסטרזיס) ---
+_REGIME = {"name": "balanced", "since": 0.0}
 
 
 # ============================
@@ -68,14 +70,14 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 def _parse_score_equity_table(raw: str) -> List[Tuple[float, float]]:
     """
-    קלט לדוגמה: "6:0.5,6.5:0.7,7:1.0,7.5:1.3,8:1.6,8.5:1.9,9:2.2,9.5:2.5"
-    פלט: [(score_thresh, pct_equity), ...] ממוין.
-    pct_equity = אחוז מההון (1.6 => 1.6%).
+    מקבל מחרוזת כמו: "6:0.4,6.5:0.5,7:0.8,8:1.2,9:1.6,9.5:2.0"
+    ומחזיר [(score_thresh, pct_equity), ...] ממוין.
+    pct_equity = אחוז מההון (לדוג' 1.2 => 1.2%).
     """
     out: List[Tuple[float, float]] = []
     raw = (raw or "").strip()
     if not raw:
-        return out
+        return []
     parts = [p.strip() for p in raw.split(",") if p.strip()]
     for p in parts:
         try:
@@ -117,7 +119,7 @@ def _auto_risk(
 ) -> Tuple[float, float]:
     """
     מחזיר (leverage, stake_usdt) דינמי:
-      - stake_usdt לפי % מההון (טבלת ספים לפי ציון), עם מגבלות min/max וכובד ADX/ATR.
+      - stake_usdt לפי % מההון לכל טרייד (טבלת ספים לפי ציון), עם מגבלות min/max וכובד ADX/ATR.
       - leverage דינמי לפי ADX/ATR.
     """
     enabled = str(os.getenv("AUTO_RISK_ENABLE", "1")).strip() == "1"
@@ -130,16 +132,13 @@ def _auto_risk(
     # אחוז בסיס fallback אם אין טבלה/Equity
     equity_base_pct = _get_env_float("RISK_STAKE_EQUITY_BASE_PCT", 1.0)  # אחוז
     equity_min_pct  = _get_env_float("RISK_STAKE_EQUITY_MIN_PCT",  0.3)  # אחוז
-    equity_max_pct  = _get_env_float("RISK_STAKE_EQUITY_MAX_PCT",  3.0)  # אחוז
+    equity_max_pct  = _get_env_float("RISK_STAKE_EQUITY_MAX_PCT",  2.0)  # אחוז
 
     stake_min_usd = _get_env_float("RISK_STAKE_MIN_USDT", 25.0)
     stake_max_usd = _get_env_float("RISK_STAKE_MAX_USDT", 500.0)
 
     # טבלת ציון→אחוז הון
-    tbl_raw = os.getenv(
-        "RISK_SCORE_TO_EQUITY_PCT",
-        "6:0.5,6.5:0.7,7:1.0,7.5:1.3,8:1.6,8.5:1.9,9:2.2,9.5:2.5"
-    )
+    tbl_raw = os.getenv("RISK_SCORE_TO_EQUITY_PCT", "6:0.4,6.5:0.5,7:0.8,8:1.2,9:1.6,9.5:2.0")
     score_tbl = _parse_score_equity_table(tbl_raw)
 
     # טריגרים (תנודתיות/טרנד)
@@ -149,15 +148,15 @@ def _auto_risk(
     atr_lo     = _get_env_float("RISK_ATR_LOW_PCT",  0.7)
 
     # התאמות באחוזים (pos/neg)
-    stake_boost_strong = _get_env_float("RISK_STAKE_BOOST_STRONG_PCT", 20.0) / 100.0
-    stake_cut_high_atr = _get_env_float("RISK_STAKE_CUT_HIGH_ATR_PCT",  25.0) / 100.0
-    lev_boost_strong   = _get_env_float("RISK_LEV_BOOST_STRONG_PCT",   15.0) / 100.0
-    lev_cut_high_atr   = _get_env_float("RISK_LEV_CUT_HIGH_ATR_PCT",   25.0) / 100.0
+    stake_boost_strong = _get_env_float("RISK_STAKE_BOOST_STRONG_PCT", 15.0) / 100.0
+    stake_cut_high_atr = _get_env_float("RISK_STAKE_CUT_HIGH_ATR_PCT",  20.0) / 100.0
+    lev_boost_strong   = _get_env_float("RISK_LEV_BOOST_STRONG_PCT",   10.0) / 100.0
+    lev_cut_high_atr   = _get_env_float("RISK_LEV_CUT_HIGH_ATR_PCT",   20.0) / 100.0
 
     # "הגדלה" אוטומטית בטריידים חזקים במיוחד (עם סף ציון)
     extra_mode   = (os.getenv("RISK_EXTRA_ADD_MODE", "pct") or "pct").lower()  # "pct" | "usd"
-    extra_thresh = _get_env_float("RISK_EXTRA_ADD_THRESH", 9.2)
-    extra_value  = _get_env_float("RISK_EXTRA_ADD_VALUE",  30.0)  # pct=>% מהStake, usd=>USD
+    extra_thresh = _get_env_float("RISK_EXTRA_ADD_THRESH", 9.0)
+    extra_value  = _get_env_float("RISK_EXTRA_ADD_VALUE",  25.0)  # אם pct => אחוזים מהStake, אם usd => USD
 
     # אם לא מופעל — החזר בסיס מוגבל
     if not enabled:
@@ -192,7 +191,7 @@ def _auto_risk(
             lev *= (1.0 - lev_cut_high_atr)
             stake *= (1.0 - stake_cut_high_atr)
         elif atr_pct <= atr_lo:
-            stake *= 0.95  # שוק "מת": להקטין מעט חשיפה
+            stake *= 0.95  # שוק "מת"
 
     # הגדלה אוטומטית בטריידים חזקים (score מעל סף)
     if score_total is not None and score_total >= extra_thresh:
@@ -205,31 +204,6 @@ def _auto_risk(
     lev = _clamp(lev, lev_min, lev_max)
     stake = _clamp(stake, stake_min_usd, stake_max_usd)
     return round(lev, 2), round(stake, 2)
-
-
-def _safe_get_price(symbol: str) -> float:
-    # 1) utils.binance_client
-    try:
-        from utils.binance_client import get_price  # type: ignore
-        p = get_price(symbol)
-        if p:
-            return float(p)
-    except Exception:
-        pass
-    # 2) python-binance futures ticker (אם יש מפתחות)
-    try:
-        from binance.client import Client  # type: ignore
-        api_key = os.getenv("BINANCE_API_KEY", "").strip()
-        api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
-        if not api_key or not api_sec:
-            return 0.0
-        cli = Client(api_key, api_sec)
-        info = cli.futures_symbol_ticker(symbol=str(symbol).upper())
-        if info and "price" in info:
-            return float(info["price"])
-    except Exception as e:
-        LOG.debug({"event": "price.fallback_failed", "symbol": symbol, "error": str(e)})
-    return 0.0
 
 
 def _passes(sig: Dict[str, Any], min_score: float, require_side: bool) -> bool:
@@ -319,6 +293,86 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
             _LAST_GOOD_TS = now
 
 
+# ============================
+# Market Regime Auto-Tune
+# ============================
+
+def _calc_market_stats(signals: List[Dict[str, Any]]) -> Dict[str, float]:
+    """סטטיסטיקות מצב שוק מתוך ה-signals שכבר חושבו."""
+    if not signals:
+        return {"avg_adx": 0.0, "med_atr": 0.0, "breadth_bull": 0.5}
+    adxs = [float((s.get("details") or {}).get("adx") or 0.0) for s in signals if isinstance(s, dict)]
+    atps = [float((s.get("details") or {}).get("atr_pct") or 0.0) for s in signals if isinstance(s, dict)]
+    ups  = [1.0 if ((s.get("details") or {}).get("trend") == "UP") else 0.0 for s in signals]
+    import statistics
+    avg_adx = statistics.fmean(adxs) if adxs else 0.0
+    med_atr = statistics.median(atps) if atps else 0.0
+    breadth = (sum(ups) / len(ups)) if ups else 0.5
+    return {"avg_adx": avg_adx, "med_atr": med_atr, "breadth_bull": breadth}
+
+def _pick_regime(stats: Dict[str, float]) -> str:
+    """מחזיר 'conservative' | 'balanced' | 'aggressive' לפי ספי ENV."""
+    avg_adx = float(stats.get("avg_adx", 0.0))
+    med_atr = float(stats.get("med_atr", 0.0))
+    breadth = float(stats.get("breadth_bull", 0.5))
+
+    adx_strong = _get_env_float("REGIME_STRONG_TREND_ADX", 30.0)
+    adx_weak   = _get_env_float("REGIME_WEAK_TREND_ADX",   18.0)
+    br_bull    = _get_env_float("REGIME_BREADTH_BULL",     0.60)
+    br_bear    = _get_env_float("REGIME_BREADTH_BEAR",     0.40)
+    atr_lo     = _get_env_float("REGIME_ATR_LOW",          0.8)
+    atr_hi     = _get_env_float("REGIME_ATR_HIGH",         4.0)
+
+    # Aggressive: טרנד חזק ורוחב שוק שורי; לא-מוגזם ב־ATR
+    if avg_adx >= adx_strong and breadth >= br_bull and med_atr <= atr_hi:
+        return "aggressive"
+    # Conservative: טרנד חלש או ATR קיצוני או רוחב חלש
+    if avg_adx <= adx_weak or med_atr >= atr_hi or breadth <= br_bear:
+        return "conservative"
+    return "balanced"
+
+def _regime_params(name: str) -> Dict[str, float]:
+    """ממפה פרופיל לפרמטרים אפקטיביים (אפשר לכוונן ב-ENV)."""
+    def gv(k, d): return _get_env_float(k, d)
+    if name == "conservative":
+        return {
+            "min_score": gv("REGIME_CONSERVATIVE_MIN_SCORE", 7.4),
+            "adx_min":   gv("REGIME_CONSERVATIVE_ADX_MIN",   27.0),  # קשוח לפי הבקשה
+            "lev_mult":  gv("REGIME_CONSERVATIVE_LEV_MULT",   0.85),
+            "stk_mult":  gv("REGIME_CONSERVATIVE_STAKE_MULT", 0.80),
+        }
+    if name == "aggressive":
+        return {
+            "min_score": gv("REGIME_AGGRESSIVE_MIN_SCORE", 6.6),     # יותר טריידים
+            "adx_min":   gv("REGIME_AGGRESSIVE_ADX_MIN",   20.0),
+            "lev_mult":  gv("REGIME_AGGRESSIVE_LEV_MULT",   1.10),
+            "stk_mult":  gv("REGIME_AGGRESSIVE_STAKE_MULT", 1.20),
+        }
+    return {
+        "min_score": gv("REGIME_BALANCED_MIN_SCORE", 7.0),
+        "adx_min":   gv("REGIME_BALANCED_ADX_MIN",   20.0),
+        "lev_mult":  gv("REGIME_BALANCED_LEV_MULT",   1.0),
+        "stk_mult":  gv("REGIME_BALANCED_STAKE_MULT", 1.0),
+    }
+
+def _apply_regime_hysteresis(new_name: str) -> str:
+    """מונע קפיצות תכופות בין פרופילים."""
+    if str(os.getenv("AUTO_REGIME_ENABLE", "1")) != "1":
+        return "balanced"
+    now = time.time()
+    min_dwell = _get_env_float("REGIME_MIN_DWELL_MIN", 45.0) * 60.0
+    cur = _REGIME.get("name", "balanced")
+    since = float(_REGIME.get("since", 0.0) or 0.0)
+    if cur == new_name:
+        return cur
+    if since == 0.0 or (now - since) >= min_dwell:
+        _REGIME["name"] = new_name
+        _REGIME["since"] = now
+        LOG.info({"event": "regime.switch", "to": new_name})
+        return new_name
+    return cur
+
+
 @router.get("/top-volume", summary="Scan (real data only) with post-filter, notify/TTL/heartbeat")
 async def scan_top_volume(
     market: str = Query("futures"),
@@ -358,8 +412,32 @@ async def scan_top_volume(
         err = f"compute_signals_failed: {e}"
         LOG.warning({"event": "scan.compute_failed", "error": str(e)})
 
+    # === Regime Auto-Tune ===
+    regime_name = "balanced"
     try:
-        filtered = [s for s in (signals_raw or []) if isinstance(s, dict) and _passes(s, min_score, require_side)]
+        if str(os.getenv("AUTO_REGIME_ENABLE", "1")) == "1":
+            stats = _calc_market_stats(signals_raw or [])
+            regime_name = _apply_regime_hysteresis(_pick_regime(stats))
+    except Exception as re:
+        LOG.warning({"event": "regime.error", "error": str(re)})
+
+    rp = _regime_params(regime_name)
+    min_score_eff = max(min_score, rp["min_score"])  # לא נרד מתחת לבחירה ידנית אם נתת
+    adx_min_eff   = rp["adx_min"]
+
+    # סינון סופי כולל ADX_MIN מהפרופיל
+    try:
+        filtered = []
+        for s in (signals_raw or []):
+            if not isinstance(s, dict):
+                continue
+            if not _passes(s, min_score_eff, require_side):
+                continue
+            det = s.get("details") or {}
+            adx_v = float(det.get("adx") or 0.0)
+            if adx_v < adx_min_eff:
+                continue
+            filtered.append(s)
     except Exception as e:
         err = f"filter_failed: {e}"
         LOG.warning({"event": "scan.filter_failed", "error": str(e)})
@@ -368,6 +446,8 @@ async def scan_top_volume(
     LOG.info({
         "event": "scan.result",
         "requested": {"limit": limit, "tf": timeframe, "k": kline_limit, "min_score": min_score, "require_side": require_side},
+        "regime": regime_name,
+        "effective": {"min_score": min_score_eff, "adx_min": adx_min_eff},
         "counts": {"total": len(signals_raw or []), "returned": len(filtered)},
     })
 
@@ -379,7 +459,7 @@ async def scan_top_volume(
             cid = None
         for s in filtered:
             try:
-                if _should_notify(s, max(min_score, 7.0), rearm_score, dedupe_window_sec):
+                if _should_notify(s, max(min_score_eff, 7.0), rearm_score, dedupe_window_sec):
                     det = (s.get("details") or {})
                     adx_val = det.get("adx")
                     atr_val = det.get("atr_pct")
@@ -398,6 +478,9 @@ async def scan_top_volume(
                         default_leverage=leverage,
                         default_stake_usdt=stake_usdt,
                     )
+                    # מכפלות פרופיל (Regime)
+                    dyn_lev   = round(_clamp(dyn_lev * float(rp["lev_mult"]),  _get_env_float("RISK_LEV_MIN", 5.0), _get_env_float("RISK_LEV_MAX", 20.0)), 2)
+                    dyn_stake = round(_clamp(dyn_stake * float(rp["stk_mult"]), _get_env_float("RISK_STAKE_MIN_USDT", 25.0), _get_env_float("RISK_STAKE_MAX_USDT", 500.0)), 2)
 
                     plan: Dict[str, Any] = {
                         "symbol": s.get("symbol"),
@@ -424,7 +507,7 @@ async def scan_top_volume(
                 LOG.warning({"event": "notify.loop_failed", "error": str(loop_e)})
 
     try:
-        await _heartbeat_if_needed(chat_id, notify, max(min_score, 7.0), found_filtered=bool(filtered))
+        await _heartbeat_if_needed(chat_id, notify, max(min_score_eff, 7.0), found_filtered=bool(filtered))
     except Exception as hb_e:
         LOG.warning({"event": "heartbeat.failed", "error": str(hb_e)})
 
@@ -434,6 +517,7 @@ async def scan_top_volume(
         "returned": len(filtered),
         "notified": notified,
         "signals": filtered if filtered else (signals_raw or []),
+        "regime": regime_name,
         "mode": "full",
         "error": err,
     }
@@ -675,8 +759,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                 "score_total": score_total,
                 "components": [
                     {"id": 1, "name": "rsi_distance", "score": round(score_1, 2)},
-                    {"id": 2, "name": "ema_trend",    "score": round(score_2, 2),
-                     "extras": {"confirmation_bonus": round(conf_bonus, 2)}},
+                    {"id": 2, "name": "ema_trend",    "score": round(score_2, 2), "extras": {"confirmation_bonus": round(conf_bonus, 2)}},
                     {"id": 3, "name": "ema_gap_pct",  "score": round(score_3, 2)},
                     {"id": 4, "name": "atr_penalty",  "score": round(score_4, 2)},
                 ],
@@ -692,6 +775,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             continue
 
     return out
+
 
 
 
