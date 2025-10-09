@@ -219,7 +219,7 @@ services:
       - key: HEARTBEAT_MIN_SCORE
         value: "4.0"
       - key: DEFAULT_LEVERAGE
-        value: "5"
+        value: "10"          # ↑ לטסט
       - key: DEFAULT_STAKE_USDT
         value: "50"
 
@@ -313,15 +313,15 @@ services:
       - key: MIN_NOTIONAL_USDT
         value: "5"
       - key: MAX_TRADE_BUDGET
-        value: "50"
+        value: "150"           # ↑ לא לחסום את 100$
       - key: AUTO_QTY_ENABLE
         value: "1"
       - key: AUTO_QTY_MODE
         value: notional
-      - key: AUTO_QTY_USDT_PER_TRADE
-        value: "50"
+      - key: AUTO_QTY_BUDGET_USDT
+        value: "100"           # ↑ לטסט
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
-        value: "0.35"
+        value: "0.20"
 
       # ================== SL/TP / BE / Trail / Ladder ==================
       - key: NATIVE_TPSL_ENABLE
@@ -429,7 +429,7 @@ services:
       - key: MAX_LEVERAGE
         value: "35"
       - key: MIN_LEVERAGE
-        value: "5"
+        value: "10"           # ↑ לטסט
       - key: LEV_HARD_CAP
         value: "50"
       - key: LEVERAGE_SYMBOL_CAPS
@@ -570,6 +570,7 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
+
 
 
 
