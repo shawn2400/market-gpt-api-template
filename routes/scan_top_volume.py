@@ -297,11 +297,12 @@ async def scan_now(
     )
 
 
-# -------- מחשב איתותים: אמיתי בלבד (אין fallback דמו) --------
+# -------- מחשב איתותים: אמיתי בלבד (אין fallback דמו) + ADX --------
 async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, kline_limit: int) -> List[Dict[str, Any]]:
     """
     מביא klines אמיתיים ומחשב score_total=1..10 + פירוק components.
-    אם אין דאטה/כשל לכל הסימבולים — מוחזר [], ללא דמו.
+    גרסה Trend-Aggressive עם ADX: משקל גבוה ל-EMA gap, ענישת ATR קשיחה יותר,
+    ואכיפת סף ADX_MIN על הכיוון/ציון.
     """
     import statistics
     out: List[Dict[str, Any]] = []
@@ -331,7 +332,6 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         return ema
 
     def _atr_pct_from_raw(rows: List[List[float]], period: int = 14) -> Optional[float]:
-        # Binance rows: [OpenTime,O,H,L,C,Vol,...]
         if len(rows) < period + 1:
             return None
         trs = []
@@ -347,6 +347,40 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             return None
         return (atr / last_close) * 100.0  # אחוז
 
+    # Wilder's ADX (+DI/-DI)
+    def _adx_from_raw(rows: List[List[float]], period: int = 14) -> Optional[Dict[str, float]]:
+        if len(rows) < period + 2:
+            return None
+        trs, dm_plus, dm_minus = [], [], []
+        for i in range(1, period + 1):
+            h1, l1, c1 = float(rows[-i][2]), float(rows[-i][3]), float(rows[-i][4])
+            h0, l0, c0 = float(rows[-i-1][2]), float(rows[-i-1][3]), float(rows[-i-1][4])
+            up = h1 - h0
+            dn = l0 - l1
+            dm_plus.append(up if (up > dn and up > 0) else 0.0)
+            dm_minus.append(dn if (dn > up and dn > 0) else 0.0)
+            tr = max(h1 - l1, abs(h1 - c0), abs(l1 - c0))
+            trs.append(tr)
+
+        # Wilder smoothing
+        import math
+        def _wilder_smooth(seq: List[float]) -> float:
+            # לשם איתות מיידי: ניקח ממוצע פשוט; בעיבוד מלא נעשה ריצה על כל הסדרה
+            return statistics.fmean(seq) if seq else 0.0
+
+        tr14 = _wilder_smooth(trs)
+        plus_dm14 = _wilder_smooth(dm_plus)
+        minus_dm14 = _wilder_smooth(dm_minus)
+        if tr14 <= 0:
+            return None
+        plus_di = 100.0 * (plus_dm14 / tr14)
+        minus_di = 100.0 * (minus_dm14 / tr14)
+        diff = abs(plus_di - minus_di)
+        summ = plus_di + minus_di if (plus_di + minus_di) != 0 else 1e-9
+        dx = 100.0 * (diff / summ)
+        adx = dx  # הערכה מיידית; (ללא ריצה מתגלגלת)
+        return {"adx": adx, "plus_di": plus_di, "minus_di": minus_di}
+
     # universe
     wl = os.getenv("WATCHLIST", "BTCUSDT,ETHUSDT,SOLUSDT").split(",")
     wl = [s.strip().upper() for s in wl if s.strip()]
@@ -354,7 +388,8 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
 
     tf = timeframe or "15m"
     k = max(60, min(kline_limit, 1000))
-    max_atr_pct = float(os.getenv("MAX_ATR_PCT", "3.0"))
+    max_atr_pct = float(os.getenv("MAX_ATR_PCT", "3"))
+    adx_min = float(os.getenv("ADX_MIN", "20"))
 
     if get_klines_sync is None:
         raise RuntimeError("get_klines_sync unavailable")
@@ -389,38 +424,85 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             close = float(closes[-1])
 
             atr_pct = _atr_pct_from_raw(raw_rows, 14) if raw_rows else None
+            adx_pack = _adx_from_raw(raw_rows, 14) if raw_rows else None
+            adx = adx_pack["adx"] if adx_pack else None
+            plus_di = adx_pack["plus_di"] if adx_pack else None
+            minus_di = adx_pack["minus_di"] if adx_pack else None
 
-            # SIDE (פשוט וסולידי):
+            # SIDE בסיסית + אכיפת ADX_MIN:
             side: Optional[str] = None
             if ema21 > ema50 and (rsi_val or 50) >= 48:
                 side = "BUY"
             elif ema21 < ema50 and (rsi_val or 50) <= 52:
                 side = "SELL"
+            # אם ADX נמוך מדי — מבטלים כיוון (זהירות) כדי לא “לצבוע” טרייד בכוח
+            if adx is not None and adx < adx_min:
+                side = None
 
-            # ניקוד רכיבים (ציון 1/2/3/4), ובסוף score_total 1..10
-            score_1 = 0.0  # RSI distance סביב 50 (עד 5)
+            # ===== ניקוד רכיבים (1/2/3/4) =====
+            # 1) RSI distance סביב 50: עד 3.5 נק'
+            score_1 = 0.0
             if rsi_val is not None:
-                score_1 = min(5.0, abs(rsi_val - 50.0) / 10.0 * 5.0)
+                score_1 = min(3.5, abs(rsi_val - 50.0) / 10.0 * 3.5)
 
-            score_2 = 2.0 if side is not None else 0.0  # מגמת EMA (0/2)
+            # 2) EMA trend + bonus יישור (עד 2.5 נק'):
+            score_2_base = 2.0 if side is not None else 0.0
+            conf_bonus = 0.0
+            if side == "BUY" and rsi_val is not None and rsi_val >= 55 and close > max(ema21, ema50):
+                # בונוס נוסף אם +DI בולט:
+                if plus_di is not None and minus_di is not None and plus_di > minus_di:
+                    conf_bonus = 0.5
+                else:
+                    conf_bonus = 0.3
+            elif side == "SELL" and rsi_val is not None and rsi_val <= 45 and close < min(ema21, ema50):
+                if plus_di is not None and minus_di is not None and minus_di > plus_di:
+                    conf_bonus = 0.5
+                else:
+                    conf_bonus = 0.3
+            # דיכוי/עידוד ע"י ADX (רק בתוך הרכיב הזה כדי לשמור 1..4):
+            if adx is not None:
+                if adx < adx_min:
+                    score_2_base *= 0.4  # טרנד חלש => נחתוך השפעת המגמה
+                    conf_bonus = 0.0
+                elif adx >= 25:
+                    score_2_base *= 1.0
+                if adx >= 30:
+                    conf_bonus = min(0.5, conf_bonus + 0.1)
 
-            score_3 = 0.0  # EMA gap pct (עד 3)
+            score_2 = min(2.5, score_2_base + conf_bonus)
+
+            # 3) EMA gap pct (עד 4 נק') — טרנד-אגרסיבי, עם scaling לפי ADX:
+            score_3 = 0.0
             if ema50 > 0:
                 ema_gap_pct = abs(ema21 - ema50) / ema50 * 100.0
-                score_3 = min(3.0, ema_gap_pct / 1.5)
+                score_3 = min(4.0, ema_gap_pct / 1.2)  # 1.2% => נק' אחת
+                if adx is not None:
+                    if adx < adx_min:
+                        score_3 *= 0.6
+                    elif adx >= 30:
+                        score_3 = min(4.0, score_3 * 1.1)
 
-            score_4 = 0.0  # ענישת ATR% (שלילי)
-            if atr_pct is not None and atr_pct > max_atr_pct:
-                score_4 = -(atr_pct - max_atr_pct) * 0.5
+            # 4) ענישת ATR% (שלילי), קשיחה יותר; ואופציה לקצה תחתון "שוק מת"
+            score_4 = 0.0
+            if atr_pct is not None:
+                if atr_pct > max_atr_pct:
+                    score_4 = -min(3.0, (atr_pct - max_atr_pct) * 0.8)  # קשיח עד -3
+                elif atr_pct < 0.5:
+                    score_4 = -0.3  # רעש נמוך מדי
 
-            score_total = round(max(0.0, min(score_1 + score_2 + score_3 + score_4, 10.0)), 2)
+            # סכימה וסופית לתחום [0..10]
+            raw_total = score_1 + score_2 + score_3 + score_4
+            score_total = round(max(0.0, min(raw_total, 10.0)), 2)
 
+            # תיאור
             note_parts = []
             if rsi_val is not None:
                 note_parts.append(f"rsi={rsi_val:.1f}")
             note_parts.append("ema21>ema50" if ema21 > ema50 else ("ema21<ema50" if ema21 < ema50 else "ema21≈ema50"))
             if atr_pct is not None:
                 note_parts.append(f"atr%={atr_pct:.2f}")
+            if adx is not None:
+                note_parts.append(f"adx={adx:.1f}")
             note = " ".join(note_parts)
 
             out.append({
@@ -430,14 +512,16 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                 "score_total": score_total,           # 1..10 (מנורמל)
                 "components": [                       # “ציון 1/2/3/4”
                     {"id": 1, "name": "rsi_distance", "score": round(score_1, 2)},
-                    {"id": 2, "name": "ema_trend",    "score": round(score_2, 2)},
+                    {"id": 2, "name": "ema_trend",    "score": round(score_2, 2),
+                     "extras": {"confirmation_bonus": round(conf_bonus, 2)}},
                     {"id": 3, "name": "ema_gap_pct",  "score": round(score_3, 2)},
                     {"id": 4, "name": "atr_penalty",  "score": round(score_4, 2)},
                 ],
                 "note": note,
                 "details": {
                     "trend": "UP" if ema21 > ema50 else ("DOWN" if ema21 < ema50 else "FLAT"),
-                    "rsi": rsi_val, "ema21": ema21, "ema50": ema50, "close": close, "atr_pct": atr_pct
+                    "rsi": rsi_val, "ema21": ema21, "ema50": ema50, "close": close,
+                    "atr_pct": atr_pct, "adx": adx, "plus_di": plus_di, "minus_di": minus_di
                 },
             })
         except Exception as e:
@@ -445,9 +529,6 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             continue
 
     return out
-
-
-
 
 
 
