@@ -28,6 +28,7 @@ static/snapshots/
 # === Static files ===
 static/
 !static/logo.png
+# אם תרצה להשאיר קבצים ספציפיים מהסטטיק – בטל הערה:
 # !static/styles.css
 # !static/favicon.ico
 
@@ -62,7 +63,6 @@ build/
 # === Node / frontend ===
 node_modules/
 *.map
-
 
 
 
