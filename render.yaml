@@ -62,19 +62,20 @@ services:
       - key: READONLY_ENDPOINTS
         value: summary,prices_top,news_cache,health
       - key: OPENAPI_INCLUDE_TAGS
-        value: "Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,meta"
+        value: "meta,Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk"
       - key: OPENAPI_HIDE_PATTERNS
         value: /telegram/*,/executor/*,/manage-once,/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
 
       # ================== Security (לא-סודי) ==================
+      # מאחר ומאשרים מהטלגרם, השאר 0. כשתעבור לזרימה חתומה – החזר ל-1 והסר את מסלולי approve מה-public.
       - key: PROTECT_APPROVE_ROUTES
-        value: "1"
+        value: "0"
       - key: PROTECT_DIGEST_ROUTES
         value: "1"
       - key: ENABLE_HSTS
         value: "1"
       - key: SECURITY_PUBLIC_PATHS
-        value: /readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now
+        value: /readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/approve,/ops/approve-link,/ops/reject,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now
       - key: SECURITY_PUBLIC_PREFIXES
         value: /public,/price,/static,/risk
 
@@ -585,6 +586,7 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
+
 
 
 
