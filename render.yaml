@@ -66,7 +66,6 @@ services:
         value: /_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
 
       # ============== Security (hardening) ==============
-      # מאשר לחיצת כפתורים מטלגרם (approve/reject) בלי Bearer
       - key: PROTECT_APPROVE_ROUTES
         value: "0"
       - key: PROTECT_DIGEST_ROUTES
@@ -310,7 +309,7 @@ services:
       - key: MAX_TRADE_BUDGET
         value: "150"
 
-      # ============== Auto QTY (כמות אוטומטית מתוך תקציב) ==============
+      # ============== Auto QTY ==============
       - key: AUTO_QTY_ENABLE
         value: "1"
       - key: AUTO_QTY_MODE
