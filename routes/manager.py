@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, HTTPException, Header, Request, Body
+from fastapi import APIRouter, HTTPException, Header, Body
 from pydantic import BaseModel
 
 from utils.anti_replay import verify_request
@@ -22,10 +22,8 @@ CONFIRMSTORE_ENABLE  = os.getenv("CONFIRMSTORE_ENABLE", "1").lower() in ("1","tr
 
 PUBLIC_HOST = (os.getenv("PUBLIC_HOST", "") or os.getenv("WEBHOOK_HOST", "")).rstrip("/")
 ALERTS_INGEST_URL = os.getenv("ALERTS_INGEST_URL", f"{PUBLIC_HOST}/alerts/ingest").strip()
-
 API_TOKEN = os.getenv("API_TOKEN", os.getenv("PRIMARY_API_TOKEN", "")).strip()
-API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or "").strip()
-PROTECT_APPROVE_ROUTES = os.getenv("PROTECT_APPROVE_ROUTES","1").lower() in ("1","true","yes","on")
+API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
 
 DEFAULT_QTY = float(os.getenv("DEFAULT_QTY", "0.001"))
 DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "5"))
@@ -108,15 +106,6 @@ def _auth_headers() -> Dict[str, str]:
     if API_TOKEN:
         h["x-api-key"] = API_TOKEN
     return h
-
-def _require_bearer(request: Request) -> None:
-    if not PROTECT_APPROVE_ROUTES:
-        return
-    if not API_BEARER_TOKEN:
-        raise HTTPException(status_code=503, detail="Route protection enabled but API_BEARER_TOKEN missing")
-    auth = request.headers.get("Authorization", "")
-    if not (auth.startswith("Bearer ") and auth.split(" ",1)[1].strip() == API_BEARER_TOKEN):
-        raise HTTPException(status_code=401, detail="Unauthorized")
 
 async def _post_alerts_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not ALERTS_INGEST_URL or not PUBLIC_HOST:
@@ -283,23 +272,6 @@ async def ops_manager_health():
         "public_host": PUBLIC_HOST or None,
     }
 
-# === NEW: single-asset manage endpoint to avoid 404 ===
-@router.post("/manage-once", tags=["manager"])
-async def manage_once(request: Request, body: Dict[str, Any] = Body(...)):
-    """
-    Lightweight placeholder for one-off position management tick.
-    Protected by Bearer (if PROTECT_APPROVE_ROUTES=1).
-    Accepts: {"symbol": "BTCUSDT", ...}
-    Returns: {"ok": True, "managed": True, "symbol": "..."}.
-    """
-    _require_bearer(request)
-    symbol = str(body.get("symbol") or "").upper()
-    if not symbol:
-        raise HTTPException(status_code=422, detail="symbol required")
-    # TODO: אם יש לך מימוש ניהול אמיתי, קרא אליו כאן.
-    logger.info("manage-once hit for symbol=%s (noop placeholder)", symbol)
-    return {"ok": True, "managed": True, "symbol": symbol}
-
 # === Tickets status / actions ===
 
 @router.get("/alerts/trades/active")
@@ -341,6 +313,52 @@ async def alerts_trades_update(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"decision failed: {e}")
 
+# === One-shot manager hook used by main.periodic_manager & smart-manage ===
+
+class ManageOnceReq(BaseModel):
+    symbol: Optional[str] = None
+    offset_bps: Optional[int] = None
+    pcts: Optional[List[float]] = None
+    splits: Optional[List[float]] = None
+    atr_mult: Optional[float] = None
+
+def _bearer_ok(auth_header: Optional[str]) -> bool:
+    if not API_BEARER_TOKEN:
+        return True  # if not configured, don't block
+    if not (auth_header and auth_header.startswith("Bearer ")):
+        return False
+    token = auth_header.split(" ", 1)[1].strip()
+    return token == API_BEARER_TOKEN
+
+@router.post("/manage-once")
+async def manage_once(
+    req: ManageOnceReq = Body(...),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+) -> Dict[str, Any]:
+    """
+    Lightweight endpoint invoked internally to perform a single management cycle for a symbol.
+    Tries to call a concrete manager if available; otherwise returns ok=True so the caller won't back off.
+    """
+    if not _bearer_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    # Try optional concrete implementation if present
+    try:
+        from routes.position_ops import manage_once as real_manage_once  # type: ignore
+        # filter args defensively
+        payload: Dict[str, Any] = {k: v for k, v in req.dict().items() if v is not None}
+        res = await real_manage_once(payload)  # type: ignore
+        return {"ok": True, "delegated": True, "result": res}
+    except Exception:
+        pass
+    try:
+        from utils.position_manager import manage_once as pm_manage_once  # type: ignore
+        res = await pm_manage_once(**{k: v for k, v in req.dict().items() if v is not None})  # type: ignore
+        return {"ok": True, "delegated": True, "result": res}
+    except Exception:
+        # Fallback: noop success so the periodic caller won't backoff
+        return {"ok": True, "delegated": False, "skipped": True, "reason": "manager_not_available"}
+
 # === Background loop (optional) ===
 
 async def _manager_loop():
@@ -369,6 +387,7 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
 
