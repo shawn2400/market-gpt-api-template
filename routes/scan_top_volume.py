@@ -110,11 +110,16 @@ def _should_notify(sig: Dict[str, Any], min_score: float, rearm_score: float, de
 
 async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
                                min_score: float, found_filtered: bool) -> None:
+    """
+    שולח Heartbeat אם לא נמצאו טריידים מעל הסף במשך HEARTBEAT_HOURS.
+    לא זורק חריגות — “כשל בטוח”.
+    """
     global _LAST_GOOD_TS
     try:
         hb_hours = float(os.getenv("HEARTBEAT_HOURS", "0") or 0)
     except Exception:
         hb_hours = 0.0
+
     if hb_hours <= 0 or notify != "telegram" or not chat_id:
         return
 
@@ -132,6 +137,7 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
             low = float(os.getenv("HEARTBEAT_MIN_SCORE", "4.0"))
         except Exception:
             low = 4.0
+
         age_min = int((now - _LAST_GOOD_TS) // 60)
         txt = (
             'בס"ד\n'
@@ -143,6 +149,7 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
             cid = int(chat_id)
         except Exception:
             cid = None
+
         try:
             await _tg_send_text(txt, chat_id=cid)
         except Exception as e:
@@ -173,7 +180,7 @@ async def scan_top_volume(
     stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
 ):
     """
-    סורק ומחזיר *כל* האיתותים (אמיתי בלבד, בלי דמו), עם score_total=1..10 + פירוק components.
+    סורק ומחזיר *כל* האיתותים (אמיתי בלבד, בלי דמו), עם score_total=1..10 + פירוק components (ציון 1/2/3/4).
     אם אין דאטה — ok=false ו-error, signals=[]
     """
     if notify not in _ALLOWED_NOTIFY:
@@ -246,7 +253,7 @@ async def scan_top_volume(
         "count_total": len(signals_raw or []),
         "returned": len(filtered),
         "notified": notified,
-        "signals": filtered if filtered else (signals_raw or []),  # אם ביקשת min_score=0, זה יהיה זהה
+        "signals": filtered if filtered else (signals_raw or []),
         "mode": "full",
         "error": err,
     }
@@ -306,7 +313,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         for i in range(1, period + 1):
             ch = closes[-i] - closes[-i-1]
             gains.append(max(ch, 0.0))
-        losses = [abs(min(closes[-i] - closes[-i-1], 0.0)) for i in range(1, period + 1)]
+            losses.append(abs(min(ch, 0.0)))
         avg_gain = statistics.fmean(gains) if any(gains) else 0.0
         avg_loss = statistics.fmean(losses) if any(losses) else 0.0
         if avg_loss == 0:
@@ -324,7 +331,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         return ema
 
     def _atr_pct_from_raw(rows: List[List[float]], period: int = 14) -> Optional[float]:
-        # rows: ביינאנס raw: [OpenTime,O,H,L,C,Vol,...]
+        # rows ביינאנס: [OpenTime,O,H,L,C,Vol,...]
         if len(rows) < period + 1:
             return None
         trs = []
@@ -359,11 +366,13 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             closes: List[float]
             raw_rows: Optional[List[List[float]]] = None
 
+            # DataFrame
             if hasattr(df, "__getitem__") and "close" in getattr(df, "columns", []):
                 closes = [float(x) for x in df["close"]]
                 if "high" in df.columns and "low" in df.columns:
                     raw_rows = [[None, None, float(h), float(l), float(c)]
                                 for h, l, c in zip(df["high"][-k:], df["low"][-k:], df["close"][-k:])]
+            # List[List]
             elif isinstance(df, list) and len(df) > 0:
                 closes = [float(row[4]) for row in df]
                 raw_rows = df
@@ -381,14 +390,14 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
 
             atr_pct = _atr_pct_from_raw(raw_rows, 14) if raw_rows else None
 
-            # SIDE:
+            # SIDE (פשוט וסולידי):
             side: Optional[str] = None
             if ema21 > ema50 and (rsi_val or 50) >= 48:
                 side = "BUY"
             elif ema21 < ema50 and (rsi_val or 50) <= 52:
                 side = "SELL"
 
-            # ניקוד רכיבים
+            # ניקוד רכיבים (ציון 1/2/3/4), ובסוף score_total 1..10
             score_1 = 0.0  # RSI distance סביב 50 (עד 5)
             if rsi_val is not None:
                 score_1 = min(5.0, abs(rsi_val - 50.0) / 10.0 * 5.0)
@@ -409,7 +418,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             note_parts = []
             if rsi_val is not None:
                 note_parts.append(f"rsi={rsi_val:.1f}")
-            note_parts.append(f"ema21{'>':'<'[ema21<ema50]}ema50")
+            note_parts.append("ema21>ema50" if ema21 > ema50 else ("ema21<ema50" if ema21 < ema50 else "ema21≈ema50"))
             if atr_pct is not None:
                 note_parts.append(f"atr%={atr_pct:.2f}")
             note = " ".join(note_parts)
@@ -418,7 +427,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                 "symbol": sym,
                 "timeframe": tf,
                 "side": side,                         # "BUY"/"SELL"/None
-                "score_total": score_total,           # 1..10 (למעשה 0..10; לרוב 1..10 בשטח)
+                "score_total": score_total,           # 1..10 (מנורמל)
                 "components": [                       # “ציון 1/2/3/4”
                     {"id": 1, "name": "rsi_distance", "score": round(score_1, 2)},
                     {"id": 2, "name": "ema_trend",    "score": round(score_2, 2)},
@@ -436,10 +445,6 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             continue
 
     return out
-
-
-
-
 
 
 
