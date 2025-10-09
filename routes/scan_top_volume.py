@@ -256,6 +256,11 @@ async def scan_top_volume(
         "signals": filtered if filtered else (signals_raw or []),
         "mode": "full",
         "error": err,
+        "meta": {
+            "min_score": min_score,
+            "rearm_score": rearm_score,
+            "dedupe_window_sec": dedupe_window_sec,
+        }
     }
 
 
@@ -332,6 +337,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         return ema
 
     def _atr_pct_from_raw(rows: List[List[float]], period: int = 14) -> Optional[float]:
+        # rows בפורמט ביינאנס: [OpenTime,O,H,L,C,Vol,...]
         if len(rows) < period + 1:
             return None
         trs = []
@@ -345,9 +351,9 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         last_close = float(rows[-1][4])
         if last_close <= 0:
             return None
-        return (atr / last_close) * 100.0  # אחוז
+        return (atr / last_close) * 100.0  # באחוזים
 
-    # Wilder's ADX (+DI/-DI)
+    # Wilder's ADX (+DI/-DI) — הערכת מקום-זמן (ללא ריצה מתגלגלת מלאה)
     def _adx_from_raw(rows: List[List[float]], period: int = 14) -> Optional[Dict[str, float]]:
         if len(rows) < period + 2:
             return None
@@ -362,10 +368,8 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             tr = max(h1 - l1, abs(h1 - c0), abs(l1 - c0))
             trs.append(tr)
 
-        # Wilder smoothing
-        import math
         def _wilder_smooth(seq: List[float]) -> float:
-            # לשם איתות מיידי: ניקח ממוצע פשוט; בעיבוד מלא נעשה ריצה על כל הסדרה
+            # ממוצע פשוט לשימוש מיידי
             return statistics.fmean(seq) if seq else 0.0
 
         tr14 = _wilder_smooth(trs)
@@ -378,7 +382,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         diff = abs(plus_di - minus_di)
         summ = plus_di + minus_di if (plus_di + minus_di) != 0 else 1e-9
         dx = 100.0 * (diff / summ)
-        adx = dx  # הערכה מיידית; (ללא ריצה מתגלגלת)
+        adx = dx
         return {"adx": adx, "plus_di": plus_di, "minus_di": minus_di}
 
     # universe
@@ -435,7 +439,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                 side = "BUY"
             elif ema21 < ema50 and (rsi_val or 50) <= 52:
                 side = "SELL"
-            # אם ADX נמוך מדי — מבטלים כיוון (זהירות) כדי לא “לצבוע” טרייד בכוח
+            # ADX נמוך? לא נכפה צד
             if adx is not None and adx < adx_min:
                 side = None
 
@@ -449,7 +453,6 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             score_2_base = 2.0 if side is not None else 0.0
             conf_bonus = 0.0
             if side == "BUY" and rsi_val is not None and rsi_val >= 55 and close > max(ema21, ema50):
-                # בונוס נוסף אם +DI בולט:
                 if plus_di is not None and minus_di is not None and plus_di > minus_di:
                     conf_bonus = 0.5
                 else:
@@ -459,42 +462,38 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                     conf_bonus = 0.5
                 else:
                     conf_bonus = 0.3
-            # דיכוי/עידוד ע"י ADX (רק בתוך הרכיב הזה כדי לשמור 1..4):
             if adx is not None:
                 if adx < adx_min:
-                    score_2_base *= 0.4  # טרנד חלש => נחתוך השפעת המגמה
+                    score_2_base *= 0.4
                     conf_bonus = 0.0
-                elif adx >= 25:
-                    score_2_base *= 1.0
-                if adx >= 30:
+                elif adx >= 30:
                     conf_bonus = min(0.5, conf_bonus + 0.1)
-
             score_2 = min(2.5, score_2_base + conf_bonus)
 
-            # 3) EMA gap pct (עד 4 נק') — טרנד-אגרסיבי, עם scaling לפי ADX:
+            # 3) EMA gap pct (עד 4 נק') — טרנד-אגרסיבי, scaling לפי ADX:
             score_3 = 0.0
             if ema50 > 0:
                 ema_gap_pct = abs(ema21 - ema50) / ema50 * 100.0
-                score_3 = min(4.0, ema_gap_pct / 1.2)  # 1.2% => נק' אחת
+                score_3 = min(4.0, ema_gap_pct / 1.2)  # ~1.2% => נק' אחת
                 if adx is not None:
                     if adx < adx_min:
                         score_3 *= 0.6
                     elif adx >= 30:
                         score_3 = min(4.0, score_3 * 1.1)
 
-            # 4) ענישת ATR% (שלילי), קשיחה יותר; ואופציה לקצה תחתון "שוק מת"
+            # 4) ATR% penalty (שלילי), קשיחה יותר; ושוק "מת"
             score_4 = 0.0
             if atr_pct is not None:
                 if atr_pct > max_atr_pct:
-                    score_4 = -min(3.0, (atr_pct - max_atr_pct) * 0.8)  # קשיח עד -3
+                    score_4 = -min(3.0, (atr_pct - max_atr_pct) * 0.8)  # עד -3
                 elif atr_pct < 0.5:
-                    score_4 = -0.3  # רעש נמוך מדי
+                    score_4 = -0.3  # רעש נמוך מדי ⇒ גם לא טוב
 
             # סכימה וסופית לתחום [0..10]
             raw_total = score_1 + score_2 + score_3 + score_4
             score_total = round(max(0.0, min(raw_total, 10.0)), 2)
 
-            # תיאור
+            # תיאור (לוג קצר)
             note_parts = []
             if rsi_val is not None:
                 note_parts.append(f"rsi={rsi_val:.1f}")
@@ -509,7 +508,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                 "symbol": sym,
                 "timeframe": tf,
                 "side": side,                         # "BUY"/"SELL"/None
-                "score_total": score_total,           # 1..10 (מנורמל)
+                "score_total": score_total,           # 1..10 (מנורמל, עובר גם 6 / 6.5 / 6.9)
                 "components": [                       # “ציון 1/2/3/4”
                     {"id": 1, "name": "rsi_distance", "score": round(score_1, 2)},
                     {"id": 2, "name": "ema_trend",    "score": round(score_2, 2),
@@ -529,7 +528,6 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             continue
 
     return out
-
 
 
 
