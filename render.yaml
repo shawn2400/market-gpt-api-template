@@ -63,8 +63,7 @@ services:
 
       # בטל סינון תגיות כדי להחזיר *כל* ה-OpenAPI (קל לאבחון):
       - key: OPENAPI_INCLUDE_TAGS
-        value: ""   # <-- שונה: היה רשימת תגיות; עכשיו ריק כדי לכלול הכל
-
+        value: ""
       - key: OPENAPI_HIDE_PATTERNS
         value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
       - key: OPENAPI_PUBLIC_MAX_OPS
@@ -78,8 +77,7 @@ services:
       - key: ENABLE_HSTS
         value: "1"
       - key: SECURITY_PUBLIC_PATHS
-        value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan/now,/scan/top-volume
- "
+        value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active,/scan/now,/scan/top-volume"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
 
@@ -363,7 +361,7 @@ services:
       - key: LADDER_SL_DEFAULT_PCTS
         value: "1.2"
       - key: TP_LADDER_ON_APPROVE
-        value: "1"   # נשאר (אם תרצה אפשר לבטל)
+        value: "1"
       - key: TP_MAX_LADDERS
         value: "3"
       - key: TRAIL_ENABLE
@@ -449,7 +447,7 @@ services:
 
       # *** חשוב: להסיר את הסינון ROUTES_ONLY כדי לטעון את כל הראוטרים ***
       - key: ROUTES_ONLY
-        value: ""   # <-- שונה: היה מלא; עכשיו ריק כדי לכלול הכל
+        value: ""
 
       - key: METRICS_ENABLE
         value: "true"
@@ -503,6 +501,7 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
+
 
 
 
