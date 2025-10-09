@@ -48,45 +48,41 @@ def _apply_profile_overrides() -> None:
     overrides: Dict[str, Any] = {}
 
     if prof == "AGGRESSIVE":
-        # יותר טריידים + דוחף קצת סיכון כשיש מגמה
         overrides.update({
             "AUTO_MIN_SCORE_BASE": "6.6",
             "TUNE_TABLE_MULT_HIGH": "1.30",
             "TUNE_SAFE_FRAC_HIGH": "0.92",
             "RISK_LEV_MAX": "17",
-            # טבלת אחוז הון “עשירה” יותר בקצה:
             "RISK_SCORE_TO_EQUITY_PCT": "6.5:0.7,7:1.0,7.5:1.3,8:1.6,8.5:2.0,9:2.4,9.5:3.0",
         })
 
     elif prof == "CONSERVATIVE":
-        # יותר זהירות בשוק "מת"/חשוד
         overrides.update({
             "ADX_MIN": "27",
             "TUNE_TABLE_MULT_LOW": "0.80",
             "TUNE_SAFE_FRAC_LOW": "0.75",
             "RISK_LEV_MAX": "12",
-            # טבלת אחוז הון “עדינה” יותר:
             "RISK_SCORE_TO_EQUITY_PCT": "6.5:0.5,7:0.8,7.5:1.0,8:1.2,8.5:1.5,9:1.8,9.5:2.2",
         })
 
     elif prof == "BALANCED":
-        # איזון קל (בקטנה מול AUTO)
         overrides.update({
             "AUTO_MIN_SCORE_BASE": "6.9",
             "TUNE_TABLE_MULT_HIGH": "1.22",
             "TUNE_SAFE_FRAC_HIGH": "0.90",
         })
 
-    # AUTO = בלי overrides ידניים (נשאר הדינמי המלא)
     if overrides:
         for k, v in overrides.items():
             os.environ[k] = str(v)
 
-# החלה מוקדמת כדי שכל os.getenv יתחשבו בפרופיל:
 _apply_profile_overrides()
 
 
+# ראוטר מוגן (דורש Bearer)
 router = APIRouter(prefix="/scan", tags=["scan"], dependencies=[Depends(require_bearer_token)])
+# ראוטר ציבורי (לנתיב /scan/public-now)
+router_public = APIRouter(prefix="/scan", tags=["scan"])
 
 # --- זיכרון קטן למניעת ספאם (per symbol+timeframe) ---
 _STATE: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -242,29 +238,18 @@ def _auto_tp_sl(*, side: Optional[str], entry: float, atr_pct: Optional[float], 
 
     atr_abs = entry * (atr_pct / 100.0)
 
-    if adx is not None:
-        if adx >= adx_boost_thr:
-            tp1_mult *= (1.0 + adx_tp_boost_pct)
-            tp2_mult *= (1.0 + adx_tp_boost_pct)
-            tp3_mult *= (1.0 + adx_tp_boost_pct)
-            sl_mult  *= (1.0 - adx_sl_tight_pct)
-        elif adx < adx_boost_thr - 10:
-            tp1_mult *= (1.0 - adx_low_tp_shrink_pct)
-            tp2_mult *= (1.0 - adx_low_tp_shrink_pct)
-            tp3_mult *= (1.0 - adx_low_tp_shrink_pct)
-            sl_mult  *= (1.0 + adx_low_sl_relax_pct)
-
     def _round_px(x: float) -> float:
         return float(f"{x:.6f}")
 
-    if (side or "").upper() == "BUY":
+    side_up = (side or "").upper()
+    if side_up == "BUY":
         sl = _round_px(entry - sl_mult * atr_abs)
         tps = [
             {"pct": None, "price": _round_px(entry + tp1_mult * atr_abs), "split": 0.40},
             {"pct": None, "price": _round_px(entry + tp2_mult * atr_abs), "split": 0.35},
             {"pct": None, "price": _round_px(entry + tp3_mult * atr_abs), "split": 0.25},
         ]
-    elif (side or "").upper() == "SELL":
+    elif side_up == "SELL":
         sl = _round_px(entry + sl_mult * atr_abs)
         tps = [
             {"pct": None, "price": _round_px(entry - tp1_mult * atr_abs), "split": 0.40},
@@ -273,6 +258,15 @@ def _auto_tp_sl(*, side: Optional[str], entry: float, atr_pct: Optional[float], 
         ]
     else:
         return {"stopPrice": None}, []
+
+    # התאמות לפי ADX
+    if adx is not None:
+        if adx >= adx_boost_thr:
+            tps = [{**t, "price": _round_px(entry + (t["price"] - entry) * 1.10 if side_up == "BUY" else entry - (entry - t["price"]) * 1.10)} for t in tps]
+            sl = _round_px(entry - (entry - sl) * 0.90 if side_up == "BUY" else entry + (sl - entry) * 0.90)
+        elif adx < adx_boost_thr - 10:
+            tps = [{**t, "price": _round_px(entry + (t["price"] - entry) * 0.90 if side_up == "BUY" else entry - (entry - t["price"]) * 0.90)} for t in tps]
+            sl = _round_px(entry - (entry - sl) * 1.10 if side_up == "BUY" else entry + (sl - entry) * 1.10)
 
     return {"stopPrice": sl}, tps
 
@@ -371,17 +365,14 @@ async def scan_top_volume(
     limit: int = Query(10, ge=1, le=100),
     timeframe: str = Query("15m"),
     kline_limit: int = Query(200, ge=60, le=1000),
-    # פוסט־פילטר
     min_score: float = Query(0.0),
     require_side: bool = Query(False),
-    # התראות:
     notify: Optional[str] = Query(None, description="currently supported: 'telegram'"),
     chat_id: Optional[str] = Query(None),
     rich: bool = Query(True),
     ttl_sec: int = Query(900, ge=60, le=86400),
     rearm_score: float = Query(6.0),
     dedupe_window_sec: int = Query(300, ge=0, le=3600),
-    # ברירות מחדל (יוחלפו דינמית ע״י Auto-Risk):
     leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "10"))),
     stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
 ):
@@ -427,11 +418,9 @@ async def scan_top_volume(
                     score_val = s.get("score_total")
                     entry_price = float(det.get("close") or 0.0) or 0.0
 
-                    # Equity אופציונלי מה-ENV (אם זמין)
                     eq_env = os.getenv("ACCOUNT_EQUITY_USDT", "").strip()
                     equity = float(eq_env) if eq_env else None
 
-                    # Auto-Risk (leverage + stake %equity)
                     dyn_lev, dyn_stake = _auto_risk(
                         score_total=score_val,
                         adx=adx_val,
@@ -441,7 +430,6 @@ async def scan_top_volume(
                         default_stake_usdt=stake_usdt,
                     )
 
-                    # Auto TP/SL (ATR + ADX)
                     sl_obj, tp_list = _auto_tp_sl(
                         side=s.get("side"),
                         entry=entry_price,
@@ -523,6 +511,38 @@ async def scan_now(
         dedupe_window_sec=dedupe_window_sec,
         leverage=leverage,
         stake_usdt=stake_usdt,
+    )
+
+# ===== נתיב ציבורי: /scan/public-now (ללא Bearer) =====
+@router_public.get("/public-now", summary="Public alias to /scan/now (no auth)")
+async def scan_public_now(
+    market: str = Query("futures"),
+    quote: str = Query("USDT"),
+    limit: int = Query(10, ge=1, le=100),
+    interval: str = Query("15m", alias="timeframe"),
+    kline_limit: int = Query(200, ge=60, le=1000),
+    min_score: float = Query(0.0),
+    require_side: bool = Query(False),
+    symbols_csv: Optional[str] = Query(None, description="לא בשימוש כאן; רשימת ברירת מחדל מגיעה מ-WATCHLIST"),
+):
+    # אין Notify כאן (ציבורי)
+    return await scan_now(
+        market=market,
+        quote=quote,
+        limit=limit,
+        timeframe=interval,
+        kline_limit=kline_limit,
+        min_score=min_score,
+        require_side=require_side,
+        notify=None,
+        chat_id=None,
+        rich=True,
+        ttl_sec=900,
+        rearm_score=6.0,
+        dedupe_window_sec=300,
+        leverage=float(os.getenv("DEFAULT_LEVERAGE", "10")),
+        stake_usdt=float(os.getenv("DEFAULT_STAKE_USDT", "50")),
+        symbol=None,
     )
 
 # -------- מחשב איתותים: אמיתי בלבד (אין fallback דמו) + ADX --------
@@ -725,8 +745,6 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             continue
 
     return out
-
-
 
 
 
