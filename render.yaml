@@ -61,7 +61,7 @@ services:
       - key: READONLY_ENDPOINTS
         value: summary,prices_top,news_cache,health
       - key: OPENAPI_INCLUDE_TAGS
-        value: "meta,Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk,alerts,aliases"
+        value: meta,Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk,alerts,aliases
       - key: OPENAPI_HIDE_PATTERNS
         value: /_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
 
@@ -213,7 +213,7 @@ services:
       - key: WATCHLIST
         value: BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT
 
-      # ============== Scan CRON (טלגרם) ==============
+      # ============== Scan CRON (Telegram) ==============
       - key: SCAN_CRON_ENABLE
         value: "1"
       - key: SCAN_CRON_EVERY_SEC
@@ -512,8 +512,6 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
-
-
 
 
 
