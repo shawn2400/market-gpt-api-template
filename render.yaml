@@ -197,7 +197,7 @@ services:
       - key: ENABLE_INDICATOR_EXIT
         value: "1"
       - key: ADX_MIN
-        value: "20"          # עגול ומקצועי
+        value: "20"
       - key: FEAT_DAILY_CAPS
         value: "0"
       - key: FEAT_DEBOUNCE_LIMIT
@@ -213,7 +213,7 @@ services:
       - key: FEAT_COOLDOWN
         value: "0"
       - key: MAX_ATR_PCT
-        value: "3"           # עגול
+        value: "3"
 
       # ============== Watchlist / Allowlist ==============
       - key: ALLOWLIST_MODE
@@ -235,9 +235,9 @@ services:
       - key: SCAN_CRON_LIMIT
         value: "12"
       - key: SCAN_CRON_MIN_SCORE
-        value: "7"           # סף עגול
+        value: "7"
       - key: SCAN_REARM_SCORE
-        value: "6"           # חימוש מחדש עגול
+        value: "6"
       - key: SCAN_DEDUPE_WINDOW_SEC
         value: "300"
       - key: SCAN_TTL_SEC
@@ -499,8 +499,6 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
-
-
 
 
 
