@@ -65,14 +65,13 @@ services:
       - key: OPENAPI_HIDE_PATTERNS
         value: /telegram/*,/executor/*,/manage-once,/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
 
-      # ================== Security (הקשחה) ==================
+      # ================== Security (hardening) ==================
       - key: PROTECT_APPROVE_ROUTES
-        value: "1"          # מאובטח: כל מסלולי approve מוגנים (כולל /ops/approve/signed)
+        value: "1"
       - key: PROTECT_DIGEST_ROUTES
         value: "1"
       - key: ENABLE_HSTS
         value: "1"
-      # בלי /ops/approve,/ops/reject,/ops/approve-link — לא ציבוריים יותר
       - key: SECURITY_PUBLIC_PATHS
         value: /readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now
       - key: SECURITY_PUBLIC_PREFIXES
@@ -85,7 +84,6 @@ services:
         value: "60"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
         value: "1"
-      # חתימה בהרשאות חתומות:
       - key: SIGNED_TS_MAX_SKEW_SEC
         value: "60"
       - key: SIGNED_NONCE_TTL_SEC
@@ -103,7 +101,7 @@ services:
       - key: ORDERS_QPS_BUCKET
         value: "8"
 
-      # ================== Redis client (לא-סודי) ==================
+      # ================== Redis client (non-secret) ==================
       - key: REQUIRE_REDIS
         value: "1"
       - key: CONFIRMSTORE_ENABLE
@@ -572,7 +570,6 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
-
 
 
 
