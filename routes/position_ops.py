@@ -44,6 +44,7 @@ def _notify_ops(symbol: str, action_name: str) -> None:
     שולח הודעת טלגרם קצרה עם מקלדת אינליין
     לא חוסם את שרשור הראוט. בטוח גם אם אין event loop קיים בת׳רד.
     """
+    loop: Optional[asyncio.AbstractEventLoop] = None
     try:
         loop = asyncio.get_running_loop()
         loop.create_task(TelegramNotifier.send_ops_action_result(symbol, action_name))  # type: ignore[attr-defined]
@@ -57,8 +58,9 @@ def _notify_ops(symbol: str, action_name: str) -> None:
     except Exception:
         pass
     finally:
-        with suppress(Exception):
-            loop.close()
+        if loop:
+            with suppress(Exception):
+                loop.close()
 
 def _maybe_notify(symbol: Optional[str], action_name: str, res: Dict[str, Any]) -> None:
     if not symbol or not isinstance(res, dict) or not res.get("ok", False) or res.get("skipped"):
@@ -1010,7 +1012,6 @@ def close_percent_alias(
         return _err(cerr or "binance_client_error")
 
     return _close_impl(client, symbol=symbol, fraction=fraction)
-
 
 
 
