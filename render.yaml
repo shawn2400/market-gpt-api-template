@@ -63,7 +63,7 @@ services:
       - key: OPENAPI_INCLUDE_TAGS
         value: "meta,Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk,alerts,aliases"
       - key: OPENAPI_HIDE_PATTERNS
-        value: /telegram/*,/executor/*,/manage-once,/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
+        value: /_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
 
       # ============== Security (hardening) ==============
       # מאשר לחיצת כפתורים מטלגרם (approve/reject) בלי Bearer
@@ -214,7 +214,7 @@ services:
       - key: WATCHLIST
         value: BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT
 
-      # ============== Scan CRON (התראות לטלגרם) ==============
+      # ============== Scan CRON (טלגרם) ==============
       - key: SCAN_CRON_ENABLE
         value: "1"
       - key: SCAN_CRON_EVERY_SEC
@@ -309,9 +309,14 @@ services:
         value: "5"
       - key: MAX_TRADE_BUDGET
         value: "150"
-      # הערה: בקוד הקיים auto-qty דורש פונקציה פנימית; בפועל תשלח qty ידני.
+
+      # ============== Auto QTY (כמות אוטומטית מתוך תקציב) ==============
       - key: AUTO_QTY_ENABLE
-        value: "0"
+        value: "1"
+      - key: AUTO_QTY_MODE
+        value: notional
+      - key: AUTO_QTY_MARGIN_BUFFER_PCT
+        value: "0.20"
 
       # ============== SL/TP / BE / Trail / Ladder ==============
       - key: NATIVE_TPSL_ENABLE
@@ -461,7 +466,7 @@ services:
       - key: INSTANCE_ID
         value: algogpt-docker
       - key: ROUTES_ONLY
-        value: routes.manager,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.scan_top_volume,routes.scan_public,routes.topk,routes.ops_flags,routes.guard_smoke,routes.status,routes.debug,routes.telegram,routes.alerts,routes.root_aliases
+        value: routes.manager,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.scan_top_volume,routes.scan_public,routes.topk,routes.ops_flags,routes.guard_smoke,routes.status,routes.debug,routes.telegram,routes.alerts,routes.root_aliases,routes.root
       - key: METRICS_ENABLE
         value: "true"
       - key: PNL_TRACKING
@@ -508,6 +513,7 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
+
 
 
 
