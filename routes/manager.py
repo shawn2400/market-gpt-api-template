@@ -9,7 +9,8 @@ from fastapi import APIRouter, HTTPException, Header, Body
 from pydantic import BaseModel
 
 from utils.anti_replay import verify_request
-from utils.telegram_notifier import TelegramNotifier, build_ticket_buttons  # noqa: F401
+# הסרתי את build_ticket_buttons שהיה גורם ל־ImportError
+from utils.telegram_notifier import TelegramNotifier, send_trade_approval  # type: ignore
 
 logger = logging.getLogger("algogpt.manager")
 router = APIRouter(tags=["manager"])
@@ -187,6 +188,65 @@ def _create_ticket_fallback(obj: Dict[str, Any]) -> Optional[str]:
         logger.error("ConfirmStore.create failed: %s", e)
         return None
 
+async def _notify_telegram_approval_from_obj(obj: Dict[str, Any], ticket_id: str) -> None:
+    """
+    בונה plan מינימלי ושולח הודעת אישור עשירה לטלגרם דרך send_trade_approval
+    """
+    symbol = str(obj.get("symbol","")).upper()
+    side   = str(obj.get("side","")).upper()
+    leverage = obj.get("leverage") or DEFAULT_LEVERAGE
+    # נרכיב TP/SL בפורמט שה־notifier יודע לפרש (price/stopPrice)
+    tp_legs = []
+    for i in (1,2,3):
+        v = obj.get(f"tp{i}")
+        if v is None: 
+            continue
+        try:
+            tp_legs.append({"stopPrice": float(v), "split": obj.get("tp_splits", [0.4,0.35,0.25])[i-1] if isinstance(obj.get("tp_splits"), list) else None})
+        except Exception:
+            pass
+    sl_px = obj.get("sl")
+    sl_obj = {"stopPrice": float(sl_px)} if sl_px is not None else {}
+
+    probs = {
+        "overall": obj.get("prob_overall_pct"),
+        "tp1": obj.get("prob_tp1_pct"),
+        "tp2": obj.get("prob_tp2_pct"),
+        "tp3": obj.get("prob_tp3_pct"),
+    }
+    eta = {
+        "entry_sec": (obj.get("eta_open_min") or 0) * 60 if obj.get("eta_open_min") is not None else None,
+        "tp1_sec": (obj.get("eta_tp1_min") or 0) * 60 if obj.get("eta_tp1_min") is not None else None,
+        "tp2_sec": (obj.get("eta_tp2_min") or 0) * 60 if obj.get("eta_tp2_min") is not None else None,
+        "tp3_sec": (obj.get("eta_tp3_min") or 0) * 60 if obj.get("eta_tp3_min") is not None else None,
+    }
+
+    plan: Dict[str, Any] = {
+        "symbol": symbol,
+        "side": side,
+        "leverage": leverage,
+        "order_type": "MARKET",
+        "entry_price": obj.get("entry_price") or obj.get("price"),
+        "sl": sl_obj,
+        "tp": tp_legs,
+        "timeframe": obj.get("timeframe","15m"),
+        "why": obj.get("reason") or "",
+        "score": float(obj.get("score",0.0) or 0.0),
+        "probs": probs,
+        "eta": eta,
+        "trade_kind": obj.get("market","futures"),
+        "budget_usd": obj.get("budget_usd"),
+        "approve_url": obj.get("approve_url"),
+        "reject_url": obj.get("reject_url"),
+        "ticket_url": obj.get("ticket_url"),
+        "require_approval": obj.get("require_approval", True),
+        "ttl_sec": int(obj.get("ttl_sec") or 600),
+    }
+    try:
+        await send_trade_approval(ticket_id, plan, chat_id=None)
+    except Exception as e:
+        logger.warning("telegram approval notify failed: %s", e)
+
 async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
     tid = _ticket_id_for(obj)
     if _already_pending(tid):
@@ -197,36 +257,15 @@ async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
             payload = _build_ingest_payload(obj)
             resp = await _post_alerts_ingest(payload)
             logger.info("alerts/ingest ok: %s", resp)
-            try:
-                await TelegramNotifier.send_ticket(
-                    trade_id=payload["ticket_id"],
-                    symbol=payload["symbol"],
-                    side=payload["side"],
-                    timeframe=payload["timeframe"],
-                    reason=payload.get("reason",""),
-                    score=payload.get("score", 0),
-                    extra=obj,
-                )
-            except Exception as te:
-                logger.warning("telegram notify failed: %s", te)
+            # שליחת אישור לטלגרם (עשיר)
+            await _notify_telegram_approval_from_obj(obj, ticket_id=payload["ticket_id"])
             return tid
         except Exception as e:
             logger.warning("alerts/ingest failed (%s) — fallback ConfirmStore", e)
 
     tid_fb = _create_ticket_fallback(obj)
     if tid_fb:
-        try:
-            await TelegramNotifier.send_ticket(
-                trade_id=tid_fb,
-                symbol=str(obj.get("symbol","")),
-                side=str(obj.get("side","")),
-                timeframe=str(obj.get("timeframe","15m")),
-                reason=obj.get("reason",""),
-                score=float(obj.get("score",0)),
-                extra=obj,
-            )
-        except Exception as te:
-            logger.warning("telegram notify failed (fallback): %s", te)
+        await _notify_telegram_approval_from_obj(obj, ticket_id=tid_fb)
     return tid_fb
 
 async def _tick_once() -> Dict[str, Any]:
@@ -324,7 +363,7 @@ class ManageOnceReq(BaseModel):
 
 def _bearer_ok(auth_header: Optional[str]) -> bool:
     if not API_BEARER_TOKEN:
-        return True  # if not configured, don't block
+        return True  # אם אין מפתח – לא חוסמים (סביבה מקומית)
     if not (auth_header and auth_header.startswith("Bearer ")):
         return False
     token = auth_header.split(" ", 1)[1].strip()
@@ -345,7 +384,6 @@ async def manage_once(
     # Try optional concrete implementation if present
     try:
         from routes.position_ops import manage_once as real_manage_once  # type: ignore
-        # filter args defensively
         payload: Dict[str, Any] = {k: v for k, v in req.dict().items() if v is not None}
         res = await real_manage_once(payload)  # type: ignore
         return {"ok": True, "delegated": True, "result": res}
@@ -387,7 +425,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
 
 
 
