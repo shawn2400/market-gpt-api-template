@@ -67,7 +67,7 @@ services:
 
       # ================== Security (hardening) ==================
       - key: PROTECT_APPROVE_ROUTES
-        value: "1"
+        value: "0"   # מאפשר קליקים מהטלגרם/דפדפן ללא Authorization
       - key: PROTECT_DIGEST_ROUTES
         value: "1"
       - key: ENABLE_HSTS
