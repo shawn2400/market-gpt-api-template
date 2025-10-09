@@ -37,6 +37,7 @@ try:
 except Exception:
     get_klines_sync = None  # type: ignore
 
+
 router = APIRouter(prefix="/scan", tags=["scan"], dependencies=[Depends(require_bearer_token)])
 
 # --- זיכרון קטן למניעת ספאם (per symbol+timeframe) ---
@@ -67,14 +68,14 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 def _parse_score_equity_table(raw: str) -> List[Tuple[float, float]]:
     """
-    מקבל מחרוזת כמו: "6:0.4,6.5:0.5,7:0.8,8:1.2,9:1.6,9.5:2.0"
-    ומחזיר [(score_thresh, pct_equity), ...] ממוין.
-    pct_equity = אחוז מההון (לדוג' 1.2 => 1.2%).
+    קלט לדוגמה: "6:0.5,6.5:0.7,7:1.0,7.5:1.3,8:1.6,8.5:1.9,9:2.2,9.5:2.5"
+    פלט: [(score_thresh, pct_equity), ...] ממוין.
+    pct_equity = אחוז מההון (1.6 => 1.6%).
     """
     out: List[Tuple[float, float]] = []
     raw = (raw or "").strip()
     if not raw:
-        return []
+        return out
     parts = [p.strip() for p in raw.split(",") if p.strip()]
     for p in parts:
         try:
@@ -116,7 +117,7 @@ def _auto_risk(
 ) -> Tuple[float, float]:
     """
     מחזיר (leverage, stake_usdt) דינמי:
-      - stake_usdt לפי % מההון לכל טרייד (טבלת ספים לפי ציון), עם מגבלות min/max וכובד ADX/ATR.
+      - stake_usdt לפי % מההון (טבלת ספים לפי ציון), עם מגבלות min/max וכובד ADX/ATR.
       - leverage דינמי לפי ADX/ATR.
     """
     enabled = str(os.getenv("AUTO_RISK_ENABLE", "1")).strip() == "1"
@@ -124,18 +125,21 @@ def _auto_risk(
     # בסיסים ומגבלות
     lev_base = _get_env_float("RISK_LEV_BASE", default_leverage)
     lev_min  = _get_env_float("RISK_LEV_MIN",  5.0)
-    lev_max  = _get_env_float("RISK_LEV_MAX", 15.0)
+    lev_max  = _get_env_float("RISK_LEV_MAX", 20.0)
 
     # אחוז בסיס fallback אם אין טבלה/Equity
     equity_base_pct = _get_env_float("RISK_STAKE_EQUITY_BASE_PCT", 1.0)  # אחוז
     equity_min_pct  = _get_env_float("RISK_STAKE_EQUITY_MIN_PCT",  0.3)  # אחוז
-    equity_max_pct  = _get_env_float("RISK_STAKE_EQUITY_MAX_PCT",  2.0)  # אחוז
+    equity_max_pct  = _get_env_float("RISK_STAKE_EQUITY_MAX_PCT",  3.0)  # אחוז
 
     stake_min_usd = _get_env_float("RISK_STAKE_MIN_USDT", 25.0)
-    stake_max_usd = _get_env_float("RISK_STAKE_MAX_USDT", 300.0)
+    stake_max_usd = _get_env_float("RISK_STAKE_MAX_USDT", 500.0)
 
     # טבלת ציון→אחוז הון
-    tbl_raw = os.getenv("RISK_SCORE_TO_EQUITY_PCT", "6:0.4,6.5:0.5,7:0.8,8:1.2,9:1.6,9.5:2.0")
+    tbl_raw = os.getenv(
+        "RISK_SCORE_TO_EQUITY_PCT",
+        "6:0.5,6.5:0.7,7:1.0,7.5:1.3,8:1.6,8.5:1.9,9:2.2,9.5:2.5"
+    )
     score_tbl = _parse_score_equity_table(tbl_raw)
 
     # טריגרים (תנודתיות/טרנד)
@@ -145,15 +149,15 @@ def _auto_risk(
     atr_lo     = _get_env_float("RISK_ATR_LOW_PCT",  0.7)
 
     # התאמות באחוזים (pos/neg)
-    stake_boost_strong = _get_env_float("RISK_STAKE_BOOST_STRONG_PCT", 15.0) / 100.0
-    stake_cut_high_atr = _get_env_float("RISK_STAKE_CUT_HIGH_ATR_PCT",  20.0) / 100.0
-    lev_boost_strong   = _get_env_float("RISK_LEV_BOOST_STRONG_PCT",   10.0) / 100.0
-    lev_cut_high_atr   = _get_env_float("RISK_LEV_CUT_HIGH_ATR_PCT",   20.0) / 100.0
+    stake_boost_strong = _get_env_float("RISK_STAKE_BOOST_STRONG_PCT", 20.0) / 100.0
+    stake_cut_high_atr = _get_env_float("RISK_STAKE_CUT_HIGH_ATR_PCT",  25.0) / 100.0
+    lev_boost_strong   = _get_env_float("RISK_LEV_BOOST_STRONG_PCT",   15.0) / 100.0
+    lev_cut_high_atr   = _get_env_float("RISK_LEV_CUT_HIGH_ATR_PCT",   25.0) / 100.0
 
     # "הגדלה" אוטומטית בטריידים חזקים במיוחד (עם סף ציון)
     extra_mode   = (os.getenv("RISK_EXTRA_ADD_MODE", "pct") or "pct").lower()  # "pct" | "usd"
-    extra_thresh = _get_env_float("RISK_EXTRA_ADD_THRESH", 9.0)
-    extra_value  = _get_env_float("RISK_EXTRA_ADD_VALUE",  25.0)  # אם pct => אחוזים מהStake, אם usd => USD
+    extra_thresh = _get_env_float("RISK_EXTRA_ADD_THRESH", 9.2)
+    extra_value  = _get_env_float("RISK_EXTRA_ADD_VALUE",  30.0)  # pct=>% מהStake, usd=>USD
 
     # אם לא מופעל — החזר בסיס מוגבל
     if not enabled:
@@ -188,7 +192,7 @@ def _auto_risk(
             lev *= (1.0 - lev_cut_high_atr)
             stake *= (1.0 - stake_cut_high_atr)
         elif atr_pct <= atr_lo:
-            stake *= 0.95  # שוק "מת"
+            stake *= 0.95  # שוק "מת": להקטין מעט חשיפה
 
     # הגדלה אוטומטית בטריידים חזקים (score מעל סף)
     if score_total is not None and score_total >= extra_thresh:
@@ -401,13 +405,13 @@ async def scan_top_volume(
                         "score": s.get("score_total"),
                         "timeframe": s.get("timeframe") or timeframe,
                         "order_type": "MARKET",
-                        "entry_price": (s.get("details", {}) or {}).get("close"),
+                        "entry_price": det.get("close"),
                         "sl": {"stopPrice": None},
                         "tp": [],
                         "budget_usd": dyn_stake,
                         "leverage": dyn_lev,
                         "ttl_sec": ttl_sec,
-                        "why": s.get("note") or (s.get("details", {}) or {}).get("trend") or "—",
+                        "why": s.get("note") or det.get("trend") or "—",
                         "rich": bool(rich),
                     }
                     idem = f"{(plan['symbol'] or '?')}-{(plan['timeframe'] or timeframe)}-{int(time.time())}"
@@ -474,7 +478,7 @@ async def scan_now(
 
 
 # -------- מחשב איתותים: אמיתי בלבד (אין fallback דמו) + ADX --------
-async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, kline_limit: int) -> List[Dict[str, Any]]]:
+async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, kline_limit: int) -> List[Dict[str, Any]]:
     """
     מביא klines אמיתיים ומחשב score_total=1..10 + פירוק components.
     גרסה Trend-Aggressive עם ADX: משקל גבוה ל-EMA gap, ענישת ATR קשיחה יותר,
@@ -671,7 +675,8 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
                 "score_total": score_total,
                 "components": [
                     {"id": 1, "name": "rsi_distance", "score": round(score_1, 2)},
-                    {"id": 2, "name": "ema_trend",    "score": round(score_2, 2), "extras": {"confirmation_bonus": round(conf_bonus, 2)}},
+                    {"id": 2, "name": "ema_trend",    "score": round(score_2, 2),
+                     "extras": {"confirmation_bonus": round(conf_bonus, 2)}},
                     {"id": 3, "name": "ema_gap_pct",  "score": round(score_3, 2)},
                     {"id": 4, "name": "atr_penalty",  "score": round(score_4, 2)},
                 ],
@@ -687,6 +692,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             continue
 
     return out
+
 
 
 
