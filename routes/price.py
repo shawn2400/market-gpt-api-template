@@ -1,161 +1,149 @@
-# routes/price.py
+# routes/scan.py
 from __future__ import annotations
-import asyncio, time, logging, os
-from typing import Optional
-from fastapi import APIRouter, Path, HTTPException
-from pydantic import BaseModel
-import httpx
+from fastapi import APIRouter, Query
+from typing import List, Optional
+import os, requests, pandas as pd
 
-# ws_fallback הוא רשותי: אם לא קיים – נשתמש בפונקציות no-op
+# תאימות Pydantic v1/v2
 try:
-    from utils.ws_fallback import get_price as get_cached_price, update_price
+    from pydantic import BaseModel, Field, ConfigDict
+    _PYD_V2 = True
 except Exception:
-    def get_cached_price(symbol: str) -> Optional[float]:  # type: ignore
-        return None
-    def update_price(symbol: str, price: float) -> None:  # type: ignore
-        return None
+    from pydantic import BaseModel, Field
+    _PYD_V2 = False
 
-# מחזיר float (סינכרוני)
-from utils.binance_client import futures_mark_price  # type: ignore
+from utils.indicators import prepare_indicators_for_backtest
 
-# Redis רשותי
-try:
-    from utils.redis_client import redis_client  # type: ignore
-except Exception:
-    redis_client = None  # type: ignore
+FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+router = APIRouter(prefix="/scan", tags=["Scan"])
 
-logger = logging.getLogger("algogpt.price")
+# =====================
+# Models
+# =====================
+if _PYD_V2:
+    class IndicatorSet(BaseModel):
+        model_config = ConfigDict(extra="ignore")  # pydantic v2
+        rsi: Optional[float] = None
+        ema_21: Optional[float] = None
+        adx: Optional[float] = None
+        atr: Optional[float] = None
+        vwap_trend: Optional[bool] = None
+        ema_50: Optional[float] = None
+        macd: Optional[float] = None
+        macd_signal: Optional[float] = None
+        macd_hist: Optional[float] = None
+        bb_mid: Optional[float] = None
+        bb_upper: Optional[float] = None
+        bb_lower: Optional[float] = None
+else:
+    class IndicatorSet(BaseModel):
+        class Config:  # pydantic v1
+            extra = "ignore"
+        rsi: Optional[float] = None
+        ema_21: Optional[float] = None
+        adx: Optional[float] = None
+        atr: Optional[float] = None
+        vwap_trend: Optional[bool] = None
+        ema_50: Optional[float] = None
+        macd: Optional[float] = None
+        macd_signal: Optional[float] = None
+        macd_hist: Optional[float] = None
+        bb_mid: Optional[float] = None
+        bb_upper: Optional[float] = None
+        bb_lower: Optional[float] = None
 
-router = APIRouter(prefix="/price", tags=["Price"])
-
-BIN_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
-BIN_SPOT = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").rstrip("/")
-
-class PriceResponse(BaseModel):
-    ok: bool
-    symbol: Optional[str] = None
-    price: Optional[float] = None
-    source: Optional[str] = None   # redis/cache/binance_futures_client/binance_fapi/binance_fapi_ticker/binance_spot
-    ts: Optional[float] = None
+class ScanSignal(BaseModel):
+    symbol: str
+    interval: str
+    indicators: Optional[IndicatorSet] = None
+    ok: bool = True
     error: Optional[str] = None
 
-@router.get("/", response_model=PriceResponse, operation_id="getPriceHint", summary="Hint endpoint")
-async def get_price_hint() -> PriceResponse:
-    return PriceResponse(ok=True, error='Use /price/{symbol} (e.g., /price/BTCUSDT)')
+class ScanResponse(BaseModel):
+    ok: bool = True
+    count_total: int
+    returned: int
+    signals: List[ScanSignal] = Field(default_factory=list)
+    error: Optional[str] = None
 
-async def _redis_get(key: str):
-    if not redis_client:
-        return None
+# =====================
+# Binance helpers
+# =====================
+def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.DataFrame:
+    sym = symbol.strip().upper()
+    if not sym.endswith("USDT"):
+        sym += "USDT"
+    url = f"{FUTURES_BASE}/fapi/v1/klines"
+    r = requests.get(url, params={"symbol": sym, "interval": interval, "limit": int(limit)}, timeout=10)
+    r.raise_for_status()
+    arr = r.json()
+    if not arr:
+        return pd.DataFrame()
+    cols = [
+        "open_time","open","high","low","close","volume","close_time",
+        "qv","nTrades","taker_base","taker_quote","x"
+    ]
+    df = pd.DataFrame(arr, columns=cols[:len(arr[0])])
+    for c in ("open","high","low","close","volume"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df[["open","high","low","close","volume"]]
+
+# =====================
+# Endpoints
+# =====================
+@router.get("/info", response_model=ScanResponse, summary="Basic Scan Info")
+async def scan_info(
+    symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
+    interval: str = Query("15m"),
+    limit: int = Query(200, ge=50, le=200)
+) -> ScanResponse:
     try:
-        import inspect
-        if inspect.iscoroutinefunction(getattr(redis_client, "get", None)):
-            val = await redis_client.get(key)  # type: ignore
-        else:
-            val = redis_client.get(key)       # type: ignore
-        return float(val) if val is not None else None
+        df = _fetch_klines(symbol, interval, limit)
+        if df.empty:
+            return ScanResponse(ok=False, count_total=1, returned=0, error="no data")
+        ind = prepare_indicators_for_backtest(df)
+        row = {k: (float(v) if pd.notna(v) else None) for k, v in ind.iloc[-1].to_dict().items()}
+        sig = ScanSignal(symbol=(symbol if symbol.endswith("USDT") else symbol + "USDT").upper(),
+                         interval=interval,
+                         indicators=IndicatorSet(**row))
+        return ScanResponse(ok=True, count_total=1, returned=1, signals=[sig])
     except Exception as e:
-        logger.warning(f"[PRICE] Redis get failed: {e}")
-        return None
+        return ScanResponse(ok=False, count_total=1, returned=0, error=str(e))
 
-async def _redis_set(key: str, value: float, ex: int = 30):
-    if not redis_client:
-        return
-    try:
-        import inspect
-        if inspect.iscoroutinefunction(getattr(redis_client, "set", None)):
-            await redis_client.set(key, value, ex=ex)  # type: ignore
-        else:
-            redis_client.set(key, value, ex=ex)        # type: ignore
-    except Exception as e:
-        logger.warning(f"[PRICE] Redis set failed: {e}")
+@router.get("/", response_model=ScanResponse, summary="Multi-symbol scan (array query)")
+async def scan_symbols(
+    symbols: List[str] = Query(..., description="List of symbols e.g. BTCUSDT,ETHUSDT (repeat ?symbols=...)"),
+    interval: str = Query("15m"),
+    limit: int = Query(200, ge=50, le=200)
+) -> ScanResponse:
+    out: List[ScanSignal] = []
+    for s in symbols:
+        try:
+            df = _fetch_klines(s, interval, limit)
+            if df.empty:
+                out.append(ScanSignal(symbol=(s if s.endswith("USDT") else s + "USDT").upper(),
+                                      interval=interval, ok=False, error="no data"))
+                continue
+            ind = prepare_indicators_for_backtest(df)
+            row = {k: (float(v) if pd.notna(v) else None) for k, v in ind.iloc[-1].to_dict().items()}
+            out.append(ScanSignal(symbol=(s if s.endswith("USDT") else s + "USDT").upper(),
+                                  interval=interval, indicators=IndicatorSet(**row)))
+        except Exception as e:
+            out.append(ScanSignal(symbol=(s if s.endswith("USDT") else s + "USDT").upper(),
+                                  interval=interval, ok=False, error=str(e)))
+    return ScanResponse(ok=True, count_total=len(symbols), returned=len(out), signals=out)
 
-async def _binance_fapi_mark(symbol: str) -> Optional[float]:
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.get(f"{BIN_FAPI}/fapi/v1/premiumIndex", params={"symbol": symbol})
-            if r.status_code != 200:
-                return None
-            data = r.json()
-            if isinstance(data, list) and data:
-                data = data[0]
-            return float(data.get("markPrice", 0) or 0) or None
-    except Exception as e:
-        logger.warning(f"[PRICE] FAPI premiumIndex failed for {symbol}: {e}")
-        return None
-
-async def _binance_fapi_ticker(symbol: str) -> Optional[float]:
-    """פולבאק נוסף: futures ticker/price (מחיר אחרון)"""
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.get(f"{BIN_FAPI}/fapi/v1/ticker/price", params={"symbol": symbol})
-            if r.status_code != 200:
-                return None
-            data = r.json()
-            return float(data.get("price", 0) or 0) or None
-    except Exception as e:
-        logger.warning(f"[PRICE] FAPI ticker/price failed for {symbol}: {e}")
-        return None
-
-async def _binance_spot_price(symbol: str) -> Optional[float]:
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.get(f"{BIN_SPOT}/api/v3/ticker/price", params={"symbol": symbol})
-            if r.status_code != 200:
-                return None
-            data = r.json()
-            return float(data.get("price", 0) or 0) or None
-    except Exception as e:
-        logger.warning(f"[PRICE] SPOT ticker failed for {symbol}: {e}")
-        return None
-
-@router.get("/{symbol}", response_model=PriceResponse, operation_id="getPriceSymbol", summary="Get latest price (multi-source fallback)")
-async def get_price_symbol(symbol: str = Path(..., min_length=3, example="BTCUSDT")) -> PriceResponse:
-    sym = symbol.upper().strip()
-
-    # 1) Redis
-    val = await _redis_get(f"price:{sym}")
-    if val is not None:
-        return PriceResponse(ok=True, symbol=sym, price=val, source="redis", ts=time.time())
-
-    # 2) cache לוקלי
-    local = get_cached_price(sym)
-    if local is not None:
-        return PriceResponse(ok=True, symbol=sym, price=float(local), source="cache", ts=time.time())
-
-    # 3) utils.binance_client (סינכרוני – נריץ ב־thread)
-    try:
-        px = await asyncio.to_thread(futures_mark_price, sym)
-        if px and px > 0:
-            update_price(sym, px)
-            await _redis_set(f"price:{sym}", px, ex=30)
-            return PriceResponse(ok=True, symbol=sym, price=float(px), source="binance_futures_client", ts=time.time())
-    except Exception as e:
-        logger.warning(f"[PRICE] futures_mark_price failed for {sym}: {e}")
-
-    # 4) FAPI premiumIndex (markPrice)
-    mark = await _binance_fapi_mark(sym)
-    if mark and mark > 0:
-        update_price(sym, mark)
-        await _redis_set(f"price:{sym}", mark, ex=30)
-        return PriceResponse(ok=True, symbol=sym, price=float(mark), source="binance_fapi", ts=time.time())
-
-    # 4b) FAPI ticker/price (last)
-    last = await _binance_fapi_ticker(sym)
-    if last and last > 0:
-        update_price(sym, last)
-        await _redis_set(f"price:{sym}", last, ex=30)
-        return PriceResponse(ok=True, symbol=sym, price=float(last), source="binance_fapi_ticker", ts=time.time())
-
-    # 5) Spot ticker
-    spot = await _binance_spot_price(sym)
-    if spot and spot > 0:
-        update_price(sym, spot)
-        await _redis_set(f"price:{sym}", spot, ex=30)
-        return PriceResponse(ok=True, symbol=sym, price=float(spot), source="binance_spot", ts=time.time())
-
-    raise HTTPException(status_code=502, detail="Unable to fetch price for symbol")
-
-
+# ===== Alias: /scan/public-now =====
+@router.get("/public-now", response_model=ScanResponse, summary="Alias: quick public scan")
+async def scan_public_now(
+    symbol: Optional[str] = Query(None, description="If omitted, uses first from WATCHLIST or BTCUSDT"),
+    interval: str = Query("15m"),
+    limit: int = Query(200, ge=50, le=200)
+) -> ScanResponse:
+    if not symbol:
+        wl = os.getenv("WATCHLIST", "BTCUSDT").split(",")
+        symbol = (wl[0] or "BTCUSDT").strip()
+    return await scan_info(symbol=symbol, interval=interval, limit=limit)
 
 
 
