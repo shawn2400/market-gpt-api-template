@@ -144,6 +144,24 @@ async def _resolve_price(sym: str) -> Optional[tuple[float,str]]:
         return float(spot), "binance_spot"
     return None
 
+# ---------- חשוב: נתיבים סטטיים לפני הדינמי ----------
+
+@router.get("/last", response_model=PriceResponse, summary="[compat] /price/last?symbol=BTCUSDT")
+async def get_price_last(symbol: str = Query(..., min_length=3)) -> PriceResponse:
+    sym = symbol.upper().strip()
+    res = await _resolve_price(sym)
+    if not res:
+        raise HTTPException(status_code=502, detail="Unable to fetch price for symbol")
+    price, source = res
+    update_price(sym, price)
+    return PriceResponse(ok=True, symbol=sym, price=price, source=source, ts=time.time())
+
+@router.get("/stream_status", summary="[compat] price stream status")
+async def price_stream_status():
+    enabled = os.getenv("USE_WS","1").lower() in ("1","true","yes","on")
+    return {"ok": True, "enabled": enabled, "interval_sec": int(os.getenv("PRICE_SCAN_INTERVAL","30") or 30)}
+
+# הדינמי בסוף – כדי לא לבלוע /last ו-/stream_status
 @router.get("/{symbol}", response_model=PriceResponse, summary="Latest price by symbol")
 async def get_price_symbol(symbol: str = Path(..., min_length=3, example="BTCUSDT")) -> PriceResponse:
     sym = symbol.upper().strip()
@@ -153,18 +171,6 @@ async def get_price_symbol(symbol: str = Path(..., min_length=3, example="BTCUSD
     price, source = res
     update_price(sym, price)
     return PriceResponse(ok=True, symbol=sym, price=price, source=source, ts=time.time())
-
-# ====== Compatibility aliases ======
-@router.get("/last", response_model=PriceResponse, summary="[compat] /price/last?symbol=BTCUSDT")
-async def get_price_last(symbol: str = Query(..., min_length=3)) -> PriceResponse:
-    return await get_price_symbol(symbol=symbol)
-
-@router.get("/stream_status", summary="[compat] price stream status")
-async def price_stream_status():
-    # חשיפה בסיסית – אם יש WS במערכת שלך, תוכל לשדרג כאן
-    enabled = os.getenv("USE_WS","1") in ("1","true","yes","on")
-    return {"ok": True, "enabled": enabled, "interval_sec": int(os.getenv("PRICE_SCAN_INTERVAL","30") or 30)}
-
 
 
 
