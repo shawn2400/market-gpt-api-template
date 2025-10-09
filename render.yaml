@@ -60,8 +60,11 @@ services:
         value: "1"
       - key: READONLY_ENDPOINTS
         value: "summary,prices_top,news_cache,health"
+
+      # בטל סינון תגיות כדי להחזיר *כל* ה-OpenAPI (קל לאבחון):
       - key: OPENAPI_INCLUDE_TAGS
-        value: "meta,Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk,alerts,aliases"
+        value: ""   # <-- שונה: היה רשימת תגיות; עכשיו ריק כדי לכלול הכל
+
       - key: OPENAPI_HIDE_PATTERNS
         value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
       - key: OPENAPI_PUBLIC_MAX_OPS
@@ -348,8 +351,6 @@ services:
         value: "1"
       - key: STREAM_TP_BE
         value: "1"
-      - key: TP_LADDER_ON_APPROVE
-        value: "1"
       - key: LADDER_TP_ENABLE
         value: "1"
       - key: LADDER_TP_DEFAULT_PCTS
@@ -360,6 +361,8 @@ services:
         value: "1"
       - key: LADDER_SL_DEFAULT_PCTS
         value: "1.2"
+      - key: TP_LADDER_ON_APPROVE
+        value: "1"   # נשאר (אם תרצה אפשר לבטל)
       - key: TP_MAX_LADDERS
         value: "3"
       - key: TRAIL_ENABLE
@@ -442,8 +445,11 @@ services:
         value: "2.18.0"
       - key: INSTANCE_ID
         value: "algogpt-docker"
+
+      # *** חשוב: להסיר את הסינון ROUTES_ONLY כדי לטעון את כל הראוטרים ***
       - key: ROUTES_ONLY
-        value: "routes.status,routes.metrics,routes.ops_approve,routes.ops_ui,routes.position_ops,routes.market,routes.price,routes.dashboard,routes.scan,routes.scan_top_volume,routes.scan_public,routes.topk,routes.ops_flags,routes.guard_smoke,routes.debug,routes.telegram,routes.alerts,routes.root_aliases,routes.root"
+        value: ""   # <-- שונה: היה מלא; עכשיו ריק כדי לכלול הכל
+
       - key: METRICS_ENABLE
         value: "true"
       - key: PNL_TRACKING
@@ -496,6 +502,7 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
+
 
 
 
