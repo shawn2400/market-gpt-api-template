@@ -357,6 +357,7 @@ except Exception:
         ts = str(int(time.time()*1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
+
 # ==================== Execute trade helpers ====================
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     with suppress(Exception):
@@ -895,7 +896,6 @@ async def approve_signed(request: Request):
         ensure_protective_stop(str(payload.get("symbol","")).upper(), prefer_mode="quantities")
 
     return {"ok": True, "ticket_id": payload.get("ticket_id"), "executed": True, "flow": flow, "internal_execute": exec_res}
-
 # ==================== Real-time TRADE EVENTS (TP/SL etc.) ====================
 @router.post("/ops/trade-event")
 async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = None):
@@ -1383,6 +1383,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1","true","yes","on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
