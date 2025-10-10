@@ -3,18 +3,18 @@ from fastapi import APIRouter
 import os
 try:
     import importlib.metadata as md  # py3.8+
-except Exception:  # very old pythons
+except Exception:
     md = None
 
 router = APIRouter()
 
 def detect_version() -> str:
-    # 1) ENV (הכי זמין)
+    # 1) ENV
     v = os.getenv("ALGOGPT_VERSION") or os.getenv("APP_VERSION")
     if v:
         return str(v).strip()
 
-    # 2) קובץ VERSION אם קיים
+    # 2) קובץ VERSION
     for p in ("VERSION", "/app/VERSION"):
         try:
             with open(p, "r", encoding="utf-8") as f:
@@ -24,7 +24,7 @@ def detect_version() -> str:
         except Exception:
             pass
 
-    # 3) מטא-דאטה של חבילה (אם קימפלתם כ-package)
+    # 3) מטא של החבילה (אם קיימת)
     if md:
         for name in ("algogpt", "AlgoGPT"):
             try:
@@ -32,10 +32,9 @@ def detect_version() -> str:
             except Exception:
                 pass
 
-    # 4) ברירת מחדל אחרונה
     return "unknown"
 
-@router.get("/meta/version")
+@router.get("/meta/version", tags=["meta"])
 def meta_version():
     return {
         "ok": True,
@@ -43,3 +42,4 @@ def meta_version():
         "version": detect_version(),
         "instance": os.getenv("INSTANCE_ID", "default"),
     }
+
