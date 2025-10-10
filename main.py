@@ -477,7 +477,7 @@ async def _smart_manage_now(symbol: str,
         try:
             r = await cli.post(f"{base}/manage-once",
                                headers={"Authorization": f"Bearer {token}"},
-                               json=body, timeout=httpx.Timeout(10.0))
+                               json=body, timeout=httpx.Timeout(15.0))
             if r.status_code < 400:
                 return {"ok": True, "status": r.status_code, "text": r.text}
         except Exception as e:
@@ -1055,7 +1055,7 @@ except Exception as e:
 
 try:
     # כולל גם את הראוטר הציבורי
-    from routes.scan_top_volume import router as scan2_router, router_public as scan2_public  # type: ignore
+    from routes.scan_top_volume import router as scan2_router, public_router as scan2_public  # ← תיקון השם כאן
     app.include_router(scan2_router)
     app.include_router(scan2_public)
 except Exception as e:
