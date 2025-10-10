@@ -1,4 +1,3 @@
-
 services:
   - type: web
     name: algogpt-docker
@@ -658,7 +657,7 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
-```
+
 
 
 
