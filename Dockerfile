@@ -10,7 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
-    build-essential curl ca-certificates \
+    build-essential curl ca-certificates git \
  && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -38,8 +38,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive \
     PORT=10000
 
+# נוסיף git גם ל-runtime כדי ש/meta/version לא ייפול כשמבצע קריאה בזמן ריצה
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
-    curl tini ca-certificates tzdata \
+    curl tini ca-certificates tzdata git \
     libopenblas0-openmp liblapack3 \
     libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
     procps psmisc \
@@ -48,7 +49,7 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /install /usr/local
 
-# משתמש לא־שורש
+# משתמש לא-שורש
 RUN useradd -ms /bin/bash appuser
 
 WORKDIR /app
@@ -81,6 +82,7 @@ CMD ["/bin/sh","-lc","/app/prestart.sh 2>/dev/null || true; \
     --graceful-timeout 30 \
     --keep-alive 5 \
     --worker-class uvicorn.workers.UvicornWorker"]
+
 
 
 
