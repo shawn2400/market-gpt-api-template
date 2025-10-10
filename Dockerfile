@@ -25,6 +25,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 # ================================
 FROM python:3.11-slim
 
+ARG APP_VERSION=2.18.0
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONOPTIMIZE=1 \
@@ -36,7 +37,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MPLCONFIGDIR=/app/.cache/matplotlib \
     TZ=Asia/Jerusalem \
     DEBIAN_FRONTEND=noninteractive \
-    PORT=10000
+    PORT=10000 \
+    APP_VERSION=${APP_VERSION} \
+    ALGOGPT_VERSION=${APP_VERSION}
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     curl tini ca-certificates tzdata git \
@@ -53,6 +56,9 @@ RUN useradd -ms /bin/bash appuser
 
 WORKDIR /app
 COPY . .
+
+# הטבעת גרסה לקובץ (fallback ל-/meta/version)
+RUN printf "%s\n" "${APP_VERSION}" > /app/VERSION || true
 
 # הרשאות ותיקיות נדרשות
 RUN mkdir -p /app/static /app/logs /app/data /app/.cache \
@@ -81,6 +87,7 @@ CMD ["/bin/sh","-lc","/app/prestart.sh 2>/dev/null || true; \
     --graceful-timeout 30 \
     --keep-alive 5 \
     --worker-class uvicorn.workers.UvicornWorker"]
+
 
 
 
