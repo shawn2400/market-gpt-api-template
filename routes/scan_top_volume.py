@@ -17,14 +17,14 @@ except Exception:
     def require_bearer_token():
         return None
 
-# --- notifier: שליחת "אישור טרייד" עשירה לטלגרם ---
+# --- notifier: שליחת "אישור טרייד" לטלגרם (רק לנתיבים מוגנים) ---
 try:
     from utils.telegram_notifier import send_trade_approval  # type: ignore
 except Exception:
     async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
         return None
 
-# --- טקסט פשוט (Heartbeat/בדיקות) ---
+# --- טקסט לטלגרם (Heartbeat) ---
 try:
     from utils.telegram_notifier_core import _tg_send as _tg_send_text  # type: ignore
 except Exception:
@@ -73,12 +73,11 @@ _apply_profile_overrides()
 
 # מוגן (Bearer) + פומבי
 router = APIRouter(prefix="/scan", tags=["scan"], dependencies=[Depends(require_bearer_token)])
-public_router = APIRouter(prefix="/scan", tags=["scan"])  # ללא Depends
+public_router = APIRouter(prefix="/scan", tags=["scan"])  # ללא Depends → פתוח
 
-# --- זיכרון קטן למניעת ספאם (per symbol+timeframe) ---
+# --- זיכרון קטן (dedupe) ---
 _STATE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _LAST_GOOD_TS = 0.0
-_ALLOWED_NOTIFY = {"telegram", None}
 
 # ============================
 # Helpers
@@ -228,18 +227,6 @@ def _auto_tp_sl(*, side: Optional[str], entry: float, atr_pct: Optional[float], 
     adx_low_tp_shrink_pct = _get_env_float("ADX_LOW_TP_SHRINK_PCT", 10.0) / 100.0
 
     atr_abs = entry * (atr_pct / 100.0)
-
-    if adx is not None:
-        if adx >= adx_boost_thr:
-            tp1_mult *= (1.0 + adx_tp_boost_pct)
-            tp2_mult *= (1.0 + adx_tp_boost_pct)
-            tp3_mult *= (1.0 + adx_tp_boost_pct)
-            sl_mult  *= (1.0 - adx_sl_tight_pct)
-        elif adx < adx_boost_thr - 10:
-            tp1_mult *= (1.0 - adx_low_tp_shrink_pct)
-            tp2_mult *= (1.0 - adx_low_tp_shrink_pct)
-            tp3_mult *= (1.0 - adx_low_tp_shrink_pct)
-            sl_mult  *= (1.0 + adx_low_sl_relax_pct)
 
     def _round_px(x: float) -> float:
         return float(f"{x:.6f}")
@@ -563,9 +550,6 @@ async def _scan_with_fallback(
     min_score: float, require_side: bool,
     fallback_enable: bool, fallback_tfs: List[str], min_candidates: int
 ) -> Tuple[List[Dict[str, Any]], str]:
-    """
-    מחזיר (signals, used_timeframe)
-    """
     tried: List[str] = []
     for tf in [primary_tf] + (fallback_tfs if fallback_enable else []):
         if tf in tried:
@@ -574,11 +558,9 @@ async def _scan_with_fallback(
         raw = await _compute_signals(market, quote, limit, tf, kline_limit)
         filtered = [s for s in raw if isinstance(s, dict) and _passes(s, min_score, require_side)]
         if len(filtered) >= max(1, min_candidates):
-            # מוודא שה-timeframe בפועל נכון (אם הקוד בפנים כבר שם, לא נוגע)
             for s in filtered:
                 s["timeframe"] = tf
             return filtered, tf
-    # אם לא מצאנו — נחזיר את האחרונים שניסינו (גם אם ריקים)
     last_tf = tried[-1] if tried else primary_tf
     raw_last = await _compute_signals(market, quote, limit, last_tf, kline_limit)
     for s in raw_last:
@@ -606,7 +588,7 @@ async def scan_top_volume(
     ttl_sec: int = Query(900, ge=60, le=86400),
     rearm_score: float = Query(6.0),
     dedupe_window_sec: int = Query(300, ge=0, le=3600),
-    # ברירות מחדל (יוחלפו דינמית ע״י Auto-Risk):
+    # ברירות מחדל
     leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "10"))),
     stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
 ):
@@ -645,7 +627,6 @@ async def scan_top_volume(
                     score_val = s.get("score_total")
                     entry_price = float(det.get("close") or 0.0) or 0.0
 
-                    # Equity אופציונלי מה-ENV
                     eq_env = os.getenv("ACCOUNT_EQUITY_USDT", "").strip()
                     equity = float(eq_env) if eq_env else None
 
@@ -734,7 +715,8 @@ async def scan_now(
         leverage=leverage, stake_usdt=stake_usdt,
     )
 
-# ===== Public alias (ללא Bearer) =====
+# ===== Public endpoints (ללא Bearer) =====
+
 @public_router.get("/public-now", summary="Public scan with TF fallback (no auth)")
 async def public_scan_now(
     market: str = Query("futures"),
@@ -757,6 +739,62 @@ async def public_scan_now(
         min_candidates=min_candidates
     )
     return {"ok": True, "used_timeframe": used_tf, "returned": len(signals), "signals": signals}
+
+@public_router.get("/public-topk", summary="Top-K scan results (no auth)")
+async def public_topk(
+    market: str = Query("futures"),
+    quote: str = Query("USDT"),
+    limit: int = Query(20, ge=1, le=100),  # כמה סימבולים לסרוק בפועל (WATCHLIST clip)
+    timeframe: str = Query("15m"),
+    kline_limit: int = Query(200, ge=60, le=1000),
+
+    # מסננים
+    k: int = Query(10, ge=1, le=100, description="כמה להחזיר אחרי מיון"),
+    min_score: float = Query(0.0),
+    require_side: bool = Query(True, description="מועמדים עם BUY/SELL תקף"),
+
+    # Fallback TF
+    fallback_enable: bool = Query(True),
+    fallback_timeframes: str = Query("30m,1h"),
+    min_candidates: int = Query(1, ge=1, le=50),
+
+    # פורמט
+    include_details: bool = Query(False, description="להוסיף details מלאים לאייטמים"),
+):
+    """
+    מחזיר: {"ok": True, "used_timeframe": "30m", "k": 8, "count": 8, "items": [...]}
+    פרמטרים שימושיים:
+      - k: מספר פריטים להחזיר (לאחר מיון בירידה לפי score_total)
+      - min_score: ציון סף
+      - require_side: רק BUY/SELL תקף
+      - include_details: יוסיף שדה details (יכול להיות כבד יותר)
+    """
+    fb_list = [t.strip() for t in (fallback_timeframes or "").split(",") if t.strip()]
+    signals, used_tf = await _scan_with_fallback(
+        market=market, quote=quote, limit=limit,
+        primary_tf=timeframe, kline_limit=kline_limit,
+        min_score=min_score, require_side=require_side,
+        fallback_enable=fallback_enable, fallback_tfs=fb_list,
+        min_candidates=min_candidates
+    )
+
+    # מיון + חיתוך
+    signals_sorted = sorted(signals, key=lambda s: float(s.get("score_total") or 0.0), reverse=True)[:k]
+
+    def _project(s: Dict[str, Any]) -> Dict[str, Any]:
+        base = {
+            "symbol": s.get("symbol"),
+            "side": s.get("side"),
+            "score": s.get("score_total"),
+            "timeframe": s.get("timeframe") or used_tf,
+            "note": s.get("note"),
+        }
+        if include_details:
+            base["details"] = s.get("details")
+        return {k: v for k, v in base.items() if v is not None}
+
+    items = [_project(s) for s in signals_sorted]
+    return {"ok": True, "used_timeframe": used_tf, "k": k, "count": len(items), "items": items}
 
 
 
