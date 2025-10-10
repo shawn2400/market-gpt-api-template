@@ -56,8 +56,8 @@ services:
       - { key: PROTECT_APPROVE_ROUTES, value: "0" }
       - { key: PROTECT_DIGEST_ROUTES,  value: "1" }
       - { key: ENABLE_HSTS,            value: "1" }
-      # צמצום ראוטים ציבוריים למינימום הנדרש בלבד
-      - { key: SECURITY_PUBLIC_PATHS,  value: "/readyz,/health,/telegram/webhook" }
+      # חשוב: לאפשר גם /meta/version כ-public
+      - { key: SECURITY_PUBLIC_PATHS,  value: "/readyz,/health,/meta/version,/telegram/webhook" }
       - { key: SECURITY_PUBLIC_PREFIXES, value: "/public,/price,/static,/risk" }
 
       # ========================= Anti-Replay =========================
@@ -85,7 +85,6 @@ services:
       - { key: REDIS_CLIENT_NAME,             value: "algogpt" }
       - { key: REDIS_SSL_NO_VERIFY,           value: "0" }
       - { key: REDIS_NAMESPACE,               value: "ops-supervisor-web" }
-      # מיפוי סוד → לשני המפתחות שהקוד עשוי לצפות להם
       - { key: REDIS_URL,         fromSecret: REDIS_URL }
       - { key: ALGOGPT_REDIS_URL, fromSecret: REDIS_URL }
 
@@ -356,9 +355,6 @@ services:
       - { key: API_BEARER_TOKEN,          fromSecret: API_BEARER_TOKEN }
       - { key: API_TOKEN,                 fromSecret: API_TOKEN }
       - { key: PRIMARY_API_TOKEN,         fromSecret: PRIMARY_API_TOKEN }
-
-
-
 
 
 
