@@ -301,8 +301,7 @@ def _auto_tp_sl(*, side: Optional[str], entry: float, atr_pct: Optional[float], 
     else:
         return {"stopPrice": None}, []
 
-    # (שמורים לעתיד: התאמות לפי ADX, כרגע לא משנים את המחירים—תוכל להרחיב כאן אם תרצה)
-
+    # (מקום להרחבות לפי ADX — כרגע לא משנים מחירים/ספליטים)
     return {"stopPrice": sl}, tps
 
 # ============================
