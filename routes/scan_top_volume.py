@@ -4,9 +4,9 @@ from __future__ import annotations
 import os
 import time
 import logging
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List, Tuple, Set
 
-from fastapi import APIRouter, Query, Depends
+from fastapi import APIRouter, Query, Depends, HTTPException, Request
 
 LOG = logging.getLogger("algogpt.scan")
 
@@ -78,6 +78,33 @@ public_router = APIRouter(prefix="/scan", tags=["scan"])  # ללא Depends → �
 # --- זיכרון קטן (dedupe) ---
 _STATE: Dict[Tuple[str, str], Dict[str, Any]] = {}
 _LAST_GOOD_TS = 0.0
+
+# --- Rate Limit קל לפי IP (לציבורי) ---
+_RL_BUCKETS: Dict[str, List[float]] = {}
+_RL_PUBLIC_TOPK_RPS = float(os.getenv("PUBLIC_TOPK_RPS", "2"))          # בקשות לשניה (לפי IP)
+_RL_PUBLIC_TOPK_WINDOW = float(os.getenv("PUBLIC_TOPK_WINDOW", "3"))    # חלון מדידה בשניות
+_RL_PUBLIC_NOW_RPS = float(os.getenv("PUBLIC_NOW_RPS", "2"))
+_RL_PUBLIC_NOW_WINDOW = float(os.getenv("PUBLIC_NOW_WINDOW", "3"))
+
+def _rl_allow(ip: str, key: str, rps: float, window: float) -> bool:
+    """
+    טוקן-באקט פשוט בזיכרון: לכל IP+key שומר חותמות זמן בתוך חלון.
+    במערכות מרובות אינסטנסים עדיף Redis — כאן שמרנו את זה מקומי בלבד.
+    """
+    if rps <= 0 or window <= 0:
+        return True
+    now = time.time()
+    cap = max(1, int(rps * window))
+    bucket_key = f"rl:{key}:{ip}"
+    arr = _RL_BUCKETS.get(bucket_key, [])
+    # מנקים חוץ לחלון
+    arr = [ts for ts in arr if (now - ts) <= window]
+    if len(arr) >= cap:
+        _RL_BUCKETS[bucket_key] = arr
+        return False
+    arr.append(now)
+    _RL_BUCKETS[bucket_key] = arr
+    return True
 
 # ============================
 # Helpers
@@ -220,11 +247,12 @@ def _auto_tp_sl(*, side: Optional[str], entry: float, atr_pct: Optional[float], 
     tp2_mult = _get_env_float("TP2_ATR_MULT_BASE", 2.20)
     tp3_mult = _get_env_float("TP3_ATR_MULT_BASE", 3.50)
 
-    adx_boost_thr = _get_env_float("ADX_TP_BOOST_THRESH", 30.0)
-    adx_tp_boost_pct = _get_env_float("ADX_TP_BOOST_PCT", 10.0) / 100.0
-    adx_sl_tight_pct = _get_env_float("ADX_STRONG_SL_TIGHTEN_PCT", 10.0) / 100.0
-    adx_low_sl_relax_pct = _get_env_float("ADX_LOW_SL_RELAX_PCT", 10.0) / 100.0
-    adx_low_tp_shrink_pct = _get_env_float("ADX_LOW_TP_SHRINK_PCT", 10.0) / 100.0
+    # שמרתי ה״חוכמה״ להמשך הרחבה – כרגע לא משנים מחירים כאן.
+    _ = _get_env_float("ADX_TP_BOOST_THRESH", 30.0)
+    _ = _get_env_float("ADX_TP_BOOST_PCT", 10.0) / 100.0
+    _ = _get_env_float("ADX_STRONG_SL_TIGHTEN_PCT", 10.0) / 100.0
+    _ = _get_env_float("ADX_LOW_SL_RELAX_PCT", 10.0) / 100.0
+    _ = _get_env_float("ADX_LOW_TP_SHRINK_PCT", 10.0) / 100.0
 
     atr_abs = entry * (atr_pct / 100.0)
 
@@ -476,7 +504,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             if side == "BUY" and rsi_val is not None and rsi_val >= 55 and close > max(ema21, ema50):
                 conf_bonus = 0.5 if (plus_di and minus_di and plus_di > minus_di) else 0.3
             elif side == "SELL" and rsi_val is not None and rsi_val <= 45 and close < min(ema21, ema50):
-                conf_bonus = 0.5 if (plus_di and minus_di and minus_di > plus_di) else 0.3
+                conf_bonus = 0.5 if (minus_di and plus_di and minus_di > plus_di) else 0.3
             if adx is not None:
                 if adx < adx_min:
                     score_2_base *= 0.4
@@ -719,6 +747,7 @@ async def scan_now(
 
 @public_router.get("/public-now", summary="Public scan with TF fallback (no auth)")
 async def public_scan_now(
+    request: Request,
     market: str = Query("futures"),
     quote: str = Query("USDT"),
     limit: int = Query(10, ge=1, le=100),
@@ -730,6 +759,9 @@ async def public_scan_now(
     fallback_timeframes: str = Query("30m,1h"),
     min_candidates: int = Query(1, ge=1, le=50),
 ):
+    ip = request.client.host if request and request.client else "unknown"
+    if not _rl_allow(ip, "public-now", _RL_PUBLIC_NOW_RPS, _RL_PUBLIC_NOW_WINDOW):
+        raise HTTPException(status_code=429, detail="Too Many Requests")
     signals, used_tf = await _scan_with_fallback(
         market=market, quote=quote, limit=limit,
         primary_tf=timeframe, kline_limit=kline_limit,
@@ -742,6 +774,7 @@ async def public_scan_now(
 
 @public_router.get("/public-topk", summary="Top-K scan results (no auth)")
 async def public_topk(
+    request: Request,
     market: str = Query("futures"),
     quote: str = Query("USDT"),
     limit: int = Query(20, ge=1, le=100),  # כמה סימבולים לסרוק בפועל (WATCHLIST clip)
@@ -760,6 +793,7 @@ async def public_topk(
 
     # פורמט
     include_details: bool = Query(False, description="להוסיף details מלאים לאייטמים"),
+    fields: Optional[str] = Query(None, description="CSV של שדות: symbol,side,score,timeframe,note,details"),
 ):
     """
     מחזיר: {"ok": True, "used_timeframe": "30m", "k": 8, "count": 8, "items": [...]}
@@ -768,7 +802,12 @@ async def public_topk(
       - min_score: ציון סף
       - require_side: רק BUY/SELL תקף
       - include_details: יוסיף שדה details (יכול להיות כבד יותר)
+      - fields: "symbol,side,score" וכד' (details רק אם include_details=1)
     """
+    ip = request.client.host if request and request.client else "unknown"
+    if not _rl_allow(ip, "public-topk", _RL_PUBLIC_TOPK_RPS, _RL_PUBLIC_TOPK_WINDOW):
+        raise HTTPException(status_code=429, detail="Too Many Requests")
+
     fb_list = [t.strip() for t in (fallback_timeframes or "").split(",") if t.strip()]
     signals, used_tf = await _scan_with_fallback(
         market=market, quote=quote, limit=limit,
@@ -781,6 +820,15 @@ async def public_topk(
     # מיון + חיתוך
     signals_sorted = sorted(signals, key=lambda s: float(s.get("score_total") or 0.0), reverse=True)[:k]
 
+    allowed: Set[str] = {"symbol", "side", "score", "timeframe", "note"}
+    if include_details:
+        allowed.add("details")
+
+    requested: Optional[Set[str]] = None
+    if fields:
+        requested = {f.strip() for f in fields.split(",") if f.strip()}
+        requested &= allowed  # רק שדות מותרים
+
     def _project(s: Dict[str, Any]) -> Dict[str, Any]:
         base = {
             "symbol": s.get("symbol"),
@@ -791,7 +839,10 @@ async def public_topk(
         }
         if include_details:
             base["details"] = s.get("details")
-        return {k: v for k, v in base.items() if v is not None}
+        obj = {k: v for k, v in base.items() if v is not None}
+        if requested:
+            obj = {k: v for k, v in obj.items() if k in requested}
+        return obj
 
     items = [_project(s) for s in signals_sorted]
     return {"ok": True, "used_timeframe": used_tf, "k": k, "count": len(items), "items": items}
