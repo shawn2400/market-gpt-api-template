@@ -48,7 +48,7 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 
 COPY --from=builder /install /usr/local
 
-# משתמש לא-שורש
+# משתמש לא־שורש
 RUN useradd -ms /bin/bash appuser
 
 WORKDIR /app
