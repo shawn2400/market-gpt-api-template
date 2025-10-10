@@ -47,9 +47,9 @@ for _k, _v in _inline_env_defaults.items():
     os.environ.setdefault(_k, _v)
 
 # ========= Notification policy =========
-ONLY_TRADE_NOTIFICATIONS = os.getenv("ONLY_TRADE_NOTIFICATIONS", "1").lower() in ("1","true","yes","on")
-STARTUP_NOTIFY_ENABLE    = os.getenv("STARTUP_NOTIFY_ENABLE", "0").lower() in ("1","true","yes","on")
-HEALTH_TP1_ENABLE        = os.getenv("HEALTH_TP1_ENABLE", "0").lower() in ("1","true","yes","on")
+ONLY_TRADE_NOTIFICATIONS = os.getenv("ONLY_TRADE_NOTIFICATIONS", "1").lower() in ("1", "true", "yes", "on")
+STARTUP_NOTIFY_ENABLE = os.getenv("STARTUP_NOTIFY_ENABLE", "0").lower() in ("1", "true", "yes", "on")
+HEALTH_TP1_ENABLE = os.getenv("HEALTH_TP1_ENABLE", "0").lower() in ("1", "true", "yes", "on")
 
 # ==================== App & CORS ====================
 APP_TITLE = os.getenv("APP_TITLE", "AlgoGPT API")
@@ -73,7 +73,7 @@ CORS_ALLOW_CREDENTIALS = os.getenv("CORS_ALLOW_CREDENTIALS", "0").lower() in ("1
 
 _origins_list = [o.strip() for o in CORS_ALLOW_ORIGINS.split(",")] if CORS_ALLOW_ORIGINS else ["*"]
 if CORS_ALLOW_CREDENTIALS and _origins_list == ["*"]:
-    strict_env = [o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS_STRICT","")).split(",") if o.strip()]
+    strict_env = [o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS_STRICT", "")).split(",") if o.strip()]
     if strict_env:
         _origins_list = strict_env
     else:
@@ -101,46 +101,46 @@ def get_internal_base() -> str:
     return f"http://127.0.0.1:{_port()}"
 
 PUBLIC_HOST = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip().rstrip("/")
-WATCHLIST = [s.strip().upper() for s in (os.getenv("WATCHLIST","") or "").split(",") if s.strip()] or ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","NEARUSDT"]
+WATCHLIST = [s.strip().upper() for s in (os.getenv("WATCHLIST", "") or "").split(",") if s.strip()] or ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "NEARUSDT"]
 
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN","").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
-TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK","1").lower() in ("1","true","yes","on")
-TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
+TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on")
+TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 
 API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
-NS = os.getenv("REDIS_NAMESPACE","ops-supervisor-web").strip() or "ops-supervisor-web"
-REDIS_URL = os.getenv("REDIS_URL","").strip()
-REQUIRE_REDIS = os.getenv("REQUIRE_REDIS","1").lower() in ("1","true","yes","on")
-CONFIRMSTORE_ENABLE = os.getenv("CONFIRMSTORE_ENABLE","0").lower() in ("1","true","yes","on")
+NS = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
+REDIS_URL = os.getenv("REDIS_URL", "").strip()
+REQUIRE_REDIS = os.getenv("REQUIRE_REDIS", "1").lower() in ("1", "true", "yes", "on")
+CONFIRMSTORE_ENABLE = os.getenv("CONFIRMSTORE_ENABLE", "0").lower() in ("1", "true", "yes", "on")
 
 # ====== Public Cache & Rate limit config (NEW) ======
 PUBLIC_CACHE_MAX_AGE = int(os.getenv("PUBLIC_CACHE_MAX_AGE", "20") or "20")
 PUBLIC_CACHE_PATHS = [p.strip() for p in (os.getenv("PUBLIC_CACHE_PATHS", "/scan/public-topk,/scan/public-now,/topk").split(",")) if p.strip()]
-RATE_LIMIT_ENABLE = os.getenv("RATE_LIMIT_ENABLE","1").lower() in ("1","true","yes","on")
-PUBLIC_TOPK_RPS = int(os.getenv("PUBLIC_TOPK_RPS","2") or "2")
-PUBLIC_TOPK_WINDOW = int(os.getenv("PUBLIC_TOPK_WINDOW","3") or "3")
-PUBLIC_NOW_RPS = int(os.getenv("PUBLIC_NOW_RPS","2") or "2")
-PUBLIC_NOW_WINDOW = int(os.getenv("PUBLIC_NOW_WINDOW","3") or "3")
+RATE_LIMIT_ENABLE = os.getenv("RATE_LIMIT_ENABLE", "1").lower() in ("1", "true", "yes", "on")
+PUBLIC_TOPK_RPS = int(os.getenv("PUBLIC_TOPK_RPS", "2") or "2")
+PUBLIC_TOPK_WINDOW = int(os.getenv("PUBLIC_TOPK_WINDOW", "3") or "3")
+PUBLIC_NOW_RPS = int(os.getenv("PUBLIC_NOW_RPS", "2") or "2")
+PUBLIC_NOW_WINDOW = int(os.getenv("PUBLIC_NOW_WINDOW", "3") or "3")
 
 # Digest to Telegram (NEW)
-PUBLIC_TOPK_DIGEST_ENABLE = os.getenv("PUBLIC_TOPK_DIGEST_ENABLE","0").lower() in ("1","true","yes","on")
-PUBLIC_TOPK_DIGEST_EVERY_SEC = int(os.getenv("PUBLIC_TOPK_DIGEST_EVERY_SEC","300") or "300")
-PUBLIC_TOPK_DIGEST_K = int(os.getenv("PUBLIC_TOPK_DIGEST_K","5") or "5")
-PUBLIC_TOPK_DIGEST_MIN_SCORE = float(os.getenv("PUBLIC_TOPK_DIGEST_MIN_SCORE","7.0") or "7.0")
-PUBLIC_TOPK_DIGEST_REQUIRE_SIDE = os.getenv("PUBLIC_TOPK_DIGEST_REQUIRE_SIDE","1").lower() in ("1","true","yes","on")
-PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS = os.getenv("PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS","0").lower() in ("1","true","yes","on")
+PUBLIC_TOPK_DIGEST_ENABLE = os.getenv("PUBLIC_TOPK_DIGEST_ENABLE", "0").lower() in ("1", "true", "yes", "on")
+PUBLIC_TOPK_DIGEST_EVERY_SEC = int(os.getenv("PUBLIC_TOPK_DIGEST_EVERY_SEC", "300") or "300")
+PUBLIC_TOPK_DIGEST_K = int(os.getenv("PUBLIC_TOPK_DIGEST_K", "5") or "5")
+PUBLIC_TOPK_DIGEST_MIN_SCORE = float(os.getenv("PUBLIC_TOPK_DIGEST_MIN_SCORE", "7.0") or "7.0")
+PUBLIC_TOPK_DIGEST_REQUIRE_SIDE = os.getenv("PUBLIC_TOPK_DIGEST_REQUIRE_SIDE", "1").lower() in ("1", "true", "yes", "on")
+PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS = os.getenv("PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS", "0").lower() in ("1", "true", "yes", "on")
 
-OPS_TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC","1800"))
-ETA_SMART_ENABLE = os.getenv("ETA_SMART_ENABLE","1").lower() in ("1","true","yes","on")
-ETA_VELOCITY_WINDOW = int(os.getenv("ETA_VELOCITY_WINDOW","30"))
-TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS","TP1,tp1,tp_1,TAKE_PROFIT_1")).split(",") if t.strip()]
+OPS_TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))
+ETA_SMART_ENABLE = os.getenv("ETA_SMART_ENABLE", "1").lower() in ("1", "true", "yes", "on")
+ETA_VELOCITY_WINDOW = int(os.getenv("ETA_VELOCITY_WINDOW", "30"))
+TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1")).split(",") if t.strip()]
 HMAC_SECRET = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
 
-TP_LADDER_ON_APPROVE = os.getenv("TP_LADDER_ON_APPROVE","1").lower() in ("1","true","yes","on")
-PROTECT_APPROVE_ROUTES = os.getenv("PROTECT_APPROVE_ROUTES","1").lower() in ("1","true","yes","on")
-PROTECT_DIGEST_ROUTES  = os.getenv("PROTECT_DIGEST_ROUTES","1").lower() in ("1","true","yes","on")
-APPROVE_FALLBACK_TO_MARKET = not (os.getenv("PROPOSE_BLOCK_ON_FAIL","0").lower() in ("1","true","yes","on"))
+TP_LADDER_ON_APPROVE = os.getenv("TP_LADDER_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on")
+PROTECT_APPROVE_ROUTES = os.getenv("PROTECT_APPROVE_ROUTES", "1").lower() in ("1", "true", "yes", "on")
+PROTECT_DIGEST_ROUTES = os.getenv("PROTECT_DIGEST_ROUTES", "1").lower() in ("1", "true", "yes", "on")
+APPROVE_FALLBACK_TO_MARKET = not (os.getenv("PROPOSE_BLOCK_ON_FAIL", "0").lower() in ("1", "true", "yes", "on"))
 
 # ==================== Simple ConfirmStore (in-memory fallback) ====================
 class ConfirmStore:
@@ -182,8 +182,8 @@ def _get_shared_async_client() -> httpx.AsyncClient:
             return cli
         timeout = httpx.Timeout(15.0)
         limits = httpx.Limits(
-            max_connections=int(os.getenv("HTTP_MAX_CONNECTIONS","50")),
-            max_keepalive_connections=int(os.getenv("HTTP_MAX_KEEPALIVE","200")),
+            max_connections=int(os.getenv("HTTP_MAX_CONNECTIONS", "50")),
+            max_keepalive_connections=int(os.getenv("HTTP_MAX_KEEPALIVE", "200")),
         )
         cli = httpx.AsyncClient(timeout=timeout, limits=limits, headers={"User-Agent": f"algogpt/{APP_VERSION}"})
         app.state.shared_async_client = cli
@@ -208,7 +208,7 @@ async def _security_headers(request: Request, call_next):
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
-    if os.getenv("ENABLE_HSTS","0").lower() in ("1","true","yes","on"):
+    if os.getenv("ENABLE_HSTS", "0").lower() in ("1", "true", "yes", "on"):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
     return resp
 
@@ -252,10 +252,10 @@ async def _public_rate_limit(request: Request, call_next):
 
     p = request.url.path
     method = request.method.upper()
-    if method != "GET":   # HEAD לא נספר להגבלה — פרובים של פלטפורמה
+    if method != "GET":  # HEAD לא נספר להגבלה — פרובים של פלטפורמה
         return await call_next(request)
 
-    ip = request.headers.get("X-Forwarded-For","").split(",")[0].strip() or request.client.host
+    ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
 
     # map per path → (rps, window)
     rules = {
@@ -312,7 +312,7 @@ async def _public_cache_etag(request: Request, call_next):
 
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
-    return str(s).replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+    return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                               reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
@@ -331,25 +331,28 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
     }
     if approve_url or reject_url or preview_url:
         row: List[Dict[str, Any]] = []
-        if preview_url: row.append({"text":"👁 Preview","url":preview_url})
-        if approve_url: row.append({"text":"✅ Approve","url":approve_url})
-        if reject_url:  row.append({"text":"❌ Reject","url":reject_url})
-        payload["reply_markup"] = {"inline_keyboard":[[r for r in row]]}
+        if preview_url: row.append({"text": "👁 Preview", "url": preview_url})
+        if approve_url: row.append({"text": "✅ Approve", "url": approve_url})
+        if reject_url:  row.append({"text": "❌ Reject", "url": reject_url})
+        payload["reply_markup"] = {"inline_keyboard": [[r for r in row]]}
 
     cli = _get_shared_async_client()
     for attempt in range(3):
         try:
-            r = await cli.post(f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                               json=payload, timeout=httpx.Timeout(10.0))
+            r = await cli.post(
+                f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                json=payload,
+                timeout=httpx.Timeout(10.0),
+            )
             data = {}
             with suppress(Exception):
                 data = r.json()
             if r.status_code < 400 and data.get("ok"):
                 return {"ok": True, "status": r.status_code, "result": data.get("result")}
-            if r.status_code in (429,500,502,503,504):
+            if r.status_code in (429, 500, 502, 503, 504):
                 ra = 0.0
                 with suppress(Exception):
-                    ra = float(r.headers.get("Retry-After","0") or 0)
+                    ra = float(r.headers.get("Retry-After", "0") or 0)
                 await asyncio.sleep(max(ra, 0.6 * (attempt + 1)))
                 continue
             return {"ok": False, "status": r.status_code, "text_raw": r.text}
@@ -394,7 +397,7 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
             v = float(val)
             if v > 0:
                 return v
-    for url in ("https://fapi.binance.com/fapi/v1/ticker/price","https://api.binance.com/api/v3/ticker/price"):
+    for url in ("https://fapi.binance.com/fapi/v1/ticker/price", "https://api.binance.com/api/v3/ticker/price"):
         try:
             cli = _get_shared_async_client()
             r = await cli.get(url, params={"symbol": sym}, timeout=httpx.Timeout(10.0))
@@ -407,8 +410,8 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
             continue
     with suppress(Exception):
         from binance.client import Client  # type: ignore
-        api_key = os.getenv("BINANCE_API_KEY","").strip()
-        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
+        api_key = os.getenv("BINANCE_API_KEY", "").strip()
+        api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
         if api_key and api_sec:
             def _sdk_call() -> Optional[float]:
                 try:
@@ -426,7 +429,7 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
 
 # ==================== Misc helpers ====================
 def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
-    key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text)==64 else secret_hex_or_text.encode("utf-8")
+    key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text) == 64 else secret_hex_or_text.encode("utf-8")
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
@@ -442,7 +445,7 @@ def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) 
         allowed = set(sig.parameters.keys())
         return {k: v for k, v in kwargs.items() if k in allowed}
     except Exception:
-        bad = {"tp_kind","sl_kind","entry_kind","entry_offset","tp_offset","sl_offset"}
+        bad = {"tp_kind", "sl_kind", "entry_kind", "entry_offset", "tp_offset", "sl_offset"}
         return {k: v for k, v in kwargs.items() if k not in bad}
 
 def _is_code_4061(err: Union[Exception, str]) -> bool:
@@ -450,11 +453,11 @@ def _is_code_4061(err: Union[Exception, str]) -> bool:
     return "code=-4061" in s or "position side does not match" in s.lower()
 
 def _align_position_mode(client) -> None:
-    mode_override = (os.getenv("POSITION_MODE_OVERRIDE","") or "").strip().lower()
+    mode_override = (os.getenv("POSITION_MODE_OVERRIDE", "") or "").strip().lower()
     with suppress(Exception):
-        if mode_override in ("hedge","dual","dual_side","dual_side_position","dualposition"):
+        if mode_override in ("hedge", "dual", "dual_side", "dual_side_position", "dualposition"):
             client.futures_change_position_mode(dualSidePosition="true")
-        elif mode_override in ("oneway","one_way","single","single_side","oneside"):
+        elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
 
 # ==================== Order ID helper ====================
@@ -465,11 +468,11 @@ except Exception:
         if len(s) <= limit:
             return s
         h = hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
-        return f"{s[:limit-(len(h)+1)]}_{h}"
+        return f"{s[:limit - (len(h) + 1)]}_{h}"
     def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Optional[str] = None) -> str:
         prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
-        sym = str(symbol).upper(); sd = str(side).upper(); rl = str(role).upper().replace("@","_")
-        ts = str(int(time.time()*1000))
+        sym = str(symbol).upper(); sd = str(side).upper(); rl = str(role).upper().replace("@", "_")
+        ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
 
@@ -484,18 +487,18 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "binance_client_import_failed", "detail": str(e)}
 
     try:
-        api_key = os.getenv("BINANCE_API_KEY","").strip()
-        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
+        api_key = os.getenv("BINANCE_API_KEY", "").strip()
+        api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
         if not api_key or not api_sec:
             return {"ok": False, "error": "binance_keys_missing"}
         client = Client(api_key, api_sec)
         _align_position_mode(client)
 
-        symbol = str(ticket.get("symbol","")).upper()
-        side = str(ticket.get("side","")).upper()
+        symbol = str(ticket.get("symbol", "")).upper()
+        side = str(ticket.get("side", "")).upper()
         qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
         leverage = int(ticket.get("leverage") or 1)
-        if not (symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
+        if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
 
         with suppress(Exception):
@@ -507,7 +510,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         }
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
         attempt_order = dict(base_kwargs)
-        if pos_side_supplied in ("LONG","SHORT"):
+        if pos_side_supplied in ("LONG", "SHORT"):
             attempt_order["positionSide"] = pos_side_supplied
 
         try:
@@ -547,13 +550,13 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
     leverage = int(ticket.get("leverage") or ticket.get("lev") or 0)
     raw_ps = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
-    pos_side = raw_ps if raw_ps in ("LONG","SHORT") else ("LONG" if side=="BUY" else "SHORT")
+    pos_side = raw_ps if raw_ps in ("LONG", "SHORT") else ("LONG" if side == "BUY" else "SHORT")
 
     tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
-    tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0","0.0") and float(x) > 0]
+    tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0", "0.0") and float(x) > 0]
     sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
 
-    if not (symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
+    if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
         return {"ok": False, "error": "bad_ticket_params"}
 
     base_kwargs: Dict[str, Any] = dict(
@@ -571,28 +574,36 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
 
 # ==================== Smart manage after approve ====================
-async def _smart_manage_now(symbol: str,
-                            offset_bps: Optional[int] = None,
-                            pcts: Optional[List[float]] = None,
-                            splits: Optional[List[float]] = None,
-                            atr_mult: Optional[float] = None) -> Dict[str, Any]:
+async def _smart_manage_now(
+    symbol: str,
+    offset_bps: Optional[int] = None,
+    pcts: Optional[List[float]] = None,
+    splits: Optional[List[float]] = None,
+    atr_mult: Optional[float] = None,
+) -> Dict[str, Any]:
     base = get_internal_base()
     token = API_BEARER_TOKEN
     if not token:
         return {"ok": False, "skipped": True, "reason": "missing token"}
     body: Dict[str, Any] = {"symbol": symbol}
-    if offset_bps is not None: body["offset_bps"] = offset_bps
-    if pcts is not None: body["pcts"] = pcts
-    if splits is not None: body["splits"] = splits
+    if offset_bps is not None:
+        body["offset_bps"] = offset_bps
+    if pcts is not None:
+        body["pcts"] = pcts
+    if splits is not None:
+        body["splits"] = splits
     if atr_mult is not None:
         body["callback_rate"] = None
         body["atr_mult"] = atr_mult
     cli = _get_shared_async_client()
     for attempt in range(3):
         try:
-            r = await cli.post(f"{base}/manage-once",
-                               headers={"Authorization": f"Bearer {token}"},
-                               json=body, timeout=httpx.Timeout(15.0))
+            r = await cli.post(
+                f"{base}/manage-once",
+                headers={"Authorization": f"Bearer {token}"},
+                json=body,
+                timeout=httpx.Timeout(15.0),
+            )
             if r.status_code < 400:
                 return {"ok": True, "status": r.status_code, "text": r.text}
         except Exception as e:
@@ -603,15 +614,18 @@ async def _smart_manage_now(symbol: str,
 
 def _smart_manage_env() -> Dict[str, Any]:
     def _csvf(val: Optional[str]) -> Optional[List[float]]:
-        if not val: return None
-        try: return [float(x.strip()) for x in val.split(",") if x.strip()]
-        except Exception: return None
+        if not val:
+            return None
+        try:
+            return [float(x.strip()) for x in val.split(",") if x.strip()]
+        except Exception:
+            return None
     return {
-        "enable": os.getenv("SMART_MANAGE_ON_APPROVE","0").lower() in ("1","true","yes","on"),
-        "offset_bps": int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS","8"))),
+        "enable": os.getenv("SMART_MANAGE_ON_APPROVE", "0").lower() in ("1", "true", "yes", "on"),
+        "offset_bps": int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS", "8"))),
         "pcts": _csvf(os.getenv("SMART_MANAGE_PCTS")),
         "splits": _csvf(os.getenv("SMART_MANAGE_SPLITS")),
-        "atr_mult": float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT","0") or 0) or None,
+        "atr_mult": float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None,
     }
 
 async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
@@ -643,7 +657,7 @@ def _require_bearer(request: Request) -> None:
     if not API_BEARER_TOKEN:
         raise HTTPException(status_code=503, detail="Route protection enabled but API_BEARER_TOKEN missing")
     auth = request.headers.get("Authorization", "")
-    if not (auth.startswith("Bearer ") and auth.split(" ",1)[1].strip() == API_BEARER_TOKEN):
+    if not (auth.startswith("Bearer ") and auth.split(" ", 1)[1].strip() == API_BEARER_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 def _rows_kv_html(t: Dict[str, Any]) -> str:
@@ -651,10 +665,12 @@ def _rows_kv_html(t: Dict[str, Any]) -> str:
         v = t.get(k, default)
         return default if v in (None, "", []) else _md_html(str(v))
     rows = []
-    for k in ("ticket_id","symbol","side","qty","leverage","position_side","budget","score",
-              "tp1","tp2","tp3","sl","eta_tp1_min","eta_tp2_min","eta_tp3_min",
-              "prob_overall_pct","prob_tp1_pct","prob_tp2_pct","prob_tp3_pct",
-              "tp_splits","expiry_ts","note"):
+    for k in (
+        "ticket_id", "symbol", "side", "qty", "leverage", "position_side", "budget", "score",
+        "tp1", "tp2", "tp3", "sl", "eta_tp1_min", "eta_tp2_min", "eta_tp3_min",
+        "prob_overall_pct", "prob_tp1_pct", "prob_tp2_pct", "prob_tp3_pct",
+        "tp_splits", "expiry_ts", "note",
+    ):
         rows.append(
             f"<tr><th style='text-align:left;padding:.35rem .6rem;background:#fafafa'>{k}</th>"
             f"<td style='padding:.35rem .6rem'>{cv(k)}</td></tr>"
@@ -710,11 +726,11 @@ async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[boo
                     fetched_req = it.get("req") or it
                     break
     if fetched_req:
-        event["symbol"] = str(fetched_req.get("symbol","")).upper()
-        event["side"] = str(fetched_req.get("side","")).upper()
+        event["symbol"] = str(fetched_req.get("symbol", "")).upper()
+        event["side"] = str(fetched_req.get("side", "")).upper()
         event["expiry_ts"] = fetched_req.get("expiry_ts")
         event["note"] = fetched_req.get("note")
-        base = f"{ticket_id}:{event.get('symbol','')}:{event.get('side','')}"
+        base = f"{ticket_id}:{event.get('symbol', '')}:{event.get('side', '')}"
         event["idem"] = hashlib.md5(base.encode("utf-8")).hexdigest()[:10]
     else:
         event["symbol"] = ""; event["side"] = ""
@@ -724,7 +740,7 @@ async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[boo
             r = await _get_redis_cached()
             if r:
                 key_good = f"{NS}:expired_log"
-                key_bad  = f"{NS}:expired_log_bad"
+                key_bad = f"{NS}:expired_log_bad"
                 key = key_good if (event.get("symbol") and event.get("side")) else key_bad
                 await r.lpush(key, json.dumps(event, ensure_ascii=False, separators=(",", ":")))
                 await r.ltrim(key, 0, 2999)
@@ -735,10 +751,10 @@ async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[boo
 @router.post("/ops/ticket")
 async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = None):
     symbol = (payload.get("symbol") or "").upper().strip()
-    side   = (payload.get("side") or "").upper().strip()
-    qty    = float(payload.get("qty") or payload.get("quantity") or 0)
-    lev    = int(payload.get("leverage") or payload.get("lev") or 0)
-    note   = payload.get("note") or ""
+    side = (payload.get("side") or "").upper().strip()
+    qty = float(payload.get("qty") or payload.get("quantity") or 0)
+    lev = int(payload.get("leverage") or payload.get("lev") or 0)
+    note = payload.get("note") or ""
     position_side = (payload.get("position_side") or payload.get("positionSide") or "BOTH").upper()
     budget = float(payload.get("budget") or payload.get("budget_usd") or 0.0)
     if not (symbol and side):
@@ -749,8 +765,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         price_now = None
         with suppress(Exception):
             price_now = await get_last_price_async(symbol)
-        def _smart(symbol: str, side: str, price_now: Optional[float],
-                   tps: List[Optional[float]]) -> Dict[str, Any]:
+        def _smart(symbol: str, side: str, price_now: Optional[float], tps: List[Optional[float]]) -> Dict[str, Any]:
             if not price_now:
                 return {}
             out: Dict[str, Any] = {}
@@ -796,7 +811,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
 
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     approve_url = f"{base}/ops/approve?ticket_id={tid}" if base else ""
-    reject_url  = f"{base}/ops/reject?ticket_id={tid}"  if base else ""
+    reject_url = f"{base}/ops/reject?ticket_id={tid}" if base else ""
     preview_url = f"{base}/ops/ui/ticket?ticket_id={tid}" if base else ""
 
     lines = [
@@ -804,7 +819,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         f"• Ticket: <code>{_md_html(tid)}</code>",
         f"• {_md_html(symbol)} {_md_html(side)} qty=<code>{_md_html(qty)}</code> lev=<code>{_md_html(lev)}</code>",
     ]
-    for i in (1,2,3):
+    for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
             row = f"• TP{i}: <code>{req_body[f'tp{i}']}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
@@ -827,7 +842,14 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     pretty = "\n".join(lines)
     tg_resp = await _send_telegram_html(pretty, approve_url=approve_url or None, reject_url=reject_url or None, preview_url=preview_url or None)
 
-    return {"ok": True, "ticket_id": tid, "approve_url": approve_url, "reject_url": reject_url, "preview_url": preview_url, "telegram_result": tg_resp}
+    return {
+        "ok": True,
+        "ticket_id": tid,
+        "approve_url": approve_url,
+        "reject_url": reject_url,
+        "preview_url": preview_url,
+        "telegram_result": tg_resp,
+    }
 
 def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
     mode = _parse_mode(ticket.get("note"))
@@ -849,7 +871,7 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
         return _html("⚠️ לא נמצא כרטיס או שפג תוקפו.")
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     approve_url = f"{base}/ops/approve?ticket_id={ticket_id}"
-    reject_url  = f"{base}/ops/reject?ticket_id={ticket_id}"
+    reject_url = f"{base}/ops/reject?ticket_id={ticket_id}"
     body = (
         "<!doctype html><meta charset='utf-8'>"
         "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.45'>"
@@ -879,7 +901,7 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור.")
 
     with suppress(Exception):
-        for k in ("blocked_by_rr_min","blocked_by_velocity","velocity_error"):
+        for k in ("blocked_by_rr_min", "blocked_by_velocity", "velocity_error"):
             ticket.pop(k, None)
 
     t2 = await _apply_auto_qty_on_ticket_async(ticket)
@@ -890,13 +912,15 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
         return _html("⚠️ שגיאה: qty/leverage חסרים גם לאחר ניסיון חישוב אוטומטי.")
 
     flow = _decide_flow_by_mode(ticket)
-    exec_res = await (_execute_trade(ticket) if flow=="MARKET"
-                      else _execute_trade_armed(ticket) if flow=="HYBRID"
-                      else (_execute_trade_armed(ticket) if any(ticket.get(k) for k in ("tp1","tp2","tp3","sl"))
-                            else _execute_trade(ticket)))
+    exec_res = await (
+        _execute_trade(ticket) if flow == "MARKET"
+        else _execute_trade_armed(ticket) if flow == "HYBRID"
+        else (_execute_trade_armed(ticket) if any(ticket.get(k) for k in ("tp1", "tp2", "tp3", "sl"))
+              else _execute_trade(ticket))
+    )
     ok = bool(exec_res.get("ok"))
 
-    if (not ok) and flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
+    if (not ok) and flow in ("HYBRID", "AUTO") and APPROVE_FALLBACK_TO_MARKET:
         retry_res = await _execute_trade(ticket)
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
@@ -905,14 +929,14 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
         with suppress(Exception):
             sm = _smart_manage_env()
             if sm["enable"]:
-                sym = str(ticket.get("symbol","")).upper()
+                sym = str(ticket.get("symbol", "")).upper()
                 await _smart_manage_now(sym, offset_bps=sm["offset_bps"], pcts=sm["pcts"], splits=sm["splits"], atr_mult=sm["atr_mult"])
         with suppress(Exception):
             from utils.guard_stop import ensure_protective_stop  # type: ignore
-            ensure_protective_stop(str(ticket.get("symbol","")).upper(), prefer_mode="quantities")
+            ensure_protective_stop(str(ticket.get("symbol", "")).upper(), prefer_mode="quantities")
 
     with suppress(Exception):
-        sym, side, qty = ticket.get("symbol",""), ticket.get("side",""), ticket.get("qty","")
+        sym, side, qty = ticket.get("symbol", ""), ticket.get("side", ""), ticket.get("qty", "")
         msg = (
             f"✅ <b>Approved</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
             f"• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n• Flow: <code>{flow}</code>\n— — —\nבוצע והועבר לניהול."
@@ -937,7 +961,7 @@ async def reject(ticket_id: str = Query(..., description="ticket_id"), request: 
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור/דחייה.")
-    sym, side, qty = (str(ticket.get("symbol","")) or "").upper(), str(ticket.get("side","")).upper(), ticket.get("qty","")
+    sym, side, qty = (str(ticket.get("symbol", "")) or "").upper(), str(ticket.get("side", "")).upper(), ticket.get("qty", "")
     with suppress(Exception):
         await _send_telegram_html(
             f"⛔️ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n— — —\nהבקשה נדחתה."
@@ -955,18 +979,21 @@ async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = No
     _maybe_protect_routes(request)
     etype = str(payload.get("event") or "").upper().strip()
     symbol = str(payload.get("symbol") or "").upper()
-    side   = str(payload.get("side") or "").upper()
-    desc   = payload.get("desc") or payload.get("description") or ""
-    extra  = payload.get("extra") or {}
+    side = str(payload.get("side") or "").upper()
+    desc = payload.get("desc") or payload.get("description") or ""
+    extra = payload.get("extra") or {}
 
     if not etype or not symbol:
         raise HTTPException(status_code=422, detail="Missing event or symbol")
 
     lines = [f"📣 <b>Trade update</b> · <code>{_md_html(symbol)}</code>"]
-    if side: lines.append(f"• Side: <code>{_md_html(side)}</code>")
+    if side:
+        lines.append(f"• Side: <code>{_md_html(side)}</code>")
     lines.append(f"• Event: <b>{_md_html(etype)}</b>")
-    if "price" in payload: lines.append(f"• Price: <code>{_md_html(payload['price'])}</code>")
-    if "qty" in payload:   lines.append(f"• Qty: <code>{_md_html(payload['qty'])}</code>")
+    if "price" in payload:
+        lines.append(f"• Price: <code>{_md_html(payload['price'])}</code>")
+    if "qty" in payload:
+        lines.append(f"• Qty: <code>{_md_html(payload['qty'])}</code>")
     if "lev" in payload or "leverage" in payload:
         lv = payload.get("lev", payload.get("leverage"))
         lines.append(f"• Lev: <code>{_md_html(lv)}</code>")
@@ -1000,7 +1027,8 @@ async def ui_pending(request: Request = None):
                     keys = res[1]
                     for k in keys:
                         raw = await r.get(k)
-                        if not raw: continue
+                        if not raw:
+                            continue
                         obj = json.loads(raw); req = obj.get("req") or {}
                         items.append(req)
                     if cursor == 0:
@@ -1016,7 +1044,7 @@ async def ui_pending(request: Request = None):
 
     rows = []
     for t in items:
-        raw_tid = str(t.get("ticket_id",""))
+        raw_tid = str(t.get("ticket_id", ""))
         link = f"{base}/ops/ui/ticket?ticket_id={raw_tid}"
         rows.append(
             f"<tr>"
@@ -1068,7 +1096,7 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
             flag = False
             try:
                 if isinstance(res, dict):
-                    flag = bool(res.get("emergency")) or bool(res.get("placed")) or (str(res.get("action","")).lower() in ("emergency","place"))
+                    flag = bool(res.get("emergency")) or bool(res.get("placed")) or (str(res.get("action", "")).lower() in ("emergency", "place"))
             except Exception:
                 pass
             if flag:
@@ -1077,12 +1105,12 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
             results[s] = {"ok": False, "error": str(e)}
 
     if emergencies and not ONLY_TRADE_NOTIFICATIONS:
-        await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>"+",".join(emergencies)+"</code>")
+        await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>" + ",".join(emergencies) + "</code>")
     return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
 
 @router.get("/ops/digest/expired")
 async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = None):
-    PROTECT_DIGEST_ROUTES = os.getenv("PROTECT_DIGEST_ROUTES","1").lower() in ("1","true","yes","on")
+    PROTECT_DIGEST_ROUTES = os.getenv("PROTECT_DIGEST_ROUTES", "1").lower() in ("1", "true", "yes", "on")
     if PROTECT_DIGEST_ROUTES:
         _require_bearer(request)
     if not (aioredis and REDIS_URL and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID):
@@ -1094,7 +1122,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
             return {"ok": False, "error": "redis_unavailable"}
 
         key_good = f"{NS}:expired_log"
-        key_bad  = f"{NS}:expired_log_bad"
+        key_bad = f"{NS}:expired_log_bad"
 
         items: List[str] = []
         with suppress(Exception):
@@ -1119,14 +1147,14 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
             await _send_telegram_html(f"ℹ️ No expired approvals in last {hours}h.")
             return {"ok": True, "sent": True, "count": 0}
 
-        by_sym: Counter = Counter((str(e.get("symbol","")).upper(), str(e.get("side","")).upper()) for e in events)
+        by_sym: Counter = Counter((str(e.get("symbol", "")).upper(), str(e.get("side", "")).upper()) for e in events)
         lines = [f"⏱️ <b>Expired approvals</b> (last {hours}h) · total: <b>{total}</b>"]
         for (sym, side), cnt in by_sym.most_common(20):
             lines.append(f"• {sym} {side}: <code>{cnt}</code>")
         lines.append("— — —")
         lines.append("<b>Last events</b>:")
         for e in events[:5]:
-            t = int(e.get("ts", now)); idem = e.get("idem",""); sym  = str(e.get("symbol","")).upper(); side = str(e.get("side","")).upper()
+            t = int(e.get("ts", now)); idem = e.get("idem", ""); sym = str(e.get("symbol", "")).upper(); side = str(e.get("side", "")).upper()
             lines.append(f"• {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(t))}Z · {sym} {side} · <code>{idem}</code>")
         await _send_telegram_html("\n".join(lines))
         return {"ok": True, "sent": True, "count": total}
@@ -1136,8 +1164,8 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
 
 # ==================== Telegram webhook ====================
 async def _telegram_webhook_core(request: Request) -> Dict[str, Any]:
-    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token","")
-    TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
+    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
+    TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
     if TELEGRAM_WEBHOOK_SECRET and secret != TELEGRAM_WEBHOOK_SECRET:
         raise HTTPException(status_code=401, detail="Bad secret")
     _ = await request.body()
@@ -1220,7 +1248,7 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
     allowlist = set([k.strip() for k in (keys or "").split(",") if k.strip()]) if keys else set()
     safe: Dict[str, Any] = {}
     for k, v in os.environ.items():
-        if any(x in k.upper() for x in ("SECRET","TOKEN","KEY","PASSWORD")):
+        if any(x in k.upper() for x in ("SECRET", "TOKEN", "KEY", "PASSWORD")):
             continue
         if allowlist and k not in allowlist:
             continue
@@ -1232,7 +1260,7 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
 async def global_exception_handler(request: Request, exc: Exception):
     error_id = secrets.token_hex(6)
     logger.exception("unhandled_error [%s]: %s %s", error_id, request.method, request.url)
-    show_detail = os.getenv("SHOW_INTERNAL_ERRORS","0").lower() in ("1","true","yes","on") or LOG_LEVEL == "DEBUG"
+    show_detail = os.getenv("SHOW_INTERNAL_ERRORS", "0").lower() in ("1", "true", "yes", "on") or LOG_LEVEL == "DEBUG"
     payload: Dict[str, Any] = {"ok": False, "error": "internal_error", "id": error_id}
     if show_detail:
         payload["detail"] = str(exc)
@@ -1278,8 +1306,10 @@ async def _public_topk_digest_loop():
                                 with suppress(Exception):
                                     adx = it.get("adx")
                                     atr = it.get("atr_pct") or it.get("atr")
-                                    if adx is not None: extra += f" adx={adx}"
-                                    if atr is not None: extra += f" atr%={atr}"
+                                    if adx is not None:
+                                        extra += f" adx={adx}"
+                                    if atr is not None:
+                                        extra += f" atr%={atr}"
                             lines.append(f"• {sym} {side}  score=<code>{score}</code>{_md_html(extra)}")
                         await _send_telegram_html("\n".join(lines))
                 else:
@@ -1308,7 +1338,7 @@ async def _startup_tasks():
                 return
             await asyncio.sleep(0.7)
             name = APP_TITLE
-            env  = os.getenv("ENV", os.getenv("ENVIRONMENT","prod"))
+            env = os.getenv("ENV", os.getenv("ENVIRONMENT", "prod"))
             await _send_telegram_html(f"🟢 <b>Bot online</b> · <code>{name}</code> · env=<code>{env}</code>")
     asyncio.create_task(_notify_bot_online())
 
@@ -1323,15 +1353,18 @@ async def _startup_tasks():
         if watch:
             async def _run_health():
                 try:
-                    await health_check_tp1_tags(watch, interval_sec=int(os.getenv("HEALTH_TP1_INTERVAL_SEC","600")))
+                    await health_check_tp1_tags(watch, interval_sec=int(os.getenv("HEALTH_TP1_INTERVAL_SEC", "600")))
                 except asyncio.CancelledError:
                     logger.info("health_tp1 background: cancelled")
                     raise
                 except Exception as e:
                     logger.warning("health_tp1 background error: %s", e)
             asyncio.create_task(_run_health())
-            logger.info("health_tp1 background started (interval=%ss, symbols=%s)",
-                        int(os.getenv("HEALTH_TP1_INTERVAL_SEC","600")), ",".join(watch))
+            logger.info(
+                "health_tp1 background started (interval=%ss, symbols=%s)",
+                int(os.getenv("HEALTH_TP1_INTERVAL_SEC", "600")),
+                ",".join(watch),
+            )
 
     async def periodic_manager():
         global _manager_backoff
@@ -1344,7 +1377,7 @@ async def _startup_tasks():
         if not syms:
             return
         base = get_internal_base()
-        every_sec = max(10, int(os.getenv("TRADE_MANAGER_INTERVAL_SEC","60")))
+        every_sec = max(10, int(os.getenv("TRADE_MANAGER_INTERVAL_SEC", "60")))
         per_req_timeout = httpx.Timeout(15.0)
         try:
             while True:
@@ -1375,7 +1408,7 @@ async def _startup_tasks():
         except asyncio.CancelledError:
             logger.info("periodic_manager: cancelled")
             raise
-    if os.getenv("MANAGER_ENABLE","1").lower() in ("1","true","yes","on"):
+    if os.getenv("MANAGER_ENABLE", "1").lower() in ("1", "true", "yes", "on"):
         asyncio.create_task(periodic_manager())
 
     async def periodic_guarder():
@@ -1396,11 +1429,11 @@ async def _startup_tasks():
                             ensure_protective_stop(s, prefer_mode="quantities")
                 except Exception:
                     pass
-                await asyncio.sleep(int(os.getenv("GUARDER_INTERVAL_SEC","45")))
+                await asyncio.sleep(int(os.getenv("GUARDER_INTERVAL_SEC", "45")))
         except asyncio.CancelledError:
             logger.info("periodic_guarder: cancelled")
             raise
-    if os.getenv("GUARDER_ENABLE","1").lower() in ("1","true","yes","on"):
+    if os.getenv("GUARDER_ENABLE", "1").lower() in ("1", "true", "yes", "on"):
         asyncio.create_task(periodic_guarder())
 
     async def periodic_scanner():
@@ -1410,18 +1443,18 @@ async def _startup_tasks():
             logger.warning("periodic_scanner_unavailable: %s", e)
             return
         await asyncio.sleep(4.0)
-        every       = int(os.getenv("SCAN_CRON_EVERY_SEC", "45") or "45")
-        tf          = os.getenv("SCAN_CRON_TIMEFRAME", "15m") or "15m"
+        every = int(os.getenv("SCAN_CRON_EVERY_SEC", "45") or "45")
+        tf = os.getenv("SCAN_CRON_TIMEFRAME", "15m") or "15m"
         kline_limit = int(os.getenv("SCAN_CRON_KLINES", "200") or "200")
-        limit       = int(os.getenv("SCAN_CRON_LIMIT", "12") or "12")
-        min_score   = float(os.getenv("SCAN_CRON_MIN_SCORE", "7.0") or "7.0")
+        limit = int(os.getenv("SCAN_CRON_LIMIT", "12") or "12")
+        min_score = float(os.getenv("SCAN_CRON_MIN_SCORE", "7.0") or "7.0")
         rearm_score = float(os.getenv("SCAN_REARM_SCORE", "6.0") or "6.0")
-        dedupe_sec  = int(os.getenv("SCAN_DEDUPE_WINDOW_SEC", "300") or "300")
-        ttl_sec     = int(os.getenv("SCAN_TTL_SEC", "900") or "900")
-        leverage    = float(os.getenv("DEFAULT_LEVERAGE", "5") or "5")
-        stake       = float(os.getenv("DEFAULT_STAKE_USDT", "50") or "50")
-        rich        = (os.getenv("SCAN_RICH", "1").lower() in ("1","true","yes","on"))
-        chat        = os.getenv("TELEGRAM_CHAT_ID")
+        dedupe_sec = int(os.getenv("SCAN_DEDUPE_WINDOW_SEC", "300") or "300")
+        ttl_sec = int(os.getenv("SCAN_TTL_SEC", "900") or "900")
+        leverage = float(os.getenv("DEFAULT_LEVERAGE", "5") or "5")
+        stake = float(os.getenv("DEFAULT_STAKE_USDT", "50") or "50")
+        rich = (os.getenv("SCAN_RICH", "1").lower() in ("1", "true", "yes", "on"))
+        chat = os.getenv("TELEGRAM_CHAT_ID")
         if not chat:
             logger.info("periodic_scanner: TELEGRAM_CHAT_ID missing; skipping")
             return
@@ -1441,7 +1474,7 @@ async def _startup_tasks():
         except asyncio.CancelledError:
             logger.info("periodic_scanner: cancelled")
             raise
-    if os.getenv("SCAN_CRON_ENABLE","0").lower() in ("1","true","yes","on"):
+    if os.getenv("SCAN_CRON_ENABLE", "0").lower() in ("1", "true", "yes", "on"):
         asyncio.create_task(periodic_scanner())
 
     # NEW: periodic digest for public-topk
@@ -1469,8 +1502,9 @@ if __name__ == "__main__":
     import uvicorn
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "10000"))
-    reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1","true","yes","on")
+    reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
