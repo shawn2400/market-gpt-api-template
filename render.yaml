@@ -56,7 +56,8 @@ services:
       - { key: PROTECT_APPROVE_ROUTES, value: "0" }
       - { key: PROTECT_DIGEST_ROUTES,  value: "1" }
       - { key: ENABLE_HSTS,            value: "1" }
-      - { key: SECURITY_PUBLIC_PATHS,  value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active,/scan/now,/scan/top-volume" }
+      # צמצום ראוטים ציבוריים למינימום הנדרש בלבד
+      - { key: SECURITY_PUBLIC_PATHS,  value: "/readyz,/health,/telegram/webhook" }
       - { key: SECURITY_PUBLIC_PREFIXES, value: "/public,/price,/static,/risk" }
 
       # ========================= Anti-Replay =========================
@@ -84,7 +85,7 @@ services:
       - { key: REDIS_CLIENT_NAME,             value: "algogpt" }
       - { key: REDIS_SSL_NO_VERIFY,           value: "0" }
       - { key: REDIS_NAMESPACE,               value: "ops-supervisor-web" }
-      # מיפוי הסוד לשני המפתחות שהקוד עלול לצפות להם
+      # מיפוי סוד → לשני המפתחות שהקוד עשוי לצפות להם
       - { key: REDIS_URL,         fromSecret: REDIS_URL }
       - { key: ALGOGPT_REDIS_URL, fromSecret: REDIS_URL }
 
@@ -226,49 +227,27 @@ services:
       - { key: TP_BE_OFFSET_BPS,          value: "8" }
 
       # ========================= Auto-Tune (Score/ADX) =========================
-      - { key: AUTO_TUNE_ENABLE,         value: "1" }
-      - { key: AUTO_MIN_SCORE_BASE,      value: "7.0" }
-      - { key: AUTO_MIN_SCORE_RANGE,     value: "6.0,7.5" }
-      - { key: AUTO_ADX_MIN_BASE,        value: "20" }
-      - { key: AUTO_ADX_RANGE,           value: "18,25" }
-      - { key: TARGET_TRADES_PER_DAY_MIN, value: "4" }
-      - { key: TARGET_TRADES_PER_DAY_MAX, value: "10" }
-      - { key: AUTO_TUNE_LOOKBACK_MIN,   value: "180" }
-      - { key: AUTO_BACKOFF_SEC,         value: "900" }
+      - { key: AUTO_TUNE_ENABLE,           value: "1" }
+      - { key: AUTO_MIN_SCORE_BASE,        value: "7.0" }
+      - { key: AUTO_MIN_SCORE_RANGE,       value: "6.0,7.5" }
+      - { key: AUTO_ADX_MIN_BASE,          value: "20" }
+      - { key: AUTO_ADX_RANGE,             value: "18,25" }
+      - { key: TARGET_TRADES_PER_DAY_MIN,  value: "4" }
+      - { key: TARGET_TRADES_PER_DAY_MAX,  value: "10" }
+      - { key: AUTO_TUNE_LOOKBACK_MIN,     value: "180" }
+      - { key: AUTO_BACKOFF_SEC,           value: "900" }
 
-      # ========================= Auto-Tune TP/SL (ATR + ADX) =========================
-      - { key: AUTO_TP_ENABLE,         value: "1" }
-      - { key: SL_ATR_MULT_BASE,       value: "1.10" }
-      - { key: TP1_ATR_MULT_BASE,      value: "1.20" }
-      - { key: TP2_ATR_MULT_BASE,      value: "2.20" }
-      - { key: TP3_ATR_MULT_BASE,      value: "3.50" }
-      - { key: ADX_TP_BOOST_THRESH,    value: "30" }
-      - { key: ADX_TP_BOOST_PCT,       value: "10" }
+      # ========================= Auto-Tune TP/SL =========================
+      - { key: AUTO_TP_ENABLE,       value: "1" }
+      - { key: SL_ATR_MULT_BASE,     value: "1.10" }
+      - { key: TP1_ATR_MULT_BASE,    value: "1.20" }
+      - { key: TP2_ATR_MULT_BASE,    value: "2.20" }
+      - { key: TP3_ATR_MULT_BASE,    value: "3.50" }
+      - { key: ADX_TP_BOOST_THRESH,  value: "30" }
+      - { key: ADX_TP_BOOST_PCT,     value: "10" }
       - { key: ADX_STRONG_SL_TIGHTEN_PCT, value: "10" }
-      - { key: ADX_LOW_SL_RELAX_PCT,   value: "10" }
-      - { key: ADX_LOW_TP_SHRINK_PCT,  value: "10" }
-
-      # ========================= Auto-Risk (Equity% + Leverage) =========================
-      - { key: AUTO_RISK_ENABLE,           value: "1" }
-      - { key: RISK_LEV_BASE,              value: "10" }
-      - { key: RISK_LEV_MIN,               value: "5" }
-      - { key: RISK_LEV_MAX,               value: "15" }
-      - { key: RISK_STAKE_MIN_USDT,        value: "25" }
-      - { key: RISK_STAKE_MAX_USDT,        value: "500" }
-      - { key: RISK_STAKE_EQUITY_MIN_PCT,  value: "0.3" }
-      - { key: RISK_STAKE_EQUITY_MAX_PCT,  value: "2.5" }
-      - { key: RISK_SCORE_TO_EQUITY_PCT,   value: "6.5:0.6,7:0.9,7.5:1.1,8:1.3,8.5:1.7,9:2.0,9.5:2.5" }
-      - { key: RISK_ADX_STRONG,            value: "35" }
-      - { key: RISK_ADX_WEAK,              value: "20" }
-      - { key: RISK_ATR_HIGH_PCT,          value: "4.0" }
-      - { key: RISK_ATR_LOW_PCT,           value: "0.7" }
-      - { key: RISK_STAKE_BOOST_STRONG_PCT, value: "15" }
-      - { key: RISK_STAKE_CUT_HIGH_ATR_PCT, value: "20" }
-      - { key: RISK_LEV_BOOST_STRONG_PCT,   value: "10" }
-      - { key: RISK_LEV_CUT_HIGH_ATR_PCT,   value: "20" }
-      - { key: RISK_EXTRA_ADD_MODE,        value: "pct" }
-      - { key: RISK_EXTRA_ADD_THRESH,      value: "9.0" }
-      - { key: RISK_EXTRA_ADD_VALUE,       value: "25" }
+      - { key: ADX_LOW_SL_RELAX_PCT, value: "10" }
+      - { key: ADX_LOW_TP_SHRINK_PCT, value: "10" }
 
       # ========================= Health / Ops Digest =========================
       - { key: HEALTH_PRICE_MAX_AGE,      value: "30" }
@@ -325,11 +304,10 @@ services:
       - { key: TELEGRAM_WEBHOOK_SECRET,   fromSecret: TELEGRAM_WEBHOOK_SECRET }
       - { key: ALERTS_INGEST_HMAC_SECRET, fromSecret: ALERTS_INGEST_HMAC_SECRET }
       - { key: INTERNAL_JWT_PUBLIC_KEY,   fromSecret: INTERNAL_JWT_PUBLIC_KEY }
-      # (BINANCE רק אם באמת חי)
       - { key: BINANCE_API_KEY,           fromSecret: BINANCE_API_KEY }
       - { key: BINANCE_API_SECRET,        fromSecret: BINANCE_API_SECRET }
 
-  # ===================== STAGING (בדיקות: ללא Redis/טלגרם/טריידים) =====================
+  # ===================== STAGING (בדיקות — ללא תלות חיצונית) =====================
   - type: web
     name: algogpt-staging
     env: docker
@@ -356,7 +334,7 @@ services:
       - { key: WEB_CONCURRENCY,  value: "1" }
       - { key: LOG_LEVEL,        value: "INFO" }
 
-      # לכבות תלות חיצונית
+      # ביטול תלות חיצונית לשקט נפשי בבדיקות
       - { key: REQUIRE_REDIS,          value: "0" }
       - { key: RATE_LIMIT_ENABLE,      value: "1" }
       - { key: RATE_LIMIT_BACKEND,     value: "memory" }
@@ -374,12 +352,10 @@ services:
       - { key: REDOC_URL,    value: "/redoc" }
       - { key: OPENAPI_URL,  value: "/openapi.json" }
 
-      # לראוטים מוגנים גם ב-staging (לבחירתך)
+      # גישה לראוטים מוגנים גם ב-staging (לפי טוקן)
       - { key: API_BEARER_TOKEN,          fromSecret: API_BEARER_TOKEN }
       - { key: API_TOKEN,                 fromSecret: API_TOKEN }
       - { key: PRIMARY_API_TOKEN,         fromSecret: PRIMARY_API_TOKEN }
-
-
 
 
 
