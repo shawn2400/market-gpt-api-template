@@ -252,7 +252,7 @@ async def _public_rate_limit(request: Request, call_next):
 
     p = request.url.path
     method = request.method.upper()
-    if method != "GET":
+    if method != "GET":   # HEAD לא נספר להגבלה — פרובים של פלטפורמה
         return await call_next(request)
 
     ip = request.headers.get("X-Forwarded-For","").split(",")[0].strip() or request.client.host
@@ -293,7 +293,6 @@ async def _public_cache_etag(request: Request, call_next):
             resp.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_MAX_AGE}"
         body = b""
         with suppress(Exception):
-            # JSONResponse/PlainTextResponse/HTMLResponse have .body
             body = resp.body if hasattr(resp, "body") and resp.body is not None else b""
         if not body:
             return resp
@@ -303,7 +302,6 @@ async def _public_cache_etag(request: Request, call_next):
 
         inm = request.headers.get("If-None-Match")
         if inm and inm == etag and resp.status_code == 200:
-            # Return 304 Not Modified
             fresh = Response(status_code=304)
             fresh.headers["Cache-Control"] = resp.headers.get("Cache-Control", f"public, max-age={PUBLIC_CACHE_MAX_AGE}")
             fresh.headers["ETag"] = etag
@@ -1172,7 +1170,7 @@ except Exception as e:
 
 try:
     # כולל גם את הראוטר הציבורי
-    from routes.scan_top_volume import router as scan2_router, public_router as scan2_public  # ← תיקון השם כאן
+    from routes.scan_top_volume import router as scan2_router, public_router as scan2_public  # type: ignore
     app.include_router(scan2_router)
     app.include_router(scan2_public)
 except Exception as e:
@@ -1184,10 +1182,17 @@ try:
 except Exception as e:
     logger.warning("topk router not loaded: %s", e)
 
+# NEW: health router המאוחד
+try:
+    from routes.health import router as health_router  # type: ignore
+    app.include_router(health_router)
+except Exception as e:
+    logger.warning("health router not loaded: %s", e)
+
 # ops-approval (הרואטר המקומי של הקובץ הנוכחי)
 app.include_router(router)
 
-# ==================== Meta & health endpoints ====================
+# ==================== Meta & readiness endpoints ====================
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
     name = os.getenv("APP_NAME", "algogpt")
@@ -1197,17 +1202,8 @@ def root() -> str:
 def root_head() -> str:
     return ""
 
-@app.get("/health", response_class=PlainTextResponse, tags=["meta"])
-@app.head("/health", response_class=PlainTextResponse)
-def health() -> str:
-    return "ok"
-
-@app.get("/healthz", response_class=PlainTextResponse, tags=["meta"])
-def healthz() -> str:
-    return "ok"
-
-@app.get("/readyz", response_class=PlainTextResponse, tags=["meta"])
-async def readyz() -> str:
+@app.api_route("/readyz", methods=["GET", "HEAD"], response_class=PlainTextResponse, tags=["meta"])
+async def readyz() -> Response:
     if REQUIRE_REDIS:
         if not (aioredis and REDIS_URL):
             return PlainTextResponse("redis_unconfigured", status_code=503)
@@ -1221,15 +1217,7 @@ async def readyz() -> str:
         except Exception as e:
             logger.warning("readyz redis ping failed: %s", e)
             return PlainTextResponse("redis_exception", status_code=503)
-    return "ok"
-
-@app.get("/health/live", response_class=PlainTextResponse, tags=["meta"])
-def health_live() -> str:
-    return "ok"
-
-@app.get("/health/strategy-version", tags=["meta"])
-def health_strategy_version() -> Dict[str, str]:
-    return {"ok": True, "version": os.getenv("ALGOGPT_VERSION", "unknown")}
+    return PlainTextResponse("ok", status_code=200)
 
 @app.get("/meta/version", tags=["meta"])
 def meta_version() -> Dict[str, str]:
@@ -1246,24 +1234,6 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
             continue
         safe[k] = v
     return {"ok": True, "env": safe}
-
-# ==================== Health TP1 optional utils ====================
-try:
-    from utils.health_tp1 import health_check_tp1_tags, quick_check_tp1  # type: ignore
-    _health_tp1_loaded = True
-except Exception as _e:
-    logger.warning("health_tp1 utils import failed: %s", _e)
-    _health_tp1_loaded = False
-
-@app.get("/health/tp1", tags=["meta"])
-async def health_tp1_now(symbols: Optional[str] = Query(None, description="CSV of symbols; default WATCHLIST")):
-    if not _health_tp1_loaded:
-        raise HTTPException(status_code=501, detail="health_tp1 module not loaded")
-    sym_list = [s.strip().upper() for s in (symbols.split(",") if symbols else WATCHLIST) if s.strip()]
-    if not sym_list:
-        raise HTTPException(status_code=400, detail="no symbols")
-    res = await quick_check_tp1(sym_list, tp1_tags=(TP1_TAGS or None), notify_telegram=True)
-    return {"ok": True, "result": res}
 
 # ==================== Global error handler ====================
 @app.exception_handler(Exception)
@@ -1306,7 +1276,6 @@ async def _public_topk_digest_loop():
                         data = r.json()
                     items = data.get("items") or data.get("topk") or data.get("result") or []
                     if items:
-                        # Compact digest
                         lines = [f"🧪 <b>Top-K Scan</b> · k=<code>{PUBLIC_TOPK_DIGEST_K}</code> min_score=<code>{PUBLIC_TOPK_DIGEST_MIN_SCORE}</code>"]
                         for it in items[:PUBLIC_TOPK_DIGEST_K]:
                             sym = str(it.get("symbol") or it.get("sym") or "").upper()
@@ -1351,6 +1320,12 @@ async def _startup_tasks():
             await _send_telegram_html(f"🟢 <b>Bot online</b> · <code>{name}</code> · env=<code>{env}</code>")
     asyncio.create_task(_notify_bot_online())
 
+    # HEALTH TP1 background (אם נטען המודול והדגל פעיל)
+    try:
+        from utils.health_tp1 import health_check_tp1_tags  # type: ignore
+        _health_tp1_loaded = True
+    except Exception:
+        _health_tp1_loaded = False
     if _health_tp1_loaded and HEALTH_TP1_ENABLE:
         watch = WATCHLIST[:]
         if watch:
@@ -1504,6 +1479,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1","true","yes","on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
