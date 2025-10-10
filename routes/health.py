@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import os
+import time
 import logging
 from contextlib import suppress
+from typing import Optional, Dict, Any
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Response, Request, HTTPException
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 router = APIRouter(prefix="/health", tags=["Health"])
 log = logging.getLogger("algogpt.health")
@@ -14,6 +17,23 @@ log = logging.getLogger("algogpt.health")
 _ai_check = None
 with suppress(Exception):
     from utils.ai_client import ai_healthcheck as _ai_check  # type: ignore
+
+# TP1 health (אופציונלי)
+_health_tp1_loaded = False
+with suppress(Exception):
+    from utils.health_tp1 import health_check_tp1_tags, quick_check_tp1  # type: ignore
+    _health_tp1_loaded = True
+
+WATCHLIST = [s.strip().upper() for s in (os.getenv("WATCHLIST", "") or "").split(",") if s.strip()] \
+            or ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "NEARUSDT"]
+TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1")).split(",") if t.strip()]
+
+
+def _base_headers() -> Dict[str, str]:
+    return {
+        "Cache-Control": "no-store",
+        "Last-Modified": time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime()),
+    }
 
 
 @router.get("", summary="Health Root")
@@ -29,12 +49,14 @@ async def root_head():
     """
     פרוב לייב/ניטור שעושים HEAD /health.
     """
-    return Response(status_code=200)
+    return Response(status_code=200, headers=_base_headers())
 
 
-@router.get("/live", summary="Liveness Probe")
-async def live():
-    return {"ok": True, "live": True}
+@router.api_route("/live", methods=["GET", "HEAD"], summary="Liveness Probe")
+async def live(request: Request):
+    if request.method == "HEAD":
+        return Response(status_code=200, headers=_base_headers())
+    return JSONResponse({"ok": True, "live": True}, headers=_base_headers())
 
 
 @router.get("/strategy-version", summary="Get Strategy Version")
@@ -65,8 +87,23 @@ async def ai():
         return {"ok": False, "error": "ai_healthcheck_failed", "detail": str(e)}
 
 
+@router.api_route("/tp1", methods=["GET", "HEAD"], summary="TP1 heartbeat / tags check")
+async def health_tp1_now(request: Request, symbols: Optional[str] = None):
+    """
+    בדיקת TP1 אופציונלית (אם קיים המודול). HEAD תמיד 200 ללא גוף.
+    """
+    if request.method == "HEAD":
+        return Response(status_code=200, headers=_base_headers())
 
+    if not _health_tp1_loaded:
+        # נשמור את ההתנהגות המקורית (501) כדי שיהיה ברור שהפיצ'ר לא בנוי
+        raise HTTPException(status_code=501, detail="health_tp1 module not loaded")
 
+    sym_list = [s.strip().upper() for s in (symbols.split(",") if symbols else WATCHLIST) if s.strip()]
+    if not sym_list:
+        raise HTTPException(status_code=400, detail="no symbols")
+    res = await quick_check_tp1(sym_list, tp1_tags=(TP1_TAGS or None), notify_telegram=True)
+    return JSONResponse({"ok": True, "result": res}, headers=_base_headers())
 
 
 
