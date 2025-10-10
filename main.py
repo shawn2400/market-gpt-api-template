@@ -219,7 +219,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
         if preview_url: row.append({"text":"👁 Preview","url":preview_url})
         if approve_url: row.append({"text":"✅ Approve","url":approve_url})
         if reject_url:  row.append({"text":"❌ Reject","url":reject_url})
-        payload["reply_markup"] = {"inline_keyboard":[row]}
+        payload["reply_markup"] = {"inline_keyboard":[[r for r in row]]}
 
     cli = _get_shared_async_client()
     for attempt in range(3):
@@ -475,7 +475,6 @@ async def _smart_manage_now(symbol: str,
     cli = _get_shared_async_client()
     for attempt in range(3):
         try:
-            # FIX: route existed in routes/manager as /manage-once (not /position-ops/manage-once)
             r = await cli.post(f"{base}/manage-once",
                                headers={"Authorization": f"Bearer {token}"},
                                json=body, timeout=httpx.Timeout(10.0))
@@ -1036,14 +1035,12 @@ async def telegram_hook_alias(request: Request):
     return await _telegram_webhook_core(request)
 
 # ==================== Register routers ====================
-# מנהל
 try:
     from routes.manager import router as manager_router  # type: ignore
     app.include_router(manager_router)
 except Exception as e:
     logger.warning("manager router not loaded: %s", e)
 
-# >>>>>>>>>>>>> הוספת ראוטרים החסרים (שורש ה-404) <<<<<<<<<<<<
 try:
     from routes.price import router as price_router  # type: ignore
     app.include_router(price_router)
@@ -1055,6 +1052,14 @@ try:
     app.include_router(scan_router)
 except Exception as e:
     logger.warning("scan router not loaded: %s", e)
+
+try:
+    # כולל גם את הראוטר הציבורי
+    from routes.scan_top_volume import router as scan2_router, router_public as scan2_public  # type: ignore
+    app.include_router(scan2_router)
+    app.include_router(scan2_public)
+except Exception as e:
+    logger.warning("scan_top_volume router not loaded: %s", e)
 
 try:
     from routes.topk import router as topk_router  # type: ignore
@@ -1328,6 +1333,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1","true","yes","on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
