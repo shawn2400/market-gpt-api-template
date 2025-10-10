@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 import time
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response
@@ -74,5 +73,10 @@ async def readyz(request: Request):
     if request.method == "HEAD":
         return Response(status_code=status, headers=_hdrs(ok))
 
-    return JSONResponse(status_code=status, content={"ok": ok, "requires_redis": REQUIRE_REDIS}, headers=_hdrs(ok))
+    return JSONResponse(
+        status_code=status,
+        content={"ok": ok, "requires_redis": REQUIRE_REDIS},
+        headers=_hdrs(ok),
+    )
+
 
