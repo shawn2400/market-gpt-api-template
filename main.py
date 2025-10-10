@@ -1082,6 +1082,7 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
 
 @router.get("/ops/digest/expired")
 async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = None):
+    PROTECT_DIGEST_ROUTES = os.getenv("PROTECT_DIGEST_ROUTES","1").lower() in ("1","true","yes","on")
     if PROTECT_DIGEST_ROUTES:
         _require_bearer(request)
     if not (aioredis and REDIS_URL and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID):
@@ -1136,6 +1137,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
 # ==================== Telegram webhook ====================
 async def _telegram_webhook_core(request: Request) -> Dict[str, Any]:
     secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token","")
+    TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET","").strip()
     if TELEGRAM_WEBHOOK_SECRET and secret != TELEGRAM_WEBHOOK_SECRET:
         raise HTTPException(status_code=401, detail="Bad secret")
     _ = await request.body()
@@ -1182,17 +1184,24 @@ try:
 except Exception as e:
     logger.warning("topk router not loaded: %s", e)
 
-# NEW: health router המאוחד
+# health router המאוחד
 try:
     from routes.health import router as health_router  # type: ignore
     app.include_router(health_router)
 except Exception as e:
     logger.warning("health router not loaded: %s", e)
 
+# readyz router (GET/HEAD) — קובץ נפרד
+try:
+    from routes.readyz import router as readyz_router  # type: ignore
+    app.include_router(readyz_router)
+except Exception as e:
+    logger.warning("readyz router not loaded: %s", e)
+
 # ops-approval (הרואטר המקומי של הקובץ הנוכחי)
 app.include_router(router)
 
-# ==================== Meta & readiness endpoints ====================
+# ==================== Meta endpoints ====================
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
     name = os.getenv("APP_NAME", "algogpt")
@@ -1201,23 +1210,6 @@ def root() -> str:
 @app.head("/", response_class=PlainTextResponse, tags=["meta"])
 def root_head() -> str:
     return ""
-
-@app.api_route("/readyz", methods=["GET", "HEAD"], response_class=PlainTextResponse, tags=["meta"])
-async def readyz() -> Response:
-    if REQUIRE_REDIS:
-        if not (aioredis and REDIS_URL):
-            return PlainTextResponse("redis_unconfigured", status_code=503)
-        try:
-            r = await _get_redis_cached()
-            if not r:
-                return PlainTextResponse("redis_unavailable", status_code=503)
-            pong = await r.ping()
-            if not pong:
-                return PlainTextResponse("redis_ping_failed", status_code=503)
-        except Exception as e:
-            logger.warning("readyz redis ping failed: %s", e)
-            return PlainTextResponse("redis_exception", status_code=503)
-    return PlainTextResponse("ok", status_code=200)
 
 @app.get("/meta/version", tags=["meta"])
 def meta_version() -> Dict[str, str]:
@@ -1479,6 +1471,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1","true","yes","on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
