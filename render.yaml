@@ -503,11 +503,11 @@ services:
 
       # ============== Equity (כדי “לחיות” מהארנק) ==============
       - key: ACCOUNT_EQUITY_USDT
-        value: ""   # ← עדכן כאן (למשל "1000") כדי שהסטייק יחושב כאחוז מההון החי
+        value: ""
 
       # ============== Profile Button (לחיצה אחת) ==============
       - key: REGIME_PROFILE
-        value: "AUTO"   # ערכים: AUTO | AGGRESSIVE | BALANCED | CONSERVATIVE
+        value: "AUTO"
 
       # ============== Manager / Intervals ==============
       - key: MANAGER_ENABLE
@@ -540,7 +540,6 @@ services:
         value: "1"
       - key: OPS_HEARTBEAT_EVERY_MIN
         value: "5"
-      # Heartbeat for scanner notifications
       - key: HEARTBEAT_HOURS
         value: "2"
       - key: HEARTBEAT_MIN_SCORE
@@ -559,6 +558,32 @@ services:
         value: "1"
       - key: GUARDER_INTERVAL_SEC
         value: "45"
+
+      # ============== Public rate limits & cache (NEW) ==============
+      - key: PUBLIC_TOPK_RPS
+        value: "2"
+      - key: PUBLIC_TOPK_WINDOW
+        value: "3"
+      - key: PUBLIC_NOW_RPS
+        value: "2"
+      - key: PUBLIC_NOW_WINDOW
+        value: "3"
+      - key: PUBLIC_CACHE_MAX_AGE
+        value: "20"
+
+      # ============== Public top-k Telegram digest (NEW) ==============
+      - key: PUBLIC_TOPK_DIGEST_ENABLE
+        value: "1"
+      - key: PUBLIC_TOPK_DIGEST_EVERY_SEC
+        value: "300"
+      - key: PUBLIC_TOPK_DIGEST_K
+        value: "5"
+      - key: PUBLIC_TOPK_DIGEST_MIN_SCORE
+        value: "7.0"
+      - key: PUBLIC_TOPK_DIGEST_REQUIRE_SIDE
+        value: "1"
+      - key: PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS
+        value: "0"
 
       # ============== Ops / Misc ==============
       - key: ALGOGPT_VERSION
@@ -619,6 +644,7 @@ services:
         fromSecret: ALERTS_INGEST_HMAC_SECRET
       - key: INTERNAL_JWT_PUBLIC_KEY
         fromSecret: INTERNAL_JWT_PUBLIC_KEY
+
 
 
 
