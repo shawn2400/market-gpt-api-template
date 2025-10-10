@@ -252,7 +252,7 @@ async def _public_rate_limit(request: Request, call_next):
 
     p = request.url.path
     method = request.method.upper()
-    if method != "GET":  # HEAD לא נספר להגבלה — פרובים של פלטפורמה
+    if method != "GET":
         return await call_next(request)
 
     ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
@@ -288,7 +288,7 @@ async def _public_cache_etag(request: Request, call_next):
 
     resp: Response = await call_next(request)
     try:
-        # if already has Cache-Control/ETag, don't override
+        # don't override if already present
         if "cache-control" not in (k.lower() for k in resp.headers.keys()):
             resp.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_MAX_AGE}"
         body = b""
@@ -296,7 +296,7 @@ async def _public_cache_etag(request: Request, call_next):
             body = resp.body if hasattr(resp, "body") and resp.body is not None else b""
         if not body:
             return resp
-        etag = '"' + hashlib.md5(body).hexdigest() + '"'  # weak enough for our use
+        etag = '"' + hashlib.md5(body).hexdigest() + '"'
         if "etag" not in (k.lower() for k in resp.headers.keys()):
             resp.headers["ETag"] = etag
 
@@ -1226,10 +1226,17 @@ try:
 except Exception as e:
     logger.warning("readyz router not loaded: %s", e)
 
+# === meta router (תיקון 500, כולל fallbackים) ===
+try:
+    from routes.meta import router as meta_router  # type: ignore
+    app.include_router(meta_router, tags=["meta"])
+except Exception as e:
+    logger.warning("meta router not loaded: %s", e)
+
 # ops-approval (הרואטר המקומי של הקובץ הנוכחי)
 app.include_router(router)
 
-# ==================== Meta endpoints ====================
+# ==================== Meta endpoints (root & debug only) ====================
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
     name = os.getenv("APP_NAME", "algogpt")
@@ -1239,9 +1246,7 @@ def root() -> str:
 def root_head() -> str:
     return ""
 
-@app.get("/meta/version", tags=["meta"])
-def meta_version() -> Dict[str, str]:
-    return {"ok": True, "version": os.getenv("ALGOGPT_VERSION", "unknown")}
+# הסרנו כאן את /meta/version — הוא עובר דרך routes.meta
 
 @app.get("/debug/env", tags=["debug"])
 def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
@@ -1504,6 +1509,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
