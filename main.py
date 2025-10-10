@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional, Callable, Tuple, Union
 
 import httpx
 from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter
-from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 # ==================== Logging ====================
@@ -87,19 +87,6 @@ app.add_middleware(
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
 )
 
-# ==================== Security headers middleware ====================
-@app.middleware("http")
-async def _security_headers(request: Request, call_next):
-    resp = await call_next(request)
-    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
-    resp.headers.setdefault("Referrer-Policy", "no-referrer")
-    resp.headers.setdefault("X-Frame-Options", "DENY")
-    resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
-    resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
-    if os.getenv("ENABLE_HSTS","0").lower() in ("1","true","yes","on"):
-        resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
-    return resp
-
 # ==================== Env & helpers ====================
 def _port() -> int:
     try:
@@ -126,6 +113,23 @@ NS = os.getenv("REDIS_NAMESPACE","ops-supervisor-web").strip() or "ops-superviso
 REDIS_URL = os.getenv("REDIS_URL","").strip()
 REQUIRE_REDIS = os.getenv("REQUIRE_REDIS","1").lower() in ("1","true","yes","on")
 CONFIRMSTORE_ENABLE = os.getenv("CONFIRMSTORE_ENABLE","0").lower() in ("1","true","yes","on")
+
+# ====== Public Cache & Rate limit config (NEW) ======
+PUBLIC_CACHE_MAX_AGE = int(os.getenv("PUBLIC_CACHE_MAX_AGE", "20") or "20")
+PUBLIC_CACHE_PATHS = [p.strip() for p in (os.getenv("PUBLIC_CACHE_PATHS", "/scan/public-topk,/scan/public-now,/topk").split(",")) if p.strip()]
+RATE_LIMIT_ENABLE = os.getenv("RATE_LIMIT_ENABLE","1").lower() in ("1","true","yes","on")
+PUBLIC_TOPK_RPS = int(os.getenv("PUBLIC_TOPK_RPS","2") or "2")
+PUBLIC_TOPK_WINDOW = int(os.getenv("PUBLIC_TOPK_WINDOW","3") or "3")
+PUBLIC_NOW_RPS = int(os.getenv("PUBLIC_NOW_RPS","2") or "2")
+PUBLIC_NOW_WINDOW = int(os.getenv("PUBLIC_NOW_WINDOW","3") or "3")
+
+# Digest to Telegram (NEW)
+PUBLIC_TOPK_DIGEST_ENABLE = os.getenv("PUBLIC_TOPK_DIGEST_ENABLE","0").lower() in ("1","true","yes","on")
+PUBLIC_TOPK_DIGEST_EVERY_SEC = int(os.getenv("PUBLIC_TOPK_DIGEST_EVERY_SEC","300") or "300")
+PUBLIC_TOPK_DIGEST_K = int(os.getenv("PUBLIC_TOPK_DIGEST_K","5") or "5")
+PUBLIC_TOPK_DIGEST_MIN_SCORE = float(os.getenv("PUBLIC_TOPK_DIGEST_MIN_SCORE","7.0") or "7.0")
+PUBLIC_TOPK_DIGEST_REQUIRE_SIDE = os.getenv("PUBLIC_TOPK_DIGEST_REQUIRE_SIDE","1").lower() in ("1","true","yes","on")
+PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS = os.getenv("PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS","0").lower() in ("1","true","yes","on")
 
 OPS_TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC","1800"))
 ETA_SMART_ENABLE = os.getenv("ETA_SMART_ENABLE","1").lower() in ("1","true","yes","on")
@@ -194,6 +198,119 @@ async def _get_redis_cached():
     r = aioredis.from_url(REDIS_URL, decode_responses=True)
     app.state.redis = r
     return r
+
+# ==================== Security headers middleware ====================
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+    resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
+    if os.getenv("ENABLE_HSTS","0").lower() in ("1","true","yes","on"):
+        resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
+    return resp
+
+# ==================== Public Rate Limit middleware (NEW) ====================
+async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
+    """
+    Returns True if over limit (i.e., should block).
+    """
+    key = f"{NS}:rl:{path_key}:{ip}"
+    try:
+        r = await _get_redis_cached()
+        if r:
+            pipe = r.pipeline()
+            pipe.incr(key, 1)
+            pipe.ttl(key)
+            cur, ttl = await pipe.execute()
+            if int(ttl) == -1:
+                await r.expire(key, window_sec)
+            return int(cur) > int(limit)
+    except Exception as e:
+        logger.debug("rate_limit_redis_fallback: %s", e)
+
+    # in-memory fallback (best-effort)
+    bucket = getattr(app.state, "rl_mem", None)
+    if bucket is None:
+        bucket = {}
+        app.state.rlm_epoch = time.time()
+        app.state.rl_mem = bucket
+    now = time.time()
+    rec = bucket.get(key)
+    if not rec or (now - rec["start"]) >= window_sec:
+        bucket[key] = {"start": now, "count": 1}
+        return False
+    rec["count"] += 1
+    return rec["count"] > int(limit)
+
+@app.middleware("http")
+async def _public_rate_limit(request: Request, call_next):
+    if not RATE_LIMIT_ENABLE:
+        return await call_next(request)
+
+    p = request.url.path
+    method = request.method.upper()
+    if method != "GET":
+        return await call_next(request)
+
+    ip = request.headers.get("X-Forwarded-For","").split(",")[0].strip() or request.client.host
+
+    # map per path → (rps, window)
+    rules = {
+        "/scan/public-topk": (PUBLIC_TOPK_RPS, PUBLIC_TOPK_WINDOW),
+        "/scan/public-now": (PUBLIC_NOW_RPS, PUBLIC_NOW_WINDOW),
+        "/topk": (PUBLIC_TOPK_RPS, PUBLIC_TOPK_WINDOW),
+    }
+    for k, (rps, win) in rules.items():
+        if p.startswith(k):
+            over = await _rl_hit(k, int(win), int(rps) * int(win), ip)
+            if over:
+                return JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+            break
+    return await call_next(request)
+
+# ==================== Public Cache/Etag middleware (NEW) ====================
+def _should_public_cache(path: str) -> bool:
+    for prefix in PUBLIC_CACHE_PATHS:
+        if path.startswith(prefix):
+            return True
+    return False
+
+@app.middleware("http")
+async def _public_cache_etag(request: Request, call_next):
+    if request.method.upper() != "GET":
+        return await call_next(request)
+    path = request.url.path
+    if not _should_public_cache(path):
+        return await call_next(request)
+
+    resp: Response = await call_next(request)
+    try:
+        # if already has Cache-Control/ETag, don't override
+        if "cache-control" not in (k.lower() for k in resp.headers.keys()):
+            resp.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_MAX_AGE}"
+        body = b""
+        with suppress(Exception):
+            # JSONResponse/PlainTextResponse/HTMLResponse have .body
+            body = resp.body if hasattr(resp, "body") and resp.body is not None else b""
+        if not body:
+            return resp
+        etag = '"' + hashlib.md5(body).hexdigest() + '"'  # weak enough for our use
+        if "etag" not in (k.lower() for k in resp.headers.keys()):
+            resp.headers["ETag"] = etag
+
+        inm = request.headers.get("If-None-Match")
+        if inm and inm == etag and resp.status_code == 200:
+            # Return 304 Not Modified
+            fresh = Response(status_code=304)
+            fresh.headers["Cache-Control"] = resp.headers.get("Cache-Control", f"public, max-age={PUBLIC_CACHE_MAX_AGE}")
+            fresh.headers["ETag"] = etag
+            return fresh
+        return resp
+    except Exception:
+        return resp
 
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
@@ -1163,6 +1280,56 @@ async def global_exception_handler(request: Request, exc: Exception):
 _manager_lock = asyncio.Lock()
 _manager_backoff = 0.0
 
+async def _public_topk_digest_loop():
+    if not PUBLIC_TOPK_DIGEST_ENABLE:
+        return
+    if not (TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID):
+        logger.info("public_topk_digest: telegram not configured; skipping")
+        return
+    base = get_internal_base()
+    cli = _get_shared_async_client()
+    every = max(30, int(PUBLIC_TOPK_DIGEST_EVERY_SEC))
+    await asyncio.sleep(5.0)
+    logger.info("public_topk_digest: started (every=%ss)", every)
+    try:
+        while True:
+            try:
+                params = {
+                    "k": str(PUBLIC_TOPK_DIGEST_K),
+                    "min_score": str(PUBLIC_TOPK_DIGEST_MIN_SCORE),
+                    "require_side": "true" if PUBLIC_TOPK_DIGEST_REQUIRE_SIDE else "false",
+                }
+                r = await cli.get(f"{base}/scan/public-topk", params=params, timeout=httpx.Timeout(12.0))
+                if r.status_code < 400:
+                    data = {}
+                    with suppress(Exception):
+                        data = r.json()
+                    items = data.get("items") or data.get("topk") or data.get("result") or []
+                    if items:
+                        # Compact digest
+                        lines = [f"🧪 <b>Top-K Scan</b> · k=<code>{PUBLIC_TOPK_DIGEST_K}</code> min_score=<code>{PUBLIC_TOPK_DIGEST_MIN_SCORE}</code>"]
+                        for it in items[:PUBLIC_TOPK_DIGEST_K]:
+                            sym = str(it.get("symbol") or it.get("sym") or "").upper()
+                            side = (str(it.get("side") or "")).upper() or "—"
+                            score = it.get("score") or it.get("rank") or ""
+                            extra = ""
+                            if PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS:
+                                with suppress(Exception):
+                                    adx = it.get("adx")
+                                    atr = it.get("atr_pct") or it.get("atr")
+                                    if adx is not None: extra += f" adx={adx}"
+                                    if atr is not None: extra += f" atr%={atr}"
+                            lines.append(f"• {sym} {side}  score=<code>{score}</code>{_md_html(extra)}")
+                        await _send_telegram_html("\n".join(lines))
+                else:
+                    logger.warning("public_topk_digest: bad status %s %s", r.status_code, r.text[:200])
+            except Exception as e:
+                logger.warning("public_topk_digest_error: %s", e)
+            await asyncio.sleep(every)
+    except asyncio.CancelledError:
+        logger.info("public_topk_digest: cancelled")
+        raise
+
 @app.on_event("startup")
 async def _startup_tasks():
     if getattr(app.state, "bg_started", False):
@@ -1310,6 +1477,10 @@ async def _startup_tasks():
     if os.getenv("SCAN_CRON_ENABLE","0").lower() in ("1","true","yes","on"):
         asyncio.create_task(periodic_scanner())
 
+    # NEW: periodic digest for public-topk
+    if PUBLIC_TOPK_DIGEST_ENABLE:
+        asyncio.create_task(_public_topk_digest_loop())
+
     logger.info("Application startup complete.")
 
 @app.on_event("shutdown")
@@ -1333,6 +1504,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1","true","yes","on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
