@@ -40,10 +40,6 @@ except Exception:
 
 # ========= Profile Button (ENV: REGIME_PROFILE) =========
 def _apply_profile_overrides() -> None:
-    """
-    REGIME_PROFILE: AUTO | AGGRESSIVE | BALANCED | CONSERVATIVE
-    מחיל override לערכי ENV כך שכל הקוד משתמש בהם מיידית.
-    """
     prof = (os.getenv("REGIME_PROFILE", "AUTO") or "AUTO").strip().upper()
     overrides: Dict[str, Any] = {}
 
@@ -55,7 +51,6 @@ def _apply_profile_overrides() -> None:
             "RISK_LEV_MAX": "17",
             "RISK_SCORE_TO_EQUITY_PCT": "6.5:0.7,7:1.0,7.5:1.3,8:1.6,8.5:2.0,9:2.4,9.5:3.0",
         })
-
     elif prof == "CONSERVATIVE":
         overrides.update({
             "ADX_MIN": "27",
@@ -64,7 +59,6 @@ def _apply_profile_overrides() -> None:
             "RISK_LEV_MAX": "12",
             "RISK_SCORE_TO_EQUITY_PCT": "6.5:0.5,7:0.8,7.5:1.0,8:1.2,8.5:1.5,9:1.8,9.5:2.2",
         })
-
     elif prof == "BALANCED":
         overrides.update({
             "AUTO_MIN_SCORE_BASE": "6.9",
@@ -72,17 +66,14 @@ def _apply_profile_overrides() -> None:
             "TUNE_SAFE_FRAC_HIGH": "0.90",
         })
 
-    if overrides:
-        for k, v in overrides.items():
-            os.environ[k] = str(v)
+    for k, v in overrides.items():
+        os.environ[k] = str(v)
 
 _apply_profile_overrides()
 
-
-# ראוטר מוגן (דורש Bearer)
+# מוגן (Bearer) + פומבי
 router = APIRouter(prefix="/scan", tags=["scan"], dependencies=[Depends(require_bearer_token)])
-# ראוטר ציבורי (לנתיב /scan/public-now)
-router_public = APIRouter(prefix="/scan", tags=["scan"])
+public_router = APIRouter(prefix="/scan", tags=["scan"])  # ללא Depends
 
 # --- זיכרון קטן למניעת ספאם (per symbol+timeframe) ---
 _STATE: Dict[Tuple[str, str], Dict[str, Any]] = {}
@@ -238,18 +229,30 @@ def _auto_tp_sl(*, side: Optional[str], entry: float, atr_pct: Optional[float], 
 
     atr_abs = entry * (atr_pct / 100.0)
 
+    if adx is not None:
+        if adx >= adx_boost_thr:
+            tp1_mult *= (1.0 + adx_tp_boost_pct)
+            tp2_mult *= (1.0 + adx_tp_boost_pct)
+            tp3_mult *= (1.0 + adx_tp_boost_pct)
+            sl_mult  *= (1.0 - adx_sl_tight_pct)
+        elif adx < adx_boost_thr - 10:
+            tp1_mult *= (1.0 - adx_low_tp_shrink_pct)
+            tp2_mult *= (1.0 - adx_low_tp_shrink_pct)
+            tp3_mult *= (1.0 - adx_low_tp_shrink_pct)
+            sl_mult  *= (1.0 + adx_low_sl_relax_pct)
+
     def _round_px(x: float) -> float:
         return float(f"{x:.6f}")
 
-    side_up = (side or "").upper()
-    if side_up == "BUY":
+    side_u = (side or "").upper()
+    if side_u == "BUY":
         sl = _round_px(entry - sl_mult * atr_abs)
         tps = [
             {"pct": None, "price": _round_px(entry + tp1_mult * atr_abs), "split": 0.40},
             {"pct": None, "price": _round_px(entry + tp2_mult * atr_abs), "split": 0.35},
             {"pct": None, "price": _round_px(entry + tp3_mult * atr_abs), "split": 0.25},
         ]
-    elif side_up == "SELL":
+    elif side_u == "SELL":
         sl = _round_px(entry + sl_mult * atr_abs)
         tps = [
             {"pct": None, "price": _round_px(entry - tp1_mult * atr_abs), "split": 0.40},
@@ -258,15 +261,6 @@ def _auto_tp_sl(*, side: Optional[str], entry: float, atr_pct: Optional[float], 
         ]
     else:
         return {"stopPrice": None}, []
-
-    # התאמות לפי ADX
-    if adx is not None:
-        if adx >= adx_boost_thr:
-            tps = [{**t, "price": _round_px(entry + (t["price"] - entry) * 1.10 if side_up == "BUY" else entry - (entry - t["price"]) * 1.10)} for t in tps]
-            sl = _round_px(entry - (entry - sl) * 0.90 if side_up == "BUY" else entry + (sl - entry) * 0.90)
-        elif adx < adx_boost_thr - 10:
-            tps = [{**t, "price": _round_px(entry + (t["price"] - entry) * 0.90 if side_up == "BUY" else entry - (entry - t["price"]) * 0.90)} for t in tps]
-            sl = _round_px(entry - (entry - sl) * 1.10 if side_up == "BUY" else entry + (sl - entry) * 1.10)
 
     return {"stopPrice": sl}, tps
 
@@ -355,197 +349,9 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
             _LAST_GOOD_TS = now
 
 # ============================
-# Routes
+# Core scan + fallback
 # ============================
 
-@router.get("/top-volume", summary="Scan (real data only) with post-filter, notify/TTL/heartbeat + AutoRisk/TP + Profile")
-async def scan_top_volume(
-    market: str = Query("futures"),
-    quote: str = Query("USDT"),
-    limit: int = Query(10, ge=1, le=100),
-    timeframe: str = Query("15m"),
-    kline_limit: int = Query(200, ge=60, le=1000),
-    min_score: float = Query(0.0),
-    require_side: bool = Query(False),
-    notify: Optional[str] = Query(None, description="currently supported: 'telegram'"),
-    chat_id: Optional[str] = Query(None),
-    rich: bool = Query(True),
-    ttl_sec: int = Query(900, ge=60, le=86400),
-    rearm_score: float = Query(6.0),
-    dedupe_window_sec: int = Query(300, ge=0, le=3600),
-    leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "10"))),
-    stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
-):
-    if notify not in {"telegram", None}:
-        LOG.warning({"event": "notify.unsupported", "notify": notify})
-        notify = None
-
-    err: Optional[str] = None
-    signals_raw: List[Dict[str, Any]] = []
-    try:
-        signals_raw = await _compute_signals(market, quote, limit, timeframe, kline_limit)
-        if not isinstance(signals_raw, list):
-            raise TypeError("signals_raw is not a list")
-    except Exception as e:
-        err = f"compute_signals_failed: {e}"
-        LOG.warning({"event": "scan.compute_failed", "error": str(e)})
-
-    try:
-        filtered = [s for s in (signals_raw or []) if isinstance(s, dict) and _passes(s, min_score, require_side)]
-    except Exception as e:
-        err = f"filter_failed: {e}"
-        LOG.warning({"event": "scan.filter_failed", "error": str(e)})
-        filtered = []
-
-    LOG.info({
-        "event": "scan.result",
-        "requested": {"limit": limit, "tf": timeframe, "k": kline_limit, "min_score": min_score, "require_side": require_side},
-        "counts": {"total": len(signals_raw or []), "returned": len(filtered)},
-    })
-
-    notified = 0
-    if notify == "telegram" and chat_id and filtered:
-        try:
-            cid = int(chat_id)
-        except Exception:
-            cid = None
-        for s in filtered:
-            try:
-                if _should_notify(s, max(min_score, 7.0), rearm_score, dedupe_window_sec):
-                    det = (s.get("details") or {})
-                    adx_val = det.get("adx")
-                    atr_val = det.get("atr_pct")
-                    score_val = s.get("score_total")
-                    entry_price = float(det.get("close") or 0.0) or 0.0
-
-                    eq_env = os.getenv("ACCOUNT_EQUITY_USDT", "").strip()
-                    equity = float(eq_env) if eq_env else None
-
-                    dyn_lev, dyn_stake = _auto_risk(
-                        score_total=score_val,
-                        adx=adx_val,
-                        atr_pct=atr_val,
-                        equity_usdt=equity,
-                        default_leverage=leverage,
-                        default_stake_usdt=stake_usdt,
-                    )
-
-                    sl_obj, tp_list = _auto_tp_sl(
-                        side=s.get("side"),
-                        entry=entry_price,
-                        atr_pct=atr_val,
-                        adx=adx_val,
-                    )
-
-                    plan: Dict[str, Any] = {
-                        "symbol": s.get("symbol"),
-                        "side": s.get("side"),
-                        "score": s.get("score_total"),
-                        "timeframe": s.get("timeframe") or timeframe,
-                        "order_type": "MARKET",
-                        "entry_price": entry_price,
-                        "sl": sl_obj,
-                        "tp": tp_list,
-                        "budget_usd": dyn_stake,
-                        "leverage": dyn_lev,
-                        "ttl_sec": ttl_sec,
-                        "why": s.get("note") or (det.get("trend")) or "—",
-                        "rich": bool(rich),
-                    }
-                    idem = f"{(plan['symbol'] or '?')}-{(plan['timeframe'] or timeframe)}-{int(time.time())}"
-                    try:
-                        await send_trade_approval(idem, plan, chat_id=cid)
-                        notified += 1
-                    except Exception as ne:
-                        LOG.warning({"event": "notify.send_failed", "symbol": plan.get("symbol"), "error": str(ne)})
-            except Exception as loop_e:
-                LOG.warning({"event": "notify.loop_failed", "error": str(loop_e)})
-
-    try:
-        await _heartbeat_if_needed(chat_id, notify, max(min_score, 7.0), found_filtered=bool(filtered))
-    except Exception as hb_e:
-        LOG.warning({"event": "heartbeat.failed", "error": str(hb_e)})
-
-    return {
-        "ok": err is None,
-        "count_total": len(signals_raw or []),
-        "returned": len(filtered),
-        "notified": notified,
-        "signals": filtered if filtered else (signals_raw or []),
-        "mode": "full",
-        "error": err,
-    }
-
-@router.get("/now", summary="Alias to /scan/top-volume (real data only)")
-async def scan_now(
-    market: str = Query("futures"),
-    quote: str = Query("USDT"),
-    limit: int = Query(10, ge=1, le=100),
-    timeframe: str = Query("15m"),
-    kline_limit: int = Query(200, ge=60, le=1000),
-    min_score: float = Query(0.0),
-    require_side: bool = Query(False),
-    notify: Optional[str] = Query(None),
-    chat_id: Optional[str] = Query(None),
-    rich: bool = Query(True),
-    ttl_sec: int = Query(900, ge=60, le=86400),
-    rearm_score: float = Query(6.0),
-    dedupe_window_sec: int = Query(300, ge=0, le=3600),
-    leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "10"))),
-    stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
-    symbol: Optional[str] = Query(None),
-):
-    return await scan_top_volume(
-        market=market,
-        quote=quote,
-        limit=limit,
-        timeframe=timeframe,
-        kline_limit=kline_limit,
-        min_score=min_score,
-        require_side=require_side,
-        notify=notify,
-        chat_id=chat_id,
-        rich=rich,
-        ttl_sec=ttl_sec,
-        rearm_score=rearm_score,
-        dedupe_window_sec=dedupe_window_sec,
-        leverage=leverage,
-        stake_usdt=stake_usdt,
-    )
-
-# ===== נתיב ציבורי: /scan/public-now (ללא Bearer) =====
-@router_public.get("/public-now", summary="Public alias to /scan/now (no auth)")
-async def scan_public_now(
-    market: str = Query("futures"),
-    quote: str = Query("USDT"),
-    limit: int = Query(10, ge=1, le=100),
-    interval: str = Query("15m", alias="timeframe"),
-    kline_limit: int = Query(200, ge=60, le=1000),
-    min_score: float = Query(0.0),
-    require_side: bool = Query(False),
-    symbols_csv: Optional[str] = Query(None, description="לא בשימוש כאן; רשימת ברירת מחדל מגיעה מ-WATCHLIST"),
-):
-    # אין Notify כאן (ציבורי)
-    return await scan_now(
-        market=market,
-        quote=quote,
-        limit=limit,
-        timeframe=interval,
-        kline_limit=kline_limit,
-        min_score=min_score,
-        require_side=require_side,
-        notify=None,
-        chat_id=None,
-        rich=True,
-        ttl_sec=900,
-        rearm_score=6.0,
-        dedupe_window_sec=300,
-        leverage=float(os.getenv("DEFAULT_LEVERAGE", "10")),
-        stake_usdt=float(os.getenv("DEFAULT_STAKE_USDT", "50")),
-        symbol=None,
-    )
-
-# -------- מחשב איתותים: אמיתי בלבד (אין fallback דמו) + ADX --------
 async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, kline_limit: int) -> List[Dict[str, Any]]:
     import statistics
     out: List[Dict[str, Any]] = []
@@ -673,7 +479,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             if adx is not None and adx < adx_min:
                 side = None
 
-            # ===== ניקוד רכיבים =====
+            # ניקוד
             score_1 = 0.0
             if rsi_val is not None:
                 score_1 = min(3.5, abs(rsi_val - 50.0) / 10.0 * 3.5)
@@ -745,6 +551,214 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             continue
 
     return out
+
+# ============================
+# Routes (עם fallback)
+# ============================
+
+async def _scan_with_fallback(
+    *,
+    market: str, quote: str, limit: int,
+    primary_tf: str, kline_limit: int,
+    min_score: float, require_side: bool,
+    fallback_enable: bool, fallback_tfs: List[str], min_candidates: int
+) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    מחזיר (signals, used_timeframe)
+    """
+    tried: List[str] = []
+    for tf in [primary_tf] + (fallback_tfs if fallback_enable else []):
+        if tf in tried:
+            continue
+        tried.append(tf)
+        raw = await _compute_signals(market, quote, limit, tf, kline_limit)
+        filtered = [s for s in raw if isinstance(s, dict) and _passes(s, min_score, require_side)]
+        if len(filtered) >= max(1, min_candidates):
+            # מוודא שה-timeframe בפועל נכון (אם הקוד בפנים כבר שם, לא נוגע)
+            for s in filtered:
+                s["timeframe"] = tf
+            return filtered, tf
+    # אם לא מצאנו — נחזיר את האחרונים שניסינו (גם אם ריקים)
+    last_tf = tried[-1] if tried else primary_tf
+    raw_last = await _compute_signals(market, quote, limit, last_tf, kline_limit)
+    for s in raw_last:
+        s["timeframe"] = last_tf
+    return [s for s in raw_last if isinstance(s, dict) and _passes(s, min_score, require_side)], last_tf
+
+@router.get("/top-volume", summary="Scan with post-filter, notify/TTL/heartbeat + AutoRisk/TP + Profile + TF fallback")
+async def scan_top_volume(
+    market: str = Query("futures"),
+    quote: str = Query("USDT"),
+    limit: int = Query(10, ge=1, le=100),
+    timeframe: str = Query("15m"),
+    kline_limit: int = Query(200, ge=60, le=1000),
+    # Post-filter
+    min_score: float = Query(0.0),
+    require_side: bool = Query(False),
+    # Fallback TFs
+    fallback_enable: bool = Query(True, description="אם אין מועמדים ב-TF הראשי — ננסה את הבאים"),
+    fallback_timeframes: str = Query("30m,1h", description="CSV של TF-ים לנסות בסדר יורד"),
+    min_candidates: int = Query(1, ge=1, le=50, description="כמות מינימלית לפני שעוברים ל-TF הבא"),
+    # התראות
+    notify: Optional[str] = Query(None, description="supported: 'telegram'"),
+    chat_id: Optional[str] = Query(None),
+    rich: bool = Query(True),
+    ttl_sec: int = Query(900, ge=60, le=86400),
+    rearm_score: float = Query(6.0),
+    dedupe_window_sec: int = Query(300, ge=0, le=3600),
+    # ברירות מחדל (יוחלפו דינמית ע״י Auto-Risk):
+    leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "10"))),
+    stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
+):
+    if notify not in {"telegram", None}:
+        LOG.warning({"event": "notify.unsupported", "notify": notify})
+        notify = None
+
+    fb_list = [t.strip() for t in (fallback_timeframes or "").split(",") if t.strip()]
+    signals, used_tf = await _scan_with_fallback(
+        market=market, quote=quote, limit=limit,
+        primary_tf=timeframe, kline_limit=kline_limit,
+        min_score=min_score, require_side=require_side,
+        fallback_enable=fallback_enable, fallback_tfs=fb_list,
+        min_candidates=min_candidates
+    )
+
+    LOG.info({
+        "event": "scan.result",
+        "requested": {"limit": limit, "tf": timeframe, "k": kline_limit, "min_score": min_score, "require_side": require_side},
+        "used_timeframe": used_tf,
+        "counts": {"returned": len(signals)},
+    })
+
+    notified = 0
+    if notify == "telegram" and chat_id and signals:
+        try:
+            cid = int(chat_id)
+        except Exception:
+            cid = None
+        for s in signals:
+            try:
+                if _should_notify(s, max(min_score, 7.0), rearm_score, dedupe_window_sec):
+                    det = (s.get("details") or {})
+                    adx_val = det.get("adx")
+                    atr_val = det.get("atr_pct")
+                    score_val = s.get("score_total")
+                    entry_price = float(det.get("close") or 0.0) or 0.0
+
+                    # Equity אופציונלי מה-ENV
+                    eq_env = os.getenv("ACCOUNT_EQUITY_USDT", "").strip()
+                    equity = float(eq_env) if eq_env else None
+
+                    dyn_lev, dyn_stake = _auto_risk(
+                        score_total=score_val,
+                        adx=adx_val,
+                        atr_pct=atr_val,
+                        equity_usdt=equity,
+                        default_leverage=leverage,
+                        default_stake_usdt=stake_usdt,
+                    )
+
+                    sl_obj, tp_list = _auto_tp_sl(
+                        side=s.get("side"),
+                        entry=entry_price,
+                        atr_pct=atr_val,
+                        adx=adx_val,
+                    )
+
+                    plan: Dict[str, Any] = {
+                        "symbol": s.get("symbol"),
+                        "side": s.get("side"),
+                        "score": s.get("score_total"),
+                        "timeframe": s.get("timeframe") or used_tf,
+                        "order_type": "MARKET",
+                        "entry_price": entry_price,
+                        "sl": sl_obj,
+                        "tp": tp_list,
+                        "budget_usd": dyn_stake,
+                        "leverage": dyn_lev,
+                        "ttl_sec": ttl_sec,
+                        "why": s.get("note") or (det.get("trend")) or "—",
+                        "rich": bool(rich),
+                    }
+                    idem = f"{(plan['symbol'] or '?')}-{(plan['timeframe'] or used_tf)}-{int(time.time())}"
+                    try:
+                        await send_trade_approval(idem, plan, chat_id=cid)
+                        notified += 1
+                    except Exception as ne:
+                        LOG.warning({"event": "notify.send_failed", "symbol": plan.get("symbol"), "error": str(ne)})
+            except Exception as loop_e:
+                LOG.warning({"event": "notify.loop_failed", "error": str(loop_e)})
+
+    try:
+        await _heartbeat_if_needed(chat_id, notify, max(min_score, 7.0), found_filtered=bool(signals))
+    except Exception as hb_e:
+        LOG.warning({"event": "heartbeat.failed", "error": str(hb_e)})
+
+    return {
+        "ok": True,
+        "returned": len(signals),
+        "notified": notified,
+        "used_timeframe": used_tf,
+        "signals": signals,
+        "mode": "full",
+        "error": None,
+    }
+
+@router.get("/now", summary="Alias to /scan/top-volume")
+async def scan_now(
+    market: str = Query("futures"),
+    quote: str = Query("USDT"),
+    limit: int = Query(10, ge=1, le=100),
+    timeframe: str = Query("15m"),
+    kline_limit: int = Query(200, ge=60, le=1000),
+    min_score: float = Query(0.0),
+    require_side: bool = Query(False),
+    fallback_enable: bool = Query(True),
+    fallback_timeframes: str = Query("30m,1h"),
+    min_candidates: int = Query(1, ge=1, le=50),
+    notify: Optional[str] = Query(None),
+    chat_id: Optional[str] = Query(None),
+    rich: bool = Query(True),
+    ttl_sec: int = Query(900, ge=60, le=86400),
+    rearm_score: float = Query(6.0),
+    dedupe_window_sec: int = Query(300, ge=0, le=3600),
+    leverage: float = Query(float(os.getenv("DEFAULT_LEVERAGE", "10"))),
+    stake_usdt: float = Query(float(os.getenv("DEFAULT_STAKE_USDT", "50"))),
+):
+    return await scan_top_volume(
+        market=market, quote=quote, limit=limit, timeframe=timeframe, kline_limit=kline_limit,
+        min_score=min_score, require_side=require_side,
+        fallback_enable=fallback_enable, fallback_timeframes=fallback_timeframes, min_candidates=min_candidates,
+        notify=notify, chat_id=chat_id, rich=rich, ttl_sec=ttl_sec,
+        rearm_score=rearm_score, dedupe_window_sec=dedupe_window_sec,
+        leverage=leverage, stake_usdt=stake_usdt,
+    )
+
+# ===== Public alias (ללא Bearer) =====
+@public_router.get("/public-now", summary="Public scan with TF fallback (no auth)")
+async def public_scan_now(
+    market: str = Query("futures"),
+    quote: str = Query("USDT"),
+    limit: int = Query(10, ge=1, le=100),
+    timeframe: str = Query("15m"),
+    kline_limit: int = Query(200, ge=60, le=1000),
+    min_score: float = Query(0.0),
+    require_side: bool = Query(False),
+    fallback_enable: bool = Query(True),
+    fallback_timeframes: str = Query("30m,1h"),
+    min_candidates: int = Query(1, ge=1, le=50),
+):
+    signals, used_tf = await _scan_with_fallback(
+        market=market, quote=quote, limit=limit,
+        primary_tf=timeframe, kline_limit=kline_limit,
+        min_score=min_score, require_side=require_side,
+        fallback_enable=fallback_enable,
+        fallback_tfs=[t.strip() for t in (fallback_timeframes or "").split(",") if t.strip()],
+        min_candidates=min_candidates
+    )
+    return {"ok": True, "used_timeframe": used_tf, "returned": len(signals), "signals": signals}
+
+
 
 
 
