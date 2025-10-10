@@ -38,7 +38,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive \
     PORT=10000
 
-# נוסיף git גם ל-runtime כדי ש/meta/version לא ייפול כשמבצע קריאה בזמן ריצה
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     curl tini ca-certificates tzdata git \
     libopenblas0-openmp liblapack3 \
@@ -82,7 +81,6 @@ CMD ["/bin/sh","-lc","/app/prestart.sh 2>/dev/null || true; \
     --graceful-timeout 30 \
     --keep-alive 5 \
     --worker-class uvicorn.workers.UvicornWorker"]
-
 
 
 
