@@ -764,7 +764,7 @@ async def _rl_or_429(req: Request, prefix: str, rps_env: str, win_env: str) -> O
         return None
     return JSONResponse(status_code=429, content={"ok": False, "error": "rate_limited", "ip": ip, "window": win})
 
-@public_router.get("/public-now", summary="Public scan with TF fallback (no auth)")
+@public_router.api_route("/public-now", methods=["GET", "HEAD"], summary="Public scan with TF fallback (no auth)")
 async def public_scan_now(
     request: Request,
     market: str = Query("futures"),
@@ -807,7 +807,7 @@ async def public_scan_now(
         "Last-Modified": _last_modified(),
     })
 
-@public_router.get("/public-topk", summary="Top-K scan results (no auth)")
+@public_router.api_route("/public-topk", methods=["GET", "HEAD"], summary="Top-K scan results (no auth)")
 async def public_topk(
     request: Request,
     market: str = Query("futures"),
@@ -877,7 +877,6 @@ async def public_topk(
         "Cache-Control": _cache_control(),
         "Last-Modified": _last_modified(),
     })
-
 
 
 
