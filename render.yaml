@@ -1,4 +1,4 @@
-```yaml
+
 services:
   - type: web
     name: algogpt-docker
