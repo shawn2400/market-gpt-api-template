@@ -64,7 +64,7 @@ services:
       - key: READONLY_ENDPOINTS
         value: "summary,prices_top,news_cache,health"
       - key: OPENAPI_INCLUDE_TAGS
-        value: ""
+        value: "meta,Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk,alerts,aliases"
       - key: OPENAPI_HIDE_PATTERNS
         value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
       - key: OPENAPI_PUBLIC_MAX_OPS
@@ -234,7 +234,7 @@ services:
       - key: SYMBOLS_ALLOWLIST_PATH
         value: "config/symbols_allowlist.json"
       - key: WATCHLIST
-        value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT"
+        value: "BTCUSDT,ETHUSDT,SOLUSUT,BNBUSDT,NEARUSDT"
 
       # ========================= Scan CRON (Telegram) =========================
       - key: SCAN_CRON_ENABLE
@@ -505,62 +505,6 @@ services:
         value: "0.90"
       - key: DRAWDOWN_PCT
         value: ""
-      - key: TUNE_DD_WEAKEN_AT
-        value: "5"
-      - key: TUNE_DD_HARD_AT
-        value: "10"
-      - key: TUNE_DD_TABLE_MULT_WEAK
-        value: "0.85"
-      - key: TUNE_DD_TABLE_MULT_HARD
-        value: "0.70"
-      - key: TUNE_DD_SAFE_FRAC_BUMP_WEAK
-        value: "0.05"
-      - key: TUNE_DD_SAFE_FRAC_BUMP_HARD
-        value: "0.10"
-
-      # ========================= Equity =========================
-      - key: ACCOUNT_EQUITY_USDT
-        value: ""
-
-      # ========================= Profile Button =========================
-      - key: REGIME_PROFILE
-        value: "AUTO"
-
-      # ========================= Manager / Intervals =========================
-      - key: MANAGER_ENABLE
-        value: "1"
-      - key: MANAGER_INTERVAL_SEC
-        value: "10"
-      - key: TRADE_MANAGER_ENABLE
-        value: "1"
-      - key: TRADE_MANAGER_INTERVAL_SEC
-        value: "60"
-      - key: TM_UPDATE_COOLDOWN_SEC
-        value: "30"
-
-      # ========================= Health / Ops Digest =========================
-      - key: HEALTH_PRICE_MAX_AGE
-        value: "30"
-      - key: HEALTH_TP_GRACE_SEC
-        value: "8"
-      - key: HEALTH_TP1_ENABLE
-        value: "0"
-      - key: HEALTH_TP1_INTERVAL_SEC
-        value: "1200"
-      - key: HEALTH_TP1_ONLY_WITH_POSITION
-        value: "1"
-      - key: TP1_TAGS
-        value: "TP1,tp1,tp_1,TAKE_PROFIT_1"
-      - key: OPS_DIGEST_INTERVAL_HOURS
-        value: "3"
-      - key: OPS_HEARTBEAT_ENABLE
-        value: "1"
-      - key: OPS_HEARTBEAT_EVERY_MIN
-        value: "5"
-      - key: HEARTBEAT_HOURS
-        value: "2"
-      - key: HEARTBEAT_MIN_SCORE
-        value: "6"
 
       # ========================= ETA / Defaults =========================
       - key: ETA_SMART_ENABLE
@@ -642,6 +586,9 @@ services:
       - key: WEBHOOK_HMAC_SECRET
         fromSecret: WEBHOOK_HMAC_SECRET
       - key: REDIS_URL
+        fromSecret: REDIS_URL
+      # 👇 מיפוי קריטי: האפליקציה קוראת ALGOGPT_REDIS_URL
+      - key: ALGOGPT_REDIS_URL
         fromSecret: REDIS_URL
       - key: BINANCE_API_KEY
         fromSecret: BINANCE_API_KEY
