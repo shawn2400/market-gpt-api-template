@@ -1246,7 +1246,20 @@ def root() -> str:
 def root_head() -> str:
     return ""
 
-# הסרנו כאן את /meta/version — הוא עובר דרך routes.meta
+# --- Fallback health/meta (zero-deps) ---
+@app.get("/meta/version", tags=["meta"])
+def meta_version_fallback():
+    return {
+        "name": os.getenv("APP_NAME", "algogpt"),
+        "version": os.getenv("ALGOGPT_VERSION", "dev"),
+        "ts": int(time.time()),
+        "ok": True,
+    }
+
+@app.get("/health", tags=["meta"])
+def health_fallback():
+    boot = getattr(app.state, "boot_ts", None)
+    return {"ok": True, "uptime_sec": int(time.time() - (boot or time.time()))}
 
 @app.get("/debug/env", tags=["debug"])
 def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
@@ -1333,9 +1346,18 @@ async def _startup_tasks():
         return
     app.state.bg_started = True
 
+    # uptime anchor for /health
+    app.state.boot_ts = time.time()
+
     _ = _get_shared_async_client()
-    with suppress(Exception):
-        await _ensure_telegram_webhook()
+
+    # ensure webhook, but never block startup
+    async def _late_webhook():
+        with suppress(Exception):
+            if TELEGRAM_AUTO_WEBHOOK:
+                await asyncio.sleep(1.0)
+                await _ensure_telegram_webhook()
+    asyncio.create_task(_late_webhook())
 
     async def _notify_bot_online():
         with suppress(Exception):
@@ -1384,6 +1406,18 @@ async def _startup_tasks():
         base = get_internal_base()
         every_sec = max(10, int(os.getenv("TRADE_MANAGER_INTERVAL_SEC", "60")))
         per_req_timeout = httpx.Timeout(15.0)
+
+        # PRE-FLIGHT: ודא שיש endpoint לפני שמתחילים לולאה
+        try:
+            cli = _get_shared_async_client()
+            probe = await cli.options(f"{base}/manage-once", timeout=httpx.Timeout(10.0))
+            if probe.status_code not in (200, 204, 400, 401, 405):
+                logger.warning("periodic_manager: /manage-once not available (status=%s) -> skipping loop", probe.status_code)
+                return
+        except Exception as e:
+            logger.warning("periodic_manager: probe failed (%r) -> skipping loop", e)
+            return
+
         try:
             while True:
                 sleep_extra = _manager_backoff
