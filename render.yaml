@@ -6,8 +6,6 @@ services:
     plan: pro
     autoDeploy: false
     dockerfilePath: ./Dockerfile
-
-    # HEALTHCHECK קליל במיוחד (אין Redis/WS/טלגרם)
     healthCheckPath: /meta/version
 
     disk:
@@ -16,105 +14,97 @@ services:
       sizeGB: 1
 
     envVars:
-      # ===== Runtime =====
-      - { key: APP_NAME,               value: "algogpt" }
-      - { key: APP_TITLE,              value: "AlgoGPT API" }
-      - { key: ALGOGPT_VERSION,        value: "2.18.0" }
-      - { key: INSTANCE_ID,            value: "algogpt-prod" }
-      - { key: PORT,                   value: "10000" }
-      - { key: APP_MODULE,             value: "main:app" }
-      - { key: PYTHONPATH,             value: "/app" }
-      - { key: WEB_CONCURRENCY,        value: "1" }
-      - { key: GUNICORN_TIMEOUT,       value: "180" }
-      - { key: LOG_LEVEL,              value: "INFO" }
-      - { key: UVICORN_ACCESS_LOG,     value: "false" }
-      - { key: UVICORN_LOG_LEVEL,      value: "info" }
-      - { key: HTTP_MAX_CONNECTIONS,   value: "30" }
-      - { key: HTTP_MAX_KEEPALIVE,     value: "200" }
+      # ==== Runtime ====
+      - { key: APP_NAME,        value: "algogpt" }
+      - { key: APP_TITLE,       value: "AlgoGPT API" }
+      - { key: ALGOGPT_VERSION, value: "2.18.0" }
+      - { key: INSTANCE_ID,     value: "algogpt-prod" }
+      - { key: PORT,            value: "10000" }
+      - { key: APP_MODULE,      value: "main:app" }
+      - { key: PYTHONPATH,      value: "/app" }
+      - { key: WEB_CONCURRENCY, value: "1" }
+      - { key: GUNICORN_TIMEOUT, value: "180" }
+      - { key: LOG_LEVEL,       value: "INFO" }
+      - { key: UVICORN_ACCESS_LOG, value: "false" }
+      - { key: UVICORN_LOG_LEVEL,  value: "info" }
+      - { key: HTTP_MAX_CONNECTIONS, value: "30" }
+      - { key: HTTP_MAX_KEEPALIVE,  value: "200" }
 
-      # ===== Base URLs =====
-      - { key: PUBLIC_HOST,            value: "https://algogpt-docker.onrender.com" }
-      - { key: CONTEXT_URL,            value: "https://algogpt-docker.onrender.com" }
-      - { key: WEBHOOK_HOST,           value: "https://algogpt-docker.onrender.com" }
+      # ==== Base URLs ====
+      - { key: PUBLIC_HOST,  value: "https://algogpt-docker.onrender.com" }
+      - { key: CONTEXT_URL,  value: "https://algogpt-docker.onrender.com" }
+      - { key: WEBHOOK_HOST, value: "https://algogpt-docker.onrender.com" }
 
-      # ===== Security =====
-      - { key: ENABLE_HSTS,            value: "1" }
-      - { key: SECURITY_PUBLIC_PATHS,  value: "/readyz,/health,/meta/version,/telegram/webhook" }
-      - { key: SECURITY_PUBLIC_PREFIXES, value: "/public,/price,/static,/risk" }
+      # ==== Security (פאבליק ל-health בלבד) ====
+      - { key: ENABLE_HSTS,              value: "1" }
+      - { key: SECURITY_PUBLIC_PATHS,    value: "/meta/version" }
+      - { key: SECURITY_PUBLIC_PREFIXES, value: "/public" }
 
-      # ===== Anti-Replay — כבוי בשלב ייצוב =====
+      # ==== Anti-Replay (כבוי בזמן ייצוב) ====
       - { key: ANTI_REPLAY_ENABLE,            value: "0" }
       - { key: ANTI_REPLAY_REQUIRE_SIGNATURE, value: "0" }
-      - { key: SIGNED_TS_MAX_SKEW_SEC,        value: "60" }
-      - { key: SIGNED_NONCE_TTL_SEC,          value: "120" }
 
-      # ===== Redis — נשאר דולק, אבל לא משתמשים בו ב-health =====
-      - { key: REQUIRE_REDIS,                 value: "1" }
-      - { key: REDIS_POOL_MAX_CONNECTIONS,    value: "30" }
-      - { key: REDIS_CLIENT_NAME,             value: "algogpt" }
-      - { key: REDIS_SSL_NO_VERIFY,           value: "0" }
-      - { key: REDIS_NAMESPACE,               value: "ops-supervisor-web" }
-      - { key: REDIS_URL,                     fromSecret: REDIS_URL }
-      - { key: ALGOGPT_REDIS_URL,             fromSecret: REDIS_URL }
+      # ==== Redis (כבוי כחובה בזמן boot) ====
+      - { key: REQUIRE_REDIS,              value: "0" }
+      - { key: REDIS_NAMESPACE,            value: "ops-supervisor-web" }
+      - { key: REDIS_URL,                  fromSecret: REDIS_URL }
+      - { key: ALGOGPT_REDIS_URL,          fromSecret: REDIS_URL }
 
-      # ===== Binance defaults =====
+      # ==== Binance ====
       - { key: DEFAULT_MARKET,              value: "futures" }
       - { key: POSITION_MODE_OVERRIDE,      value: "hedge" }
       - { key: BINANCE_MARGIN_TYPE_DEFAULT, value: "ISOLATED" }
       - { key: BINANCE_FUTURES_HTTP_BASE,   value: "https://fapi.binance.com" }
-      - { key: BINANCE_FUTURES_WS_BASE,     value: "wss://fstream.binance.com" }
       - { key: BINANCE_SPOT_HTTP_BASE,      value: "https://api.binance.com" }
       - { key: BINANCE_TESTNET,             value: "false" }
-      - { key: USER_STREAM_ENABLE,          value: "0" }     # <<< כבוי ב-boot
-      - { key: USE_WS,                      value: "0" }     # <<< כבוי ב-boot
+      - { key: USE_WS,                      value: "0" }
+      - { key: USER_STREAM_ENABLE,          value: "0" }
 
-      # ===== Router =====
-      - { key: ENABLE_AI_ROUTES,            value: "1" }
-      - { key: PRICE_MONITOR_DISABLE,       value: "1" }     # <<< לכבות פקח בזמן boot
-      - { key: ROUTES_ONLY,                 value: "routes.status,routes.market,routes.price,routes.scan_public,routes.topk,routes.ops_ticket,routes.ops_approve,routes.telegram,routes.root" }
+      # ==== Router (מינימום ראוטים ל-health/בדיקה ידנית) ====
+      - { key: ROUTES_ONLY, value: "routes.root,routes.meta,routes.price,routes.topk,routes.ops_ticket,routes.ops_approve" }
+      - { key: ENABLE_AI_ROUTES,      value: "1" }
+      - { key: PRICE_MONITOR_DISABLE, value: "1" }
 
-      # ===== Scanner / Cron — כבוי ב-boot =====
-      - { key: SCAN_CRON_ENABLE,            value: "0" }
-      - { key: MANAGER_ENABLE,              value: "0" }
-      - { key: TRADE_MANAGER_ENABLE,        value: "0" }
+      # ==== Scanner / Managers (כבוי בזמן boot) ====
+      - { key: SCAN_CRON_ENABLE,      value: "0" }
+      - { key: MANAGER_ENABLE,        value: "0" }
+      - { key: TRADE_MANAGER_ENABLE,  value: "0" }
 
-      # ===== Approvals / Telegram =====
+      # ==== Telegram Approvals (ללא webhook אוטומטי בזמן boot) ====
       - { key: APPROVAL_ENABLED,             value: "1" }
       - { key: REQUIRE_TELEGRAM_APPROVAL,    value: "1" }
       - { key: AUTO_OPEN_ON_APPROVE,         value: "1" }
       - { key: SINK_ENFORCE_APPROVALS,       value: "1" }
       - { key: ONLY_TRADE_NOTIFICATIONS,     value: "1" }
-      - { key: TELEGRAM_AUTO_WEBHOOK,        value: "0" }     # <<< לא נוגעים ב-startup
+      - { key: TELEGRAM_AUTO_WEBHOOK,        value: "0" }
       - { key: TELEGRAM_PARSE_MODE,          value: "HTML" }
       - { key: ADMIN_CHAT_ID,                value: "449087907" }
       - { key: TELEGRAM_CHAT_ID,             value: "449087907" }
       - { key: TELEGRAM_ADMIN_IDS,           value: "449087907" }
 
-      # ===== Orders =====
-      - { key: EXECUTE_TRADES,               value: "1" }
-      - { key: ALLOW_MARKET_ENTRY,           value: "1" }
-      - { key: MANAGER_WRITES_ORDERS,        value: "1" }
-      - { key: ORDERS_USE_OCO,               value: "1" }
-      - { key: ORDER_ID_PREFIX,              value: "ALG" }
-      - { key: ORDER_ID_INCLUDE_TS,          value: "1" }
-      - { key: USE_EXCHANGE_FILTERS,         value: "1" }
-      - { key: MIN_NOTIONAL_USDT,            value: "5" }
-      - { key: MAX_TRADE_BUDGET,             value: "200" }
+      # ==== Orders (מוגבל תקציבית כמו שביקשת) ====
+      - { key: EXECUTE_TRADES,     value: "1" }
+      - { key: ALLOW_MARKET_ENTRY, value: "1" }
+      - { key: MANAGER_WRITES_ORDERS, value: "1" }
+      - { key: ORDERS_USE_OCO,     value: "1" }
+      - { key: ORDER_ID_PREFIX,    value: "ALG" }
+      - { key: ORDER_ID_INCLUDE_TS, value: "1" }
+      - { key: MIN_NOTIONAL_USDT,  value: "5" }
+      - { key: MAX_TRADE_BUDGET,   value: "200" }
 
-      # ===== Secrets =====
-      - { key: API_BEARER_TOKEN,             fromSecret: API_BEARER_TOKEN }
-      - { key: API_TOKEN,                    fromSecret: API_TOKEN }
-      - { key: PRIMARY_API_TOKEN,            fromSecret: PRIMARY_API_TOKEN }
-      - { key: API_SIGNING_SECRET,           fromSecret: API_SIGNING_SECRET }
-      - { key: OPS_SIGN_SECRET,              fromSecret: OPS_SIGN_SECRET }
-      - { key: WEBHOOK_HMAC_SECRET,          fromSecret: WEBHOOK_HMAC_SECRET }
-      - { key: OPENAI_API_KEY,               fromSecret: OPENAI_API_KEY }
-      - { key: TELEGRAM_BOT_TOKEN,           fromSecret: TELEGRAM_BOT_TOKEN }
-      - { key: TELEGRAM_WEBHOOK_SECRET,      fromSecret: TELEGRAM_WEBHOOK_SECRET }
-      - { key: INTERNAL_JWT_PUBLIC_KEY,      fromSecret: INTERNAL_JWT_PUBLIC_KEY }
-      - { key: BINANCE_API_KEY,              fromSecret: BINANCE_API_KEY }
-      - { key: BINANCE_API_SECRET,           fromSecret: BINANCE_API_SECRET }
-
+      # ==== Secrets ====
+      - { key: API_BEARER_TOKEN,          fromSecret: API_BEARER_TOKEN }
+      - { key: API_TOKEN,                 fromSecret: API_TOKEN }
+      - { key: PRIMARY_API_TOKEN,         fromSecret: PRIMARY_API_TOKEN }
+      - { key: API_SIGNING_SECRET,        fromSecret: API_SIGNING_SECRET }
+      - { key: OPS_SIGN_SECRET,           fromSecret: OPS_SIGN_SECRET }
+      - { key: WEBHOOK_HMAC_SECRET,       fromSecret: WEBHOOK_HMAC_SECRET }
+      - { key: OPENAI_API_KEY,            fromSecret: OPENAI_API_KEY }
+      - { key: TELEGRAM_BOT_TOKEN,        fromSecret: TELEGRAM_BOT_TOKEN }
+      - { key: TELEGRAM_WEBHOOK_SECRET,   fromSecret: TELEGRAM_WEBHOOK_SECRET }
+      - { key: INTERNAL_JWT_PUBLIC_KEY,   fromSecret: INTERNAL_JWT_PUBLIC_KEY }
+      - { key: BINANCE_API_KEY,           fromSecret: BINANCE_API_KEY }
+      - { key: BINANCE_API_SECRET,        fromSecret: BINANCE_API_SECRET }
 
 
 
