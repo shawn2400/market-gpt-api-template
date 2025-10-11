@@ -70,7 +70,7 @@ services:
       - { key: RL_FAIL_OPEN,       value: "0" }
       - { key: RATE_LIMIT_BACKEND, value: "redis" }
 
-      # ========================= Redis (קריטי) =========================
+      # ========================= Redis =========================
       - { key: REQUIRE_REDIS,                 value: "1" }
       - { key: CONFIRMSTORE_ENABLE,           value: "0" }
       - { key: USE_REDIS_IDEM,                value: "1" }
@@ -88,7 +88,7 @@ services:
 
       # ========================= Exchange Defaults =========================
       - { key: DEFAULT_MARKET,              value: "futures" }
-      - { key: POSITION_MODE_OVERRIDE,      value: "hedge" }   # ✅ דואל־סייד: אפשר לונג+שורט יחד
+      - { key: POSITION_MODE_OVERRIDE,      value: "hedge" }  # Dual-side
       - { key: BINANCE_MARGIN_TYPE_DEFAULT, value: "ISOLATED" }
       - { key: BINANCE_FUTURES_HTTP_BASE,   value: "https://fapi.binance.com" }
       - { key: BINANCE_FUTURES_WS_BASE,     value: "wss://fstream.binance.com" }
@@ -126,25 +126,25 @@ services:
       - { key: ADX_MIN,                 value: "20" }
       - { key: FEAT_DAILY_CAPS,         value: "0" }
       - { key: FEAT_DEBOUNCE_LIMIT,     value: "1" }
-      - { key: FEAT_QUALITY_ENFORCE,    value: "1" }   # אכיפת איכות איתותים
+      - { key: FEAT_QUALITY_ENFORCE,    value: "1" }
       - { key: FEAT_SPREAD_DEPTH,       value: "1" }
       - { key: FEAT_TF_ALIGN,           value: "0" }
       - { key: FEAT_VOLUME_GATE,        value: "0" }
       - { key: FEAT_COOLDOWN,           value: "0" }
       - { key: MAX_ATR_PCT,             value: "3" }
 
-      # ========================= Watchlist / Allowlist =========================
+      # ========================= Watchlist =========================
       - { key: ALLOWLIST_MODE,         value: "off" }
       - { key: SYMBOLS_ALLOWLIST_PATH, value: "config/symbols_allowlist.json" }
       - { key: WATCHLIST,              value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT" }
 
-      # ========================= Scan CRON (איתותים אוטומטיים) =========================
+      # ========================= Scan CRON =========================
       - { key: SCAN_CRON_ENABLE,        value: "1" }
       - { key: SCAN_CRON_EVERY_SEC,     value: "45" }
       - { key: SCAN_CRON_TIMEFRAME,     value: "15m" }
       - { key: SCAN_CRON_KLINES,        value: "200" }
       - { key: SCAN_CRON_LIMIT,         value: "12" }
-      - { key: SCAN_CRON_MIN_SCORE,     value: "7" }
+      - { key: SCAN_CRON_MIN_SCORE,     value: "0" }   # לא לחסום — תאשר ידנית בטלגרם
       - { key: SCAN_REARM_SCORE,        value: "6" }
       - { key: SCAN_DEDUPE_WINDOW_SEC,  value: "300" }
       - { key: SCAN_TTL_SEC,            value: "900" }
@@ -152,11 +152,11 @@ services:
       - { key: DEFAULT_LEVERAGE,        value: "10" }
       - { key: DEFAULT_STAKE_USDT,      value: "50" }
 
-      # ========================= Approvals — כבוי לחלוטין =========================
-      - { key: APPROVAL_ENABLED,             value: "0" }
-      - { key: REQUIRE_TELEGRAM_APPROVAL,    value: "0" }
+      # ========================= Approvals (ON) =========================
+      - { key: APPROVAL_ENABLED,             value: "1" }
+      - { key: REQUIRE_TELEGRAM_APPROVAL,    value: "1" }
       - { key: APPROVAL_REQUIRE_WATCHLIST,   value: "0" }
-      - { key: AUTO_OPEN_ON_APPROVE,         value: "0" }
+      - { key: AUTO_OPEN_ON_APPROVE,         value: "1" }
       - { key: ONLY_TRADE_NOTIFICATIONS,     value: "1" }
       - { key: STARTUP_NOTIFY_ENABLE,        value: "0" }
       - { key: ADMIN_CHAT_ID,                value: "449087907" }
@@ -165,14 +165,15 @@ services:
       - { key: TELEGRAM_AUTO_WEBHOOK,        value: "1" }
       - { key: TELEGRAM_PARSE_MODE,          value: "HTML" }
       - { key: APPROVAL_PUBSUB_CHANNEL,      value: "ops:ticket:events" }
-      - { key: APPROVAL_RR_MIN,              value: "1.25" }
-      - { key: APPROVAL_SUCCESS_MIN,         value: "55" }
+      - { key: APPROVAL_RR_MIN,              value: "1.15" }
+      - { key: APPROVAL_SUCCESS_MIN,         value: "50" }
       - { key: APPROVAL_MAX_SL_PCT,          value: "3.0" }
       - { key: APPROVAL_REQUIRE_FRESH_PRICE, value: "1" }
       - { key: APPROVAL_DUP_COOLDOWN_SEC,    value: "0" }
-      - { key: APPROVE_BEFORE_GATE,          value: "0" }
+      - { key: APPROVE_BEFORE_GATE,          value: "1" }
       - { key: CONFIRM_TTL_SEC,              value: "120" }
       - { key: OPS_TICKET_TTL_SEC,           value: "1800" }
+      - { key: SINK_ENFORCE_APPROVALS,       value: "1" }
 
       # ========================= Trade & Orders =========================
       - { key: EXECUTE_TRADES,        value: "1" }
@@ -190,7 +191,6 @@ services:
       - { key: MAX_TRADES_PER_TICK,   value: "1" }
       - { key: MIN_NOTIONAL_USDT,     value: "5" }
       - { key: MAX_TRADE_BUDGET,      value: "150" }
-      - { key: SINK_ENFORCE_APPROVALS, value: "0" }
 
       # ========================= Auto QTY =========================
       - { key: AUTO_QTY_ENABLE,            value: "1" }
@@ -231,12 +231,11 @@ services:
       - { key: SMART_MANAGE_SPLITS,         value: "" }
       - { key: SMART_MANAGE_TRAIL_ATR_MULT, value: "0" }
 
-      # ========================= Hedge & Auto-Flip (לונג+שורט/היפוך אוטומטי) =========================
-      - { key: HEDGE_ENABLE,            value: "1" }          # מאפשר לנהל שני צדדים במקביל
-      - { key: ALLOW_OPPOSITE_SIDE,     value: "1" }          # פתיחת עמדה נגדית מותרת
-      - { key: AUTO_SIDE_SWITCH,        value: "1" }          # מעבר אוטומטי מלונג↔שורט לפי אות
-      - { key: AUTO_REOPEN_ON_EXIT,     value: "1" }          # אם נסגרה — לפתוח מחדש לפי אות חדש
-      # (אם אין לך מפתחות אלה בקוד — הם יתעלמו; השאר קריטי הוא hedge + approvals=0 + execute=1)
+      # ========================= Hedge & Auto-Flip =========================
+      - { key: HEDGE_ENABLE,            value: "1" }
+      - { key: ALLOW_OPPOSITE_SIDE,     value: "1" }
+      - { key: AUTO_SIDE_SWITCH,        value: "1" }
+      - { key: AUTO_REOPEN_ON_EXIT,     value: "1" }
 
       # ========================= Auto-Tune (Score/ADX) =========================
       - { key: AUTO_TUNE_ENABLE,           value: "1" }
@@ -283,7 +282,7 @@ services:
       - { key: GUARDER_ENABLE,        value: "1" }
       - { key: GUARDER_INTERVAL_SEC,  value: "45" }
 
-      # ========================= Public: Rate Limits & Cache =========================
+      # ========================= Public Cache =========================
       - { key: PUBLIC_TOPK_RPS,        value: "2" }
       - { key: PUBLIC_TOPK_WINDOW,     value: "3" }
       - { key: PUBLIC_NOW_RPS,         value: "2" }
@@ -301,9 +300,8 @@ services:
       - { key: PRICE_MAX_AGE_SEC,    value: "15" }
       - { key: PRICE_WS_FRESH_TTL,   value: "60" }
       - { key: PRICE_SCAN_INTERVAL,  value: "30" }
-      - { key: SINK_ENFORCE_APPROVALS, value: "0" }
 
-      # מנהלים
+      # ========================= Managers =========================
       - { key: MANAGER_ENABLE,         value: "1" }
       - { key: TRADE_MANAGER_ENABLE,   value: "1" }
 
@@ -321,6 +319,7 @@ services:
       - { key: INTERNAL_JWT_PUBLIC_KEY,   fromSecret: INTERNAL_JWT_PUBLIC_KEY }
       - { key: BINANCE_API_KEY,           fromSecret: BINANCE_API_KEY }
       - { key: BINANCE_API_SECRET,        fromSecret: BINANCE_API_SECRET }
+
 
 
 
