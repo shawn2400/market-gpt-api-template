@@ -6,7 +6,7 @@ services:
     plan: pro
     autoDeploy: false
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /health   # <<< חשוב! לא /readyz
+    healthCheckPath: /health   # קליל ויציב
 
     disk:
       name: data
@@ -15,25 +15,25 @@ services:
 
     envVars:
       # ===== Runtime & Logging =====
-      - { key: APP_NAME,        value: "algogpt" }
-      - { key: APP_TITLE,       value: "AlgoGPT API" }
-      - { key: ALGOGPT_VERSION, value: "2.18.0" }
-      - { key: INSTANCE_ID,     value: "algogpt-prod" }
-      - { key: PORT,            value: "10000" }
-      - { key: APP_MODULE,      value: "main:app" }
-      - { key: PYTHONPATH,      value: "/app" }
-      - { key: WEB_CONCURRENCY, value: "1" }
-      - { key: GUNICORN_TIMEOUT, value: "120" }
-      - { key: LOG_LEVEL,       value: "INFO" }
-      - { key: UVICORN_ACCESS_LOG, value: "false" }
-      - { key: UVICORN_LOG_LEVEL,  value: "info" }
-      - { key: HTTP_MAX_CONNECTIONS, value: "50" }
-      - { key: HTTP_MAX_KEEPALIVE,  value: "200" }
+      - { key: APP_NAME,               value: "algogpt" }
+      - { key: APP_TITLE,              value: "AlgoGPT API" }
+      - { key: ALGOGPT_VERSION,        value: "2.18.0" }
+      - { key: INSTANCE_ID,            value: "algogpt-prod" }
+      - { key: PORT,                   value: "10000" }
+      - { key: APP_MODULE,             value: "main:app" }
+      - { key: PYTHONPATH,             value: "/app" }
+      - { key: WEB_CONCURRENCY,        value: "1" }
+      - { key: GUNICORN_TIMEOUT,       value: "180" }         # יותר מרווח נשימה
+      - { key: LOG_LEVEL,              value: "INFO" }
+      - { key: UVICORN_ACCESS_LOG,     value: "false" }
+      - { key: UVICORN_LOG_LEVEL,      value: "info" }
+      - { key: HTTP_MAX_CONNECTIONS,   value: "30" }          # פחות עומס = פחות ריסטרטים
+      - { key: HTTP_MAX_KEEPALIVE,     value: "200" }
 
       # ===== Base URLs =====
-      - { key: PUBLIC_HOST,  value: "https://algogpt-docker.onrender.com" }
-      - { key: CONTEXT_URL,  value: "https://algogpt-docker.onrender.com" }
-      - { key: WEBHOOK_HOST, value: "https://algogpt-docker.onrender.com" }
+      - { key: PUBLIC_HOST,            value: "https://algogpt-docker.onrender.com" }
+      - { key: CONTEXT_URL,            value: "https://algogpt-docker.onrender.com" }
+      - { key: WEBHOOK_HOST,           value: "https://algogpt-docker.onrender.com" }
 
       # ===== OpenAPI / Docs =====
       - { key: DOCS_URL,               value: "/docs" }
@@ -52,7 +52,7 @@ services:
       - { key: CORS_ALLOW_CREDENTIALS, value: "0" }
 
       # ===== Security =====
-      - { key: PROTECT_APPROVE_ROUTES,   value: "0" }
+      - { key: PROTECT_APPROVE_ROUTES,   value: "0" }         # אישור דרך טלגרם, לא נדרש חתימה פה
       - { key: PROTECT_DIGEST_ROUTES,    value: "1" }
       - { key: ENABLE_HSTS,              value: "1" }
       - { key: SECURITY_PUBLIC_PATHS,    value: "/readyz,/health,/meta/version,/telegram/webhook" }
@@ -66,29 +66,29 @@ services:
       - { key: SIGNED_NONCE_TTL_SEC,          value: "120" }
 
       # ===== Rate Limit =====
-      - { key: RATE_LIMIT_ENABLE,  value: "1" }
-      - { key: RL_FAIL_OPEN,       value: "0" }
-      - { key: RATE_LIMIT_BACKEND, value: "redis" }
+      - { key: RATE_LIMIT_ENABLE,       value: "1" }
+      - { key: RL_FAIL_OPEN,            value: "0" }
+      - { key: RATE_LIMIT_BACKEND,      value: "redis" }
 
       # ===== Redis =====
-      - { key: REQUIRE_REDIS,                value: "1" }
-      - { key: CONFIRMSTORE_ENABLE,          value: "0" }
-      - { key: USE_REDIS_IDEM,               value: "1" }
-      - { key: SETEX_STRICT,                 value: "1" }
-      - { key: REDIS_CONNECT_TIMEOUT,        value: "8.0" }
-      - { key: REDIS_SOCKET_TIMEOUT,         value: "8.0" }
-      - { key: REDIS_POOL_MAX_CONNECTIONS,   value: "30" }
-      - { key: REDIS_PING_RETRIES,           value: "3" }
-      - { key: REDIS_PING_RETRY_BACKOFF_SEC, value: "0.6" }
-      - { key: REDIS_CLIENT_NAME,            value: "algogpt" }
-      - { key: REDIS_SSL_NO_VERIFY,          value: "0" }
-      - { key: REDIS_NAMESPACE,              value: "ops-supervisor-web" }
+      - { key: REQUIRE_REDIS,                 value: "1" }
+      - { key: CONFIRMSTORE_ENABLE,           value: "0" }
+      - { key: USE_REDIS_IDEM,                value: "1" }
+      - { key: SETEX_STRICT,                  value: "1" }
+      - { key: REDIS_CONNECT_TIMEOUT,         value: "8.0" }
+      - { key: REDIS_SOCKET_TIMEOUT,          value: "8.0" }
+      - { key: REDIS_POOL_MAX_CONNECTIONS,    value: "30" }
+      - { key: REDIS_PING_RETRIES,            value: "3" }
+      - { key: REDIS_PING_RETRY_BACKOFF_SEC,  value: "0.6" }
+      - { key: REDIS_CLIENT_NAME,             value: "algogpt" }
+      - { key: REDIS_SSL_NO_VERIFY,           value: "0" }
+      - { key: REDIS_NAMESPACE,               value: "ops-supervisor-web" }
       - { key: REDIS_URL,         fromSecret: REDIS_URL }
       - { key: ALGOGPT_REDIS_URL, fromSecret: REDIS_URL }
 
       # ===== Exchange Defaults =====
       - { key: DEFAULT_MARKET,              value: "futures" }
-      - { key: POSITION_MODE_OVERRIDE,      value: "hedge" }   # dual-side
+      - { key: POSITION_MODE_OVERRIDE,      value: "hedge" }    # dual-side (לונג+שורט)
       - { key: BINANCE_MARGIN_TYPE_DEFAULT, value: "ISOLATED" }
       - { key: BINANCE_FUTURES_HTTP_BASE,   value: "https://fapi.binance.com" }
       - { key: BINANCE_FUTURES_WS_BASE,     value: "wss://fstream.binance.com" }
@@ -109,16 +109,16 @@ services:
       - { key: PRICE_MONITOR_DISABLE, value: "0" }
 
       # ===== Scanner / Universe =====
-      - { key: SCAN_SOURCE,          value: "binance-futures" }
-      - { key: UNIVERSE_MODE,        value: "exchange" }
-      - { key: SCAN_INTERVALS,       value: "5m,15m,1h,4h" }
-      - { key: SCAN_MAX_SYMBOLS,     value: "150" }
-      - { key: SCAN_MAX_LIMIT,       value: "0" }
-      - { key: SCAN_CONCURRENCY,     value: "4" }
-      - { key: TOP_SYMBOLS,          value: "150" }
-      - { key: SUGGEST_FUTURES,      value: "1" }
-      - { key: SUGGEST_INTERVAL_SEC, value: "45" }
-      - { key: SUGGEST_CAP_PER_CYCLE, value: "30" }
+      - { key: SCAN_SOURCE,            value: "binance-futures" }
+      - { key: UNIVERSE_MODE,          value: "exchange" }
+      - { key: SCAN_INTERVALS,         value: "5m,15m,1h,4h" }
+      - { key: SCAN_MAX_SYMBOLS,       value: "150" }
+      - { key: SCAN_MAX_LIMIT,         value: "0" }
+      - { key: SCAN_CONCURRENCY,       value: "4" }
+      - { key: TOP_SYMBOLS,            value: "150" }
+      - { key: SUGGEST_FUTURES,        value: "1" }
+      - { key: SUGGEST_INTERVAL_SEC,   value: "45" }
+      - { key: SUGGEST_CAP_PER_CYCLE,  value: "30" }
 
       # ===== Indicators / Gates =====
       - { key: INDICATOR_INTERVALS,     value: "15m,1h,4h,1d" }
@@ -139,20 +139,20 @@ services:
       - { key: WATCHLIST,              value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT" }
 
       # ===== Scan CRON =====
-      - { key: SCAN_CRON_ENABLE,      value: "1" }
-      - { key: SCAN_CRON_EVERY_SEC,   value: "45" }
-      - { key: SCAN_CRON_TIMEFRAME,   value: "15m" }
-      - { key: SCAN_CRON_KLINES,      value: "200" }
-      - { key: SCAN_CRON_LIMIT,       value: "12" }
-      - { key: SCAN_CRON_MIN_SCORE,   value: "0" }   # ללא סף — תאשר ידנית
-      - { key: SCAN_REARM_SCORE,      value: "6" }
-      - { key: SCAN_DEDUPE_WINDOW_SEC, value: "300" }
-      - { key: SCAN_TTL_SEC,          value: "900" }
-      - { key: SCAN_RICH,             value: "1" }
-      - { key: DEFAULT_LEVERAGE,      value: "10" }
-      - { key: DEFAULT_STAKE_USDT,    value: "50" }
+      - { key: SCAN_CRON_ENABLE,        value: "1" }
+      - { key: SCAN_CRON_EVERY_SEC,     value: "45" }
+      - { key: SCAN_CRON_TIMEFRAME,     value: "15m" }
+      - { key: SCAN_CRON_KLINES,        value: "200" }
+      - { key: SCAN_CRON_LIMIT,         value: "12" }
+      - { key: SCAN_CRON_MIN_SCORE,     value: "0" }     # לא חוסם — תאשר ידנית בטלגרם
+      - { key: SCAN_REARM_SCORE,        value: "6" }
+      - { key: SCAN_DEDUPE_WINDOW_SEC,  value: "300" }
+      - { key: SCAN_TTL_SEC,            value: "900" }
+      - { key: SCAN_RICH,               value: "1" }
+      - { key: DEFAULT_LEVERAGE,        value: "10" }
+      - { key: DEFAULT_STAKE_USDT,      value: "50" }
 
-      # ===== Approvals (ידני בלבד לפני פתיחה) =====
+      # ===== Approvals (ON) =====
       - { key: APPROVAL_ENABLED,             value: "1" }
       - { key: REQUIRE_TELEGRAM_APPROVAL,    value: "1" }
       - { key: AUTO_OPEN_ON_APPROVE,         value: "1" }
@@ -231,97 +231,93 @@ services:
       - { key: SMART_MANAGE_TRAIL_ATR_MULT, value: "0" }
 
       # ===== Hedge & Auto-Flip =====
-      - { key: HEDGE_ENABLE,        value: "1" }
-      - { key: ALLOW_OPPOSITE_SIDE, value: "1" }
-      - { key: AUTO_SIDE_SWITCH,    value: "1" }
-      - { key: AUTO_REOPEN_ON_EXIT, value: "1" }
+      - { key: HEDGE_ENABLE,            value: "1" }
+      - { key: ALLOW_OPPOSITE_SIDE,     value: "1" }
+      - { key: AUTO_SIDE_SWITCH,        value: "1" }
+      - { key: AUTO_REOPEN_ON_EXIT,     value: "1" }
 
-      # ===== Auto-Tune =====
-      - { key: AUTO_TUNE_ENABLE,          value: "1" }
-      - { key: AUTO_MIN_SCORE_BASE,       value: "7.0" }
-      - { key: AUTO_MIN_SCORE_RANGE,      value: "6.0,7.5" }
-      - { key: AUTO_ADX_MIN_BASE,         value: "20" }
-      - { key: AUTO_ADX_RANGE,            value: "18,25" }
-      - { key: TARGET_TRADES_PER_DAY_MIN, value: "4" }
-      - { key: TARGET_TRADES_PER_DAY_MAX, value: "10" }
-      - { key: AUTO_TUNE_LOOKBACK_MIN,    value: "180" }
-      - { key: AUTO_BACKOFF_SEC,          value: "900" }
+      # ===== Auto-Tune (Score/ADX) =====
+      - { key: AUTO_TUNE_ENABLE,           value: "1" }
+      - { key: AUTO_MIN_SCORE_BASE,        value: "7.0" }
+      - { key: AUTO_MIN_SCORE_RANGE,       value: "6.0,7.5" }
+      - { key: AUTO_ADX_MIN_BASE,          value: "20" }
+      - { key: AUTO_ADX_RANGE,             value: "18,25" }
+      - { key: TARGET_TRADES_PER_DAY_MIN,  value: "4" }
+      - { key: TARGET_TRADES_PER_DAY_MAX,  value: "10" }
+      - { key: AUTO_TUNE_LOOKBACK_MIN,     value: "180" }
+      - { key: AUTO_BACKOFF_SEC,           value: "900" }
 
       # ===== Auto-Tune TP/SL =====
-      - { key: AUTO_TP_ENABLE,        value: "1" }
-      - { key: SL_ATR_MULT_BASE,      value: "1.10" }
-      - { key: TP1_ATR_MULT_BASE,     value: "1.20" }
-      - { key: TP2_ATR_MULT_BASE,     value: "2.20" }
-      - { key: TP3_ATR_MULT_BASE,     value: "3.50" }
-      - { key: ADX_TP_BOOST_THRESH,   value: "30" }
-      - { key: ADX_TP_BOOST_PCT,      value: "10" }
-      - { key: ADX_STRONG_SL_TIGHTEN_PCT, value: "10" }
-      - { key: ADX_LOW_SL_RELAX_PCT,  value: "10" }
-      - { key: ADX_LOW_TP_SHRINK_PCT, value: "10" }
+      - { key: AUTO_TP_ENABLE,             value: "1" }
+      - { key: SL_ATR_MULT_BASE,           value: "1.10" }
+      - { key: TP1_ATR_MULT_BASE,          value: "1.20" }
+      - { key: TP2_ATR_MULT_BASE,          value: "2.20" }
+      - { key: TP3_ATR_MULT_BASE,          value: "3.50" }
+      - { key: ADX_TP_BOOST_THRESH,        value: "30" }
+      - { key: ADX_TP_BOOST_PCT,           value: "10" }
+      - { key: ADX_STRONG_SL_TIGHTEN_PCT,  value: "10" }
+      - { key: ADX_LOW_SL_RELAX_PCT,       value: "10" }
+      - { key: ADX_LOW_TP_SHRINK_PCT,      value: "10" }
 
       # ===== Health / Ops Digest =====
-      - { key: HEALTH_PRICE_MAX_AGE,      value: "30" }
-      - { key: HEALTH_TP_GRACE_SEC,       value: "8" }
-      - { key: HEALTH_TP1_ENABLE,         value: "0" }
-      - { key: HEALTH_TP1_INTERVAL_SEC,   value: "1200" }
+      - { key: HEALTH_PRICE_MAX_AGE,        value: "30" }
+      - { key: HEALTH_TP_GRACE_SEC,         value: "8" }
+      - { key: HEALTH_TP1_ENABLE,           value: "0" }
+      - { key: HEALTH_TP1_INTERVAL_SEC,     value: "1200" }
       - { key: HEALTH_TP1_ONLY_WITH_POSITION, value: "1" }
-      - { key: TP1_TAGS,                  value: "TP1,tp1,tp_1,TAKE_PROFIT_1" }
-      - { key: OPS_DIGEST_INTERVAL_HOURS, value: "3" }
-      - { key: OPS_HEARTBEAT_ENABLE,      value: "1" }
-      - { key: OPS_HEARTBEAT_EVERY_MIN,   value: "5" }
-      - { key: HEARTBEAT_HOURS,           value: "2" }
-      - { key: HEARTBEAT_MIN_SCORE,       value: "6" }
+      - { key: TP1_TAGS,                    value: "TP1,tp1,tp_1,TAKE_PROFIT_1" }
+      - { key: OPS_DIGEST_INTERVAL_HOURS,   value: "3" }
+      - { key: OPS_HEARTBEAT_ENABLE,        value: "1" }
+      - { key: OPS_HEARTBEAT_EVERY_MIN,     value: "5" }
+      - { key: HEARTBEAT_HOURS,             value: "2" }
+      - { key: HEARTBEAT_MIN_SCORE,         value: "6" }
 
       # ===== ETA / Defaults =====
-      - { key: ETA_SMART_ENABLE,     value: "1" }
-      - { key: ETA_VELOCITY_WINDOW,  value: "30" }
-      - { key: DEFAULT_INTERVAL,     value: "15m" }
+      - { key: ETA_SMART_ENABLE,            value: "1" }
+      - { key: ETA_VELOCITY_WINDOW,         value: "30" }
+      - { key: DEFAULT_INTERVAL,            value: "15m" }
 
       # ===== Guarder =====
-      - { key: GUARDER_ENABLE,       value: "1" }
-      - { key: GUARDER_INTERVAL_SEC, value: "45" }
+      - { key: GUARDER_ENABLE,              value: "1" }
+      - { key: GUARDER_INTERVAL_SEC,        value: "45" }
 
       # ===== Public Cache =====
-      - { key: PUBLIC_TOPK_RPS,      value: "2" }
-      - { key: PUBLIC_TOPK_WINDOW,   value: "3" }
-      - { key: PUBLIC_NOW_RPS,       value: "2" }
-      - { key: PUBLIC_NOW_WINDOW,    value: "3" }
-      - { key: PUBLIC_CACHE_MAX_AGE, value: "20" }
-      - { key: PUBLIC_CACHE_PATHS,   value: "/scan/public-topk,/scan/public-now,/topk" }
+      - { key: PUBLIC_TOPK_RPS,             value: "2" }
+      - { key: PUBLIC_TOPK_WINDOW,          value: "3" }
+      - { key: PUBLIC_NOW_RPS,              value: "2" }
+      - { key: PUBLIC_NOW_WINDOW,           value: "3" }
+      - { key: PUBLIC_CACHE_MAX_AGE,        value: "20" }
+      - { key: PUBLIC_CACHE_PATHS,          value: "/scan/public-topk,/scan/public-now,/topk" }
 
       # ===== Misc / Storage / Metrics =====
-      - { key: ROUTES_ONLY,        value: "" }
-      - { key: METRICS_ENABLE,     value: "true" }
-      - { key: PNL_TRACKING,       value: "true" }
-      - { key: PARAMS_DIR,         value: "params/optimized" }
-      - { key: DATABASE_URL,       value: "sqlite:////app/data/algogpt.db" }
-      - { key: PRICE_CACHE_TTL_MS, value: "250" }
-      - { key: PRICE_MAX_AGE_SEC,  value: "15" }
-      - { key: PRICE_WS_FRESH_TTL, value: "60" }
-      - { key: PRICE_SCAN_INTERVAL, value: "30" }
+      - { key: ROUTES_ONLY,                 value: "" }
+      - { key: METRICS_ENABLE,              value: "true" }
+      - { key: PNL_TRACKING,                value: "true" }
+      - { key: PARAMS_DIR,                  value: "params/optimized" }
+      - { key: DATABASE_URL,                value: "sqlite:////app/data/algogpt.db" }
+      - { key: PRICE_CACHE_TTL_MS,          value: "250" }
+      - { key: PRICE_MAX_AGE_SEC,           value: "15" }
+      - { key: PRICE_WS_FRESH_TTL,          value: "60" }
+      - { key: PRICE_SCAN_INTERVAL,         value: "30" }
 
       # ===== Managers =====
-      - { key: MANAGER_ENABLE,       value: "1" }
-      - { key: TRADE_MANAGER_ENABLE, value: "1" }
+      - { key: MANAGER_ENABLE,              value: "1" }
+      - { key: TRADE_MANAGER_ENABLE,        value: "1" }
 
       # ===== Secrets =====
-      - { key: API_BEARER_TOKEN,          fromSecret: API_BEARER_TOKEN }
-      - { key: API_TOKEN,                 fromSecret: API_TOKEN }
-      - { key: PRIMARY_API_TOKEN,         fromSecret: PRIMARY_API_TOKEN }
-      - { key: API_SIGNING_SECRET,        fromSecret: API_SIGNING_SECRET }
-      - { key: OPS_SIGN_SECRET,           fromSecret: OPS_SIGN_SECRET }
-      - { key: WEBHOOK_HMAC_SECRET,       fromSecret: WEBHOOK_HMAC_SECRET }
-      - { key: OPENAI_API_KEY,            fromSecret: OPENAI_API_KEY }
-      - { key: TELEGRAM_BOT_TOKEN,        fromSecret: TELEGRAM_BOT_TOKEN }
-      - { key: TELEGRAM_WEBHOOK_SECRET,   fromSecret: TELEGRAM_WEBHOOK_SECRET }
-      - { key: ALERTS_INGEST_HMAC_SECRET, fromSecret: ALERTS_INGEST_HMAC_SECRET }
-      - { key: INTERNAL_JWT_PUBLIC_KEY,   fromSecret: INTERNAL_JWT_PUBLIC_KEY }
-      - { key: BINANCE_API_KEY,           fromSecret: BINANCE_API_KEY }
-      - { key: BINANCE_API_SECRET,        fromSecret: BINANCE_API_SECRET }
-
-
-
-
+      - { key: API_BEARER_TOKEN,            fromSecret: API_BEARER_TOKEN }
+      - { key: API_TOKEN,                   fromSecret: API_TOKEN }
+      - { key: PRIMARY_API_TOKEN,           fromSecret: PRIMARY_API_TOKEN }
+      - { key: API_SIGNING_SECRET,          fromSecret: API_SIGNING_SECRET }
+      - { key: OPS_SIGN_SECRET,             fromSecret: OPS_SIGN_SECRET }
+      - { key: WEBHOOK_HMAC_SECRET,         fromSecret: WEBHOOK_HMAC_SECRET }
+      - { key: OPENAI_API_KEY,              fromSecret: OPENAI_API_KEY }
+      - { key: TELEGRAM_BOT_TOKEN,          fromSecret: TELEGRAM_BOT_TOKEN }
+      - { key: TELEGRAM_WEBHOOK_SECRET,     fromSecret: TELEGRAM_WEBHOOK_SECRET }
+      - { key: ALERTS_INGEST_HMAC_SECRET,   fromSecret: ALERTS_INGEST_HMAC_SECRET }
+      - { key: INTERNAL_JWT_PUBLIC_KEY,     fromSecret: INTERNAL_JWT_PUBLIC_KEY }
+      - { key: BINANCE_API_KEY,             fromSecret: BINANCE_API_KEY }
+      - { key: BINANCE_API_SECRET,          fromSecret: BINANCE_API_SECRET }
 
 
 
