@@ -1,86 +1,3 @@
-קיבלתי. יש כאן שני דברים עיקריים שתקעו אותך:
-
-1. הפקודות שלך נשברו בבאש (ה-copy/paste הכניס שורות/סימנים שגרמו ל־`URL rejected: No host part`).
-2. האישור כן עבד לפעמים, אבל “ניהול דינמי” לא הופעל אוטומטית כי חסרים דגלים — במיוחד `SMART_MANAGE_ON_APPROVE=1` ו(אופציונלית) `TRADE_MANAGER_ENABLE=1`.
-
-להלן סט פקודות נקיות (ללא jq, ללא שמירת קבצים) + עדכון `services` שמבטיח שאחרי Approve תהיה פתיחה + ניהול דינמי אוטומטי.
-פשוט הדבק כמו שזה (1:1).
-
----
-
-# פקודות LIVE — נקי ולעניין
-
-```bash
-# ==== 0) משתנים בסיס (LIVE) ====
-export HOST="https://algogpt-docker.onrender.com"
-export TOKEN="rnd_XVyANQbo1mk8Q8nny3kTNDEzKoF7"
-export TG_BOT="7197767713:AAFxnox7IyaIU35VuGNyt_TFLPKEdKs47jE"
-export TG_SECRET="tghsec_87add65f9963a43d7879ac4e1f06a2846a5a260e9aa74c53a6893ce773dc0725"
-
-# וידוא שאין בעיות quoting/ריקים:
-printf 'HOST=%s\nTOKEN_len=%s\n' "$HOST" "${#TOKEN}"
-
-# ==== 1) בדיקות בסיס ====
-curl -sS "$HOST/readyz"
-curl -sS "$HOST/meta/version"
-curl -sS -I  "$HOST/openapi.json"
-
-# ==== 2) חיבור טלגרם (Webhook) ====
-curl -sS -X POST "https://api.telegram.org/bot$TG_BOT/setWebhook" \
-  -d "url=$HOST/telegram/webhook" \
-  -d "secret_token=$TG_SECRET" \
-  -d "drop_pending_updates=true" \
-  -d "max_connections=40"
-
-# ==== 3) פתיחת כרטיס MARKET קטן (לעקוף gate ולמנוע מרג'ין נמוך) ====
-TID="$(
-  curl -sS -X POST "$HOST/ops/ticket" \
-    -H "Authorization: Bearer $TOKEN" \
-    -H "Content-Type: application/json" \
-    --data-binary '{"symbol":"BTCUSDT","side":"BUY","qty":0.001,"leverage":10,"note":"[mode: MARKET] live auto-managed"}' \
-  | sed -n 's/.*"ticket_id":"\([^"]*\)".*/\1/p'
-)"; echo "TID=$TID"
-
-# ==== 4) אישור הכרטיס ====
-curl -sS "$HOST/ops/approve?ticket_id=$TID" -H "Authorization: Bearer $TOKEN"
-
-# ==== 5) (אופציונלי) ניהול מיידי ידני לסמל ====
-curl -sS -X POST "$HOST/manage-once" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  --data-binary '{"symbol":"BTCUSDT"}'
-
-# ==== 6) (אופציונלי) Smoke-Guard לסמל — בלי jq/קבצים ====
-curl -sS -X POST "$HOST/guard/smoke/run" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  --data-binary '"BTCUSDT"'
-
-# ==== 7) (אופציונלי) Top-K + ETag (הדגמת Cache/304) ====
-ETAG="$(curl -sSI "$HOST/scan/public-topk?k=3" | tr -d '\r' | sed -n 's/^ETag: *//p')"; echo "ETag=$ETAG"
-curl -sS -i -H "If-None-Match: $ETAG" "$HOST/scan/public-topk?k=3"
-```
-
-> טיפים:
->
-> * תמיד השתמש ב־`--data-binary` או `-d 'JSONחד-שורה'` כדי שלא ייכנסו שברי שורות.
-> * אם תחזור שגיאת margin (-2019) — נסה `qty: 0.001` או `leverage` נמוך יותר.
-> * אם תרצה לעבור ל־HYBRID (עם TP/SL/סולמות מהמודול) — תן `note: "[mode: HYBRID]"` ואפשר `TP_LADDER_ON_APPROVE=1` (כבר אצלך) + `SMART_MANAGE_ON_APPROVE=1` (מופיע בעדכון למטה).
-
----
-
-# services (prod) — תוספות כדי שיהיה ניהול אוטומטי באמת
-
-הנה **גרסה מלאה 1:1** לקטע `services: … envVars:` של `algogpt-prod` עם התוספות הבאות:
-
-* `SMART_MANAGE_ON_APPROVE=1` — מפעיל ניהול מיד אחרי approve.
-* פרמטרי smart-manage ברירת מחדל (ניתן לכוון): `SMART_MANAGE_BE_OFFSET_BPS`, `SMART_MANAGE_PCTS`, `SMART_MANAGE_SPLITS`, `SMART_MANAGE_TRAIL_ATR_MULT`.
-* (אופציונלי) `TRADE_MANAGER_ENABLE=1` — אם יש לך מודול שמצריך דגל זה בנוסף ל־`MANAGER_ENABLE=1`.
-* לא נגעתי ב־`APPROVE_BEFORE_GATE` (נשאר 1). לבדיקות LIVE עקפת gate עם MARKET; כשתרצה, תחזיר ל־HYBRID.
-
-הדבק את כל הבלוק כמו שהוא:
-
-```yaml
 services:
   - type: web
     name: algogpt-prod
@@ -171,7 +88,7 @@ services:
 
       # ========================= Exchange Defaults =========================
       - { key: DEFAULT_MARKET,              value: "futures" }
-      - { key: POSITION_MODE_OVERRIDE,      value: "oneway" }
+      - { key: POSITION_MODE_OVERRIDE,      value: "hedge" }   # ✅ דואל־סייד: אפשר לונג+שורט יחד
       - { key: BINANCE_MARGIN_TYPE_DEFAULT, value: "ISOLATED" }
       - { key: BINANCE_FUTURES_HTTP_BASE,   value: "https://fapi.binance.com" }
       - { key: BINANCE_FUTURES_WS_BASE,     value: "wss://fstream.binance.com" }
@@ -209,7 +126,7 @@ services:
       - { key: ADX_MIN,                 value: "20" }
       - { key: FEAT_DAILY_CAPS,         value: "0" }
       - { key: FEAT_DEBOUNCE_LIMIT,     value: "1" }
-      - { key: FEAT_QUALITY_ENFORCE,    value: "0" }
+      - { key: FEAT_QUALITY_ENFORCE,    value: "1" }   # אכיפת איכות איתותים
       - { key: FEAT_SPREAD_DEPTH,       value: "1" }
       - { key: FEAT_TF_ALIGN,           value: "0" }
       - { key: FEAT_VOLUME_GATE,        value: "0" }
@@ -221,7 +138,7 @@ services:
       - { key: SYMBOLS_ALLOWLIST_PATH, value: "config/symbols_allowlist.json" }
       - { key: WATCHLIST,              value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT" }
 
-      # ========================= Scan CRON (Telegram) =========================
+      # ========================= Scan CRON (איתותים אוטומטיים) =========================
       - { key: SCAN_CRON_ENABLE,        value: "1" }
       - { key: SCAN_CRON_EVERY_SEC,     value: "45" }
       - { key: SCAN_CRON_TIMEFRAME,     value: "15m" }
@@ -235,11 +152,11 @@ services:
       - { key: DEFAULT_LEVERAGE,        value: "10" }
       - { key: DEFAULT_STAKE_USDT,      value: "50" }
 
-      # ========================= Approvals / Telegram =========================
-      - { key: APPROVAL_ENABLED,             value: "1" }
-      - { key: REQUIRE_TELEGRAM_APPROVAL,    value: "1" }
+      # ========================= Approvals — כבוי לחלוטין =========================
+      - { key: APPROVAL_ENABLED,             value: "0" }
+      - { key: REQUIRE_TELEGRAM_APPROVAL,    value: "0" }
       - { key: APPROVAL_REQUIRE_WATCHLIST,   value: "0" }
-      - { key: AUTO_OPEN_ON_APPROVE,         value: "1" }
+      - { key: AUTO_OPEN_ON_APPROVE,         value: "0" }
       - { key: ONLY_TRADE_NOTIFICATIONS,     value: "1" }
       - { key: STARTUP_NOTIFY_ENABLE,        value: "0" }
       - { key: ADMIN_CHAT_ID,                value: "449087907" }
@@ -253,7 +170,7 @@ services:
       - { key: APPROVAL_MAX_SL_PCT,          value: "3.0" }
       - { key: APPROVAL_REQUIRE_FRESH_PRICE, value: "1" }
       - { key: APPROVAL_DUP_COOLDOWN_SEC,    value: "0" }
-      - { key: APPROVE_BEFORE_GATE,          value: "1" }
+      - { key: APPROVE_BEFORE_GATE,          value: "0" }
       - { key: CONFIRM_TTL_SEC,              value: "120" }
       - { key: OPS_TICKET_TTL_SEC,           value: "1800" }
 
@@ -273,6 +190,7 @@ services:
       - { key: MAX_TRADES_PER_TICK,   value: "1" }
       - { key: MIN_NOTIONAL_USDT,     value: "5" }
       - { key: MAX_TRADE_BUDGET,      value: "150" }
+      - { key: SINK_ENFORCE_APPROVALS, value: "0" }
 
       # ========================= Auto QTY =========================
       - { key: AUTO_QTY_ENABLE,            value: "1" }
@@ -306,12 +224,19 @@ services:
       - { key: BE_GUARD_EVERY_SEC,        value: "30" }
       - { key: TP_BE_OFFSET_BPS,          value: "8" }
 
-      # ========================= Smart Manage ON APPROVE (חדש/חשוב) =========================
+      # ========================= Smart-Manage =========================
       - { key: SMART_MANAGE_ON_APPROVE,     value: "1" }
       - { key: SMART_MANAGE_BE_OFFSET_BPS,  value: "8" }
-      - { key: SMART_MANAGE_PCTS,           value: "" }         # אופציונלי, דוגמה: "25,50,25"
-      - { key: SMART_MANAGE_SPLITS,         value: "" }         # אופציונלי, דוגמה: "0.4,0.35,0.25"
-      - { key: SMART_MANAGE_TRAIL_ATR_MULT, value: "0" }        # שים 1.5 אם רוצים trail ATR מיידי
+      - { key: SMART_MANAGE_PCTS,           value: "" }
+      - { key: SMART_MANAGE_SPLITS,         value: "" }
+      - { key: SMART_MANAGE_TRAIL_ATR_MULT, value: "0" }
+
+      # ========================= Hedge & Auto-Flip (לונג+שורט/היפוך אוטומטי) =========================
+      - { key: HEDGE_ENABLE,            value: "1" }          # מאפשר לנהל שני צדדים במקביל
+      - { key: ALLOW_OPPOSITE_SIDE,     value: "1" }          # פתיחת עמדה נגדית מותרת
+      - { key: AUTO_SIDE_SWITCH,        value: "1" }          # מעבר אוטומטי מלונג↔שורט לפי אות
+      - { key: AUTO_REOPEN_ON_EXIT,     value: "1" }          # אם נסגרה — לפתוח מחדש לפי אות חדש
+      # (אם אין לך מפתחות אלה בקוד — הם יתעלמו; השאר קריטי הוא hedge + approvals=0 + execute=1)
 
       # ========================= Auto-Tune (Score/ADX) =========================
       - { key: AUTO_TUNE_ENABLE,           value: "1" }
@@ -376,14 +301,13 @@ services:
       - { key: PRICE_MAX_AGE_SEC,    value: "15" }
       - { key: PRICE_WS_FRESH_TTL,   value: "60" }
       - { key: PRICE_SCAN_INTERVAL,  value: "30" }
-      - { key: SINK_ENFORCE_APPROVALS, value: "1" }
-      - { key: RISK_QUICK_URL,       value: "https://algogpt-docker.onrender.com/risk/quick" }
+      - { key: SINK_ENFORCE_APPROVALS, value: "0" }
 
-      # (אופציונלי אם נדרש אצלך בנוסף למנהל הפנימי)
+      # מנהלים
       - { key: MANAGER_ENABLE,         value: "1" }
       - { key: TRADE_MANAGER_ENABLE,   value: "1" }
 
-      # ========================= Secrets (Render Secrets) =========================
+      # ========================= Secrets =========================
       - { key: API_BEARER_TOKEN,          fromSecret: API_BEARER_TOKEN }
       - { key: API_TOKEN,                 fromSecret: API_TOKEN }
       - { key: PRIMARY_API_TOKEN,         fromSecret: PRIMARY_API_TOKEN }
@@ -397,8 +321,6 @@ services:
       - { key: INTERNAL_JWT_PUBLIC_KEY,   fromSecret: INTERNAL_JWT_PUBLIC_KEY }
       - { key: BINANCE_API_KEY,           fromSecret: BINANCE_API_KEY }
       - { key: BINANCE_API_SECRET,        fromSecret: BINANCE_API_SECRET }
-
-
 
 
 
