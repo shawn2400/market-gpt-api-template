@@ -10,7 +10,7 @@ import httpx
 from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.responses import Response as StarletteResponse  # לשימוש בהחזרת HEAD ריקה
+from starlette.responses import Response as StarletteResponse
 
 # ==================== Logging ====================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -80,21 +80,14 @@ async def _head_compat_and_soft_readyz(request: Request, call_next):
     if request.url.path == "/readyz":
         return PlainTextResponse("ok", status_code=200)
 
-    # 2) תמיכה בטוחה ב-HEAD -> GET (ללא שימוש בשדות פרטיים)
+    # 2) תמיכה בטוחה ב-HEAD -> GET (ללא גוף בתגובה)
     if request.method == "HEAD":
         scope_copy = dict(request.scope)
         scope_copy["method"] = "GET"
         new_req = Request(scope_copy, receive=request.receive)
-
         resp = await call_next(new_req)
-
-        # מחזירים סטטוס+כותרות בלבד (ללא גוף)
-        head_headers = dict(resp.headers)
-        return StarletteResponse(
-            status_code=resp.status_code,
-            headers=head_headers,
-            media_type=resp.media_type
-        )
+        headers = dict(resp.headers)
+        return StarletteResponse(status_code=resp.status_code, headers=headers, media_type=resp.media_type)
 
     # ברירת מחדל
     return await call_next(request)
@@ -328,37 +321,28 @@ def _should_public_cache(path: str) -> bool:
 
 @app.middleware("http")
 async def _public_cache_etag(request: Request, call_next):
-    # עובדים רק על GET ובנתיבי קאש
     if request.method.upper() != "GET" or not _should_public_cache(request.url.path):
         return await call_next(request)
-
-    # הגנה על "No response returned" כדי לא להפיל שרת
     try:
         resp: Response = await call_next(request)
     except RuntimeError as e:
         if "No response returned" in str(e):
             return PlainTextResponse("", status_code=204)
         raise
-
     try:
-        # לא קאש על שגיאות
         if int(getattr(resp, "status_code", 200)) >= 400:
             return resp
-
         hdrs_lower = {k.lower() for k in resp.headers.keys()}
         if "cache-control" not in hdrs_lower:
             resp.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_MAX_AGE}"
-
         body = b""
         with suppress(Exception):
             body = resp.body if getattr(resp, "body", None) else b""
         if not body:
             return resp
-
         etag = '"' + hashlib.md5(body).hexdigest() + '"'
         if "etag" not in hdrs_lower:
             resp.headers["ETag"] = etag
-
         inm = request.headers.get("If-None-Match")
         if inm and inm == etag and resp.status_code == 200:
             fresh = Response(status_code=304)
@@ -366,7 +350,6 @@ async def _public_cache_etag(request: Request, call_next):
             fresh.headers["ETag"] = etag
             return fresh
     except Exception:
-        # כשל בקאש/ETag לא אמור להפיל – מחזירים את התגובה המקורית
         pass
     return resp
 
@@ -607,7 +590,6 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
         return {"ok": False, "error": "bad_ticket_params"}
 
-    # ודא מינוף באקצ׳יינג׳ גם ב-HYBRID
     try:
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
@@ -675,7 +657,6 @@ def _smart_manage_env() -> Dict[str, Any]:
         except Exception:
             return None
     return {
-        # ברירת מחדל: פעיל כדי להבטיח ניהול אחרי אישור
         "enable": os.getenv("SMART_MANAGE_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on"),
         "offset_bps": int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS", "8"))),
         "pcts": _csvf(os.getenv("SMART_MANAGE_PCTS")),
@@ -692,13 +673,6 @@ def _round_qty(q: float, dec: int) -> float:
         return float(f"{q:.3f}")
 
 async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """
-    ממלא leverage/qty אם חסרים+כופה טווחים:
-    1) קובע מינוף אוטומטי לפי טווח (15–25) אם לא סופק, או חותך לטווח אם סופק.
-    2) מנסה utils.position_sizing.ensure_final_qty (מכבד פילטרי בורסה).
-    3) פולבק: חישוב לפי תקציב מתוך טווח (100–200) או מהבקשה/ENV, כפוף MAX_TRADE_BUDGET.
-    4) מנקה position_side="BOTH".
-    """
     symbol = (ticket.get("symbol") or "").upper()
     price = await get_last_price_async(symbol)
     if not price or float(price) <= 0:
@@ -706,7 +680,7 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
 
     new_ticket = dict(ticket)
 
-    # טווחי מינוף/תקציב מהבקשה (אם נשלחו)
+    # טווחי מינוף/תקציב
     try:
         lev_min = int(new_ticket.get("leverage_min") or (new_ticket.get("leverage_range") or [AUTO_LEV_MIN, AUTO_LEV_MAX])[0] or AUTO_LEV_MIN)
         lev_max = int(new_ticket.get("leverage_max") or (new_ticket.get("leverage_range") or [AUTO_LEV_MIN, AUTO_LEV_MAX])[-1] or AUTO_LEV_MAX)
@@ -723,7 +697,7 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
     if bmin > bmax:
         bmin, bmax = bmax, bmin
 
-    # 1) leverage לפי טווח
+    # leverage לפי טווח
     lev = int(new_ticket.get("leverage") or new_ticket.get("lev") or 0)
     if lev <= 0:
         lev = max(min((lev_min + lev_max) // 2, lev_max), lev_min)
@@ -731,12 +705,12 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
     else:
         new_ticket["leverage"] = max(min(lev, lev_max), lev_min)
 
-    # 2) ניסיון לוגיקת sizing פנימית
+    # לוגיקת sizing פנימית (אם קיימת)
     with suppress(Exception):
         from utils.position_sizing import ensure_final_qty as _efq  # type: ignore
         new_ticket = _efq(new_ticket, float(price)) or new_ticket
 
-    # 3) פולבק אם עדיין אין qty>0
+    # פולבק אם עדיין אין qty
     q = float(new_ticket.get("qty") or new_ticket.get("quantity") or 0.0)
     if q <= 0.0:
         budget_env = os.getenv("AUTO_QTY_BUDGET_USDT") or os.getenv("DEFAULT_STAKE_USDT", str(AUTO_BUDGET_MIN))
@@ -759,7 +733,7 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
             calc_qty = (budget * float(new_ticket["leverage"])) / float(price)
             new_ticket["qty"] = _round_qty(calc_qty, dec)
 
-    # 4) נקה position_side="BOTH"
+    # נקה position_side="BOTH"
     ps = str(new_ticket.get("position_side") or new_ticket.get("positionSide") or "").upper()
     if ps == "BOTH":
         new_ticket.pop("positionSide", None)
@@ -897,7 +871,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         etas = _smart(symbol, side, price_now, [payload.get("tp1"), payload.get("tp2"), payload.get("tp3")])
         payload.update(etas)
 
-    # תמיכה רכה בטווחי מינוף/תקציב בבקשה (לא חובה)
     lev_min = payload.get("leverage_min") or (payload.get("leverage_range") or [None, None])[0]
     lev_max = payload.get("leverage_max") or (payload.get("leverage_range") or [None, None])[-1]
     bud_min = payload.get("budget_min") or (payload.get("budget_range") or [None, None])[0]
@@ -1083,7 +1056,6 @@ async def _approve_core(ticket_id: str):
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
 
-    # ניהול דינמי מלא מיד אחרי אישור מוצלח
     if ok:
         try:
             sm = _smart_manage_env()
@@ -1208,20 +1180,6 @@ async def ui_pending(request: Request = None):
         "</body>"
     )
     return HTMLResponse(body)
-
-# אינדקס קטן ל- /ops/ui (מונע Not Found)
-@router.get("/ops/ui")
-async def ui_index(request: Request = None):
-    base = PUBLIC_HOST if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
-    html = (
-        "<!doctype html><meta charset='utf-8'>"
-        "<body style='font-family:sans-serif;max-width:720px;margin:2rem auto;line-height:1.5'>"
-        "<h2>Ops UI</h2>"
-        f"<p><a href='{base}/ops/ui/pending'>Pending Tickets</a></p>"
-        f"<p><a href='{base}/docs'>OpenAPI Docs</a></p>"
-        "</body>"
-    )
-    return HTMLResponse(html)
 
 @router.post("/guard/smoke/run")
 async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
@@ -1408,7 +1366,7 @@ async def readyz_strict():
             await r.ping()
     except Exception as e:
         logger.warning("readyz.strict.redis_ping_failed: %s", e)
-        # ✅ תיקון המחרוזת השבורה:
+        # תוקן: טקסט שגוי שהיה משובש
         return PlainTextResponse("redis_fail", status_code=503)
     return PlainTextResponse("ok", status_code=200)
 
@@ -1475,6 +1433,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
