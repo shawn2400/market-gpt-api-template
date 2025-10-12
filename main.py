@@ -92,7 +92,7 @@ async def _head_compat_and_soft_readyz(request: Request, call_next):
         head_headers = dict(resp.headers)
         return StarletteResponse(
             status_code=resp.status_code,
-            headers=head_headers if (head_headers := head_headers) else {},
+            headers=head_headers,
             media_type=resp.media_type
         )
 
@@ -1209,6 +1209,20 @@ async def ui_pending(request: Request = None):
     )
     return HTMLResponse(body)
 
+# אינדקס קטן ל- /ops/ui (מונע Not Found)
+@router.get("/ops/ui")
+async def ui_index(request: Request = None):
+    base = PUBLIC_HOST if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
+    html = (
+        "<!doctype html><meta charset='utf-8'>"
+        "<body style='font-family:sans-serif;max-width:720px;margin:2rem auto;line-height:1.5'>"
+        "<h2>Ops UI</h2>"
+        f"<p><a href='{base}/ops/ui/pending'>Pending Tickets</a></p>"
+        f"<p><a href='{base}/docs'>OpenAPI Docs</a></p>"
+        "</body>"
+    )
+    return HTMLResponse(html)
+
 @router.post("/guard/smoke/run")
 async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
     _require_bearer(request)
@@ -1394,6 +1408,7 @@ async def readyz_strict():
             await r.ping()
     except Exception as e:
         logger.warning("readyz.strict.redis_ping_failed: %s", e)
+        # ✅ תיקון המחרוזת השבורה:
         return PlainTextResponse("redis_fail", status_code=503)
     return PlainTextResponse("ok", status_code=200)
 
@@ -1460,6 +1475,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
