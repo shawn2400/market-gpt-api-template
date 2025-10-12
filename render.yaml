@@ -213,13 +213,15 @@ services:
       - { key: STOP_BAND_BPS,             value: "12" }
       - { key: TP_BE_ONLY_AFTER_TP1,      value: "1" }
       - { key: STREAM_TP_BE,              value: "1" }
+
+      # 🔻 דינמי באמת: לא לשים סולם קבוע באישור
+      - { key: TP_LADDER_ON_APPROVE,      value: "0" }
+
+      # משאיר אפשרות למנהל להניח/לעדכן סולמות לפי חישוב—אבל לא עם אחוזים קבועים
       - { key: LADDER_TP_ENABLE,          value: "1" }
-      - { key: LADDER_TP_DEFAULT_PCTS,    value: "4.0,8.0,16.0" }
-      - { key: LADDER_TP_DEFAULT_SPLITS,  value: "0.30,0.30,0.40" }
       - { key: LADDER_SL_ENABLE,          value: "1" }
-      - { key: LADDER_SL_DEFAULT_PCTS,    value: "1.2" }
-      - { key: TP_LADDER_ON_APPROVE,      value: "1" }
       - { key: TP_MAX_LADDERS,            value: "3" }
+
       - { key: TRAIL_ENABLE,              value: "1" }
       - { key: TRAIL_ATR_MULT,            value: "2.6" }
       - { key: ATR_UPDATE_COOLDOWN_SEC,   value: "20" }
@@ -232,8 +234,9 @@ services:
       # ========================= Smart-Manage =========================
       - { key: SMART_MANAGE_ON_APPROVE,     value: "1" }
       - { key: SMART_MANAGE_BE_OFFSET_BPS,  value: "5" }
-      - { key: SMART_MANAGE_PCTS,           value: "4.0,8.0,16.0" }
-      - { key: SMART_MANAGE_SPLITS,         value: "0.30,0.30,0.40" }
+      # ❌ לא קובעים אחוזי TP/Splits קבועים — ריק כדי להשאיר חישוב דינמי:
+      - { key: SMART_MANAGE_PCTS,           value: "" }
+      - { key: SMART_MANAGE_SPLITS,         value: "" }
       - { key: SMART_MANAGE_TRAIL_ATR_MULT, value: "2.6" }
 
       # ========================= Hedge & Auto-Flip =========================
@@ -357,7 +360,7 @@ services:
       - { key: DYN_PROFILE_extreme_BUD_MIN,  value: "150" }
       - { key: DYN_PROFILE_extreme_BUD_MAX,  value: "600" }
 
-      # ========================= Secrets (לא לחשוף בלוגים) =========================
+      # ========================= Secrets =========================
       - { key: API_BEARER_TOKEN,          fromSecret: API_BEARER_TOKEN }
       - { key: API_TOKEN,                 fromSecret: API_TOKEN }
       - { key: PRIMARY_API_TOKEN,         fromSecret: PRIMARY_API_TOKEN }
