@@ -671,6 +671,13 @@ def _round_qty(q: float, dec: int) -> float:
         return float(f"{q:.3f}")
 
 async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    ממלא leverage/qty אם חסרים:
+    1) קובע מינוף דיפולטי אם לא נשלח (DEFAULT_LEVERAGE).
+    2) מנסה להשתמש ב-utils.position_sizing.ensure_final_qty (מכבד AUTO_QTY_* , MIN_NOTIONAL וכו').
+    3) פולבק: חישוב לפי budget בבקשה או מה-ENV (AUTO_QTY_BUDGET_USDT/DEFAULT_STAKE_USDT) וכפוף MAX_TRADE_BUDGET.
+    4) מנקה position_side="BOTH".
+    """
     symbol = (ticket.get("symbol") or "").upper()
     price = await get_last_price_async(symbol)
     if not price or float(price) <= 0:
@@ -678,21 +685,41 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
 
     new_ticket = dict(ticket)
 
-    # leverage ברירת מחדל אם חסר/אפס
+    # 1) leverage ברירת מחדל אם חסר/אפס
     lev = int(new_ticket.get("leverage") or new_ticket.get("lev") or 0)
     if lev <= 0:
-        lev = int(os.getenv("DEFAULT_LEVERAGE", "10"))
+        lev = int(os.getenv("DEFAULT_LEVERAGE", "10") or 10)
         new_ticket["leverage"] = lev
 
-    qty = float(new_ticket.get("qty") or new_ticket.get("quantity") or 0.0)
-    budget = float(new_ticket.get("budget") or new_ticket.get("budget_usd") or 0.0)
+    # 2) נסה להשתמש בלוגיקת המיקום/פילטרים מהמודול
+    used_ps = False
+    with suppress(Exception):
+        from utils.position_sizing import ensure_final_qty as _efq  # type: ignore
+        new_ticket = _efq(new_ticket, float(price)) or new_ticket
+        used_ps = True
 
-    if qty <= 0 and budget > 0 and lev > 0:
-        dec = int(os.getenv("QTY_DECIMALS", "3"))
-        calc_qty = (budget * lev) / float(price)
-        new_ticket["qty"] = _round_qty(calc_qty, dec)
+    # 3) פולבק אם עדיין אין qty>0
+    q = float(new_ticket.get("qty") or new_ticket.get("quantity") or 0.0)
+    if q <= 0.0:
+        # תקציב מהבקשה או מה-ENV
+        budget_env = os.getenv("AUTO_QTY_BUDGET_USDT") or os.getenv("DEFAULT_STAKE_USDT", "50")
+        try:
+            max_budget = float(os.getenv("MAX_TRADE_BUDGET", budget_env or 0) or 0)
+        except Exception:
+            max_budget = 0.0
+        budget = float(
+            new_ticket.get("budget")
+            or new_ticket.get("budget_usd")
+            or (budget_env or 0)
+        )
+        if max_budget > 0:
+            budget = min(budget, max_budget)
+        if budget > 0 and lev > 0:
+            dec = int(os.getenv("QTY_DECIMALS", "3") or 3)
+            calc_qty = (budget * lev) / float(price)
+            new_ticket["qty"] = _round_qty(calc_qty, dec)
 
-    # תנקה position_side= BOTH
+    # 4) נקה position_side="BOTH"
     ps = str(new_ticket.get("position_side") or new_ticket.get("positionSide") or "").upper()
     if ps == "BOTH":
         new_ticket.pop("positionSide", None)
