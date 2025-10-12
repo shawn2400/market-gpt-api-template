@@ -1,3 +1,4 @@
+```yaml
 services:
   - type: web
     name: algogpt-prod
@@ -52,10 +53,10 @@ services:
       - { key: CORS_ALLOW_CREDENTIALS, value: "0" }
 
       # ========================= Security / Hardening =========================
-      - { key: PROTECT_APPROVE_ROUTES,   value: "0" }
+      - { key: PROTECT_APPROVE_ROUTES,   value: "1" }
       - { key: PROTECT_DIGEST_ROUTES,    value: "1" }
       - { key: ENABLE_HSTS,              value: "1" }
-      - { key: SECURITY_PUBLIC_PATHS,    value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan/top-volume,/scan/now,/meta/version" }
+      - { key: SECURITY_PUBLIC_PATHS,    value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version" }
       - { key: SECURITY_PUBLIC_PREFIXES, value: "/public,/price,/static,/risk" }
 
       # ========================= Anti-Replay =========================
@@ -150,7 +151,7 @@ services:
       - { key: SCAN_CRON_TIMEFRAME,     value: "15m" }
       - { key: SCAN_CRON_KLINES,        value: "200" }
       - { key: SCAN_CRON_LIMIT,         value: "12" }
-      - { key: SCAN_CRON_MIN_SCORE,     value: "0" }     # תאשר ידנית בטלגרם
+      - { key: SCAN_CRON_MIN_SCORE,     value: "6.8" }     # תאשר ידנית בטלגרם אם צריך
       - { key: SCAN_REARM_SCORE,        value: "6" }
       - { key: SCAN_DEDUPE_WINDOW_SEC,  value: "300" }
       - { key: SCAN_TTL_SEC,            value: "900" }
@@ -316,6 +317,8 @@ services:
       - { key: INTERNAL_JWT_PUBLIC_KEY,     fromSecret: INTERNAL_JWT_PUBLIC_KEY }
       - { key: BINANCE_API_KEY,             fromSecret: BINANCE_API_KEY }
       - { key: BINANCE_API_SECRET,          fromSecret: BINANCE_API_SECRET }
+```
+
 
 
 
