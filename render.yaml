@@ -1,4 +1,3 @@
-
 services:
   - type: web
     name: algogpt-prod
@@ -7,7 +6,7 @@ services:
     plan: pro
     autoDeploy: false
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /meta/version   # fallback מהיר ויציב לבדיקת בריאות
+    healthCheckPath: /meta/version
 
     disk:
       name: data
@@ -24,11 +23,11 @@ services:
       - { key: APP_MODULE,             value: "main:app" }
       - { key: PYTHONPATH,             value: "/app" }
       - { key: WEB_CONCURRENCY,        value: "1" }
-      - { key: GUNICORN_TIMEOUT,       value: "180" }         # מרווח נשימה לעלייה ול־warmups
+      - { key: GUNICORN_TIMEOUT,       value: "180" }
       - { key: LOG_LEVEL,              value: "INFO" }
       - { key: UVICORN_ACCESS_LOG,     value: "false" }
       - { key: UVICORN_LOG_LEVEL,      value: "info" }
-      - { key: HTTP_MAX_CONNECTIONS,   value: "30" }          # להפחתת עומס חיבורים פתוחים
+      - { key: HTTP_MAX_CONNECTIONS,   value: "30" }
       - { key: HTTP_MAX_KEEPALIVE,     value: "200" }
 
       # ========================= Base URLs =========================
@@ -66,7 +65,7 @@ services:
       - { key: SIGNED_TS_MAX_SKEW_SEC,        value: "60" }
       - { key: SIGNED_NONCE_TTL_SEC,          value: "120" }
 
-      # ========================= Rate Limit (Backend/Public cache) =========================
+      # ========================= Rate Limit / Public cache =========================
       - { key: RATE_LIMIT_ENABLE,       value: "1" }
       - { key: RL_FAIL_OPEN,            value: "0" }
       - { key: RATE_LIMIT_BACKEND,      value: "redis" }
@@ -95,7 +94,7 @@ services:
 
       # ========================= Exchange Defaults =========================
       - { key: DEFAULT_MARKET,              value: "futures" }
-      - { key: POSITION_MODE_OVERRIDE,      value: "hedge" }   # dual-side
+      - { key: POSITION_MODE_OVERRIDE,      value: "hedge" }
       - { key: BINANCE_MARGIN_TYPE_DEFAULT, value: "ISOLATED" }
       - { key: BINANCE_FUTURES_HTTP_BASE,   value: "https://fapi.binance.com" }
       - { key: BINANCE_FUTURES_WS_BASE,     value: "wss://fstream.binance.com" }
@@ -151,7 +150,7 @@ services:
       - { key: SCAN_CRON_TIMEFRAME,     value: "15m" }
       - { key: SCAN_CRON_KLINES,        value: "200" }
       - { key: SCAN_CRON_LIMIT,         value: "12" }
-      - { key: SCAN_CRON_MIN_SCORE,     value: "6.8" }     # תאשר ידנית בטלגרם אם צריך
+      - { key: SCAN_CRON_MIN_SCORE,     value: "6.8" }
       - { key: SCAN_REARM_SCORE,        value: "6" }
       - { key: SCAN_DEDUPE_WINDOW_SEC,  value: "300" }
       - { key: SCAN_TTL_SEC,            value: "900" }
@@ -289,7 +288,7 @@ services:
       - { key: GUARDER_INTERVAL_SEC,        value: "45" }
 
       # ========================= Misc / Storage / Metrics =========================
-      - { key: ROUTES_ONLY,                 value: "" }         # ריק = טוען את כל הראוטים
+      - { key: ROUTES_ONLY,                 value: "" }
       - { key: METRICS_ENABLE,              value: "true" }
       - { key: PNL_TRACKING,                value: "true" }
       - { key: PARAMS_DIR,                  value: "params/optimized" }
@@ -317,6 +316,7 @@ services:
       - { key: INTERNAL_JWT_PUBLIC_KEY,     fromSecret: INTERNAL_JWT_PUBLIC_KEY }
       - { key: BINANCE_API_KEY,             fromSecret: BINANCE_API_KEY }
       - { key: BINANCE_API_SECRET,          fromSecret: BINANCE_API_SECRET }
+
 
 
 
