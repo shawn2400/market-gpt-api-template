@@ -114,7 +114,7 @@ REDIS_URL = os.getenv("REDIS_URL", "").strip()
 REQUIRE_REDIS = os.getenv("REQUIRE_REDIS", "1").lower() in ("1", "true", "yes", "on")
 CONFIRMSTORE_ENABLE = os.getenv("CONFIRMSTORE_ENABLE", "0").lower() in ("1", "true", "yes", "on")
 
-# ====== Public Cache & Rate limit config (NEW) ======
+# ====== Public Cache & Rate limit config ======
 PUBLIC_CACHE_MAX_AGE = int(os.getenv("PUBLIC_CACHE_MAX_AGE", "20") or "20")
 PUBLIC_CACHE_PATHS = [p.strip() for p in (os.getenv("PUBLIC_CACHE_PATHS", "/scan/public-topk,/scan/public-now,/topk").split(",")) if p.strip()]
 RATE_LIMIT_ENABLE = os.getenv("RATE_LIMIT_ENABLE", "1").lower() in ("1", "true", "yes", "on")
@@ -123,7 +123,7 @@ PUBLIC_TOPK_WINDOW = int(os.getenv("PUBLIC_TOPK_WINDOW", "3") or "3")
 PUBLIC_NOW_RPS = int(os.getenv("PUBLIC_NOW_RPS", "2") or "2")
 PUBLIC_NOW_WINDOW = int(os.getenv("PUBLIC_NOW_WINDOW", "3") or "3")
 
-# Digest to Telegram (NEW)
+# Digest config
 PUBLIC_TOPK_DIGEST_ENABLE = os.getenv("PUBLIC_TOPK_DIGEST_ENABLE", "0").lower() in ("1", "true", "yes", "on")
 PUBLIC_TOPK_DIGEST_EVERY_SEC = int(os.getenv("PUBLIC_TOPK_DIGEST_EVERY_SEC", "300") or "300")
 PUBLIC_TOPK_DIGEST_K = int(os.getenv("PUBLIC_TOPK_DIGEST_K", "5") or "5")
@@ -135,32 +135,64 @@ OPS_TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))
 ETA_SMART_ENABLE = os.getenv("ETA_SMART_ENABLE", "1").lower() in ("1", "true", "yes", "on")
 ETA_VELOCITY_WINDOW = int(os.getenv("ETA_VELOCITY_WINDOW", "30"))
 TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1")).split(",") if t.strip()]
+
+# HMAC secret for signed links
 HMAC_SECRET = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
 
-TP_LADDER_ON_APPROVE = os.getenv("TP_LADDER_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on")
-PROTECT_APPROVE_ROUTES = os.getenv("PROTECT_APPROVE_ROUTES", "1").lower() in ("1", "true", "yes", "on")
-PROTECT_DIGEST_ROUTES = os.getenv("PROTECT_DIGEST_ROUTES", "1").lower() in ("1", "true", "yes", "on")
-APPROVE_FALLBACK_TO_MARKET = not (os.getenv("PROPOSE_BLOCK_ON_FAIL", "0").lower() in ("1", "true", "yes", "on"))
+# ==================== Security helpers ====================
+def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
+    key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text) == 64 else secret_hex_or_text.encode("utf-8")
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600, action: Optional[str] = None) -> str:
+    """
+    Returns:
+      - with secret: {base}{path}?ticket_id=...&exp=...&sig=...
+      - without secret: routes to Bearer-protected endpoint by action:
+          approve -> /ops/approve
+          reject  -> /ops/reject
+          preview -> /ops/ui/ticket
+    """
+    if not HMAC_SECRET:
+        route = "/ops/ui/ticket"
+        if action == "approve": route = "/ops/approve"
+        elif action == "reject": route = "/ops/reject"
+        sep = "&" if "?" in route else "?"
+        return f"{base}{route}{sep}ticket_id={ticket_id}"
+
+    exp = int(time.time()) + int(ttl_sec)
+    to_sign = f"{path}|{ticket_id}|{exp}|{NS}".encode("utf-8")
+    sig = _sign_hex(HMAC_SECRET, to_sign)
+    sep = "&" if "?" in path else "?"
+    return f"{base}{path}{sep}ticket_id={ticket_id}&exp={exp}&sig={sig}"
+
+def _verify_signed_params(ticket_id: str, exp: str, sig: str, path: str) -> bool:
+    if not (HMAC_SECRET and ticket_id and exp and sig):
+        return False
+    try:
+        exp_i = int(exp)
+        if exp_i < int(time.time()):
+            return False
+    except Exception:
+        return False
+    expected = _sign_hex(HMAC_SECRET, f"{path}|{ticket_id}|{exp}|{NS}".encode("utf-8"))
+    return hmac.compare_digest(expected, sig)
 
 # ==================== Simple ConfirmStore (in-memory fallback) ====================
 class ConfirmStore:
     _items: Dict[str, Dict[str, Any]] = {}
-
     @classmethod
     def create(cls, req: Dict[str, Any]) -> None:
         tid = str(req.get("ticket_id") or f"T_{int(time.time())}_{secrets.token_hex(3)}")
         cls._items[tid] = {"ticket_id": tid, "req": dict(req), "ts": time.time(), "approved": None}
-
     @classmethod
     def decide(cls, ticket_id: str, approved: bool) -> None:
         it = cls._items.get(str(ticket_id))
         if it:
             it["approved"] = bool(approved)
-
     @classmethod
     def pending(cls) -> List[Dict[str, Any]]:
         return [v for v in cls._items.values() if v.get("approved") is None]
-
     @classmethod
     def remove(cls, ticket_id: str) -> None:
         cls._items.pop(str(ticket_id), None)
@@ -212,11 +244,8 @@ async def _security_headers(request: Request, call_next):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
     return resp
 
-# ==================== Public Rate Limit middleware (NEW) ====================
+# ==================== Public Rate Limit middleware ====================
 async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
-    """
-    Returns True if over limit (i.e., should block).
-    """
     key = f"{NS}:rl:{path_key}:{ip}"
     try:
         r = await _get_redis_cached()
@@ -230,8 +259,6 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
             return int(cur) > int(limit)
     except Exception as e:
         logger.debug("rate_limit_redis_fallback: %s", e)
-
-    # in-memory fallback (best-effort)
     bucket = getattr(app.state, "rl_mem", None)
     if bucket is None:
         bucket = {}
@@ -249,15 +276,11 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
 async def _public_rate_limit(request: Request, call_next):
     if not RATE_LIMIT_ENABLE:
         return await call_next(request)
-
     p = request.url.path
     method = request.method.upper()
     if method != "GET":
         return await call_next(request)
-
     ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
-
-    # map per path → (rps, window)
     rules = {
         "/scan/public-topk": (PUBLIC_TOPK_RPS, PUBLIC_TOPK_WINDOW),
         "/scan/public-now": (PUBLIC_NOW_RPS, PUBLIC_NOW_WINDOW),
@@ -271,7 +294,7 @@ async def _public_rate_limit(request: Request, call_next):
             break
     return await call_next(request)
 
-# ==================== Public Cache/Etag middleware (NEW) ====================
+# ==================== Public Cache/Etag middleware ====================
 def _should_public_cache(path: str) -> bool:
     for prefix in PUBLIC_CACHE_PATHS:
         if path.startswith(prefix):
@@ -285,10 +308,8 @@ async def _public_cache_etag(request: Request, call_next):
     path = request.url.path
     if not _should_public_cache(path):
         return await call_next(request)
-
     resp: Response = await call_next(request)
     try:
-        # don't override if already present
         if "cache-control" not in (k.lower() for k in resp.headers.keys()):
             resp.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_MAX_AGE}"
         body = b""
@@ -299,7 +320,6 @@ async def _public_cache_etag(request: Request, call_next):
         etag = '"' + hashlib.md5(body).hexdigest() + '"'
         if "etag" not in (k.lower() for k in resp.headers.keys()):
             resp.headers["ETag"] = etag
-
         inm = request.headers.get("If-None-Match")
         if inm and inm == etag and resp.status_code == 200:
             fresh = Response(status_code=304)
@@ -428,10 +448,6 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
     return None
 
 # ==================== Misc helpers ====================
-def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
-    key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text) == 64 else secret_hex_or_text.encode("utf-8")
-    return hmac.new(key, payload, hashlib.sha256).hexdigest()
-
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
 def _parse_mode(note: Optional[str]) -> Optional[str]:
     if not note:
@@ -485,7 +501,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         from binance.client import Client  # type: ignore
     except Exception as e:
         return {"ok": False, "error": "binance_client_import_failed", "detail": str(e)}
-
     try:
         api_key = os.getenv("BINANCE_API_KEY", "").strip()
         api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
@@ -493,17 +508,14 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": False, "error": "binance_keys_missing"}
         client = Client(api_key, api_sec)
         _align_position_mode(client)
-
         symbol = str(ticket.get("symbol", "")).upper()
         side = str(ticket.get("side", "")).upper()
         qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
         leverage = int(ticket.get("leverage") or 1)
         if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
-
         with suppress(Exception):
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
-
         base_kwargs: Dict[str, Any] = {
             "symbol": symbol, "side": side, "type": "MARKET", "quantity": qty,
             "newClientOrderId": build_client_order_id(symbol, side, role="ENTRY"),
@@ -512,7 +524,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         attempt_order = dict(base_kwargs)
         if pos_side_supplied in ("LONG", "SHORT"):
             attempt_order["positionSide"] = pos_side_supplied
-
         try:
             order = client.futures_create_order(**attempt_order)
             return {"ok": True, "exchange": "binance_futures", "order": order}
@@ -544,21 +555,17 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
             execute_trade_live = _x
     if execute_trade_live is None:
         return {"ok": False, "error": "execute_trade_live_missing"}
-
     symbol = (ticket.get("symbol") or "").upper()
     side = (ticket.get("side") or "").upper()
     qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
     leverage = int(ticket.get("leverage") or ticket.get("lev") or 0)
     raw_ps = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
     pos_side = raw_ps if raw_ps in ("LONG", "SHORT") else ("LONG" if side == "BUY" else "SHORT")
-
     tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
     tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0", "0.0") and float(x) > 0]
     sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
-
     if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
         return {"ok": False, "error": "bad_ticket_params"}
-
     base_kwargs: Dict[str, Any] = dict(
         symbol=symbol, side=side, budget=None, leverage=leverage, dry_run=False, quantity=qty,
         entry=None, tp_targets=tp_targets or None, sl_targets=sl_targets or None,
@@ -573,25 +580,18 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
 
-# ==================== Smart manage after approve ====================
-async def _smart_manage_now(
-    symbol: str,
-    offset_bps: Optional[int] = None,
-    pcts: Optional[List[float]] = None,
-    splits: Optional[List[float]] = None,
-    atr_mult: Optional[float] = None,
-) -> Dict[str, Any]:
+# ==================== Smart manage etc. ====================
+async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
+                            pcts: Optional[List[float]] = None, splits: Optional[List[float]] = None,
+                            atr_mult: Optional[float] = None) -> Dict[str, Any]:
     base = get_internal_base()
     token = API_BEARER_TOKEN
     if not token:
         return {"ok": False, "skipped": True, "reason": "missing token"}
     body: Dict[str, Any] = {"symbol": symbol}
-    if offset_bps is not None:
-        body["offset_bps"] = offset_bps
-    if pcts is not None:
-        body["pcts"] = pcts
-    if splits is not None:
-        body["splits"] = splits
+    if offset_bps is not None: body["offset_bps"] = offset_bps
+    if pcts is not None: body["pcts"] = pcts
+    if splits is not None: body["splits"] = splits
     if atr_mult is not None:
         body["callback_rate"] = None
         body["atr_mult"] = atr_mult
@@ -652,7 +652,7 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
 router = APIRouter(tags=["ops-approval"])
 
 def _require_bearer(request: Request) -> None:
-    if not PROTECT_APPROVE_ROUTES:
+    if os.getenv("PROTECT_APPROVE_ROUTES", "1").lower() not in ("1", "true", "yes", "on"):
         return
     if not API_BEARER_TOKEN:
         raise HTTPException(status_code=503, detail="Route protection enabled but API_BEARER_TOKEN missing")
@@ -810,9 +810,9 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
             persisted = True
 
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
-    approve_url = f"{base}/ops/approve?ticket_id={tid}" if base else ""
-    reject_url = f"{base}/ops/reject?ticket_id={tid}" if base else ""
-    preview_url = f"{base}/ops/ui/ticket?ticket_id={tid}" if base else ""
+    preview_url = _build_signed_link(base, "/ops/ui/ticket/signed", tid, ttl_sec=900, action="preview")
+    approve_url = _build_signed_link(base, "/ops/approve/signed", tid, ttl_sec=900, action="approve")
+    reject_url  = _build_signed_link(base, "/ops/reject/signed",  tid, ttl_sec=900, action="reject")
 
     lines = [
         "⚠️ <b>Approval Needed</b>",
@@ -855,7 +855,26 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
     mode = _parse_mode(ticket.get("note"))
     if mode in ("MARKET", "HYBRID", "AUTO"):
         return mode
-    return "HYBRID" if TP_LADDER_ON_APPROVE else "MARKET"
+    return "HYBRID" if os.getenv("TP_LADDER_ON_APPROVE", "1").lower() in ("1","true","yes","on") else "MARKET"
+
+def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLResponse:
+    approve_url = _build_signed_link(base, "/ops/approve/signed", ticket_id, ttl_sec=900, action="approve")
+    reject_url  = _build_signed_link(base, "/ops/reject/signed",  ticket_id, ttl_sec=900, action="reject")
+    body = (
+        "<!doctype html><meta charset='utf-8'>"
+        "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.45'>"
+        f"<h2 style='margin:0 0 1rem 0'>Ticket Preview · <code>{_md_html(ticket_id)}</code></h2>"
+        "<div style='margin:.5rem 0 1rem 0'>"
+        f"<a href='{approve_url}' style='display:inline-block;padding:.6rem 1rem;background:#16a34a;color:#fff;border-radius:9px;text-decoration:none'>✅ Approve</a>"
+        f"<a href='{reject_url}' style='display:inline-block;padding:.6rem 1rem;background:#dc2626;color:#fff;border-radius:9px;text-decoration:none;margin-left:.6rem'>❌ Reject</a>"
+        "</div>"
+        "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
+        f"{_rows_kv_html(rec)}"
+        "</table>"
+        "<p style='color:#777;margin-top:1rem'>טיפ: ניתן לאשר/לדחות גם מהטלגרם.</p>"
+        "</body>"
+    )
+    return HTMLResponse(body)
 
 @router.get("/ops/ui/ticket")
 async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
@@ -870,47 +889,60 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     if not rec:
         return _html("⚠️ לא נמצא כרטיס או שפג תוקפו.")
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
-    approve_url = f"{base}/ops/approve?ticket_id={ticket_id}"
-    reject_url = f"{base}/ops/reject?ticket_id={ticket_id}"
-    body = (
-        "<!doctype html><meta charset='utf-8'>"
-        "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.45'>"
-        f"<h2 style='margin:0 0 1rem 0'>Ticket Preview · <code>{_md_html(ticket_id)}</code></h2>"
-        "<div style='margin:.5rem 0 1rem 0'>"
-        f"<a href='{approve_url}' style='display:inline-block;padding:.6rem 1rem;background:#16a34a;color:#fff;border-radius:9px;text-decoration:none'>✅ Approve</a>"
-        f"<a href='{reject_url}' style='display:inline-block;padding:.6rem 1rem;background:#dc2626;color:#fff;border-radius:9px;text-decoration:none;margin-left:.6rem'>❌ Reject</a>"
-        "</div>"
-        "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
-        f"{_rows_kv_html(rec)}"
-        "</table>"
-        "<p style='color:#777;margin-top:1rem'>טיפ: ניתן לקרוא/לאשר גם מהטלגרם.</p>"
-        "</body>"
-    )
-    return HTMLResponse(body)
+    return _render_ticket_html(ticket_id, rec, base)
+
+# --- Signed public preview (no Bearer; signature required) ---
+@router.get("/ops/ui/ticket/signed")
+async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
+    if not _verify_signed_params(ticket_id, exp, sig, "/ops/ui/ticket/signed"):
+        raise HTTPException(status_code=401, detail="Bad or expired signature")
+    rec, _ = await _load_ticket(ticket_id)
+    if not rec:
+        return _html("⚠️ לא נמצא כרטיס או שפג תוקפו.")
+    base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
+    return _render_ticket_html(ticket_id, rec, base)
 
 def _maybe_protect_routes(request: Request) -> None:
-    if not PROTECT_APPROVE_ROUTES:
-        return
     _require_bearer(request)
 
+# ======= APPROVE/REJECT (Bearer-protected) =======
 @router.get("/ops/approve")
 async def approve(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
     _maybe_protect_routes(request)
+    return await _approve_core(ticket_id)
+
+@router.get("/ops/reject")
+async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
+    _maybe_protect_routes(request)
+    return await _reject_core(ticket_id)
+
+# ======= APPROVE/REJECT SIGNED (no Bearer; signature required) =======
+@router.get("/ops/approve/signed")
+async def approve_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
+    if not _verify_signed_params(ticket_id, exp, sig, "/ops/approve/signed"):
+        raise HTTPException(status_code=401, detail="Bad or expired signature")
+    return await _approve_core(ticket_id)
+
+@router.get("/ops/reject/signed")
+async def reject_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
+    if not _verify_signed_params(ticket_id, exp, sig, "/ops/reject/signed"):
+        raise HTTPException(status_code=401, detail="Bad or expired signature")
+    return await _reject_core(ticket_id)
+
+# ======= CORE handlers (shared) =======
+async def _approve_core(ticket_id: str):
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור.")
-
     with suppress(Exception):
         for k in ("blocked_by_rr_min", "blocked_by_velocity", "velocity_error"):
             ticket.pop(k, None)
-
     t2 = await _apply_auto_qty_on_ticket_async(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
     ticket = t2
     if float(ticket.get("qty") or 0) <= 0 or int(ticket.get("leverage") or 0) <= 0:
         return _html("⚠️ שגיאה: qty/leverage חסרים גם לאחר ניסיון חישוב אוטומטי.")
-
     flow = _decide_flow_by_mode(ticket)
     exec_res = await (
         _execute_trade(ticket) if flow == "MARKET"
@@ -919,22 +951,10 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
               else _execute_trade(ticket))
     )
     ok = bool(exec_res.get("ok"))
-
-    if (not ok) and flow in ("HYBRID", "AUTO") and APPROVE_FALLBACK_TO_MARKET:
+    if (not ok) and flow in ("HYBRID", "AUTO") and (os.getenv("PROPOSE_BLOCK_ON_FAIL","0").lower() not in ("1","true","yes","on")):
         retry_res = await _execute_trade(ticket)
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
-
-    if ok:
-        with suppress(Exception):
-            sm = _smart_manage_env()
-            if sm["enable"]:
-                sym = str(ticket.get("symbol", "")).upper()
-                await _smart_manage_now(sym, offset_bps=sm["offset_bps"], pcts=sm["pcts"], splits=sm["splits"], atr_mult=sm["atr_mult"])
-        with suppress(Exception):
-            from utils.guard_stop import ensure_protective_stop  # type: ignore
-            ensure_protective_stop(str(ticket.get("symbol", "")).upper(), prefer_mode="quantities")
-
     with suppress(Exception):
         sym, side, qty = ticket.get("symbol", ""), ticket.get("side", ""), ticket.get("qty", "")
         msg = (
@@ -946,18 +966,10 @@ async def approve(ticket_id: str = Query(..., description="ticket_id"), request:
             f"שגיאה: <code>{_md_html(json.dumps(exec_res, ensure_ascii=False))}</code>"
         )
         await _send_telegram_html(msg)
-
     await _delete_ticket(ticket_id, source, final_status=ok)
     return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.") if ok else _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
 
-@router.get("/ops/approve-link")
-async def approve_link(id: str = Query(..., description="ticket_id"), request: Request = None):
-    return await approve(ticket_id=id, request=request)
-
-# ============ explicit reject endpoints ============
-@router.get("/ops/reject")
-async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
-    _maybe_protect_routes(request)
+async def _reject_core(ticket_id: str):
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור/דחייה.")
@@ -969,53 +981,41 @@ async def reject(ticket_id: str = Query(..., description="ticket_id"), request: 
     await _delete_ticket(ticket_id, source, final_status=False)
     return _html("⛔️ נדחה — הכרטיס הוסר.")
 
-@router.get("/ops/reject-link")
-async def reject_link(id: str = Query(..., description="ticket_id"), request: Request = None):
-    return await reject(ticket_id=id, request=request)
-
-# ==================== Real-time TRADE EVENTS (TP/SL etc.) ====================
+# ==================== Real-time TRADE EVENTS ====================
 @router.post("/ops/trade-event")
 async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = None):
-    _maybe_protect_routes(request)
+    _require_bearer(request)
     etype = str(payload.get("event") or "").upper().strip()
     symbol = str(payload.get("symbol") or "").upper()
     side = str(payload.get("side") or "").upper()
     desc = payload.get("desc") or payload.get("description") or ""
     extra = payload.get("extra") or {}
-
     if not etype or not symbol:
         raise HTTPException(status_code=422, detail="Missing event or symbol")
-
     lines = [f"📣 <b>Trade update</b> · <code>{_md_html(symbol)}</code>"]
-    if side:
-        lines.append(f"• Side: <code>{_md_html(side)}</code>")
+    if side: lines.append(f"• Side: <code>{_md_html(side)}</code>")
     lines.append(f"• Event: <b>{_md_html(etype)}</b>")
-    if "price" in payload:
-        lines.append(f"• Price: <code>{_md_html(payload['price'])}</code>")
-    if "qty" in payload:
-        lines.append(f"• Qty: <code>{_md_html(payload['qty'])}</code>")
+    if "price" in payload: lines.append(f"• Price: <code>{_md_html(payload['price'])}</code>")
+    if "qty" in payload: lines.append(f"• Qty: <code>{_md_html(payload['qty'])}</code>")
     if "lev" in payload or "leverage" in payload:
         lv = payload.get("lev", payload.get("leverage"))
         lines.append(f"• Lev: <code>{_md_html(lv)}</code>")
-    if desc:
-        lines.append(f"• Note: {_md_html(desc)}")
+    if desc: lines.append(f"• Note: {_md_html(desc)}")
     if extra:
         try:
             trimmed = json.dumps(extra, ensure_ascii=False)[:400]
             lines.append(f"• Extra: <code>{_md_html(trimmed)}</code>")
         except Exception:
             pass
-
     await _send_telegram_html("\n".join(lines))
     return {"ok": True}
 
-# ==================== Digest endpoints ====================
+# ==================== Digest/UI/etc. ====================
 @router.get("/ops/ui/pending")
 async def ui_pending(request: Request = None):
     _require_bearer(request)
     base = PUBLIC_HOST if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     items: List[Dict[str, Any]] = []
-
     if aioredis and REDIS_URL:
         with suppress(Exception):
             r = await _get_redis_cached()
@@ -1033,15 +1033,12 @@ async def ui_pending(request: Request = None):
                         items.append(req)
                     if cursor == 0:
                         break
-
     if CONFIRMSTORE_ENABLE:
         with suppress(Exception):
             for it in ConfirmStore.pending() or []:
                 items.append(it.get("req") or it)
-
     if not items:
         return _html("אין כרטיסים ממתינים כרגע.")
-
     rows = []
     for t in items:
         raw_tid = str(t.get("ticket_id", ""))
@@ -1055,7 +1052,6 @@ async def ui_pending(request: Request = None):
             f"<td style='padding:.4rem .6rem'>{_md_html(str(t.get('leverage','')))}</td>"
             f"</tr>"
         )
-
     body = (
         "<!doctype html><meta charset='utf-8'>"
         "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.5'>"
@@ -1079,14 +1075,12 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
         from utils.guard_stop import ensure_protective_stop  # type: ignore
     except Exception:
         raise HTTPException(status_code=501, detail="ensure_protective_stop() not available")
-
     if isinstance(symbols, str) and symbols.strip():
         sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
     else:
         sym_list = WATCHLIST[:]
     if not sym_list:
         raise HTTPException(status_code=400, detail="no symbols to check")
-
     results: Dict[str, Any] = {}
     emergencies: List[str] = []
     for s in sym_list:
@@ -1103,36 +1097,29 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
                 emergencies.append(s)
         except Exception as e:
             results[s] = {"ok": False, "error": str(e)}
-
     if emergencies and not ONLY_TRADE_NOTIFICATIONS:
         await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>" + ",".join(emergencies) + "</code>")
     return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
 
 @router.get("/ops/digest/expired")
 async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = None):
-    PROTECT_DIGEST_ROUTES = os.getenv("PROTECT_DIGEST_ROUTES", "1").lower() in ("1", "true", "yes", "on")
-    if PROTECT_DIGEST_ROUTES:
+    if os.getenv("PROTECT_DIGEST_ROUTES", "1").lower() in ("1","true","yes","on"):
         _require_bearer(request)
     if not (aioredis and REDIS_URL and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID):
         return {"ok": False, "error": "digest_dependencies_missing"}
-
     try:
         r = await _get_redis_cached()
         if not r:
             return {"ok": False, "error": "redis_unavailable"}
-
         key_good = f"{NS}:expired_log"
         key_bad = f"{NS}:expired_log_bad"
-
         items: List[str] = []
         with suppress(Exception):
             items.extend(await r.lrange(key_good, 0, 2000) or [])
         with suppress(Exception):
             items.extend(await r.lrange(key_bad, 0, 2000) or [])
-
         now = time.time()
         since = now - (hours * 3600)
-
         events: List[Dict[str, Any]] = []
         for it in items:
             try:
@@ -1146,7 +1133,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
         if total == 0:
             await _send_telegram_html(f"ℹ️ No expired approvals in last {hours}h.")
             return {"ok": True, "sent": True, "count": 0}
-
         by_sym: Counter = Counter((str(e.get("symbol", "")).upper(), str(e.get("side", "")).upper()) for e in events)
         lines = [f"⏱️ <b>Expired approvals</b> (last {hours}h) · total: <b>{total}</b>"]
         for (sym, side), cnt in by_sym.most_common(20):
@@ -1199,7 +1185,6 @@ except Exception as e:
     logger.warning("scan router not loaded: %s", e)
 
 try:
-    # כולל גם את הראוטר הציבורי
     from routes.scan_top_volume import router as scan2_router, public_router as scan2_public  # type: ignore
     app.include_router(scan2_router)
     app.include_router(scan2_public)
@@ -1212,31 +1197,27 @@ try:
 except Exception as e:
     logger.warning("topk router not loaded: %s", e)
 
-# health router המאוחד
 try:
     from routes.health import router as health_router  # type: ignore
     app.include_router(health_router)
 except Exception as e:
     logger.warning("health router not loaded: %s", e)
 
-# readyz router (GET/HEAD) — קובץ נפרד
 try:
     from routes.readyz import router as readyz_router  # type: ignore
     app.include_router(readyz_router)
 except Exception as e:
     logger.warning("readyz router not loaded: %s", e)
 
-# === meta router (תיקון 500, כולל fallbackים) ===
 try:
     from routes.meta import router as meta_router  # type: ignore
     app.include_router(meta_router, tags=["meta"])
 except Exception as e:
     logger.warning("meta router not loaded: %s", e)
 
-# ops-approval (הרואטר המקומי של הקובץ הנוכחי)
 app.include_router(router)
 
-# ==================== Meta endpoints (root & debug only) ====================
+# ==================== Meta & Fallbacks ====================
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
     name = os.getenv("APP_NAME", "algogpt")
@@ -1246,17 +1227,10 @@ def root() -> str:
 def root_head() -> str:
     return ""
 
-# --- Fallback health/meta (zero-deps) ---
 @app.get("/meta/version", tags=["meta"])
 def meta_version_fallback():
-    return {
-        "name": os.getenv("APP_NAME", "algogpt"),
-        "version": os.getenv("ALGOGPT_VERSION", "dev"),
-        "ts": int(time.time()),
-        "ok": True,
-    }
+    return {"name": os.getenv("APP_NAME", "algogpt"), "version": os.getenv("ALGOGPT_VERSION", "dev"), "ts": int(time.time()), "ok": True}
 
-# <<< NEW: HEAD for /meta/version >>>
 @app.head("/meta/version", tags=["meta"])
 def meta_version_head():
     return PlainTextResponse("", status_code=200)
@@ -1266,9 +1240,17 @@ def health_fallback():
     boot = getattr(app.state, "boot_ts", None)
     return {"ok": True, "uptime_sec": int(time.time() - (boot or time.time()))}
 
-# <<< NEW: HEAD for /health >>>
 @app.head("/health", tags=["meta"])
 def health_head():
+    return PlainTextResponse("", status_code=200)
+
+# --- Fallback readyz (zero-deps) ---
+@app.get("/readyz", tags=["meta"])
+def readyz_fallback():
+    return PlainTextResponse("ok", status_code=200)
+
+@app.head("/readyz", tags=["meta"])
+def readyz_head():
     return PlainTextResponse("", status_code=200)
 
 @app.get("/debug/env", tags=["debug"])
@@ -1295,242 +1277,20 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content=payload)
 
 # ==================== Startup / Shutdown ====================
-_manager_lock = asyncio.Lock()
-_manager_backoff = 0.0
-
-async def _public_topk_digest_loop():
-    if not PUBLIC_TOPK_DIGEST_ENABLE:
-        return
-    if not (TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID):
-        logger.info("public_topk_digest: telegram not configured; skipping")
-        return
-    base = get_internal_base()
-    cli = _get_shared_async_client()
-    every = max(30, int(PUBLIC_TOPK_DIGEST_EVERY_SEC))
-    await asyncio.sleep(5.0)
-    logger.info("public_topk_digest: started (every=%ss)", every)
-    try:
-        while True:
-            try:
-                params = {
-                    "k": str(PUBLIC_TOPK_DIGEST_K),
-                    "min_score": str(PUBLIC_TOPK_DIGEST_MIN_SCORE),
-                    "require_side": "true" if PUBLIC_TOPK_DIGEST_REQUIRE_SIDE else "false",
-                }
-                r = await cli.get(f"{base}/scan/public-topk", params=params, timeout=httpx.Timeout(12.0))
-                if r.status_code < 400:
-                    data = {}
-                    with suppress(Exception):
-                        data = r.json()
-                    items = data.get("items") or data.get("topk") or data.get("result") or []
-                    if items:
-                        lines = [f"🧪 <b>Top-K Scan</b> · k=<code>{PUBLIC_TOPK_DIGEST_K}</code> min_score=<code>{PUBLIC_TOPK_DIGEST_MIN_SCORE}</code>"]
-                        for it in items[:PUBLIC_TOPK_DIGEST_K]:
-                            sym = str(it.get("symbol") or it.get("sym") or "").upper()
-                            side = (str(it.get("side") or "")).upper() or "—"
-                            score = it.get("score") or it.get("rank") or ""
-                            extra = ""
-                            if PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS:
-                                with suppress(Exception):
-                                    adx = it.get("adx")
-                                    atr = it.get("atr_pct") or it.get("atr")
-                                    if adx is not None:
-                                        extra += f" adx={adx}"
-                                    if atr is not None:
-                                        extra += f" atr%={atr}"
-                            lines.append(f"• {sym} {side}  score=<code>{score}</code>{_md_html(extra)}")
-                        await _send_telegram_html("\n".join(lines))
-                else:
-                    logger.warning("public_topk_digest: bad status %s %s", r.status_code, r.text[:200])
-            except Exception as e:
-                logger.warning("public_topk_digest_error: %s", e)
-            await asyncio.sleep(every)
-    except asyncio.CancelledError:
-        logger.info("public_topk_digest: cancelled")
-        raise
-
 @app.on_event("startup")
 async def _startup_tasks():
     if getattr(app.state, "bg_started", False):
         logger.info("startup: background already started – skipping")
         return
     app.state.bg_started = True
-
-    # uptime anchor for /health
     app.state.boot_ts = time.time()
-
     _ = _get_shared_async_client()
-
-    # ensure webhook, but never block startup
     async def _late_webhook():
         with suppress(Exception):
             if TELEGRAM_AUTO_WEBHOOK:
                 await asyncio.sleep(1.0)
                 await _ensure_telegram_webhook()
     asyncio.create_task(_late_webhook())
-
-    async def _notify_bot_online():
-        with suppress(Exception):
-            if not STARTUP_NOTIFY_ENABLE:
-                return
-            await asyncio.sleep(0.7)
-            name = APP_TITLE
-            env = os.getenv("ENV", os.getenv("ENVIRONMENT", "prod"))
-            await _send_telegram_html(f"🟢 <b>Bot online</b> · <code>{name}</code> · env=<code>{env}</code>")
-    asyncio.create_task(_notify_bot_online())
-
-    # HEALTH TP1 background (אם נטען המודול והדגל פעיל)
-    try:
-        from utils.health_tp1 import health_check_tp1_tags  # type: ignore
-        _health_tp1_loaded = True
-    except Exception:
-        _health_tp1_loaded = False
-    if _health_tp1_loaded and HEALTH_TP1_ENABLE:
-        watch = WATCHLIST[:]
-        if watch:
-            async def _run_health():
-                try:
-                    await health_check_tp1_tags(watch, interval_sec=int(os.getenv("HEALTH_TP1_INTERVAL_SEC", "600")))
-                except asyncio.CancelledError:
-                    logger.info("health_tp1 background: cancelled")
-                    raise
-                except Exception as e:
-                    logger.warning("health_tp1 background error: %s", e)
-            asyncio.create_task(_run_health())
-            logger.info(
-                "health_tp1 background started (interval=%ss, symbols=%s)",
-                int(os.getenv("HEALTH_TP1_INTERVAL_SEC", "600")),
-                ",".join(watch),
-            )
-
-    async def periodic_manager():
-        global _manager_backoff
-        await asyncio.sleep(2.0)
-        token = API_BEARER_TOKEN
-        if not token:
-            logger.info("periodic_manager: missing API_BEARER_TOKEN; skipping")
-            return
-        syms = WATCHLIST[:]
-        if not syms:
-            return
-        base = get_internal_base()
-        every_sec = max(10, int(os.getenv("TRADE_MANAGER_INTERVAL_SEC", "60")))
-        per_req_timeout = httpx.Timeout(15.0)
-
-        # PRE-FLIGHT: ודא שיש endpoint לפני שמתחילים לולאה
-        try:
-            cli = _get_shared_async_client()
-            probe = await cli.options(f"{base}/manage-once", timeout=httpx.Timeout(10.0))
-            if probe.status_code not in (200, 204, 400, 401, 405):
-                logger.warning("periodic_manager: /manage-once not available (status=%s) -> skipping loop", probe.status_code)
-                return
-        except Exception as e:
-            logger.warning("periodic_manager: probe failed (%r) -> skipping loop", e)
-            return
-
-        try:
-            while True:
-                sleep_extra = _manager_backoff
-                if sleep_extra > 0:
-                    await asyncio.sleep(sleep_extra)
-                async with _manager_lock:
-                    try:
-                        cli = _get_shared_async_client()
-                        for s in syms:
-                            r = await cli.post(
-                                f"{base}/manage-once",
-                                headers={"Authorization": f"Bearer {token}"},
-                                json={"symbol": s},
-                                timeout=per_req_timeout,
-                            )
-                            if r.status_code < 400:
-                                _manager_backoff = max(0.0, _manager_backoff * 0.5 - 2.0)
-                            elif r.status_code in (429, 500, 502, 503, 504):
-                                _manager_backoff = min((_manager_backoff or 0) * 1.6 + 5, 90)
-                                logger.warning("periodic_manager_backoff: status=%s backoff=%ss", r.status_code, _manager_backoff)
-                            else:
-                                logger.warning("periodic_manager_unexpected_status: %s %s", r.status_code, r.text[:200])
-                    except Exception as e:
-                        _manager_backoff = min((_manager_backoff or 0) * 1.5 + 5, 90)
-                        logger.warning("periodic_manager_error: %r (backoff now %.1fs)", e, _manager_backoff)
-                await asyncio.sleep(every_sec)
-        except asyncio.CancelledError:
-            logger.info("periodic_manager: cancelled")
-            raise
-    if os.getenv("MANAGER_ENABLE", "1").lower() in ("1", "true", "yes", "on"):
-        asyncio.create_task(periodic_manager())
-
-    async def periodic_guarder():
-        await asyncio.sleep(3.0)
-        syms = WATCHLIST[:]
-        if not syms:
-            return
-        try:
-            from utils.guard_stop import ensure_protective_stop  # type: ignore
-        except Exception:
-            logger.info("periodic_guarder: ensure_protective_stop not available")
-            return
-        try:
-            while True:
-                try:
-                    for s in syms:
-                        with suppress(Exception):
-                            ensure_protective_stop(s, prefer_mode="quantities")
-                except Exception:
-                    pass
-                await asyncio.sleep(int(os.getenv("GUARDER_INTERVAL_SEC", "45")))
-        except asyncio.CancelledError:
-            logger.info("periodic_guarder: cancelled")
-            raise
-    if os.getenv("GUARDER_ENABLE", "1").lower() in ("1", "true", "yes", "on"):
-        asyncio.create_task(periodic_guarder())
-
-    async def periodic_scanner():
-        try:
-            from routes.scan_top_volume import scan_top_volume  # type: ignore
-        except Exception as e:
-            logger.warning("periodic_scanner_unavailable: %s", e)
-            return
-        await asyncio.sleep(4.0)
-        every = int(os.getenv("SCAN_CRON_EVERY_SEC", "45") or "45")
-        tf = os.getenv("SCAN_CRON_TIMEFRAME", "15m") or "15m"
-        kline_limit = int(os.getenv("SCAN_CRON_KLINES", "200") or "200")
-        limit = int(os.getenv("SCAN_CRON_LIMIT", "12") or "12")
-        min_score = float(os.getenv("SCAN_CRON_MIN_SCORE", "7.0") or "7.0")
-        rearm_score = float(os.getenv("SCAN_REARM_SCORE", "6.0") or "6.0")
-        dedupe_sec = int(os.getenv("SCAN_DEDUPE_WINDOW_SEC", "300") or "300")
-        ttl_sec = int(os.getenv("SCAN_TTL_SEC", "900") or "900")
-        leverage = float(os.getenv("DEFAULT_LEVERAGE", "5") or "5")
-        stake = float(os.getenv("DEFAULT_STAKE_USDT", "50") or "50")
-        rich = (os.getenv("SCAN_RICH", "1").lower() in ("1", "true", "yes", "on"))
-        chat = os.getenv("TELEGRAM_CHAT_ID")
-        if not chat:
-            logger.info("periodic_scanner: TELEGRAM_CHAT_ID missing; skipping")
-            return
-        try:
-            while True:
-                try:
-                    await scan_top_volume(
-                        market="futures", quote="USDT", limit=limit, timeframe=tf,
-                        kline_limit=kline_limit, min_score=min_score, require_side=True,
-                        notify="telegram", chat_id=str(chat), rich=rich, ttl_sec=ttl_sec,
-                        rearm_score=rearm_score, dedupe_window_sec=dedupe_sec,
-                        leverage=leverage, stake_usdt=stake,
-                    )
-                except Exception as e:
-                    logger.warning("periodic_scanner_error: %s", e)
-                await asyncio.sleep(max(10, every))
-        except asyncio.CancelledError:
-            logger.info("periodic_scanner: cancelled")
-            raise
-    if os.getenv("SCAN_CRON_ENABLE", "0").lower() in ("1", "true", "yes", "on"):
-        asyncio.create_task(periodic_scanner())
-
-    # NEW: periodic digest for public-topk
-    if PUBLIC_TOPK_DIGEST_ENABLE:
-        asyncio.create_task(_public_topk_digest_loop())
-
-    logger.info("Application startup complete.")
 
 @app.on_event("shutdown")
 async def _shutdown_tasks():
@@ -1546,17 +1306,12 @@ async def _shutdown_tasks():
             await r.connection_pool.disconnect()
     logger.info("Application shutdown complete.")
 
-# ==================== Uvicorn entry ====================
 if __name__ == "__main__":
     import uvicorn
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
-
-
-
 
 
 
