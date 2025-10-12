@@ -10,7 +10,7 @@ import httpx
 from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware  # ← לשימוש במידלוור HEAD→GET
+from starlette.responses import Response as StarletteResponse  # לשימוש בהחזרת HEAD ריקה
 
 # ==================== Logging ====================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -67,20 +67,31 @@ app = FastAPI(
     openapi_url=OPENAPI_URL,
 )
 
-# ---------- NEW: HEAD→GET fallback middleware (מונע 405) ----------
-class HeadToGetMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        if request.method == "HEAD":
-            # אם קיים ראוט HEAD מפורש הוא יתפוס קודם; אחרת נחזה GET ללא גוף
-            request._scope["method"] = "GET"
-            resp = await call_next(request)
-            # הופכים לתשובת HEAD ריקה
-            resp.body_iterator = iter([b""])
-            resp.headers["content-length"] = "0"
-            return resp
-        return await call_next(request)
+# ---------- NEW: בטוח ל-HEAD + readyz רך (לפני כל מידלוורים אחרים) ----------
+@app.middleware("http")
+async def _head_compat_and_soft_readyz(request: Request, call_next):
+    # 1) /readyz חייב להיות 200 תמיד עבור Render, בלי תלות ב-routers אחרים
+    if request.url.path == "/readyz":
+        return PlainTextResponse("ok", status_code=200)
 
-app.add_middleware(HeadToGetMiddleware)
+    # 2) תמיכה בטוחה ב-HEAD -> GET (ללא גישה לשדות פרטיים)
+    if request.method == "HEAD":
+        scope_copy = dict(request.scope)
+        scope_copy["method"] = "GET"
+        new_req = Request(scope_copy, receive=request.receive)
+
+        resp = await call_next(new_req)
+
+        # מחזירים סטטוס+כותרות בלבד (בלי גוף)
+        head_headers = dict(resp.headers)
+        return StarletteResponse(
+            status_code=resp.status_code,
+            headers=head_headers,
+            media_type=resp.media_type
+        )
+
+    # ברירת מחדל
+    return await call_next(request)
 
 # ---------- CORS ----------
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
@@ -867,7 +878,7 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
 
 def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLResponse:
     approve_url = _build_signed_link(base, "/ops/approve/signed", ticket_id, ttl_sec=900, action="approve")
-    reject_url  = _build_signed_link(base, "/ops/reject/signed",  ticket_id, ttl_sec=900, action="reject")
+    reject_url  = _build_signed_link(base, "/ops/reject/signed", ticket_id, ttl_sec=900, action="reject")
     body = (
         "<!doctype html><meta charset='utf-8'>"
         "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.45'>"
@@ -1252,18 +1263,9 @@ def health_fallback():
 def health_head():
     return PlainTextResponse("", status_code=200)
 
-# --- READYZ: soft (תמיד 200) + strict אופציונלי ---
-@app.get("/readyz", tags=["meta"])
-def readyz_fallback():
-    return PlainTextResponse("ok", status_code=200)
-
-@app.head("/readyz", tags=["meta"])
-def readyz_head():
-    return PlainTextResponse("", status_code=200)
-
+# --- READYZ: strict (אופציונלי; לוגיקה מחמירה) ---
 @app.get("/readyz/strict", tags=["meta"])
 async def readyz_strict():
-    # בדיקות מחמירות (לא להשתמש עבור healthCheck של Render)
     try:
         r = await _get_redis_cached()
         if r:
@@ -1287,7 +1289,6 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
 
 @app.head("/debug/env", tags=["debug"])
 def debug_env_head():
-    # כדי למנוע 405 מסורקים ששולחים HEAD
     return PlainTextResponse("", status_code=200)
 
 # ==================== Global error handler ====================
