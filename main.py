@@ -70,19 +70,23 @@ app = FastAPI(
 # ---------- NEW: בטוח ל-HEAD + readyz רך (לפני כל מידלוורים אחרים) ----------
 @app.middleware("http")
 async def _head_compat_and_soft_readyz(request: Request, call_next):
-    # 1) /readyz חייב להיות 200 תמיד עבור Render, בלי תלות ב-routers אחרים
+    # 1) /readyz תמיד 200 (נדרש ע״י Render/CF)
     if request.url.path == "/readyz":
         return PlainTextResponse("ok", status_code=200)
 
-    # 2) תמיכה בטוחה ב-HEAD -> GET (ללא גישה לשדות פרטיים)
+    # 2) תמיכה בטוחה ב-HEAD -> GET (ללא שימוש בשדות פרטיים)
     if request.method == "HEAD":
         scope_copy = dict(request.scope)
         scope_copy["method"] = "GET"
         new_req = Request(scope_copy, receive=request.receive)
 
-        resp = await call_next(new_req)
+        try:
+            resp = await call_next(new_req)
+        except Exception:
+            # תן ל-global exception handler לטפל
+            raise
 
-        # מחזירים סטטוס+כותרות בלבד (בלי גוף)
+        # מחזירים סטטוס+כותרות בלבד (ללא גוף)
         head_headers = dict(resp.headers)
         return StarletteResponse(
             status_code=resp.status_code,
@@ -322,32 +326,48 @@ def _should_public_cache(path: str) -> bool:
 
 @app.middleware("http")
 async def _public_cache_etag(request: Request, call_next):
-    if request.method.upper() != "GET":
-        return await call_next(request)
-    path = request.url.path
-    if not _should_public_cache(path):
-        return await call_next(request)
-    resp: Response = await call_next(request)
+    # לא GET או לא בנתיבי קאש → העבר כרגיל (ואל תבלע חריגות)
+    if request.method.upper() != "GET" or not _should_public_cache(request.url.path):
+        try:
+            return await call_next(request)
+        except Exception:
+            raise
+
+    # הפעל את הנתיב והגן על חריגות כדי לא לייצר "No response returned"
     try:
-        if "cache-control" not in (k.lower() for k in resp.headers.keys()):
+        resp: Response = await call_next(request)
+    except Exception:
+        raise
+
+    # אל תעשה קאש/ETag על שגיאות או על גוף ריק
+    try:
+        if int(getattr(resp, "status_code", 200)) >= 400:
+            return resp
+
+        hdrs_lower = {k.lower() for k in resp.headers.keys()}
+        if "cache-control" not in hdrs_lower:
             resp.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_MAX_AGE}"
+
         body = b""
         with suppress(Exception):
-            body = resp.body if hasattr(resp, "body") and resp.body is not None else b""
+            body = resp.body if getattr(resp, "body", None) else b""
         if not body:
             return resp
+
         etag = '"' + hashlib.md5(body).hexdigest() + '"'
-        if "etag" not in (k.lower() for k in resp.headers.keys()):
+        if "etag" not in hdrs_lower:
             resp.headers["ETag"] = etag
+
         inm = request.headers.get("If-None-Match")
         if inm and inm == etag and resp.status_code == 200:
             fresh = Response(status_code=304)
             fresh.headers["Cache-Control"] = resp.headers.get("Cache-Control", f"public, max-age={PUBLIC_CACHE_MAX_AGE}")
             fresh.headers["ETag"] = etag
             return fresh
-        return resp
     except Exception:
-        return resp
+        # לא כשל קריטי – מחזירים את התגובה המקורית
+        pass
+    return resp
 
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
@@ -647,24 +667,42 @@ def _smart_manage_env() -> Dict[str, Any]:
         "atr_mult": float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None,
     }
 
+# ======== AUTO QTY/LEV: חישוב אמיתי באישור ========
+def _round_qty(q: float, dec: int) -> float:
+    try:
+        fmt = "{:0." + str(int(dec)) + "f}"
+        return float(fmt.format(q))
+    except Exception:
+        return float(f"{q:.3f}")
+
 async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     symbol = (ticket.get("symbol") or "").upper()
     price = await get_last_price_async(symbol)
     if not price or float(price) <= 0:
         return None
-    try:
-        from app.utils.position_sizing import ensure_final_qty  # type: ignore
-    except Exception:
-        try:
-            from utils.position_sizing import ensure_final_qty  # type: ignore
-        except Exception:
-            def ensure_final_qty(t: Dict[str, Any], p: float) -> Dict[str, Any]:
-                return t
-    new_ticket = ensure_final_qty(dict(ticket), float(price))  # type: ignore
+
+    new_ticket = dict(ticket)
+
+    # leverage ברירת מחדל אם חסר/אפס
+    lev = int(new_ticket.get("leverage") or new_ticket.get("lev") or 0)
+    if lev <= 0:
+        lev = int(os.getenv("DEFAULT_LEVERAGE", "10"))
+        new_ticket["leverage"] = lev
+
+    qty = float(new_ticket.get("qty") or new_ticket.get("quantity") or 0.0)
+    budget = float(new_ticket.get("budget") or new_ticket.get("budget_usd") or 0.0)
+
+    if qty <= 0 and budget > 0 and lev > 0:
+        dec = int(os.getenv("QTY_DECIMALS", "3"))
+        calc_qty = (budget * lev) / float(price)
+        new_ticket["qty"] = _round_qty(calc_qty, dec)
+
+    # תנקה position_side= BOTH
     ps = str(new_ticket.get("position_side") or new_ticket.get("positionSide") or "").upper()
     if ps == "BOTH":
         new_ticket.pop("positionSide", None)
         new_ticket["position_side"] = ""
+
     return new_ticket
 
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
