@@ -55,7 +55,7 @@ services:
       - { key: PROTECT_APPROVE_ROUTES,   value: "1" }
       - { key: PROTECT_DIGEST_ROUTES,    value: "1" }
       - { key: ENABLE_HSTS,              value: "1" }
-      - { key: SECURITY_PUBLIC_PATHS,    value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version" }
+      - { key: SECURITY_PUBLIC_PATHS,    value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version" }
       - { key: SECURITY_PUBLIC_PREFIXES, value: "/public,/price,/static,/risk" }
 
       # ========================= Anti-Replay =========================
@@ -65,7 +65,7 @@ services:
       - { key: SIGNED_TS_MAX_SKEW_SEC,        value: "60" }
       - { key: SIGNED_NONCE_TTL_SEC,          value: "120" }
 
-      # ========================= Rate Limit (Backend/Public cache) =========================
+      # ========================= Rate Limit =========================
       - { key: RATE_LIMIT_ENABLE,       value: "1" }
       - { key: RL_FAIL_OPEN,            value: "0" }
       - { key: RATE_LIMIT_BACKEND,      value: "redis" }
@@ -158,7 +158,7 @@ services:
       - { key: DEFAULT_LEVERAGE,        value: "10" }
       - { key: DEFAULT_STAKE_USDT,      value: "50" }
 
-      # ========================= Approvals (ON) =========================
+      # ========================= Approvals =========================
       - { key: APPROVAL_ENABLED,             value: "1" }
       - { key: REQUIRE_TELEGRAM_APPROVAL,    value: "1" }
       - { key: AUTO_OPEN_ON_APPROVE,         value: "1" }
@@ -197,7 +197,7 @@ services:
       - { key: MIN_NOTIONAL_USDT,      value: "5" }
       - { key: MAX_TRADE_BUDGET,       value: "600" }
 
-      # ========================= Auto QTY (core) =========================
+      # ========================= Auto QTY =========================
       - { key: AUTO_QTY_ENABLE,            value: "1" }
       - { key: AUTO_QTY_MODE,              value: "notional" }
       - { key: AUTO_QTY_MARGIN_BUFFER_PCT, value: "0.20" }
@@ -229,7 +229,7 @@ services:
       - { key: BE_GUARD_EVERY_SEC,        value: "20" }
       - { key: TP_BE_OFFSET_BPS,          value: "5" }
 
-      # ========================= Smart-Manage (Auto אחרי אישור) =========================
+      # ========================= Smart-Manage =========================
       - { key: SMART_MANAGE_ON_APPROVE,     value: "1" }
       - { key: SMART_MANAGE_BE_OFFSET_BPS,  value: "5" }
       - { key: SMART_MANAGE_PCTS,           value: "4.0,8.0,16.0" }
@@ -253,7 +253,7 @@ services:
       - { key: AUTO_TUNE_LOOKBACK_MIN,     value: "180" }
       - { key: AUTO_BACKOFF_SEC,           value: "900" }
 
-      # ========================= Auto-Tune TP/SL (דינמי לפי ADX) =========================
+      # ========================= Auto-Tune TP/SL (ADX) =========================
       - { key: AUTO_TP_ENABLE,             value: "1" }
       - { key: SL_ATR_MULT_BASE,           value: "0.90" }
       - { key: TP1_ATR_MULT_BASE,          value: "1.60" }
@@ -265,7 +265,7 @@ services:
       - { key: ADX_LOW_SL_RELAX_PCT,       value: "10" }
       - { key: ADX_LOW_TP_SHRINK_PCT,      value: "15" }
 
-      # ========================= Health / Ops Digest =========================
+      # ========================= Health / Digest =========================
       - { key: HEALTH_PRICE_MAX_AGE,        value: "30" }
       - { key: HEALTH_TP_GRACE_SEC,         value: "8" }
       - { key: HEALTH_TP1_ENABLE,           value: "0" }
@@ -287,7 +287,7 @@ services:
       - { key: GUARDER_ENABLE,              value: "1" }
       - { key: GUARDER_INTERVAL_SEC,        value: "45" }
 
-      # ========================= Risk rails (קשיח) =========================
+      # ========================= Risk rails =========================
       - { key: DAILY_LOSS_CAP_USDT,     value: "300" }
       - { key: KILL_ON_CAP,             value: "1" }
       - { key: PRICE_PROTECT,           value: "1" }
@@ -307,17 +307,16 @@ services:
       - { key: MANAGER_ENABLE,              value: "1" }
       - { key: TRADE_MANAGER_ENABLE,        value: "1" }
 
-      # ========================= Auto-Qty/Leverage Ranges (Dynamic 5–35) =========================
+      # ========================= Auto-Qty/Leverage Ranges =========================
       - { key: AUTO_LEV_MIN,     value: "5" }
       - { key: AUTO_LEV_MAX,     value: "35" }
       - { key: AUTO_BUDGET_MIN,  value: "80" }
       - { key: AUTO_BUDGET_MAX,  value: "600" }
 
-      # ========================= Dynamic Toolbox =========================
+      # ========================= Dynamic Toolbox & Profiles =========================
       - { key: DYN_TOOLBOX_ENABLE, value: "1" }
       - { key: DYN_SCORE_BANDS, value: "conservative:<6.0;base:6.0-7.5;aggressive:7.5-8.5;extreme:>=8.5" }
 
-      # פרופילים: TP/Trail/BE/splits + מינוף/תקציב לטווח
       - { key: DYN_PROFILE_conservative_TP_PCTS,  value: "2,4,7" }
       - { key: DYN_PROFILE_conservative_SPLITS,   value: "0.50,0.30,0.20" }
       - { key: DYN_PROFILE_conservative_BE_BPS,   value: "10" }
@@ -358,25 +357,21 @@ services:
       - { key: DYN_PROFILE_extreme_BUD_MIN,  value: "150" }
       - { key: DYN_PROFILE_extreme_BUD_MAX,  value: "600" }
 
-      # אסקלציה לפי ADX
-      - { key: DYN_ADX_ESCALATE_THRESH, value: "30" }
-      - { key: DYN_ADX_TP_BOOST_PCT,    value: "15" }
-      - { key: DYN_ADX_TRAIL_BOOST,     value: "0.3" }
+      # ========================= Secrets (לא לחשוף בלוגים) =========================
+      - { key: API_BEARER_TOKEN,          fromSecret: API_BEARER_TOKEN }
+      - { key: API_TOKEN,                 fromSecret: API_TOKEN }
+      - { key: PRIMARY_API_TOKEN,         fromSecret: PRIMARY_API_TOKEN }
+      - { key: API_SIGNING_SECRET,        fromSecret: API_SIGNING_SECRET }
+      - { key: OPS_SIGN_SECRET,           fromSecret: OPS_SIGN_SECRET }
+      - { key: WEBHOOK_HMAC_SECRET,       fromSecret: WEBHOOK_HMAC_SECRET }
+      - { key: OPENAI_API_KEY,            fromSecret: OPENAI_API_KEY }
+      - { key: TELEGRAM_BOT_TOKEN,        fromSecret: TELEGRAM_BOT_TOKEN }
+      - { key: TELEGRAM_WEBHOOK_SECRET,   fromSecret: TELEGRAM_WEBHOOK_SECRET }
+      - { key: ALERTS_INGEST_HMAC_SECRET, fromSecret: ALERTS_INGEST_HMAC_SECRET }
+      - { key: INTERNAL_JWT_PUBLIC_KEY,   fromSecret: INTERNAL_JWT_PUBLIC_KEY }
+      - { key: BINANCE_API_KEY,           fromSecret: BINANCE_API_KEY }
+      - { key: BINANCE_API_SECRET,        fromSecret: BINANCE_API_SECRET }
 
-      # ========================= Secrets =========================
-      - { key: API_BEARER_TOKEN,            fromSecret: API_BEARER_TOKEN }
-      - { key: API_TOKEN,                   fromSecret: API_TOKEN }
-      - { key: PRIMARY_API_TOKEN,           fromSecret: PRIMARY_API_TOKEN }
-      - { key: API_SIGNING_SECRET,          fromSecret: API_SIGNING_SECRET }
-      - { key: OPS_SIGN_SECRET,             fromSecret: OPS_SIGN_SECRET }
-      - { key: WEBHOOK_HMAC_SECRET,         fromSecret: WEBHOOK_HMAC_SECRET }
-      - { key: OPENAI_API_KEY,              fromSecret: OPENAI_API_KEY }
-      - { key: TELEGRAM_BOT_TOKEN,          fromSecret: TELEGRAM_BOT_TOKEN }
-      - { key: TELEGRAM_WEBHOOK_SECRET,     fromSecret: TELEGRAM_WEBHOOK_SECRET }
-      - { key: ALERTS_INGEST_HMAC_SECRET,   fromSecret: ALERTS_INGEST_HMAC_SECRET }
-      - { key: INTERNAL_JWT_PUBLIC_KEY,     fromSecret: INTERNAL_JWT_PUBLIC_KEY }
-      - { key: BINANCE_API_KEY,             fromSecret: BINANCE_API_KEY }
-      - { key: BINANCE_API_SECRET,          fromSecret: BINANCE_API_SECRET }
 
 
 
