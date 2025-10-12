@@ -129,7 +129,7 @@ services:
       # ========================= Indicators / Gates =========================
       - { key: INDICATOR_INTERVALS,     value: "15m,1h,4h,1d" }
       - { key: ENABLE_INDICATOR_EXIT,   value: "1" }
-      - { key: ADX_MIN,                 value: "20" }
+      - { key: ADX_MIN,                 value: "22" }
       - { key: FEAT_DAILY_CAPS,         value: "0" }
       - { key: FEAT_DEBOUNCE_LIMIT,     value: "1" }
       - { key: FEAT_QUALITY_ENFORCE,    value: "1" }
@@ -195,18 +195,18 @@ services:
       - { key: USE_EXCHANGE_FILTERS,   value: "1" }
       - { key: MAX_TRADES_PER_TICK,    value: "1" }
       - { key: MIN_NOTIONAL_USDT,      value: "5" }
-      - { key: MAX_TRADE_BUDGET,       value: "150" }
+      - { key: MAX_TRADE_BUDGET,       value: "600" }
 
-      # ========================= Auto QTY =========================
+      # ========================= Auto QTY (core) =========================
       - { key: AUTO_QTY_ENABLE,            value: "1" }
       - { key: AUTO_QTY_MODE,              value: "notional" }
       - { key: AUTO_QTY_MARGIN_BUFFER_PCT, value: "0.20" }
 
-      # ========================= SL/TP / BE / Trail / Ladder =========================
+      # ========================= SL/TP / BE / Trail / Ladder (ברירת־מחדל אגרסיבית) =========================
       - { key: NATIVE_TPSL_ENABLE,        value: "0" }
       - { key: SL_MONOTONIC,              value: "1" }
       - { key: PERCENT_GUARD_ENABLE,      value: "1" }
-      - { key: PERCENT_PRICE_GUARD_BPS,   value: "100" }
+      - { key: PERCENT_PRICE_GUARD_BPS,   value: "150" }
       - { key: ENTRY_BAND_BPS,            value: "10" }
       - { key: ENTRY_GAP_MAX_PCT,         value: "0.80" }
       - { key: ENTRY_GAP_WARN_PCT,        value: "0.50" }
@@ -214,27 +214,27 @@ services:
       - { key: TP_BE_ONLY_AFTER_TP1,      value: "1" }
       - { key: STREAM_TP_BE,              value: "1" }
       - { key: LADDER_TP_ENABLE,          value: "1" }
-      - { key: LADDER_TP_DEFAULT_PCTS,    value: "1.8,3.2,5.5" }
-      - { key: LADDER_TP_DEFAULT_SPLITS,  value: "0.4,0.35,0.25" }
+      - { key: LADDER_TP_DEFAULT_PCTS,    value: "4.0,8.0,16.0" }
+      - { key: LADDER_TP_DEFAULT_SPLITS,  value: "0.30,0.30,0.40" }
       - { key: LADDER_SL_ENABLE,          value: "1" }
       - { key: LADDER_SL_DEFAULT_PCTS,    value: "1.2" }
       - { key: TP_LADDER_ON_APPROVE,      value: "1" }
       - { key: TP_MAX_LADDERS,            value: "3" }
       - { key: TRAIL_ENABLE,              value: "1" }
-      - { key: TRAIL_ATR_MULT,            value: "1.5" }
+      - { key: TRAIL_ATR_MULT,            value: "2.6" }
       - { key: ATR_UPDATE_COOLDOWN_SEC,   value: "20" }
       - { key: ATR_MIN_DELTA,             value: "0.02" }
-      - { key: BE_ARM_PCT,                value: "1.6" }
+      - { key: BE_ARM_PCT,                value: "1.0" }
       - { key: BE_GUARD_ENABLE,           value: "1" }
-      - { key: BE_GUARD_EVERY_SEC,        value: "30" }
-      - { key: TP_BE_OFFSET_BPS,          value: "8" }
+      - { key: BE_GUARD_EVERY_SEC,        value: "20" }
+      - { key: TP_BE_OFFSET_BPS,          value: "5" }
 
-      # ========================= Smart-Manage =========================
+      # ========================= Smart-Manage (Auto אחרי אישור) =========================
       - { key: SMART_MANAGE_ON_APPROVE,     value: "1" }
-      - { key: SMART_MANAGE_BE_OFFSET_BPS,  value: "8" }
-      - { key: SMART_MANAGE_PCTS,           value: "" }
-      - { key: SMART_MANAGE_SPLITS,         value: "" }
-      - { key: SMART_MANAGE_TRAIL_ATR_MULT, value: "0" }
+      - { key: SMART_MANAGE_BE_OFFSET_BPS,  value: "5" }
+      - { key: SMART_MANAGE_PCTS,           value: "4.0,8.0,16.0" }
+      - { key: SMART_MANAGE_SPLITS,         value: "0.30,0.30,0.40" }
+      - { key: SMART_MANAGE_TRAIL_ATR_MULT, value: "2.6" }
 
       # ========================= Hedge & Auto-Flip =========================
       - { key: HEDGE_ENABLE,            value: "1" }
@@ -245,25 +245,25 @@ services:
       # ========================= Auto-Tune (Score/ADX) =========================
       - { key: AUTO_TUNE_ENABLE,           value: "1" }
       - { key: AUTO_MIN_SCORE_BASE,        value: "7.0" }
-      - { key: AUTO_MIN_SCORE_RANGE,       value: "6.0,7.5" }
-      - { key: AUTO_ADX_MIN_BASE,          value: "20" }
-      - { key: AUTO_ADX_RANGE,             value: "18,25" }
+      - { key: AUTO_MIN_SCORE_RANGE,       value: "6.2,7.9" }
+      - { key: AUTO_ADX_MIN_BASE,          value: "22" }
+      - { key: AUTO_ADX_RANGE,             value: "20,35" }
       - { key: TARGET_TRADES_PER_DAY_MIN,  value: "4" }
-      - { key: TARGET_TRADES_PER_DAY_MAX,  value: "10" }
+      - { key: TARGET_TRADES_PER_DAY_MAX,  value: "12" }
       - { key: AUTO_TUNE_LOOKBACK_MIN,     value: "180" }
       - { key: AUTO_BACKOFF_SEC,           value: "900" }
 
-      # ========================= Auto-Tune TP/SL =========================
+      # ========================= Auto-Tune TP/SL (דינמי לפי ADX) =========================
       - { key: AUTO_TP_ENABLE,             value: "1" }
-      - { key: SL_ATR_MULT_BASE,           value: "1.10" }
-      - { key: TP1_ATR_MULT_BASE,          value: "1.20" }
-      - { key: TP2_ATR_MULT_BASE,          value: "2.20" }
-      - { key: TP3_ATR_MULT_BASE,          value: "3.50" }
-      - { key: ADX_TP_BOOST_THRESH,        value: "30" }
-      - { key: ADX_TP_BOOST_PCT,           value: "10" }
-      - { key: ADX_STRONG_SL_TIGHTEN_PCT,  value: "10" }
+      - { key: SL_ATR_MULT_BASE,           value: "0.90" }
+      - { key: TP1_ATR_MULT_BASE,          value: "1.60" }
+      - { key: TP2_ATR_MULT_BASE,          value: "3.20" }
+      - { key: TP3_ATR_MULT_BASE,          value: "5.20" }
+      - { key: ADX_TP_BOOST_THRESH,        value: "28" }
+      - { key: ADX_TP_BOOST_PCT,           value: "18" }
+      - { key: ADX_STRONG_SL_TIGHTEN_PCT,  value: "14" }
       - { key: ADX_LOW_SL_RELAX_PCT,       value: "10" }
-      - { key: ADX_LOW_TP_SHRINK_PCT,      value: "10" }
+      - { key: ADX_LOW_TP_SHRINK_PCT,      value: "15" }
 
       # ========================= Health / Ops Digest =========================
       - { key: HEALTH_PRICE_MAX_AGE,        value: "30" }
@@ -287,6 +287,11 @@ services:
       - { key: GUARDER_ENABLE,              value: "1" }
       - { key: GUARDER_INTERVAL_SEC,        value: "45" }
 
+      # ========================= Risk rails (קשיח) =========================
+      - { key: DAILY_LOSS_CAP_USDT,     value: "300" }
+      - { key: KILL_ON_CAP,             value: "1" }
+      - { key: PRICE_PROTECT,           value: "1" }
+
       # ========================= Misc / Storage / Metrics =========================
       - { key: ROUTES_ONLY,                 value: "" }
       - { key: METRICS_ENABLE,              value: "true" }
@@ -301,6 +306,62 @@ services:
       # ========================= Managers =========================
       - { key: MANAGER_ENABLE,              value: "1" }
       - { key: TRADE_MANAGER_ENABLE,        value: "1" }
+
+      # ========================= Auto-Qty/Leverage Ranges (Dynamic 5–35) =========================
+      - { key: AUTO_LEV_MIN,     value: "5" }
+      - { key: AUTO_LEV_MAX,     value: "35" }
+      - { key: AUTO_BUDGET_MIN,  value: "80" }
+      - { key: AUTO_BUDGET_MAX,  value: "600" }
+
+      # ========================= Dynamic Toolbox (בחירה אוטומטית לפי Score/ADX) =========================
+      - { key: DYN_TOOLBOX_ENABLE, value: "1" }
+      - { key: DYN_SCORE_BANDS, value: "conservative:<6.0;base:6.0-7.5;aggressive:7.5-8.5;extreme:>=8.5" }
+
+      # פרופילים: TP/Trail/BE/splits + מינוף/תקציב לטווח
+      - { key: DYN_PROFILE_conservative_TP_PCTS,  value: "2,4,7" }
+      - { key: DYN_PROFILE_conservative_SPLITS,   value: "0.50,0.30,0.20" }
+      - { key: DYN_PROFILE_conservative_BE_BPS,   value: "10" }
+      - { key: DYN_PROFILE_conservative_BE_ARM,   value: "1.8" }
+      - { key: DYN_PROFILE_conservative_TRAIL_ATR,value: "1.6" }
+      - { key: DYN_PROFILE_conservative_LEV_MIN,  value: "5" }
+      - { key: DYN_PROFILE_conservative_LEV_MAX,  value: "12" }
+      - { key: DYN_PROFILE_conservative_BUD_MIN,  value: "50" }
+      - { key: DYN_PROFILE_conservative_BUD_MAX,  value: "150" }
+
+      - { key: DYN_PROFILE_base_TP_PCTS,  value: "3,6,12" }
+      - { key: DYN_PROFILE_base_SPLITS,   value: "0.25,0.25,0.50" }
+      - { key: DYN_PROFILE_base_BE_BPS,   value: "6" }
+      - { key: DYN_PROFILE_base_BE_ARM,   value: "1.2" }
+      - { key: DYN_PROFILE_base_TRAIL_ATR,value: "2.3" }
+      - { key: DYN_PROFILE_base_LEV_MIN,  value: "10" }
+      - { key: DYN_PROFILE_base_LEV_MAX,  value: "25" }
+      - { key: DYN_PROFILE_base_BUD_MIN,  value: "80" }
+      - { key: DYN_PROFILE_base_BUD_MAX,  value: "400" }
+
+      - { key: DYN_PROFILE_aggressive_TP_PCTS,  value: "4,8,16" }
+      - { key: DYN_PROFILE_aggressive_SPLITS,   value: "0.30,0.30,0.40" }
+      - { key: DYN_PROFILE_aggressive_BE_BPS,   value: "5" }
+      - { key: DYN_PROFILE_aggressive_BE_ARM,   value: "1.0" }
+      - { key: DYN_PROFILE_aggressive_TRAIL_ATR,value: "2.6" }
+      - { key: DYN_PROFILE_aggressive_LEV_MIN,  value: "20" }
+      - { key: DYN_PROFILE_aggressive_LEV_MAX,  value: "30" }
+      - { key: DYN_PROFILE_aggressive_BUD_MIN,  value: "120" }
+      - { key: DYN_PROFILE_aggressive_BUD_MAX,  value: "500" }
+
+      - { key: DYN_PROFILE_extreme_TP_PCTS,  value: "6,12,24" }
+      - { key: DYN_PROFILE_extreme_SPLITS,   value: "0.20,0.30,0.50" }
+      - { key: DYN_PROFILE_extreme_BE_BPS,   value: "4" }
+      - { key: DYN_PROFILE_extreme_BE_ARM,   value: "0.9" }
+      - { key: DYN_PROFILE_extreme_TRAIL_ATR,value: "3.2" }
+      - { key: DYN_PROFILE_extreme_LEV_MIN,  value: "25" }
+      - { key: DYN_PROFILE_extreme_LEV_MAX,  value: "35" }
+      - { key: DYN_PROFILE_extreme_BUD_MIN,  value: "150" }
+      - { key: DYN_PROFILE_extreme_BUD_MAX,  value: "600" }
+
+      # אסקלציה לפי ADX (להחריף TP/Trail כשהשוק חזק)
+      - { key: DYN_ADX_ESCALATE_THRESH, value: "30" }
+      - { key: DYN_ADX_TP_BOOST_PCT,    value: "15" }
+      - { key: DYN_ADX_TRAIL_BOOST,     value: "0.3" }   # יוסיף ל-ATR Mult כש-ADX מעל הסף
 
       # ========================= Secrets =========================
       - { key: API_BEARER_TOKEN,            fromSecret: API_BEARER_TOKEN }
