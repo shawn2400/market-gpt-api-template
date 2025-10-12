@@ -42,6 +42,17 @@ print(f"{q:.{d}f}")
 PY
 }
 
+price_round() {
+python3 - <<PY
+from decimal import Decimal, getcontext
+getcontext().prec = 28
+p=Decimal("$1"); t=Decimal("$2")
+q=(p//t)*t
+d=len(str(t).split('.')[-1]) if '.' in str(t) else 0
+print(f"{q:.{d}f}")
+PY
+}
+
 get_mark_price(){ curl -sS "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=$1" | sed -n 's/.*"markPrice":"\([0-9.]\+\)".*/\1/p'; }
 get_filters(){
   local EX="$(curl -sS "https://fapi.binance.com/fapi/v1/exchangeInfo?symbol=$1")"
@@ -60,27 +71,48 @@ print(int(round(c + t*(d-c))))
 PY
 }
 
-# ====== timeframe chooser (מבין "15m,30m,1h,1d") ======
+# ====== Composite scorer for timeframe: Score+ADX+ATR% ======
+# נורמליזציה: score∈[0,10]→[0,1]; ADX∈[10,40]→[0,1]; ATR%∈[0,5%]→[0,1] (קלמפ)
+# משקולות ברירת-מחדל: wS=0.55, wA=0.35, wV=0.10
+tf_score(){
+python3 - <<PY
+import sys, json
+score=float(sys.argv[1]); adx=float(sys.argv[2]); atrp=float(sys.argv[3])
+def clamp(x,a,b): return max(a,min(b,x))
+s = clamp(score/10.0, 0, 1)
+a = clamp((adx-10)/30.0, 0, 1)
+v = clamp(atrp/5.0, 0, 1)
+wS, wA, wV = 0.55, 0.35, 0.10
+print( round(wS*s + wA*a + wV*v, 6) )
+PY
+"$1" "$2" "$3"
+}
+
 best_interval_for(){
-  local S="$1" best_i="" best_s=""
+  local S="$1" best_i="" best_val=""
   IFS=',' read -ra IFR <<< "$INTERVALS"
   for I in "${IFR[@]}"; do
     local R="$(curl -sS "$HOST/scan/public-now?symbol=$S&interval=$I&rich=1" || true)"
     [ -z "$R" ] && R="$(curl -sS "$HOST/scan/now?symbol=$S&interval=$I&rich=1" -H "Authorization: Bearer $TOKEN" || true)"
     [ -z "$R" ] && continue
     local sc="$(jnum "$R" "score")"
+    local adx="$(jnum "$R" "adx")"
+    local atrp="$(jnum "$R" "atr_pct")"
     [ -z "$sc" ] && continue
+    [ -z "$adx" ] && adx="0"
+    [ -z "$atrp" ] && atrp="0"
     awk "BEGIN{exit !($sc >= $SCORE_MIN)}" || continue
-    if [ -z "$best_s" ] || awk "BEGIN{exit !($sc > $best_s)}"; then best_s="$sc"; best_i="$I"; fi
+    local comp="$(tf_score "$sc" "$adx" "$atrp")"
+    if [ -z "$best_val" ] || awk "BEGIN{exit !($comp > $best_val)}"; then
+      best_val="$comp"; best_i="$I"
+    fi
   done
-  [ -n "$best_i" ] && echo "$best_i|$best_s" || echo ""
+  [ -n "$best_i" ] && echo "$best_i" || echo ""
 }
 
-# ====== pick best symbol from UNIVERSE ======
 pick_symbol(){
-  # נסה קודם topk (קל משקל):
-  local TOP="$(curl -sS "$HOST/topk" || true)"
   local best="" bsc=""
+  local TOP="$(curl -sS "$HOST/topk" || true)"
   if [ -n "$TOP" ]; then
     IFS=',' read -ra SYMS <<< "$UNIVERSE"
     for S in "${SYMS[@]}"; do
@@ -93,7 +125,6 @@ pick_symbol(){
     done
     [ -n "$best" ] && { echo "$best|$bsc"; return; }
   fi
-  # fallback: סריקה נקודתית לכל סימבול (עדיין קל)
   IFS=',' read -ra SYMS <<< "$UNIVERSE"
   for S in "${SYMS[@]}"; do
     local R="$(curl -sS "$HOST/scan/public-now?symbol=$S&interval=15m&rich=1" || true)"
@@ -171,17 +202,19 @@ main(){
 
   # best symbol (score גבוה) מתוך UNIVERSE
   local PS="$(pick_symbol)"; [ -z "$PS" ] && { echo "[auto-pick] no symbol"; exit 0; }
-  local SYMBOL="${PS%%|*}"; local SC_TOP="${PS##*|}"
+  local SYMBOL="${PS%%|*}"
 
-  # עבור הסימבול — בחר טיימפריים אופטימלי מהרשימה
-  local BI="$(best_interval_for "$SYMBOL")"; [ -z "$BI" ] && { echo "[auto-pick] no interval"; exit 0; }
-  local INTERVAL="${BI%%|*}"; local SCORE="${BI##*|}"
+  # בחר timeframe ע"פ משקלול Score+ADX+ATR%
+  local INTERVAL="$(best_interval_for "$SYMBOL")"
+  [ -z "$INTERVAL" ] && { echo "[auto-pick] no interval"; exit 0; }
 
-  # משוך adx ו־side לאותו טיימפריים
+  # משוך נתונים (כולל side/score/adx/atr_pct)
   local R="$(curl -sS "$HOST/scan/public-now?symbol=$SYMBOL&interval=$INTERVAL&rich=1" || true)"
   [ -z "$R" ] && R="$(curl -sS "$HOST/scan/now?symbol=$SYMBOL&interval=$INTERVAL&rich=1" -H "Authorization: Bearer $TOKEN" || true)"
-  local ADX="$(jnum "$R" "adx")"; local SIDE_GUESS="$(jstr "$R" "side")"
-  [ -z "$ADX" ] && ADX="0"
+  local SCORE="$(jnum "$R" "score")"
+  local ADX="$(jnum "$R" "adx")"; [ -z "$ADX" ] && ADX="0"
+  local ATRP="$(jnum "$R" "atr_pct")"; [ -z "$ATRP" ] && ATRP="0"
+  local SIDE_GUESS="$(jstr "$R" "side")"
 
   awk "BEGIN{exit !($SCORE >= $SCORE_MIN)}" || { echo "[auto-pick] score too low"; exit 0; }
   awk "BEGIN{exit !($ADX >= $ADX_MIN)}"     || { echo "[auto-pick] adx too low"; exit 0; }
@@ -192,17 +225,18 @@ main(){
   local LEV="$(calc_linear "$SCORE" "$LEV_MIN" "$LEV_MAX")"
   local BUDGET="$(calc_linear "$SCORE" "$BUDGET_MIN" "$BUDGET_MAX")"
 
+  # דיוק לכל מטבע: stepSize/tickSize
   local MP="$(get_mark_price "$SYMBOL")"
   IFS='|' read -r QSTEP TICK <<<"$(get_filters "$SYMBOL")"
-
   local RAW_QTY="$(python3 - <<PY
 from decimal import Decimal as D
 print((D("$BUDGET")/D("$MP")))
 PY
 )"
   local QTY="$(quant_floor "$RAW_QTY" "$QSTEP")"
+  local MP_ROUNDED="$(price_round "$MP" "$TICK")"
 
-  echo "[auto-pick] sym=$SYMBOL itv=$INTERVAL side=$SIDE score=$SCORE adx=$ADX lev=$LEV budget=$BUDGET mp=$MP qty=$QTY step=$QSTEP"
+  echo "[auto-pick] sym=$SYMBOL itv=$INTERVAL side=$SIDE score=$SCORE adx=$ADX atr%=$ATRP lev=$LEV budget=$BUDGET mp=$MP_ROUNDED qty=$QTY step=$QSTEP tick=$TICK"
 
   if [ "$MODE" = "approve" ]; then
     local PAYLOAD="$(cat <<JSON
@@ -213,7 +247,7 @@ PY
   "interval": "$INTERVAL",
   "leverage": $LEV,
   "budget_usdt": $BUDGET,
-  "reason": "auto-pick live",
+  "reason": "auto-pick (score+adx+atr%)",
   "params": { "offset_bps": $OFF, "pcts": $PCTS, "splits": $SPLITS, "atr_mult": $ATR }
 }
 JSON
@@ -221,7 +255,7 @@ JSON
     create_ticket "$PAYLOAD"
     exit 0
   else
-    # פתיחה מיידית + ניהול
+    # פתיחה מיידית + ניהול (כמות מעוגלת לפי stepSize, מחיר לפי tickSize)
     binance_open_market "$SYMBOL" "$SIDE" "$LEV" "$QTY" | sed 's/.*/[binance] &/'
     local BODY="{\"symbol\":\"$SYMBOL\",\"offset_bps\":$OFF,\"pcts\":$PCTS,\"splits\":$SPLITS,\"atr_mult\":$ATR}"
     manage_once_signed "$BODY" | sed 's/.*/[manage-once] &/'
