@@ -52,6 +52,12 @@ ONLY_TRADE_NOTIFICATIONS = os.getenv("ONLY_TRADE_NOTIFICATIONS", "1").lower() in
 STARTUP_NOTIFY_ENABLE = os.getenv("STARTUP_NOTIFY_ENABLE", "0").lower() in ("1", "true", "yes", "on")
 HEALTH_TP1_ENABLE = os.getenv("HEALTH_TP1_ENABLE", "0").lower() in ("1", "true", "yes", "on")
 
+# ========= Auto ranges defaults (lev/budget) =========
+AUTO_LEV_MIN = int(os.getenv("AUTO_LEV_MIN", "15") or 15)
+AUTO_LEV_MAX = int(os.getenv("AUTO_LEV_MAX", "25") or 25)
+AUTO_BUDGET_MIN = float(os.getenv("AUTO_BUDGET_MIN", "100") or 100.0)
+AUTO_BUDGET_MAX = float(os.getenv("AUTO_BUDGET_MAX", "200") or 200.0)
+
 # ==================== App & CORS ====================
 APP_TITLE = os.getenv("APP_TITLE", "AlgoGPT API")
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "dev")
@@ -86,7 +92,7 @@ async def _head_compat_and_soft_readyz(request: Request, call_next):
         head_headers = dict(resp.headers)
         return StarletteResponse(
             status_code=resp.status_code,
-            headers=hand_headers if (hand_headers := head_headers) else {},
+            headers=head_headers if (head_headers := head_headers) else {},
             media_type=resp.media_type
         )
 
@@ -600,6 +606,20 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
     if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
         return {"ok": False, "error": "bad_ticket_params"}
+
+    # ודא מינוף באקצ׳יינג׳ גם ב-HYBRID
+    try:
+        from binance.client import Client  # type: ignore
+        api_key = os.getenv("BINANCE_API_KEY","").strip()
+        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
+        if api_key and api_sec and leverage > 0 and symbol:
+            cli_ = Client(api_key, api_sec)
+            _align_position_mode(cli_)
+            with suppress(Exception):
+                cli_.futures_change_leverage(symbol=symbol, leverage=leverage)
+    except Exception:
+        pass
+
     base_kwargs: Dict[str, Any] = dict(
         symbol=symbol, side=side, budget=None, leverage=leverage, dry_run=False, quantity=qty,
         entry=None, tp_targets=tp_targets or None, sl_targets=sl_targets or None,
@@ -655,7 +675,8 @@ def _smart_manage_env() -> Dict[str, Any]:
         except Exception:
             return None
     return {
-        "enable": os.getenv("SMART_MANAGE_ON_APPROVE", "0").lower() in ("1", "true", "yes", "on"),
+        # ברירת מחדל: פעיל כדי להבטיח ניהול אחרי אישור
+        "enable": os.getenv("SMART_MANAGE_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on"),
         "offset_bps": int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS", "8"))),
         "pcts": _csvf(os.getenv("SMART_MANAGE_PCTS")),
         "splits": _csvf(os.getenv("SMART_MANAGE_SPLITS")),
@@ -672,10 +693,10 @@ def _round_qty(q: float, dec: int) -> float:
 
 async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    ממלא leverage/qty אם חסרים:
-    1) קובע מינוף דיפולטי אם לא נשלח (DEFAULT_LEVERAGE).
-    2) מנסה להשתמש ב-utils.position_sizing.ensure_final_qty (מכבד AUTO_QTY_* , MIN_NOTIONAL וכו').
-    3) פולבק: חישוב לפי budget בבקשה או מה-ENV (AUTO_QTY_BUDGET_USDT/DEFAULT_STAKE_USDT) וכפוף MAX_TRADE_BUDGET.
+    ממלא leverage/qty אם חסרים+כופה טווחים:
+    1) קובע מינוף אוטומטי לפי טווח (15–25) אם לא סופק, או חותך לטווח אם סופק.
+    2) מנסה utils.position_sizing.ensure_final_qty (מכבד פילטרי בורסה).
+    3) פולבק: חישוב לפי תקציב מתוך טווח (100–200) או מהבקשה/ENV, כפוף MAX_TRADE_BUDGET.
     4) מנקה position_side="BOTH".
     """
     symbol = (ticket.get("symbol") or "").upper()
@@ -685,38 +706,57 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
 
     new_ticket = dict(ticket)
 
-    # 1) leverage ברירת מחדל אם חסר/אפס
+    # טווחי מינוף/תקציב מהבקשה (אם נשלחו)
+    try:
+        lev_min = int(new_ticket.get("leverage_min") or (new_ticket.get("leverage_range") or [AUTO_LEV_MIN, AUTO_LEV_MAX])[0] or AUTO_LEV_MIN)
+        lev_max = int(new_ticket.get("leverage_max") or (new_ticket.get("leverage_range") or [AUTO_LEV_MIN, AUTO_LEV_MAX])[-1] or AUTO_LEV_MAX)
+    except Exception:
+        lev_min, lev_max = AUTO_LEV_MIN, AUTO_LEV_MAX
+    if lev_min > lev_max:
+        lev_min, lev_max = lev_max, lev_min
+
+    try:
+        bmin = float(new_ticket.get("budget_min") or (new_ticket.get("budget_range") or [AUTO_BUDGET_MIN, AUTO_BUDGET_MAX])[0] or AUTO_BUDGET_MIN)
+        bmax = float(new_ticket.get("budget_max") or (new_ticket.get("budget_range") or [AUTO_BUDGET_MIN, AUTO_BUDGET_MAX])[-1] or AUTO_BUDGET_MAX)
+    except Exception:
+        bmin, bmax = AUTO_BUDGET_MIN, AUTO_BUDGET_MAX
+    if bmin > bmax:
+        bmin, bmax = bmax, bmin
+
+    # 1) leverage לפי טווח
     lev = int(new_ticket.get("leverage") or new_ticket.get("lev") or 0)
     if lev <= 0:
-        lev = int(os.getenv("DEFAULT_LEVERAGE", "10") or 10)
+        lev = max(min((lev_min + lev_max) // 2, lev_max), lev_min)
         new_ticket["leverage"] = lev
+    else:
+        new_ticket["leverage"] = max(min(lev, lev_max), lev_min)
 
-    # 2) נסה להשתמש בלוגיקת המיקום/פילטרים מהמודול
-    used_ps = False
+    # 2) ניסיון לוגיקת sizing פנימית
     with suppress(Exception):
         from utils.position_sizing import ensure_final_qty as _efq  # type: ignore
         new_ticket = _efq(new_ticket, float(price)) or new_ticket
-        used_ps = True
 
     # 3) פולבק אם עדיין אין qty>0
     q = float(new_ticket.get("qty") or new_ticket.get("quantity") or 0.0)
     if q <= 0.0:
-        # תקציב מהבקשה או מה-ENV
-        budget_env = os.getenv("AUTO_QTY_BUDGET_USDT") or os.getenv("DEFAULT_STAKE_USDT", "50")
+        budget_env = os.getenv("AUTO_QTY_BUDGET_USDT") or os.getenv("DEFAULT_STAKE_USDT", str(AUTO_BUDGET_MIN))
         try:
             max_budget = float(os.getenv("MAX_TRADE_BUDGET", budget_env or 0) or 0)
         except Exception:
             max_budget = 0.0
-        budget = float(
-            new_ticket.get("budget")
-            or new_ticket.get("budget_usd")
-            or (budget_env or 0)
-        )
+        budget_req = new_ticket.get("budget") or new_ticket.get("budget_usd")
+        try:
+            budget = float(budget_req) if budget_req not in (None, "", 0, "0", "0.0") else (bmin + bmax) / 2.0
+        except Exception:
+            budget = (bmin + bmax) / 2.0
+        if budget <= 0:
+            budget = float(budget_env or AUTO_BUDGET_MIN)
+        budget = max(min(budget, bmax), bmin)
         if max_budget > 0:
             budget = min(budget, max_budget)
-        if budget > 0 and lev > 0:
+        if budget > 0 and new_ticket.get("leverage", 0):
             dec = int(os.getenv("QTY_DECIMALS", "3") or 3)
-            calc_qty = (budget * lev) / float(price)
+            calc_qty = (budget * float(new_ticket["leverage"])) / float(price)
             new_ticket["qty"] = _round_qty(calc_qty, dec)
 
     # 4) נקה position_side="BOTH"
@@ -857,9 +897,17 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         etas = _smart(symbol, side, price_now, [payload.get("tp1"), payload.get("tp2"), payload.get("tp3")])
         payload.update(etas)
 
+    # תמיכה רכה בטווחי מינוף/תקציב בבקשה (לא חובה)
+    lev_min = payload.get("leverage_min") or (payload.get("leverage_range") or [None, None])[0]
+    lev_max = payload.get("leverage_max") or (payload.get("leverage_range") or [None, None])[-1]
+    bud_min = payload.get("budget_min") or (payload.get("budget_range") or [None, None])[0]
+    bud_max = payload.get("budget_max") or (payload.get("budget_range") or [None, None])[-1]
+
     req_body: Dict[str, Any] = {
         "ticket_id": tid, "symbol": symbol, "side": side, "qty": qty, "leverage": lev,
         "position_side": position_side, "budget": budget, "note": note,
+        "leverage_min": lev_min, "leverage_max": lev_max,
+        "budget_min": bud_min, "budget_max": bud_max,
         "score": payload.get("score"),
         "eta_open_min": payload.get("eta_open_min"),
         "tp1": payload.get("tp1"), "tp2": payload.get("tp2"), "tp3": payload.get("tp3"),
@@ -1034,6 +1082,20 @@ async def _approve_core(ticket_id: str):
         retry_res = await _execute_trade(ticket)
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
+
+    # ניהול דינמי מלא מיד אחרי אישור מוצלח
+    if ok:
+        try:
+            sm = _smart_manage_env()
+            offset_bps = sm.get("offset_bps") or 8
+            pcts = sm.get("pcts") or [0.25, 0.25, 0.5]
+            splits = sm.get("splits") or [0.4, 0.35, 0.25]
+            atr_mult = sm.get("atr_mult") or None
+            await _smart_manage_now(str(ticket.get("symbol","")).upper(),
+                                    offset_bps=offset_bps, pcts=pcts, splits=splits, atr_mult=atr_mult)
+        except Exception:
+            pass
+
     with suppress(Exception):
         sym, side, qty = ticket.get("symbol", ""), ticket.get("side", ""), ticket.get("qty", "")
         msg = (
@@ -1398,6 +1460,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
