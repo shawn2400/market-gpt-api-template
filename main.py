@@ -1,7 +1,7 @@
 # main.py
 from __future__ import annotations
 
-import os, json, time, hmac, re, hashlib, secrets, logging, traceback, inspect, asyncio, threading
+import os, json, time, hmac, re, hashlib, secrets, logging, traceback, inspect, asyncio, threading, math
 from contextlib import suppress
 from collections import Counter
 from typing import Any, Dict, List, Optional, Callable, Tuple, Union
@@ -76,20 +76,14 @@ app = FastAPI(
 # ---------- NEW: בטוח ל-HEAD + readyz רך (לפני כל מידלוורים אחרים) ----------
 @app.middleware("http")
 async def _head_compat_and_soft_readyz(request: Request, call_next):
-    # 1) /readyz תמיד 200 (נדרש ע״י Render/CF)
     if request.url.path == "/readyz":
         return PlainTextResponse("ok", status_code=200)
-
-    # 2) תמיכה בטוחה ב-HEAD -> GET (ללא גוף בתגובה)
     if request.method == "HEAD":
-        scope_copy = dict(request.scope)
-        scope_copy["method"] = "GET"
+        scope_copy = dict(request.scope); scope_copy["method"] = "GET"
         new_req = Request(scope_copy, receive=request.receive)
         resp = await call_next(new_req)
         headers = dict(resp.headers)
         return StarletteResponse(status_code=resp.status_code, headers=headers, media_type=resp.media_type)
-
-    # ברירת מחדל
     return await call_next(request)
 
 # ---------- CORS ----------
@@ -624,10 +618,6 @@ def _anti_replay_required() -> bool:
 async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
                             pcts: Optional[List[float]] = None, splits: Optional[List[float]] = None,
                             atr_mult: Optional[float] = None) -> Dict[str, Any]:
-    """
-    קורא ל-/manage-once של אותו שירות. אם Anti-Replay מופעל (TTL/Nonce/Signature),
-    נוסיף X-Timestamp/X-Nonce/X-Signature עם חתימה על 'ts.nonce.body'.
-    """
     base = get_internal_base()
     token = API_BEARER_TOKEN
     if not token:
@@ -641,7 +631,6 @@ async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
         body["callback_rate"] = None
         body["atr_mult"] = atr_mult
 
-    # נבנה גוף JSON “יציב” (לחתימה ולשליחה)
     body_str = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
 
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
@@ -661,7 +650,6 @@ async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
             r = await cli.post(f"{base}/manage-once", headers=headers, content=body_str, timeout=httpx.Timeout(15.0))
             if r.status_code < 400:
                 return {"ok": True, "status": r.status_code, "text": r.text}
-            # אם 401/403 – ננסה פעם אחת לבצע רענון חתימה (שעון/nonce).
             if r.status_code in (401, 403) and _anti_replay_required() and attempt == 0:
                 continue
             return {"ok": False, "status": r.status_code, "text": r.text}
@@ -679,7 +667,6 @@ def _smart_manage_env() -> Dict[str, Any]:
             return [float(x.strip()) for x in val.split(",") if x.strip()]
         except Exception:
             return None
-    # ברירות מחדל עקביות עם ENV בדוק: pcts=4/8/16, splits=0.30/0.30/0.40, offset_bps=5
     return {
         "enable": os.getenv("SMART_MANAGE_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on"),
         "offset_bps": int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS", "5"))),
@@ -704,7 +691,6 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
 
     new_ticket = dict(ticket)
 
-    # טווחי מינוף/תקציב
     try:
         lev_min = int(new_ticket.get("leverage_min") or (new_ticket.get("leverage_range") or [AUTO_LEV_MIN, AUTO_LEV_MAX])[0] or AUTO_LEV_MIN)
         lev_max = int(new_ticket.get("leverage_max") or (new_ticket.get("leverage_range") or [AUTO_LEV_MIN, AUTO_LEV_MAX])[-1] or AUTO_LEV_MAX)
@@ -721,7 +707,6 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
     if bmin > bmax:
         bmin, bmax = bmax, bmin
 
-    # leverage לפי טווח
     lev = int(new_ticket.get("leverage") or new_ticket.get("lev") or 0)
     if lev <= 0:
         lev = max(min((lev_min + lev_max) // 2, lev_max), lev_min)
@@ -729,12 +714,10 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
     else:
         new_ticket["leverage"] = max(min(lev, lev_max), lev_min)
 
-    # לוגיקת sizing פנימית (אם קיימת)
     with suppress(Exception):
         from utils.position_sizing import ensure_final_qty as _efq  # type: ignore
         new_ticket = _efq(new_ticket, float(price)) or new_ticket
 
-    # פולבק אם עדיין אין qty
     q = float(new_ticket.get("qty") or new_ticket.get("quantity") or 0.0)
     if q <= 0.0:
         budget_env = os.getenv("AUTO_QTY_BUDGET_USDT") or os.getenv("DEFAULT_STAKE_USDT", str(AUTO_BUDGET_MIN))
@@ -757,7 +740,6 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
             calc_qty = (budget * float(new_ticket["leverage"])) / float(price)
             new_ticket["qty"] = _round_qty(calc_qty, dec)
 
-    # נקה position_side="BOTH"
     ps = str(new_ticket.get("position_side") or new_ticket.get("positionSide") or "").upper()
     if ps == "BOTH":
         new_ticket.pop("positionSide", None)
@@ -1015,7 +997,6 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     return _render_ticket_html(ticket_id, rec, base)
 
-# --- Signed public preview (no Bearer; signature required) ---
 @router.get("/ops/ui/ticket/signed")
 async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
     if not _verify_signed_params(ticket_id, exp, sig, "/ops/ui/ticket/signed"):
@@ -1029,7 +1010,6 @@ async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), s
 def _maybe_protect_routes(request: Request) -> None:
     _require_bearer(request)
 
-# ======= APPROVE/REJECT (Bearer-protected) =======
 @router.get("/ops/approve")
 async def approve(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
     _maybe_protect_routes(request)
@@ -1040,7 +1020,6 @@ async def reject(ticket_id: str = Query(..., description="ticket_id"), request: 
     _maybe_protect_routes(request)
     return await _reject_core(ticket_id)
 
-# ======= APPROVE/REJECT SIGNED (no Bearer; signature required) =======
 @router.get("/ops/approve/signed")
 async def approve_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
     if not _verify_signed_params(ticket_id, exp, sig, "/ops/approve/signed"):
@@ -1053,7 +1032,6 @@ async def reject_signed(ticket_id: str = Query(...), exp: str = Query(...), sig:
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _reject_core(ticket_id)
 
-# ======= CORE handlers (shared) =======
 async def _approve_core(ticket_id: str):
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
@@ -1115,7 +1093,7 @@ async def _reject_core(ticket_id: str):
     sym, side, qty = (str(ticket.get("symbol", "")) or "").upper(), str(ticket.get("side", "")).upper(), ticket.get("qty", "")
     with suppress(Exception):
         await _send_telegram_html(
-            f"⛔️ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n— — —\νהבקשה נדחתה."
+            f"⛔️ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n— — —\nהבקשה נדחתה."
         )
     await _delete_ticket(ticket_id, source, final_status=False)
     return _html("⛔️ נדחה — הכרטיס הוסר.")
@@ -1239,6 +1217,212 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
     if emergencies and not ONLY_TRADE_NOTIFICATIONS:
         await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>" + ",".join(emergencies) + "</code>")
     return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
+
+# ==================== NEW: /manage-once (Bearer) ====================
+def _bn_round(value: float, step: float) -> float:
+    if step <= 0:
+        return value
+    return math.floor(value / step) * step
+
+def _get_filters(client, symbol: str) -> Tuple[float, float]:
+    tick = 0.1
+    step = 0.001
+    try:
+        ex = client.futures_exchange_info()
+        for s in ex.get("symbols", []):
+            if s.get("symbol") == symbol:
+                for f in s.get("filters", []):
+                    if f.get("filterType") == "PRICE_FILTER":
+                        tick = float(f.get("tickSize", tick))
+                    if f.get("filterType") == "LOT_SIZE":
+                        step = float(f.get("stepSize", step))
+                break
+    except Exception:
+        pass
+    return tick, step
+
+def _pos_side_from_amt(side_text: str, pos_amt: float) -> str:
+    if side_text == "BUY":
+        return "LONG"
+    if side_text == "SELL":
+        return "SHORT"
+    return "LONG" if pos_amt >= 0 else "SHORT"
+
+@router.post("/manage-once")
+async def manage_once(
+    request: Request,
+    payload: Dict[str, Any] = Body(...),
+):
+    _require_bearer(request)
+
+    symbol = (payload.get("symbol") or "").upper().strip()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+
+    # Defaults (דינמי לפי מה שביקשת)
+    offset_bps = int(payload.get("offset_bps") or os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS", "5")))
+    pcts: List[float] = payload.get("pcts") or [1.5, 3.0, 6.0]
+    splits: List[float] = payload.get("splits") or [0.30, 0.30, 0.40]
+    atr_mult = payload.get("atr_mult", None)
+
+    # ולידציה
+    if len(pcts) != len(splits) or not (0.999 <= sum(splits) <= 1.001):
+        raise HTTPException(status_code=422, detail="pcts/splits mismatch or splits must sum to 1.0")
+    if any(x <= 0 for x in pcts):
+        raise HTTPException(status_code=422, detail="pcts must be > 0")
+    if any(x <= 0 for x in splits):
+        raise HTTPException(status_code=422, detail="splits must be > 0")
+
+    # נסה להפעיל מנהל פנימי אם נטען Route חיצוני (routes.manager)
+    internal_delegated = False
+    with suppress(Exception):
+        mgr = getattr(app, "routes", None)
+
+    # עבודה ישירה מול Binance אם אין מנהל
+    try:
+        from binance.client import Client  # type: ignore
+    except Exception as e:
+        return {"ok": True, "delegated": False, "skipped": True, "reason": "binance_client_import_failed", "detail": str(e)}
+
+    api_key = os.getenv("BINANCE_API_KEY", "").strip()
+    api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not api_key or not api_sec:
+        return {"ok": True, "delegated": False, "skipped": True, "reason": "binance_keys_missing"}
+
+    client = Client(api_key, api_sec)
+    _align_position_mode(client)
+
+    # משוך פוזיציה קיימת
+    pos_amt = 0.0
+    entry_price = None
+    side_txt = None
+    try:
+        positions = client.futures_position_information(symbol=symbol)
+        for p in positions:
+            amt = float(p.get("positionAmt") or 0.0)
+            if abs(amt) > 0:
+                pos_amt = amt
+                entry_price = float(p.get("entryPrice") or 0.0)
+                side_txt = "BUY" if amt > 0 else "SELL"
+                break
+    except Exception as e:
+        return {"ok": False, "error": "position_fetch_failed", "detail": str(e)}
+
+    if not side_txt or not entry_price or abs(pos_amt) <= 0:
+        return {"ok": True, "skipped": True, "reason": "no_open_position"}
+
+    # פילטרים לעיגול
+    tick, step = _get_filters(client, symbol)
+
+    # 1) העברת סטופ ל־BE + offset_bps
+    be_price = float(entry_price) * (1.0 + (offset_bps / 10_000.0)) if side_txt == "BUY" else float(entry_price) * (1.0 - (offset_bps / 10_000.0))
+    be_price = _bn_round(be_price, tick)
+
+    # בטל סטופים קיימים מסוג SL/STOP כדי למנוע כפילויות
+    try:
+        open_orders = client.futures_get_open_orders(symbol=symbol)
+        for o in open_orders or []:
+            t = o.get("type", "")
+            if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
+                with suppress(Exception):
+                    client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+    except Exception:
+        pass
+
+    # הצב SL ל־BE+offset
+    try:
+        sl_kwargs = dict(
+            symbol=symbol,
+            side="SELL" if side_txt == "BUY" else "BUY",
+            type="STOP_MARKET",
+            stopPrice=be_price,
+            closePosition=True,
+            workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+            newClientOrderId=build_client_order_id(symbol, "SELL" if side_txt == "BUY" else "BUY", role="SL@BE"),
+        )
+        client.futures_create_order(**sl_kwargs)
+    except Exception as e:
+        logger.warning("place_be_stop_failed: %s", e)
+
+    # 2) TP Ladder (reduceOnly)
+    price_now = None
+    with suppress(Exception):
+        tick_data = client.futures_symbol_ticker(symbol=symbol)
+        if tick_data and "price" in tick_data:
+            price_now = float(tick_data["price"])
+    base_price = price_now or entry_price
+    tps: List[float] = []
+    for pct in pcts:
+        if side_txt == "BUY":
+            tps.append(_bn_round(base_price * (1.0 + pct / 100.0), tick))
+        else:
+            tps.append(_bn_round(base_price * (1.0 - pct / 100.0), tick))
+
+    qty_abs = abs(pos_amt)
+    placed_tp = []
+    for i, (tp_price, split) in enumerate(zip(tps, splits), start=1):
+        qty_i = _bn_round(qty_abs * float(split), step)
+        if qty_i <= 0:
+            continue
+        tp_kwargs = dict(
+            symbol=symbol,
+            side="SELL" if side_txt == "BUY" else "BUY",
+            type="LIMIT",
+            price=tp_price,
+            quantity=qty_i,
+            timeInForce="GTC",
+            reduceOnly=True,
+            newClientOrderId=build_client_order_id(symbol, "SELL" if side_txt == "BUY" else "BUY", role=f"TP{i}"),
+        )
+        try:
+            client.futures_create_order(**tp_kwargs)
+            placed_tp.append({"i": i, "price": tp_price, "qty": qty_i})
+        except Exception as e:
+            logger.warning("place_tp_failed[%s]: %s", i, e)
+
+    # 3) Trailing ATR*atr_mult → callbackRate
+    placed_trail = None
+    if atr_mult is not None:
+        try:
+            # משוך Klines 1m ל־ATR (14)
+            kl = client.futures_klines(symbol=symbol, interval="1m", limit=50)
+            highs = [float(k[2]) for k in kl]
+            lows  = [float(k[3]) for k in kl]
+            closes= [float(k[4]) for k in kl]
+            trs = []
+            for i in range(1, len(kl)):
+                h, l, pc = highs[i], lows[i], closes[i-1]
+                tr = max(h - l, abs(h - pc), abs(l - pc))
+                trs.append(tr)
+            atr = sum(trs[-14:]) / float(min(14, len(trs))) if trs else 0.0
+            px = base_price
+            callback_rate = max(0.1, min(5.0, (atr * float(atr_mult) / px) * 100.0 if px > 0 else 0.5))
+            # הצב Trailing Stop Market לכל הפוזיציה שנותרה
+            trail_kwargs = dict(
+                symbol=symbol,
+                side="SELL" if side_txt == "BUY" else "BUY",
+                type="TRAILING_STOP_MARKET",
+                callbackRate=round(callback_rate, 1),
+                reduceOnly=True,
+                workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+                newClientOrderId=build_client_order_id(symbol, "SELL" if side_txt == "BUY" else "BUY", role="TRAIL"),
+            )
+            client.futures_create_order(**trail_kwargs)
+            placed_trail = {"callbackRate": round(callback_rate, 1)}
+        except Exception as e:
+            logger.warning("place_trailing_failed: %s", e)
+
+    result = {
+        "ok": True,
+        "delegated": False,
+        "symbol": symbol,
+        "side": side_txt,
+        "entry": entry_price,
+        "be_stop_price": be_price,
+        "tp": placed_tp,
+        "trail": placed_trail,
+    }
+    return result
 
 @router.get("/ops/digest/expired")
 async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = None):
@@ -1383,7 +1567,6 @@ def health_fallback():
 def health_head():
     return PlainTextResponse("", status_code=200)
 
-# --- READYZ: strict (אופציונלי; לוגיקה מחמירה) ---
 @app.get("/readyz/strict", tags=["meta"])
 async def readyz_strict():
     try:
