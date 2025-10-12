@@ -10,6 +10,7 @@ import httpx
 from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware  # ← לשימוש במידלוור HEAD→GET
 
 # ==================== Logging ====================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -66,6 +67,22 @@ app = FastAPI(
     openapi_url=OPENAPI_URL,
 )
 
+# ---------- NEW: HEAD→GET fallback middleware (מונע 405) ----------
+class HeadToGetMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        if request.method == "HEAD":
+            # אם קיים ראוט HEAD מפורש הוא יתפוס קודם; אחרת נחזה GET ללא גוף
+            request._scope["method"] = "GET"
+            resp = await call_next(request)
+            # הופכים לתשובת HEAD ריקה
+            resp.body_iterator = iter([b""])
+            resp.headers["content-length"] = "0"
+            return resp
+        return await call_next(request)
+
+app.add_middleware(HeadToGetMiddleware)
+
+# ---------- CORS ----------
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
 CORS_ALLOW_HEADERS = os.getenv("CORS_ALLOW_HEADERS", "*")
 CORS_ALLOW_METHODS = os.getenv("CORS_ALLOW_METHODS", "*")
@@ -145,21 +162,12 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
 def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600, action: Optional[str] = None) -> str:
-    """
-    Returns:
-      - with secret: {base}{path}?ticket_id=...&exp=...&sig=...
-      - without secret: routes to Bearer-protected endpoint by action:
-          approve -> /ops/approve
-          reject  -> /ops/reject
-          preview -> /ops/ui/ticket
-    """
     if not HMAC_SECRET:
         route = "/ops/ui/ticket"
         if action == "approve": route = "/ops/approve"
         elif action == "reject": route = "/ops/reject"
         sep = "&" if "?" in route else "?"
         return f"{base}{route}{sep}ticket_id={ticket_id}"
-
     exp = int(time.time()) + int(ttl_sec)
     to_sign = f"{path}|{ticket_id}|{exp}|{NS}".encode("utf-8")
     sig = _sign_hex(HMAC_SECRET, to_sign)
@@ -1244,7 +1252,7 @@ def health_fallback():
 def health_head():
     return PlainTextResponse("", status_code=200)
 
-# --- Fallback readyz (zero-deps) ---
+# --- READYZ: soft (תמיד 200) + strict אופציונלי ---
 @app.get("/readyz", tags=["meta"])
 def readyz_fallback():
     return PlainTextResponse("ok", status_code=200)
@@ -1252,6 +1260,18 @@ def readyz_fallback():
 @app.head("/readyz", tags=["meta"])
 def readyz_head():
     return PlainTextResponse("", status_code=200)
+
+@app.get("/readyz/strict", tags=["meta"])
+async def readyz_strict():
+    # בדיקות מחמירות (לא להשתמש עבור healthCheck של Render)
+    try:
+        r = await _get_redis_cached()
+        if r:
+            await r.ping()
+    except Exception as e:
+        logger.warning("readyz.strict.redis_ping_failed: %s", e)
+        return PlainTextResponse("redis_fail", status_code=503)
+    return PlainTextResponse("ok", status_code=200)
 
 @app.get("/debug/env", tags=["debug"])
 def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
@@ -1264,6 +1284,11 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
             continue
         safe[k] = v
     return {"ok": True, "env": safe}
+
+@app.head("/debug/env", tags=["debug"])
+def debug_env_head():
+    # כדי למנוע 405 מסורקים ששולחים HEAD
+    return PlainTextResponse("", status_code=200)
 
 # ==================== Global error handler ====================
 @app.exception_handler(Exception)
@@ -1312,6 +1337,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
