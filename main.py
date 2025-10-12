@@ -1,4 +1,3 @@
-
 # main.py
 from __future__ import annotations
 
@@ -1257,10 +1256,20 @@ def meta_version_fallback():
         "ok": True,
     }
 
+# <<< NEW: HEAD for /meta/version >>>
+@app.head("/meta/version", tags=["meta"])
+def meta_version_head():
+    return PlainTextResponse("", status_code=200)
+
 @app.get("/health", tags=["meta"])
 def health_fallback():
     boot = getattr(app.state, "boot_ts", None)
     return {"ok": True, "uptime_sec": int(time.time() - (boot or time.time()))}
+
+# <<< NEW: HEAD for /health >>>
+@app.head("/health", tags=["meta"])
+def health_head():
+    return PlainTextResponse("", status_code=200)
 
 @app.get("/debug/env", tags=["debug"])
 def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
@@ -1544,6 +1553,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
