@@ -617,13 +617,22 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
 
 # ==================== Smart manage etc. ====================
+def _anti_replay_required() -> bool:
+    return os.getenv("ANTI_REPLAY_ENABLE", "0").lower() in ("1","true","yes","on") and \
+           os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "0").lower() in ("1","true","yes","on")
+
 async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
                             pcts: Optional[List[float]] = None, splits: Optional[List[float]] = None,
                             atr_mult: Optional[float] = None) -> Dict[str, Any]:
+    """
+    קורא ל-/manage-once של אותו שירות. אם Anti-Replay מופעל (TTL/Nonce/Signature),
+    נוסיף X-Timestamp/X-Nonce/X-Signature עם חתימה על 'ts.nonce.body'.
+    """
     base = get_internal_base()
     token = API_BEARER_TOKEN
     if not token:
         return {"ok": False, "skipped": True, "reason": "missing token"}
+
     body: Dict[str, Any] = {"symbol": symbol}
     if offset_bps is not None: body["offset_bps"] = offset_bps
     if pcts is not None: body["pcts"] = pcts
@@ -631,17 +640,31 @@ async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
     if atr_mult is not None:
         body["callback_rate"] = None
         body["atr_mult"] = atr_mult
+
+    # נבנה גוף JSON “יציב” (לחתימה ולשליחה)
+    body_str = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
+
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    if _anti_replay_required():
+        ts = str(int(time.time()))
+        nonce = secrets.token_hex(8)
+        secret = (os.getenv("API_SIGNING_SECRET") or "").strip()
+        if not secret:
+            return {"ok": False, "error": "missing_signing_secret"}
+        payload = f"{ts}.{nonce}.{body_str}".encode("utf-8")
+        sig = _sign_hex(secret, payload)
+        headers.update({"X-Timestamp": ts, "X-Nonce": nonce, "X-Signature": sig})
+
     cli = _get_shared_async_client()
     for attempt in range(3):
         try:
-            r = await cli.post(
-                f"{base}/manage-once",
-                headers={"Authorization": f"Bearer {token}"},
-                json=body,
-                timeout=httpx.Timeout(15.0),
-            )
+            r = await cli.post(f"{base}/manage-once", headers=headers, content=body_str, timeout=httpx.Timeout(15.0))
             if r.status_code < 400:
                 return {"ok": True, "status": r.status_code, "text": r.text}
+            # אם 401/403 – ננסה פעם אחת לבצע רענון חתימה (שעון/nonce).
+            if r.status_code in (401, 403) and _anti_replay_required() and attempt == 0:
+                continue
+            return {"ok": False, "status": r.status_code, "text": r.text}
         except Exception as e:
             if attempt == 2:
                 return {"ok": False, "error": str(e)}
@@ -656,11 +679,12 @@ def _smart_manage_env() -> Dict[str, Any]:
             return [float(x.strip()) for x in val.split(",") if x.strip()]
         except Exception:
             return None
+    # ברירות מחדל עקביות עם ENV בדוק: pcts=4/8/16, splits=0.30/0.30/0.40, offset_bps=5
     return {
         "enable": os.getenv("SMART_MANAGE_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on"),
-        "offset_bps": int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS", "8"))),
-        "pcts": _csvf(os.getenv("SMART_MANAGE_PCTS")),
-        "splits": _csvf(os.getenv("SMART_MANAGE_SPLITS")),
+        "offset_bps": int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS", "5"))),
+        "pcts": _csvf(os.getenv("SMART_MANAGE_PCTS")) or [4.0, 8.0, 16.0],
+        "splits": _csvf(os.getenv("SMART_MANAGE_SPLITS")) or [0.30, 0.30, 0.40],
         "atr_mult": float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None,
     }
 
@@ -1059,14 +1083,16 @@ async def _approve_core(ticket_id: str):
     if ok:
         try:
             sm = _smart_manage_env()
-            offset_bps = sm.get("offset_bps") or 8
-            pcts = sm.get("pcts") or [0.25, 0.25, 0.5]
-            splits = sm.get("splits") or [0.4, 0.35, 0.25]
-            atr_mult = sm.get("atr_mult") or None
-            await _smart_manage_now(str(ticket.get("symbol","")).upper(),
-                                    offset_bps=offset_bps, pcts=pcts, splits=splits, atr_mult=atr_mult)
-        except Exception:
-            pass
+            if sm.get("enable", True):
+                await _smart_manage_now(
+                    str(ticket.get("symbol","")).upper(),
+                    offset_bps=sm.get("offset_bps"),
+                    pcts=sm.get("pcts"),
+                    splits=sm.get("splits"),
+                    atr_mult=sm.get("atr_mult"),
+                )
+        except Exception as e:
+            logger.warning("smart_manage_trigger_failed: %s", e)
 
     with suppress(Exception):
         sym, side, qty = ticket.get("symbol", ""), ticket.get("side", ""), ticket.get("qty", "")
@@ -1089,7 +1115,7 @@ async def _reject_core(ticket_id: str):
     sym, side, qty = (str(ticket.get("symbol", "")) or "").upper(), str(ticket.get("side", "")).upper(), ticket.get("qty", "")
     with suppress(Exception):
         await _send_telegram_html(
-            f"⛔️ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n— — —\nהבקשה נדחתה."
+            f"⛔️ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n— — —\νהבקשה נדחתה."
         )
     await _delete_ticket(ticket_id, source, final_status=False)
     return _html("⛔️ נדחה — הכרטיס הוסר.")
@@ -1366,7 +1392,6 @@ async def readyz_strict():
             await r.ping()
     except Exception as e:
         logger.warning("readyz.strict.redis_ping_failed: %s", e)
-        # תוקן: טקסט שגוי שהיה משובש
         return PlainTextResponse("redis_fail", status_code=503)
     return PlainTextResponse("ok", status_code=200)
 
@@ -1433,6 +1458,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
