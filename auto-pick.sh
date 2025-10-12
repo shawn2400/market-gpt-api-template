@@ -10,7 +10,7 @@ BINANCE_API_KEY="${BINANCE_API_KEY:-}"
 BINANCE_API_SECRET="${BINANCE_API_SECRET:-}"
 
 UNIVERSE="${UNIVERSE:-BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT}"
-MODE="${MODE:-approve}"   # approve=טיקט טלגרם (מומלץ) | direct=פתיחה ישירה
+MODE="${MODE:-approve}"   # approve|direct
 
 BUDGET_MIN="${BUDGET_MIN:-100}"
 BUDGET_MAX="${BUDGET_MAX:-200}"
@@ -142,7 +142,6 @@ PY
 }
 
 main(){
-  # ודא שהמנג'ר חי
   HEALTH="$(curl -sS "$HOST/ops/manager/health" -H "Authorization: Bearer $TOKEN" || true)"
   TC="$(jnum "$HEALTH" "tick_count")"
   if [ -z "$TC" ] || [ "$TC" -le 0 ]; then
@@ -157,6 +156,7 @@ main(){
   BUDGET="$(calc_linear "$SCORE" "$BUDGET_MIN" "$BUDGET_MAX")"
   MP="$(get_mark_price "$SYMBOL")"
   IFS='|' read -r QSTEP TICK <<<"$(get_filters "$SYMBOL")"
+
   RAW_QTY="$(python3 - <<PY
 from decimal import Decimal as D
 print((D("$BUDGET")/D("$MP")))
@@ -191,4 +191,5 @@ JSON
 main "$@"
 SH
 chmod +x /app/auto-pick.sh
+
 
