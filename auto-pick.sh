@@ -11,8 +11,8 @@ BINANCE_API_KEY="${BINANCE_API_KEY:-}"
 BINANCE_API_SECRET="${BINANCE_API_SECRET:-}"
 
 UNIVERSE="${UNIVERSE:-BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT}"
-MODE="${MODE:-approve}"   # approve|direct
-INTERVAL="${INTERVAL:-15m}"
+INTERVALS="${INTERVALS:-15m,30m,1h,1d}"
+MODE="${MODE:-approve}"
 
 BUDGET_MIN="${BUDGET_MIN:-100}"
 BUDGET_MAX="${BUDGET_MAX:-200}"
@@ -50,37 +50,63 @@ get_filters(){
   echo "${STEP:-0.001}|${TICK:-0.10}"
 }
 
-# ====== Pick best symbol ======
-pick_top(){
-  local TOP; TOP="$(curl -sS "$HOST/topk" || true)"
+calc_linear(){
+python3 - <<PY
+v=$1; a=6.0; b=8.8
+c=$2; d=$3
+v=max(a, min(b, v))
+t=(v-a)/(b-a) if b>a else 0.5
+print(int(round(c + t*(d-c))))
+PY
+}
+
+# ====== timeframe chooser (מבין "15m,30m,1h,1d") ======
+best_interval_for(){
+  local S="$1" best_i="" best_s=""
+  IFS=',' read -ra IFR <<< "$INTERVALS"
+  for I in "${IFR[@]}"; do
+    local R="$(curl -sS "$HOST/scan/public-now?symbol=$S&interval=$I&rich=1" || true)"
+    [ -z "$R" ] && R="$(curl -sS "$HOST/scan/now?symbol=$S&interval=$I&rich=1" -H "Authorization: Bearer $TOKEN" || true)"
+    [ -z "$R" ] && continue
+    local sc="$(jnum "$R" "score")"
+    [ -z "$sc" ] && continue
+    awk "BEGIN{exit !($sc >= $SCORE_MIN)}" || continue
+    if [ -z "$best_s" ] || awk "BEGIN{exit !($sc > $best_s)}"; then best_s="$sc"; best_i="$I"; fi
+  done
+  [ -n "$best_i" ] && echo "$best_i|$best_s" || echo ""
+}
+
+# ====== pick best symbol from UNIVERSE ======
+pick_symbol(){
+  # נסה קודם topk (קל משקל):
+  local TOP="$(curl -sS "$HOST/topk" || true)"
+  local best="" bsc=""
   if [ -n "$TOP" ]; then
     IFS=',' read -ra SYMS <<< "$UNIVERSE"
-    local best="" bsc="" badx="" bside=""
     for S in "${SYMS[@]}"; do
       local C; C="$(printf "%s" "$TOP" | tr -d '\n' | sed -n 's/.*{"symbol":"'"$S"'".\{1,200\}}/\0/p' | head -n1)"
       [ -z "$C" ] && continue
-      local sc adx side; sc="$(jnum "$C" "score")"; adx="$(jnum "$C" "adx")"; side="$(jstr "$C" "side")"
+      local sc="$(jnum "$C" "score")"
       [ -z "$sc" ] && continue
       awk "BEGIN{exit !($sc >= $SCORE_MIN)}" || continue
-      if [ -z "$bsc" ] || awk "BEGIN{exit !($sc > $bsc)}"; then best="$S"; bsc="$sc"; badx="${adx:-0}"; bside="${side:-}"; fi
+      if [ -z "$bsc" ] || awk "BEGIN{exit !($sc > $bsc)}"; then best="$S"; bsc="$sc"; fi
     done
-    [ -n "$best" ] && { echo "$best|$bsc|${badx:-0}|${bside:-}"; return; }
+    [ -n "$best" ] && { echo "$best|$bsc"; return; }
   fi
+  # fallback: סריקה נקודתית לכל סימבול (עדיין קל)
   IFS=',' read -ra SYMS <<< "$UNIVERSE"
-  local best="" bsc="" badx="" bside=""
   for S in "${SYMS[@]}"; do
-    local R; R="$(curl -sS "$HOST/scan/now?symbol=$S&interval=$INTERVAL&rich=1" -H "Authorization: Bearer $TOKEN" || true)"
-    [ -z "$R" ] && R="$(curl -sS "$HOST/scan/public-now?symbol=$S&interval=$INTERVAL&rich=1" || true)"
+    local R="$(curl -sS "$HOST/scan/public-now?symbol=$S&interval=15m&rich=1" || true)"
+    [ -z "$R" ] && R="$(curl -sS "$HOST/scan/now?symbol=$S&interval=15m&rich=1" -H "Authorization: Bearer $TOKEN" || true)"
     [ -z "$R" ] && continue
-    local sc adx side; sc="$(jnum "$R" "score")"; adx="$(jnum "$R" "adx")"; side="$(jstr "$R" "side")"
+    local sc="$(jnum "$R" "score")"
     [ -z "$sc" ] && continue
     awk "BEGIN{exit !($sc >= $SCORE_MIN)}" || continue
-    if [ -z "$bsc" ] || awk "BEGIN{exit !($sc > $bsc)}"; then best="$S"; bsc="$sc"; badx="${adx:-0}"; bside="${side:-}"; fi
+    if [ -z "$bsc" ] || awk "BEGIN{exit !($sc > $bsc)}"; then best="$S"; bsc="$sc"; fi
   done
-  [ -n "$best" ] && echo "$best|$bsc|${badx:-0}|${bside:-}" || echo ""
+  [ -n "$best" ] && echo "$best|$bsc" || echo ""
 }
 
-# ====== Decide side ======
 decide_side(){
   local sc="$1" adx="$2" guess="${3:-}"
   [ -n "$guess" ] && { [[ "$guess" =~ ^(long|buy|LONG|BUY)$ ]] && echo BUY && return; [[ "$guess" =~ ^(short|sell|SHORT|SELL)$ ]] && echo SELL && return; }
@@ -89,7 +115,6 @@ decide_side(){
   echo BUY
 }
 
-# ====== Profile mapping ======
 profile_map(){
   local sc="$1" adx="$2" p="base"
   awk "BEGIN{exit !($sc < 6.0)}" && p="conservative"
@@ -106,7 +131,6 @@ profile_map(){
   esac
 }
 
-# ====== Signed calls ======
 manage_once_signed(){
   local BODY="$1" TS NONCE SIG
   TS="$(ts_s)"; NONCE="$(openssl rand -hex 8)"
@@ -127,7 +151,6 @@ create_ticket(){
     --data "$payload"
 }
 
-# ====== Optional: direct open on Binance ======
 binance_open_market(){
   local S="$1" SIDE="$2" LEV="$3" QTY="$4" BASE="https://fapi.binance.com" RECV="45000"
   local q="symbol=$S&marginType=ISOLATED&timestamp=$(ts_ms)&recvWindow=$RECV"
@@ -138,49 +161,51 @@ binance_open_market(){
   curl -sS -X POST "$BASE/fapi/v1/order" -H "X-MBX-APIKEY: $BINANCE_API_KEY" --data "$q&signature=$(mbx_sig "$q")"
 }
 
-calc_linear(){
-python3 - <<PY
-v=$1; a=6.0; b=8.8
-c=$2; d=$3
-v=max(a, min(b, v))
-t=(v-a)/(b-a) if b>a else 0.5
-print(int(round(c + t*(d-c))))
-PY
-}
-
 main(){
-  # manager live?
-  HEALTH="$(curl -sS "$HOST/ops/manager/health" -H "Authorization: Bearer $TOKEN" || true)"
-  TC="$(jnum "$HEALTH" "tick_count")"
+  # manager health
+  local H="$(curl -sS "$HOST/ops/manager/health" -H "Authorization: Bearer $TOKEN" || true)"
+  local TC="$(jnum "$H" "tick_count")"
   if [ -z "$TC" ] || [ "$TC" -le 0 ]; then
-    echo "[auto-pick] manager not ready"; exit 0
+    echo "[auto-pick] manager_not_available"; exit 0
   fi
 
-  # pick best symbol
-  PICK="$(pick_top)"; [ -z "$PICK" ] && { echo "[auto-pick] no candidate"; exit 0; }
-  IFS='|' read -r SYMBOL SCORE ADX SIDE_GUESS <<<"$PICK"
+  # best symbol (score גבוה) מתוך UNIVERSE
+  local PS="$(pick_symbol)"; [ -z "$PS" ] && { echo "[auto-pick] no symbol"; exit 0; }
+  local SYMBOL="${PS%%|*}"; local SC_TOP="${PS##*|}"
+
+  # עבור הסימבול — בחר טיימפריים אופטימלי מהרשימה
+  local BI="$(best_interval_for "$SYMBOL")"; [ -z "$BI" ] && { echo "[auto-pick] no interval"; exit 0; }
+  local INTERVAL="${BI%%|*}"; local SCORE="${BI##*|}"
+
+  # משוך adx ו־side לאותו טיימפריים
+  local R="$(curl -sS "$HOST/scan/public-now?symbol=$SYMBOL&interval=$INTERVAL&rich=1" || true)"
+  [ -z "$R" ] && R="$(curl -sS "$HOST/scan/now?symbol=$SYMBOL&interval=$INTERVAL&rich=1" -H "Authorization: Bearer $TOKEN" || true)"
+  local ADX="$(jnum "$R" "adx")"; local SIDE_GUESS="$(jstr "$R" "side")"
+  [ -z "$ADX" ] && ADX="0"
+
   awk "BEGIN{exit !($SCORE >= $SCORE_MIN)}" || { echo "[auto-pick] score too low"; exit 0; }
   awk "BEGIN{exit !($ADX >= $ADX_MIN)}"     || { echo "[auto-pick] adx too low"; exit 0; }
 
-  SIDE="$(decide_side "$SCORE" "$ADX" "$SIDE_GUESS")"
+  local SIDE="$(decide_side "$SCORE" "$ADX" "$SIDE_GUESS")"
   IFS='|' read -r PCTS SPLITS ATR OFF <<<"$(profile_map "$SCORE" "$ADX")"
-  LEV="$(calc_linear "$SCORE" "$LEV_MIN" "$LEV_MAX")"
-  BUDGET="$(calc_linear "$SCORE" "$BUDGET_MIN" "$BUDGET_MAX")"
 
-  MP="$(get_mark_price "$SYMBOL")"
+  local LEV="$(calc_linear "$SCORE" "$LEV_MIN" "$LEV_MAX")"
+  local BUDGET="$(calc_linear "$SCORE" "$BUDGET_MIN" "$BUDGET_MAX")"
+
+  local MP="$(get_mark_price "$SYMBOL")"
   IFS='|' read -r QSTEP TICK <<<"$(get_filters "$SYMBOL")"
 
-  RAW_QTY="$(python3 - <<PY
+  local RAW_QTY="$(python3 - <<PY
 from decimal import Decimal as D
 print((D("$BUDGET")/D("$MP")))
 PY
 )"
-  QTY="$(quant_floor "$RAW_QTY" "$QSTEP")"
+  local QTY="$(quant_floor "$RAW_QTY" "$QSTEP")"
 
-  echo "[auto-pick] $SYMBOL side=$SIDE score=$SCORE adx=$ADX lev=$LEV budget=$BUDGET mp=$MP qty=$QTY step=$QSTEP"
+  echo "[auto-pick] sym=$SYMBOL itv=$INTERVAL side=$SIDE score=$SCORE adx=$ADX lev=$LEV budget=$BUDGET mp=$MP qty=$QTY step=$QSTEP"
 
   if [ "$MODE" = "approve" ]; then
-    PAYLOAD="$(cat <<JSON
+    local PAYLOAD="$(cat <<JSON
 {
   "type": "trade_request",
   "symbol": "$SYMBOL",
@@ -196,8 +221,9 @@ JSON
     create_ticket "$PAYLOAD"
     exit 0
   else
+    # פתיחה מיידית + ניהול
     binance_open_market "$SYMBOL" "$SIDE" "$LEV" "$QTY" | sed 's/.*/[binance] &/'
-    BODY="{\"symbol\":\"$SYMBOL\",\"offset_bps\":$OFF,\"pcts\":$PCTS,\"splits\":$SPLITS,\"atr_mult\":$ATR}"
+    local BODY="{\"symbol\":\"$SYMBOL\",\"offset_bps\":$OFF,\"pcts\":$PCTS,\"splits\":$SPLITS,\"atr_mult\":$ATR}"
     manage_once_signed "$BODY" | sed 's/.*/[manage-once] &/'
   fi
 }
