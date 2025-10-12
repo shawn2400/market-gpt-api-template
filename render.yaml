@@ -1,4 +1,4 @@
-```yaml
+
 services:
   - type: web
     name: algogpt-prod
@@ -317,7 +317,8 @@ services:
       - { key: INTERNAL_JWT_PUBLIC_KEY,     fromSecret: INTERNAL_JWT_PUBLIC_KEY }
       - { key: BINANCE_API_KEY,             fromSecret: BINANCE_API_KEY }
       - { key: BINANCE_API_SECRET,          fromSecret: BINANCE_API_SECRET }
-```
+
+
 
 
 
