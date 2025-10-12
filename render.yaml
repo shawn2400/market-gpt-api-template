@@ -55,7 +55,7 @@ services:
       - { key: PROTECT_APPROVE_ROUTES,   value: "1" }
       - { key: PROTECT_DIGEST_ROUTES,    value: "1" }
       - { key: ENABLE_HSTS,              value: "1" }
-      - { key: SECURITY_PUBLIC_PATHS,    value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/ticket,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version" }
+      - { key: SECURITY_PUBLIC_PATHS,    value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ops/ui,/ops/ui/orders,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version" }
       - { key: SECURITY_PUBLIC_PREFIXES, value: "/public,/price,/static,/risk" }
 
       # ========================= Anti-Replay =========================
@@ -65,7 +65,7 @@ services:
       - { key: SIGNED_TS_MAX_SKEW_SEC,        value: "60" }
       - { key: SIGNED_NONCE_TTL_SEC,          value: "120" }
 
-      # ========================= Rate Limit / Public cache =========================
+      # ========================= Rate Limit (Backend/Public cache) =========================
       - { key: RATE_LIMIT_ENABLE,       value: "1" }
       - { key: RL_FAIL_OPEN,            value: "0" }
       - { key: RATE_LIMIT_BACKEND,      value: "redis" }
