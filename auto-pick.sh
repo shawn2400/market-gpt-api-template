@@ -2,6 +2,7 @@ cat > /app/auto-pick.sh <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ====== ENV ======
 HOST="${HOST:-https://algogpt-docker.onrender.com}"
 TOKEN="${TOKEN:-}"
 SECRET_HEX="${SECRET_HEX:-}"
@@ -11,6 +12,7 @@ BINANCE_API_SECRET="${BINANCE_API_SECRET:-}"
 
 UNIVERSE="${UNIVERSE:-BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT}"
 MODE="${MODE:-approve}"   # approve|direct
+INTERVAL="${INTERVAL:-15m}"
 
 BUDGET_MIN="${BUDGET_MIN:-100}"
 BUDGET_MAX="${BUDGET_MAX:-200}"
@@ -19,8 +21,8 @@ LEV_MAX="${LEV_MAX:-35}"
 
 SCORE_MIN="${SCORE_MIN:-6.0}"
 ADX_MIN="${ADX_MIN:-20}"
-INTERVAL="${INTERVAL:-15m}"
 
+# ====== Utils ======
 ts_ms(){ date +%s%3N; }
 ts_s(){ date +%s; }
 sig_hmac(){ printf "%s" "$2" | openssl dgst -sha256 -mac HMAC -macopt hexkey:"$1" | awk '{print $2}'; }
@@ -48,6 +50,7 @@ get_filters(){
   echo "${STEP:-0.001}|${TICK:-0.10}"
 }
 
+# ====== Pick best symbol ======
 pick_top(){
   local TOP; TOP="$(curl -sS "$HOST/topk" || true)"
   if [ -n "$TOP" ]; then
@@ -77,6 +80,7 @@ pick_top(){
   [ -n "$best" ] && echo "$best|$bsc|${badx:-0}|${bside:-}" || echo ""
 }
 
+# ====== Decide side ======
 decide_side(){
   local sc="$1" adx="$2" guess="${3:-}"
   [ -n "$guess" ] && { [[ "$guess" =~ ^(long|buy|LONG|BUY)$ ]] && echo BUY && return; [[ "$guess" =~ ^(short|sell|SHORT|SELL)$ ]] && echo SELL && return; }
@@ -85,6 +89,7 @@ decide_side(){
   echo BUY
 }
 
+# ====== Profile mapping ======
 profile_map(){
   local sc="$1" adx="$2" p="base"
   awk "BEGIN{exit !($sc < 6.0)}" && p="conservative"
@@ -101,6 +106,7 @@ profile_map(){
   esac
 }
 
+# ====== Signed calls ======
 manage_once_signed(){
   local BODY="$1" TS NONCE SIG
   TS="$(ts_s)"; NONCE="$(openssl rand -hex 8)"
@@ -121,6 +127,7 @@ create_ticket(){
     --data "$payload"
 }
 
+# ====== Optional: direct open on Binance ======
 binance_open_market(){
   local S="$1" SIDE="$2" LEV="$3" QTY="$4" BASE="https://fapi.binance.com" RECV="45000"
   local q="symbol=$S&marginType=ISOLATED&timestamp=$(ts_ms)&recvWindow=$RECV"
@@ -142,18 +149,24 @@ PY
 }
 
 main(){
+  # manager live?
   HEALTH="$(curl -sS "$HOST/ops/manager/health" -H "Authorization: Bearer $TOKEN" || true)"
   TC="$(jnum "$HEALTH" "tick_count")"
   if [ -z "$TC" ] || [ "$TC" -le 0 ]; then
     echo "[auto-pick] manager not ready"; exit 0
   fi
 
+  # pick best symbol
   PICK="$(pick_top)"; [ -z "$PICK" ] && { echo "[auto-pick] no candidate"; exit 0; }
   IFS='|' read -r SYMBOL SCORE ADX SIDE_GUESS <<<"$PICK"
+  awk "BEGIN{exit !($SCORE >= $SCORE_MIN)}" || { echo "[auto-pick] score too low"; exit 0; }
+  awk "BEGIN{exit !($ADX >= $ADX_MIN)}"     || { echo "[auto-pick] adx too low"; exit 0; }
+
   SIDE="$(decide_side "$SCORE" "$ADX" "$SIDE_GUESS")"
   IFS='|' read -r PCTS SPLITS ATR OFF <<<"$(profile_map "$SCORE" "$ADX")"
   LEV="$(calc_linear "$SCORE" "$LEV_MIN" "$LEV_MAX")"
   BUDGET="$(calc_linear "$SCORE" "$BUDGET_MIN" "$BUDGET_MAX")"
+
   MP="$(get_mark_price "$SYMBOL")"
   IFS='|' read -r QSTEP TICK <<<"$(get_filters "$SYMBOL")"
 
@@ -164,7 +177,7 @@ PY
 )"
   QTY="$(quant_floor "$RAW_QTY" "$QSTEP")"
 
-  echo "[auto-pick] $SYMBOL side=$SIDE score=$SCORE adx=$ADX lev=$LEV budget=$BUDGET mp=$MP qty=$QTY"
+  echo "[auto-pick] $SYMBOL side=$SIDE score=$SCORE adx=$ADX lev=$LEV budget=$BUDGET mp=$MP qty=$QTY step=$QSTEP"
 
   if [ "$MODE" = "approve" ]; then
     PAYLOAD="$(cat <<JSON
@@ -191,5 +204,6 @@ JSON
 main "$@"
 SH
 chmod +x /app/auto-pick.sh
+
 
 
