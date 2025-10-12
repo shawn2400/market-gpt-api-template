@@ -211,22 +211,17 @@ services:
       - { key: ENTRY_GAP_MAX_PCT,         value: "0.80" }
       - { key: ENTRY_GAP_WARN_PCT,        value: "0.50" }
       - { key: STOP_BAND_BPS,             value: "12" }
-      - { key: TP_BE_ONLY_AFTER_TP1,      value: "1" }
+      - { key: TP_BE_ONLY_AFTER_TP1,      value: "0" }     # ← דינמי: BE גם בלי TP1
       - { key: STREAM_TP_BE,              value: "1" }
-
-      # 🔻 דינמי באמת: לא לשים סולם קבוע באישור
-      - { key: TP_LADDER_ON_APPROVE,      value: "0" }
-
-      # משאיר אפשרות למנהל להניח/לעדכן סולמות לפי חישוב—אבל לא עם אחוזים קבועים
+      - { key: TP_LADDER_ON_APPROVE,      value: "0" }     # ← לא תבניתי
       - { key: LADDER_TP_ENABLE,          value: "1" }
       - { key: LADDER_SL_ENABLE,          value: "1" }
       - { key: TP_MAX_LADDERS,            value: "3" }
-
       - { key: TRAIL_ENABLE,              value: "1" }
       - { key: TRAIL_ATR_MULT,            value: "2.6" }
       - { key: ATR_UPDATE_COOLDOWN_SEC,   value: "20" }
       - { key: ATR_MIN_DELTA,             value: "0.02" }
-      - { key: BE_ARM_PCT,                value: "1.0" }
+      - { key: BE_ARM_PCT,                value: "0.6" }    # ← מקדים BE
       - { key: BE_GUARD_ENABLE,           value: "1" }
       - { key: BE_GUARD_EVERY_SEC,        value: "20" }
       - { key: TP_BE_OFFSET_BPS,          value: "5" }
@@ -234,9 +229,8 @@ services:
       # ========================= Smart-Manage =========================
       - { key: SMART_MANAGE_ON_APPROVE,     value: "1" }
       - { key: SMART_MANAGE_BE_OFFSET_BPS,  value: "5" }
-      # ❌ לא קובעים אחוזי TP/Splits קבועים — ריק כדי להשאיר חישוב דינמי:
-      - { key: SMART_MANAGE_PCTS,           value: "" }
-      - { key: SMART_MANAGE_SPLITS,         value: "" }
+      - { key: SMART_MANAGE_PCTS,           value: "" }     # ← בלי אחוזים קשיחים
+      - { key: SMART_MANAGE_SPLITS,         value: "" }     # ← חישוב דינמי
       - { key: SMART_MANAGE_TRAIL_ATR_MULT, value: "2.6" }
 
       # ========================= Hedge & Auto-Flip =========================
@@ -374,7 +368,6 @@ services:
       - { key: INTERNAL_JWT_PUBLIC_KEY,   fromSecret: INTERNAL_JWT_PUBLIC_KEY }
       - { key: BINANCE_API_KEY,           fromSecret: BINANCE_API_KEY }
       - { key: BINANCE_API_SECRET,        fromSecret: BINANCE_API_SECRET }
-
 
 
 
