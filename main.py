@@ -80,17 +80,13 @@ async def _head_compat_and_soft_readyz(request: Request, call_next):
         scope_copy["method"] = "GET"
         new_req = Request(scope_copy, receive=request.receive)
 
-        try:
-            resp = await call_next(new_req)
-        except Exception:
-            # תן ל-global exception handler לטפל
-            raise
+        resp = await call_next(new_req)
 
         # מחזירים סטטוס+כותרות בלבד (ללא גוף)
         head_headers = dict(resp.headers)
         return StarletteResponse(
             status_code=resp.status_code,
-            headers=head_headers,
+            headers=hand_headers if (hand_headers := head_headers) else {},
             media_type=resp.media_type
         )
 
@@ -326,21 +322,20 @@ def _should_public_cache(path: str) -> bool:
 
 @app.middleware("http")
 async def _public_cache_etag(request: Request, call_next):
-    # לא GET או לא בנתיבי קאש → העבר כרגיל (ואל תבלע חריגות)
+    # עובדים רק על GET ובנתיבי קאש
     if request.method.upper() != "GET" or not _should_public_cache(request.url.path):
-        try:
-            return await call_next(request)
-        except Exception:
-            raise
+        return await call_next(request)
 
-    # הפעל את הנתיב והגן על חריגות כדי לא לייצר "No response returned"
+    # הגנה על "No response returned" כדי לא להפיל שרת
     try:
         resp: Response = await call_next(request)
-    except Exception:
+    except RuntimeError as e:
+        if "No response returned" in str(e):
+            return PlainTextResponse("", status_code=204)
         raise
 
-    # אל תעשה קאש/ETag על שגיאות או על גוף ריק
     try:
+        # לא קאש על שגיאות
         if int(getattr(resp, "status_code", 200)) >= 400:
             return resp
 
@@ -365,7 +360,7 @@ async def _public_cache_etag(request: Request, call_next):
             fresh.headers["ETag"] = etag
             return fresh
     except Exception:
-        # לא כשל קריטי – מחזירים את התגובה המקורית
+        # כשל בקאש/ETag לא אמור להפיל – מחזירים את התגובה המקורית
         pass
     return resp
 
@@ -1376,6 +1371,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
