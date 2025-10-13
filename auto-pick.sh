@@ -1,263 +1,188 @@
-cat > /app/auto-pick.sh <<'SH'
+cat > ./auto-pick.sh <<'SH'
 #!/usr/bin/env bash
+# auto-pick.sh (PRO) — בוחר timeframe לפי ADX+ATR%, יוצר טיקט HYBRID עם TP/SL לפי פרופיל דינמי.
 set -euo pipefail
 
-# ====== ENV ======
-HOST="${HOST:-https://algogpt-docker.onrender.com}"
-TOKEN="${TOKEN:-}"
-SECRET_HEX="${SECRET_HEX:-}"
-OPS_SECRET_HEX="${OPS_SECRET_HEX:-}"
-BINANCE_API_KEY="${BINANCE_API_KEY:-}"
-BINANCE_API_SECRET="${BINANCE_API_SECRET:-}"
+: "${HOST:?set in algogpt.env}"
+: "${TOKEN:?set in algogpt.env}"
 
-UNIVERSE="${UNIVERSE:-BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT}"
-INTERVALS="${INTERVALS:-15m,30m,1h,1d}"
-MODE="${MODE:-approve}"
+# ===== Tunables (אפשר לשנות ב-env לפני הרצה) =====
+INTERVALS_CSV="${INTERVALS:-15m,30m,1h,4h,1d}"
+ADX_WEIGHT="${ADX_WEIGHT:-0.6}"
+ATRW_WEIGHT="${ATRW_WEIGHT:-0.4}"        # משקל ל־ATR% (ATR/Price*100)
+ATRW_CAP_PCT="${ATRW_CAP_PCT:-3.0}"      # חיתוך ATR% מקסימלי לנרמול
+SCORE_FALLBACK_MIN="${SCORE_FALLBACK_MIN:-6.0}"  # אם אין score מהשרת
+APPROVAL_MAX_SL_PCT="${APPROVAL_MAX_SL_PCT:-3.0}" # תקרת SL% לבטיחות
 
-BUDGET_MIN="${BUDGET_MIN:-100}"
-BUDGET_MAX="${BUDGET_MAX:-200}"
-LEV_MIN="${LEV_MIN:-15}"
-LEV_MAX="${LEV_MAX:-35}"
+log(){ echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') [INFO] $*"; }
+warn(){ echo "$(date -u +'%Y-%m-%dT%H:%M:%SZ') [WARN] $*" >&2; }
 
-SCORE_MIN="${SCORE_MIN:-6.0}"
-ADX_MIN="${ADX_MIN:-20}"
-
-# ====== Utils ======
-ts_ms(){ date +%s%3N; }
-ts_s(){ date +%s; }
-sig_hmac(){ printf "%s" "$2" | openssl dgst -sha256 -mac HMAC -macopt hexkey:"$1" | awk '{print $2}'; }
-mbx_sig(){ printf "%s" "$1" | openssl dgst -sha256 -hmac "$BINANCE_API_SECRET" -binary | xxd -p -c 256; }
-
-# json helpers בלי jq (פשוטים)
-jnum(){ printf "%s" "$1" | tr -d '\n' | sed -n 's/.*"'"$2"'":[[:space:]]*\([-0-9.]\+\).*/\1/p' | head -n1; }
-jstr(){ printf "%s" "$1" | tr -d '\n' | sed -n 's/.*"'"$2"'":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1; }
-
-# ריצפה לכמות לפי stepSize, ועיגול למחיר לפי tickSize
-quant_floor() { python3 - <<PY
-from decimal import Decimal, getcontext
-getcontext().prec = 28
-v=Decimal("$1"); s=Decimal("$2")
-q=(v//s)*s
-d=len(str(s).split('.')[-1]) if '.' in str(s) else 0
-print(f"{q:.{d}f}")
-PY
-}
-price_round() { python3 - <<PY
-from decimal import Decimal, getcontext
-getcontext().prec = 28
-p=Decimal("$1"); t=Decimal("$2")
-q=(p//t)*t
-d=len(str(t).split('.')[-1]) if '.' in str(t) else 0
-print(f"{q:.{d}f}")
-PY
+json_field() { # json, key -> first numeric/string
+  printf '%s' "$1" | grep -o "\"$2\":[[:space:]]*[-0-9.]\+" | head -n1 | awk -F: '{print $2}'
 }
 
-# מחירים/פילטרים מהבורסה (לדיוק לכל סימבול)
-get_mark_price(){ curl -sS "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=$1" | sed -n 's/.*"markPrice":"\([0-9.]\+\)".*/\1/p'; }
-get_filters(){
-  local EX="$(curl -sS "https://fapi.binance.com/fapi/v1/exchangeInfo?symbol=$1")"
-  local STEP="$(printf "%s" "$EX" | tr -d '\n' | sed -n 's/.*"symbol":"'"$1"'".*?"stepSize":"\([0-9.]\+\)".*/\1/p' | head -n1)"
-  local TICK="$(printf "%s" "$EX" | tr -d '\n' | sed -n 's/.*"symbol":"'"$1"'".*?"tickSize":"\([0-9.]\+\)".*/\1/p' | head -n1)"
-  echo "${STEP:-0.001}|${TICK:-0.10}"
+json_keystr() { # json, key -> first string
+  printf '%s' "$1" | sed -n "s/.*\"$2\":\"\\([^\"]\\+\\)\".*/\\1/p" | head -n1
 }
 
-# מיפוי ליניארי מה-Score אל טווחי LEV/BUDGET
-calc_linear(){
-python3 - <<PY
-v=$1; a=6.0; b=8.8
-c=$2; d=$3
-v=max(a, min(b, v))
-t=(v-a)/(b-a) if b>a else 0.5
-print(int(round(c + t*(d-c))))
-PY
-}
-
-# ====== ציון משוקלל ל-timeframe: Score+ADX+ATR% ======
-tf_score(){
-python3 - <<PY
-import sys
-score=float(sys.argv[1]); adx=float(sys.argv[2]); atrp=float(sys.argv[3])
-def clamp(x,a,b): return max(a,min(b,x))
-s = clamp(score/10.0, 0, 1)         # Score: 0..10 -> 0..1
-a = clamp((adx-10)/30.0, 0, 1)      # ADX:   10..40 -> 0..1
-v = clamp(atrp/5.0, 0, 1)           # ATR%:  0..5%  -> 0..1
-wS, wA, wV = 0.55, 0.35, 0.10
-print( round(wS*s + wA*a + wV*v, 6) )
-PY
-"$1" "$2" "$3"
+has_open_position(){
+  local sym="$1"
+  local resp
+  resp="$(curl -fsS -X POST "$HOST/guard/smoke/run" \
+      -H "Authorization: Bearer $TOKEN" \
+      -H "Content-Type: application/json" \
+      -d "\"$sym\"" || true)"
+  # אם יש "No open position" => אין פוזיציה; אחרת מניחים שיש פוזיציה פתוחה
+  if printf '%s\n' "$resp" | grep -q 'No open position'; then
+    return 1  # אין פוזיציה
+  else
+    return 0  # יש פוזיציה
+  fi
 }
 
 best_interval_for(){
-  local S="$1" best_i="" best_val=""
-  IFS=',' read -ra IFR <<< "$INTERVALS"
-  for I in "${IFR[@]}"; do
-    local R="$(curl -sS "$HOST/scan/public-now?symbol=$S&interval=$I&rich=1" || true)"
-    [ -z "$R" ] && R="$(curl -sS "$HOST/scan/now?symbol=$S&interval=$I&rich=1" -H "Authorization: Bearer $TOKEN" || true)"
-    [ -z "$R" ] && continue
-    local sc="$(jnum "$R" "score")"; [ -z "$sc" ] && continue
-    local adx="$(jnum "$R" "adx")";   [ -z "$adx" ] && adx="0"
-    local atr="$(jnum "$R" "atr_pct")"; [ -z "$atr" ] && atr="0"
-    awk "BEGIN{exit !($sc >= $SCORE_MIN)}" || continue
-    local comp="$(tf_score "$sc" "$adx" "$atr")"
-    if [ -z "$best_val" ] || awk "BEGIN{exit !($comp > $best_val)}"; then
-      best_val="$comp"; best_i="$I"
+  local sym="$1"
+  local best_if=""
+  local best_score="-1"
+
+  IFS=',' read -r -a IFS_ARR <<< "$INTERVALS_CSV"
+  for ifr in "${IFS_ARR[@]}"; do
+    local scan resp adx atr bbmid ema21 price atrw norm_adx norm_atrw tf_score
+    resp="$(curl -fsS "$HOST/scan/public-now?symbol=$sym&interval=$ifr&rich=1" || true)"
+    # לשלוף ADX/ATR
+    adx="$(printf '%s' "$resp" | sed -n 's/.*"adx":[[:space:]]*\([-0-9.]\+\).*/\1/p' | head -n1)"
+    atr="$(printf '%s' "$resp" | sed -n 's/.*"atr":[[:space:]]*\([-0-9.]\+\).*/\1/p' | head -n1)"
+    # נסה מחיר מ-bb_mid או ema_21
+    bbmid="$(printf '%s' "$resp" | sed -n 's/.*"bb_mid":[[:space:]]*\([-0-9.]\+\).*/\1/p' | head -n1)"
+    ema21="$(printf '%s' "$resp" | sed -n 's/.*"ema_21":[[:space:]]*\([-0-9.]\+\).*/\1/p' | head -n1)"
+    price="$bbmid"; [ -z "$price" ] && price="$ema21"
+    [ -z "$adx" ] && adx="0"
+    [ -z "$atr" ] && atr="0"
+    [ -z "$price" ] && { warn "no price for $sym@$ifr"; continue; }
+
+    # ATR% משוער
+    atrw="$(awk -v a="$atr" -v p="$price" 'BEGIN{ if(p>0){print (a/p*100)} else {print 0} }')"
+    # נרמולים: ADX 20..40, ATR% 0..ATRW_CAP_PCT
+    norm_adx="$(awk -v x="$adx" 'BEGIN{v=(x-20)/20; if(v<0)v=0; if(v>1)v=1; print v}')"
+    norm_atrw="$(awk -v x="$atrw" -v cap="$ATRW_CAP_PCT" 'BEGIN{ if(x<0)x=0; if(x>cap)x=cap; print x/cap }')"
+
+    tf_score="$(awk -v a="$norm_adx" -v b="$norm_atrw" -v wa="$ADX_WEIGHT" -v wb="$ATRW_WEIGHT" \
+      'BEGIN{print a*wa + b*wb}')"
+
+    log "$sym@$ifr: ADX=$adx ATR%=$(printf '%.3f' "$atrw") -> score=$(printf '%.3f' "$tf_score")"
+    if awk "BEGIN{exit !($tf_score > $best_score)}"; then
+      best_score="$tf_score"
+      best_if="$ifr"
     fi
   done
-  [ -n "$best_i" ] && echo "$best_i" || echo ""
+
+  printf '%s|%s\n' "$best_if" "$best_score"
 }
 
-pick_symbol(){
-  local best="" bsc=""
-  local TOP="$(curl -sS "$HOST/topk" || true)"
-  if [ -n "$TOP" ]; then
-    IFS=',' read -ra SYMS <<< "$UNIVERSE"
-    for S in "${SYMS[@]}"; do
-      local C; C="$(printf "%s" "$TOP" | tr -d '\n' | sed -n 's/.*{"symbol":"'"$S"'".\{1,200\}}/\0/p' | head -n1)"
-      [ -z "$C" ] && continue
-      local sc="$(jnum "$C" "score")"; [ -z "$sc" ] && continue
-      awk "BEGIN{exit !($sc >= $SCORE_MIN)}" || continue
-      if [ -z "$bsc" ] || awk "BEGIN{exit !($sc > $bsc)}"; then best="$S"; bsc="$sc"; fi
-    done
-    [ -n "$best" ] && { echo "$best|$bsc"; return; }
-  fi
-  IFS=',' read -ra SYMS <<< "$UNIVERSE"
-  for S in "${SYMS[@]}"; do
-    local R="$(curl -sS "$HOST/scan/public-now?symbol=$S&interval=15m&rich=1" || true)"
-    [ -z "$R" ] && R="$(curl -sS "$HOST/scan/now?symbol=$S&interval=15m&rich=1" -H "Authorization: Bearer $TOKEN" || true)"
-    [ -z "$R" ] && continue
-    local sc="$(jnum "$R" "score")"; [ -z "$sc" ] && continue
-    awk "BEGIN{exit !($sc >= $SCORE_MIN)}" || continue
-    if [ -z "$bsc" ] || awk "BEGIN{exit !($sc > $bsc)}"; then best="$S"; bsc="$sc"; fi
-  done
-  [ -n "$best" ] && echo "$best|$bsc" || echo ""
-}
+choose_profile(){
+  # קלט: score (יכול להגיע מהשרת; אם לא - נגזרת מה-ADX/ATR)
+  # פלט: profile,tp1,tp2,tp3,sl_pct,lev_hint,budget_hint,trail_atr,be_bps
+  local sc="$1" atrw="$2"
+  # ברירת מחדל:
+  local prof="base" tp1=3 tp2=6 tp3=12 slp=1.2 lev="10-25x" bud="80-400" trail=2.3 be=6
 
-decide_side(){
-  local sc="$1" adx="$2" hint="${3:-}"
-  [ -n "$hint" ] && { [[ "$hint" =~ ^(long|buy|LONG|BUY)$ ]] && echo BUY && return; [[ "$hint" =~ ^(short|sell|SHORT|SELL)$ ]] && echo SELL && return; }
-  awk "BEGIN{exit !($adx >= 28 && $sc >= 7.3)}" && { echo BUY;  return; }
-  awk "BEGIN{exit !($adx >= 28 && $sc <  7.3)}" && { echo SELL; return; }
-  echo BUY
-}
-
-profile_map(){
-  local sc="$1" adx="$2" p="base"
-  awk "BEGIN{exit !($sc < 6.0)}" && p="conservative"
-  awk "BEGIN{exit !($sc >= 6.0 && $sc < 7.5)}" && p="base"
-  awk "BEGIN{exit !($sc >= 7.5 && $sc < 8.5)}" && p="aggressive"
-  awk "BEGIN{exit !($sc >= 8.5)}" && p="extreme"
-  awk "BEGIN{exit !($adx < 22)}" && p="conservative"
-  awk "BEGIN{exit !($adx >= 28 && $sc >= 7.3)}" && { case "$p" in conservative)p="base";; base)p="aggressive";; aggressive)p="extreme";; esac; }
-  case "$p" in
-    conservative) echo "[2,4,7]|[0.50,0.30,0.20]|1.6|10" ;;
-    base)         echo "[3,6,12]|[0.25,0.25,0.50]|2.3|6" ;;
-    aggressive)   echo "[4,8,16]|[0.30,0.30,0.40]|2.6|5" ;;
-    extreme)      echo "[6,12,24]|[0.20,0.30,0.50]|3.2|4" ;;
-  esac
-}
-
-manage_once_signed(){
-  local BODY="$1" TS NONCE SIG
-  TS="$(ts_s)"; NONCE="$(openssl rand -hex 8)"
-  SIG="$(sig_hmac "$SECRET_HEX" "$TS.$NONCE.$BODY")"
-  curl -sS -X POST "$HOST/manage-once" \
-    -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-    -H "X-Timestamp: $TS" -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
-    --data "$BODY"
-}
-
-create_ticket(){
-  local payload="$1" TS NONCE SIG
-  TS="$(ts_s)"; NONCE="$(openssl rand -hex 8)"
-  SIG="$(sig_hmac "$OPS_SECRET_HEX" "$TS.$NONCE.$payload")"
-  curl -sS -X POST "$HOST/ops/ui/ticket/signed" \
-    -H "Content-Type: application/json" \
-    -H "X-Timestamp: $TS" -H "X-Nonce: $NONCE" -H "X-Signature: $SIG" \
-    --data "$payload"
-}
-
-binance_open_market(){
-  local S="$1" SIDE="$2" LEV="$3" QTY="$4" BASE="https://fapi.binance.com" RECV="45000"
-  local q="symbol=$S&marginType=ISOLATED&timestamp=$(ts_ms)&recvWindow=$RECV"
-  curl -sS -X POST "$BASE/fapi/v1/marginType" -H "X-MBX-APIKEY: $BINANCE_API_KEY" --data "$q&signature=$(mbx_sig "$q")" >/dev/null || true
-  q="symbol=$S&leverage=$LEV&timestamp=$(ts_ms)&recvWindow=$RECV"
-  curl -sS -X POST "$BASE/fapi/v1/leverage" -H "X-MBX-APIKEY: $BINANCE_API_KEY" --data "$q&signature=$(mbx_sig "$q")" >/dev/null
-  q="symbol=$S&side=$SIDE&type=MARKET&quantity=$QTY&timestamp=$(ts_ms)&recvWindow=$RECV"
-  curl -sS -X POST "$BASE/fapi/v1/order" -H "X-MBX-APIKEY: $BINANCE_API_KEY" --data "$q&signature=$(mbx_sig "$q")"
-}
-
-main(){
-  # manager health
-  local H="$(curl -sS "$HOST/ops/manager/health" -H "Authorization: Bearer $TOKEN" || true)"
-  local TC="$(jnum "$H" "tick_count")"
-  if [ -z "$TC" ] || [ "$TC" -le 0 ]; then
-    echo "[auto-pick] manager_not_available"; exit 0
+  if awk "BEGIN{exit !($sc >= 8.5)}"; then
+    prof="extreme"; tp1=6; tp2=12; tp3=24; lev="25-35x"; bud="150-600"; trail=3.2; be=4
+  elif awk "BEGIN{exit !($sc >= 7.5)}"; then
+    prof="aggressive"; tp1=4; tp2=8; tp3=16; lev="20-30x"; bud="120-500"; trail=2.6; be=5
+  elif awk "BEGIN{exit !($sc >= 6.0)}"; then
+    prof="base"; tp1=3; tp2=6; tp3=12; lev="10-25x"; bud="80-400"; trail=2.3; be=6
+  else
+    prof="conservative"; tp1=2; tp2=4; tp3=7; lev="5-12x"; bud="50-150"; trail=1.6; be=10
   fi
 
-  # best symbol
-  local PS="$(pick_symbol)"; [ -z "$PS" ] && { echo "[auto-pick] no symbol"; exit 0; }
-  local SYMBOL="${PS%%|*}"
+  # SL% לפי ATR% (עם תקרה הגנתית)
+  # אם atrw=0 -> נשתמש במינימום שמרני
+  local raw_sl
+  raw_sl="$(awk -v a="$atrw" 'BEGIN{ if(a>0){print a*0.9} else {print 0.8} }')"
+  slp="$(awk -v x="$raw_sl" -v cap="$APPROVAL_MAX_SL_PCT" 'BEGIN{ if(x>cap)x=cap; if(x<0.5)x=0.5; print x }')"
 
-  # best interval
-  local INTERVAL="$(best_interval_for "$SYMBOL")"
-  [ -z "$INTERVAL" ] && { echo "[auto-pick] no interval"; exit 0; }
+  printf '%s|%s|%s|%s|-%s|%s|%s|%s|%s\n' "$prof" "$tp1" "$tp2" "$tp3" "$slp" "$lev" "$bud" "$trail" "$be"
+}
 
-  # fetch metrics
-  local R="$(curl -sS "$HOST/scan/public-now?symbol=$SYMBOL&interval=$INTERVAL&rich=1" || true)"
-  [ -z "$R" ] && R="$(curl -sS "$HOST/scan/now?symbol=$SYMBOL&interval=$INTERVAL&rich=1" -H "Authorization: Bearer $TOKEN" || true)"
-  local SCORE="$(jnum "$R" "score")"
-  local ADX="$(jnum "$R" "adx")";    [ -z "$ADX" ] && ADX="0"
-  local ATRP="$(jnum "$R" "atr_pct")";[ -z "$ATRP" ] && ATRP="0"
-  local SIDE_HINT="$(jstr "$R" "side")"
+# ====== שלב 1: קבל את ה-Top1 ======
+TOP="$(curl -fsS "$HOST/topk?limit=1")"
+SYMBOL="$(printf '%s' "$TOP" | sed -n 's/.*\["\([^"]\+\)"].*/\1/p')"
+[ -n "$SYMBOL" ] || { warn "no symbol from /topk"; exit 0; }
+log "Top1: $SYMBOL"
 
-  awk "BEGIN{exit !($SCORE >= $SCORE_MIN)}" || { echo "[auto-pick] score too low"; exit 0; }
-  awk "BEGIN{exit !($ADX >= $ADX_MIN)}"     || { echo "[auto-pick] adx too low"; exit 0; }
+# אם יש פוזיציה פתוחה על הסימבול — לא נוגעים (לא פותחים טיקט חדש)
+if has_open_position "$SYMBOL"; then
+  warn "position already open on $SYMBOL — skipping new ticket to avoid conflict."
+  exit 0
+fi
 
-  local SIDE="$(decide_side "$SCORE" "$ADX" "$SIDE_HINT")"
-  IFS='|' read -r PCTS SPLITS ATR OFF <<<"$(profile_map "$SCORE" "$ADX")"
+# ====== שלב 2: בחר timeframe משוקלל ======
+BEST="$(best_interval_for "$SYMBOL")"
+BEST_IF="$(printf '%s' "$BEST" | cut -d'|' -f1)"
+IF_SCORE="$(printf '%s' "$BEST" | cut -d'|' -f2)"
+[ -n "$BEST_IF" ] || { warn "no best interval"; exit 0; }
 
-  local LEV="$(calc_linear "$SCORE" "$LEV_MIN" "$LEV_MAX")"
-  local BUDGET="$(calc_linear "$SCORE" "$BUDGET_MIN" "$BUDGET_MAX")"
+# הבא נתונים מהסורק ל-BEST_IF כדי לחשב ATR%
+SCAN="$(curl -fsS "$HOST/scan/public-now?symbol=$SYMBOL&interval=$BEST_IF&rich=1" || true)"
+ADX="$(printf '%s' "$SCAN" | sed -n 's/.*"adx":[[:space:]]*\([-0-9.]\+\).*/\1/p' | head -n1)"
+ATR="$(printf '%s' "$SCAN" | sed -n 's/.*"atr":[[:space:]]*\([-0-9.]\+\).*/\1/p' | head -n1)"
+PRICE="$(printf '%s' "$SCAN" | sed -n 's/.*"bb_mid":[[:space:]]*\([-0-9.]\+\).*/\1/p' | head -n1)"
+[ -z "$PRICE" ] && PRICE="$(printf '%s' "$SCAN" | sed -n 's/.*"ema_21":[[:space:]]*\([-0-9.]\+\).*/\1/p' | head -n1)"
+[ -z "$ADX" ] && ADX="0"; [ -z "$ATR" ] && ATR="0"
+ATRW="$(awk -v a="$ATR" -v p="$PRICE" 'BEGIN{ if(p>0){print (a/p*100)} else {print 0} }')"
 
-  # precision לכל סימבול
-  local MP="$(get_mark_price "$SYMBOL")"
-  IFS='|' read -r QSTEP TICK <<<"$(get_filters "$SYMBOL")"
-  local RAW_QTY="$(python3 - <<PY
-from decimal import Decimal as D
-print((D("$BUDGET")/D("$MP")))
-PY
-)"
-  local QTY="$(quant_floor "$RAW_QTY" "$QSTEP")"
-  local MP_ROUNDED="$(price_round "$MP" "$TICK")"
+# נסה לקרוא score אם קיים באובייקט
+SCORE="$(printf '%s' "$SCAN" | sed -n 's/.*"score":[[:space:]]*\([-0-9.]\+\).*/\1/p' | head -n1)"
+[ -z "$SCORE" ] && SCORE="$SCORE_FALLBACK_MIN"
 
-  echo "[auto-pick] sym=$SYMBOL itv=$INTERVAL side=$SIDE score=$SCORE adx=$ADX atr%=$ATRP lev=$LEV budget=$BUDGET mp=$MP_ROUNDED qty=$QTY step=$QSTEP tick=$TICK"
+log "$SYMBOL@$BEST_IF chosen. ADX=$(printf '%.2f' "$ADX") ATR%%=$(printf '%.3f' "$ATRW") baseScore=$SCORE tfScore=$(printf '%.3f' "$IF_SCORE")"
 
-  if [ "$MODE" = "approve" ]; then
-    local PAYLOAD="$(cat <<JSON
+# ====== שלב 3: פרופיל -> TP/SL + רמזי Lev/Budget ======
+MAP="$(choose_profile "$SCORE" "$ATRW")"
+PROF="$(printf '%s' "$MAP" | cut -d'|' -f1)"
+TP1="$(printf '%s' "$MAP" | cut -d'|' -f2)"
+TP2="$(printf '%s' "$MAP" | cut -d'|' -f3)"
+TP3="$(printf '%s' "$MAP" | cut -d'|' -f4)"
+SLP="$(printf '%s' "$MAP" | cut -d'|' -f5)"
+LEV_HINT="$(printf '%s' "$MAP" | cut -d'|' -f6)"
+BUD_HINT="$(printf '%s' "$MAP" | cut -d'|' -f7)"
+TRAIL_ATR="$(printf '%s' "$MAP" | cut -d'|' -f8)"
+BE_BPS="$(printf '%s' "$MAP" | cut -d'|' -f9)"
+
+log "PROFILE=$PROF TP=[${TP1},${TP2},${TP3}] SL=${SLP}% Hints: LEV=${LEV_HINT} BUD=${BUD_HINT} Trail=${TRAIL_ATR}x BE=${BE_BPS}bps"
+
+# ====== שלב 4: צד (BUY/SELL) לפי ADX & MACD היסט ב-BEST_IF ======
+MACDH="$(printf '%s' "$SCAN" | sed -n 's/.*"macd_hist":[[:space:]]*\([-0-9.]\+\).*/\1/p' | head -n1)"
+SIDE="BUY"
+awk "BEGIN{exit !($ADX >= 28 && $MACDH < 0)}" 2>/dev/null && SIDE="SELL"
+
+# ====== שלב 5: יצירת טיקט HYBRID (qty/lev=0 -> המנג'ר ימלא אחרי אישור) ======
+PAYLOAD="$(cat <<JSON
 {
-  "type": "trade_request",
-  "symbol": "$SYMBOL",
-  "side": "$SIDE",
-  "interval": "$INTERVAL",
-  "leverage": $LEV,
-  "budget_usdt": $BUDGET,
-  "reason": "auto-pick (score+adx+atr%)",
-  "params": { "offset_bps": $OFF, "pcts": $PCTS, "splits": $SPLITS, "atr_mult": $ATR }
+  "symbol":"$SYMBOL",
+  "side":"$SIDE",
+  "qty":0,
+  "leverage":0,
+  "tp1":$TP1,
+  "tp2":$TP2,
+  "tp3":$TP3,
+  "sl":$SLP,
+  "tp_splits":[0.25,0.25,0.50],
+  "note":"auto-top1 PRO [$BEST_IF] score=$SCORE tfScore=$(printf '%.2f' "$IF_SCORE") adx=$(printf '%.1f' "$ADX") atr%=$(printf '%.2f' "$ATRW") prof=$PROF lev=$LEV_HINT bud=$BUD_HINT trail=${TRAIL_ATR}x be=${BE_BPS}bps"
 }
 JSON
 )"
-    create_ticket "$PAYLOAD"
-    exit 0
-  else
-    # פתיחה מיידית + ניהול
-    binance_open_market "$SYMBOL" "$SIDE" "$LEV" "$QTY" | sed 's/.*/[binance] &/'
-    local BODY="{\"symbol\":\"$SYMBOL\",\"offset_bps\":$OFF,\"pcts\":$PCTS,\"splits\":$SPLITS,\"atr_mult\":$ATR}"
-    manage_once_signed "$BODY" | sed 's/.*/[manage-once] &/'
-  fi
-}
-main "$@"
-SH
-chmod +x /app/auto-pick.sh
 
+RESP="$(curl -fsS -X POST "$HOST/ops/ticket" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d "$PAYLOAD")"
+
+echo "$RESP"
+log "ticket sent (Approve/Reject בטלגרם)."
+
+SH
+chmod +x ./auto-pick.sh
 
 
