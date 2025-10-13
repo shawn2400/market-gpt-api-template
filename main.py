@@ -1,4 +1,3 @@
-
 # main.py
 from __future__ import annotations
 
@@ -74,17 +73,17 @@ app = FastAPI(
     openapi_url=OPENAPI_URL,
 )
 
-# ---------- NEW: בטוח ל-HEAD + readyz רך (לפני כל מידלוורים אחרים) ----------
+# ---------- Safe HEAD & /readyz (first middleware) ----------
 @app.middleware("http")
 async def _head_compat_and_soft_readyz(request: Request, call_next):
     if request.url.path == "/readyz":
         return PlainTextResponse("ok", status_code=200)
     if request.method == "HEAD":
-        scope_copy = dict(request.scope); scope_copy["method"] = "GET"
+        scope_copy = dict(request.scope)
+        scope_copy["method"] = "GET"
         new_req = Request(scope_copy, receive=request.receive)
         resp = await call_next(new_req)
-        headers = dict(resp.headers)
-        return StarletteResponse(status_code=resp.status_code, headers=headers, media_type=resp.media_type)
+        return StarletteResponse(status_code=resp.status_code, headers=dict(resp.headers), media_type=resp.media_type)
     return await call_next(request)
 
 # ---------- CORS ----------
@@ -290,8 +289,7 @@ async def _public_rate_limit(request: Request, call_next):
     if not RATE_LIMIT_ENABLE:
         return await call_next(request)
     p = request.url.path
-    method = request.method.upper()
-    if method != "GET":
+    if request.method.upper() != "GET":
         return await call_next(request)
     ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
     rules = {
@@ -321,7 +319,6 @@ async def _public_cache_etag(request: Request, call_next):
     try:
         resp: Response = await call_next(request)
     except RuntimeError as e:
-        # תיקון לבאג "No response returned" – תחזיר 204 במקום קריסה
         if "No response returned" in str(e):
             return PlainTextResponse("", status_code=204)
         raise
@@ -361,7 +358,6 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
         chat_id: Any = int(ADMIN_CHAT_ID) if str(ADMIN_CHAT_ID).isdigit() else ADMIN_CHAT_ID
     except Exception:
         chat_id = ADMIN_CHAT_ID
-
     payload: Dict[str, Any] = {
         "chat_id": chat_id,
         "text": text,
@@ -374,7 +370,6 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
         if approve_url: row.append({"text": "✅ Approve", "url": approve_url})
         if reject_url:  row.append({"text": "❌ Reject", "url": reject_url})
         payload["reply_markup"] = {"inline_keyboard": [[r for r in row]]}
-
     cli = _get_shared_async_client()
     for attempt in range(3):
         try:
@@ -585,7 +580,6 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
     if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
         return {"ok": False, "error": "bad_ticket_params"}
-
     try:
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY","").strip()
@@ -597,7 +591,6 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
                 cli_.futures_change_leverage(symbol=symbol, leverage=leverage)
     except Exception:
         pass
-
     base_kwargs: Dict[str, Any] = dict(
         symbol=symbol, side=side, budget=None, leverage=leverage, dry_run=False, quantity=qty,
         entry=None, tp_targets=tp_targets or None, sl_targets=sl_targets or None,
@@ -624,7 +617,6 @@ async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
     token = API_BEARER_TOKEN
     if not token:
         return {"ok": False, "skipped": True, "reason": "missing token"}
-
     body: Dict[str, Any] = {"symbol": symbol}
     if offset_bps is not None: body["offset_bps"] = offset_bps
     if pcts is not None: body["pcts"] = pcts
@@ -632,9 +624,7 @@ async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
     if atr_mult is not None:
         body["callback_rate"] = None
         body["atr_mult"] = atr_mult
-
     body_str = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
-
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     if _anti_replay_required():
         ts = str(int(time.time()))
@@ -645,7 +635,6 @@ async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
         payload = f"{ts}.{nonce}.{body_str}".encode("utf-8")
         sig = _sign_hex(secret, payload)
         headers.update({"X-Timestamp": ts, "X-Nonce": nonce, "X-Signature": sig})
-
     cli = _get_shared_async_client()
     for attempt in range(3):
         try:
@@ -677,7 +666,7 @@ def _smart_manage_env() -> Dict[str, Any]:
         "atr_mult": float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None,
     }
 
-# ======== AUTO QTY/LEV: חישוב אמיתי באישור ========
+# ======== AUTO QTY/LEV ========
 def _round_qty(q: float, dec: int) -> float:
     try:
         fmt = "{:0." + str(int(dec)) + "f}"
@@ -690,9 +679,7 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
     price = await get_last_price_async(symbol)
     if not price or float(price) <= 0:
         return None
-
     new_ticket = dict(ticket)
-
     try:
         lev_min = int(new_ticket.get("leverage_min") or (new_ticket.get("leverage_range") or [AUTO_LEV_MIN, AUTO_LEV_MAX])[0] or AUTO_LEV_MIN)
         lev_max = int(new_ticket.get("leverage_max") or (new_ticket.get("leverage_range") or [AUTO_LEV_MIN, AUTO_LEV_MAX])[-1] or AUTO_LEV_MAX)
@@ -700,7 +687,6 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         lev_min, lev_max = AUTO_LEV_MIN, AUTO_LEV_MAX
     if lev_min > lev_max:
         lev_min, lev_max = lev_max, lev_min
-
     try:
         bmin = float(new_ticket.get("budget_min") or (new_ticket.get("budget_range") or [AUTO_BUDGET_MIN, AUTO_BUDGET_MAX])[0] or AUTO_BUDGET_MIN)
         bmax = float(new_ticket.get("budget_max") or (new_ticket.get("budget_range") or [AUTO_BUDGET_MIN, AUTO_BUDGET_MAX])[-1] or AUTO_BUDGET_MAX)
@@ -708,18 +694,15 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         bmin, bmax = AUTO_BUDGET_MIN, AUTO_BUDGET_MAX
     if bmin > bmax:
         bmin, bmax = bmax, bmin
-
     lev = int(new_ticket.get("leverage") or new_ticket.get("lev") or 0)
     if lev <= 0:
         lev = max(min((lev_min + lev_max) // 2, lev_max), lev_min)
         new_ticket["leverage"] = lev
     else:
         new_ticket["leverage"] = max(min(lev, lev_max), lev_min)
-
     with suppress(Exception):
         from utils.position_sizing import ensure_final_qty as _efq  # type: ignore
         new_ticket = _efq(new_ticket, float(price)) or new_ticket
-
     q = float(new_ticket.get("qty") or new_ticket.get("quantity") or 0.0)
     if q <= 0.0:
         budget_env = os.getenv("AUTO_QTY_BUDGET_USDT") or os.getenv("DEFAULT_STAKE_USDT", str(AUTO_BUDGET_MIN))
@@ -741,12 +724,10 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
             dec = int(os.getenv("QTY_DECIMALS", "3") or 3)
             calc_qty = (budget * float(new_ticket["leverage"])) / float(price)
             new_ticket["qty"] = _round_qty(calc_qty, dec)
-
     ps = str(new_ticket.get("position_side") or new_ticket.get("positionSide") or "").upper()
     if ps == "BOTH":
         new_ticket.pop("positionSide", None)
         new_ticket["position_side"] = ""
-
     return new_ticket
 
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
@@ -819,7 +800,8 @@ async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[boo
             if r:
                 raw = await r.get(f"{NS}:ticket:{ticket_id}")
                 if raw:
-                    obj = json.loads(raw); fetched_req = obj.get("req") or obj
+                    obj = json.loads(raw)
+                    fetched_req = obj.get("req") or obj
     if not fetched_req and source == "memory" and CONFIRMSTORE_ENABLE:
         with suppress(Exception):
             for it in ConfirmStore.pending():
@@ -1059,7 +1041,6 @@ async def _approve_core(ticket_id: str):
         retry_res = await _execute_trade(ticket)
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
-
     if ok:
         try:
             sm = _smart_manage_env()
@@ -1073,7 +1054,6 @@ async def _approve_core(ticket_id: str):
                 )
         except Exception as e:
             logger.warning("smart_manage_trigger_failed: %s", e)
-
     with suppress(Exception):
         sym, side, qty = ticket.get("symbol", ""), ticket.get("side", ""), ticket.get("qty", "")
         msg = (
@@ -1220,28 +1200,23 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
         await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>" + ",".join(emergencies) + "</code>")
     return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
 
-# ==================== NEW: Profile ENV & helpers for ADX/ATR auto-select ====================
-# ------ Profiles & auto-select (ADX/ATR) ------
+# ==================== Profiles (auto-select) ====================
 PROFILE_AUTO_SELECT = os.getenv("PROFILE_AUTO_SELECT", "1").lower() in ("1", "true", "yes", "on")
 
-# Base profile (שמרני/ברירת מחדל)
-PROFILE_BASE_BE_BPS = int(os.getenv("PROFILE_BASE_BE_BPS", "5"))  # BE = 5bps
+PROFILE_BASE_BE_BPS = int(os.getenv("PROFILE_BASE_BE_BPS", "5"))
 PROFILE_BASE_PCTS = [float(x) for x in (os.getenv("PROFILE_BASE_PCTS", "4,8,16")).split(",") if x.strip()]
 PROFILE_BASE_SPLITS = [float(x) for x in (os.getenv("PROFILE_BASE_SPLITS", "0.30,0.30,0.40")).split(",") if x.strip()]
 PROFILE_BASE_ATR_MULT = float(os.getenv("PROFILE_BASE_ATR_MULT", "0") or 0) or None
 
-# Extreme profile (אגרסיבי)
-PROFILE_EXTREME_BE_BPS = int(os.getenv("PROFILE_EXTREME_BE_BPS", "2"))  # BE = 2bps
+PROFILE_EXTREME_BE_BPS = int(os.getenv("PROFILE_EXTREME_BE_BPS", "2"))
 PROFILE_EXTREME_PCTS = [float(x) for x in (os.getenv("PROFILE_EXTREME_PCTS", "2,4,8")).split(",") if x.strip()]
 PROFILE_EXTREME_SPLITS = [float(x) for x in (os.getenv("PROFILE_EXTREME_SPLITS", "0.25,0.35,0.40")).split(",") if x.strip()]
 PROFILE_EXTREME_ATR_MULT = float(os.getenv("PROFILE_EXTREME_ATR_MULT", "1.6"))
 
-# טריגרים לפרופיל Extreme
 ADX_EXTREME_MIN = float(os.getenv("ADX_EXTREME_MIN", "28"))
-ATRPCT_EXTREME_MIN = float(os.getenv("ATRPCT_EXTREME_MIN", "0.007"))  # ATR/price >= 0.7%
+ATRPCT_EXTREME_MIN = float(os.getenv("ATRPCT_EXTREME_MIN", "0.007"))
 
 def _wilder_smooth(values: List[float], period: int) -> List[float]:
-    """Wilder smoothing for ATR/DM series."""
     if not values or period <= 0 or len(values) < period:
         return []
     smoothed = [sum(values[:period]) / period]
@@ -1250,35 +1225,24 @@ def _wilder_smooth(values: List[float], period: int) -> List[float]:
     return smoothed
 
 def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -> Dict[str, float]:
-    """
-    klines: Binance futures_klines rows
-    return: {"atr": float, "adx": float, "price": float}
-    """
     try:
         highs = [float(k[2]) for k in klines]
         lows  = [float(k[3]) for k in klines]
         closes= [float(k[4]) for k in klines]
         if len(closes) < period + 2:
             return {"atr": 0.0, "adx": 0.0, "price": closes[-1] if closes else 0.0}
-
-        trs = []
-        plus_dm = []
-        minus_dm = []
+        trs, plus_dm, minus_dm = [], [], []
         for i in range(1, len(closes)):
             h, l, ph, pl, pc = highs[i], lows[i], highs[i-1], lows[i-1], closes[i-1]
-            tr = max(h - l, abs(h - pc), abs(l - pc))
-            trs.append(tr)
-            up_move = h - ph
-            down_move = pl - l
+            tr = max(h - l, abs(h - pc), abs(l - pc)); trs.append(tr)
+            up_move = h - ph; down_move = pl - l
             plus_dm.append(up_move if (up_move > down_move and up_move > 0) else 0.0)
             minus_dm.append(down_move if (down_move > up_move and down_move > 0) else 0.0)
-
         atr_series = _wilder_smooth(trs, period)
         plus_dm_s  = _wilder_smooth(plus_dm, period)
         minus_dm_s = _wilder_smooth(minus_dm, period)
         if not (atr_series and plus_dm_s and minus_dm_s):
             return {"atr": 0.0, "adx": 0.0, "price": closes[-1]}
-
         atr = atr_series[-1]
         plus_di = [(p / atr_series[i]) * 100 if atr_series[i] > 0 else 0.0 for i, p in enumerate(plus_dm_s)]
         minus_di = [(m / atr_series[i]) * 100 if atr_series[i] > 0 else 0.0 for i, m in enumerate(minus_dm_s)]
@@ -1294,12 +1258,6 @@ def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -
         return {"atr": 0.0, "adx": 0.0, "price": 0.0}
 
 async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, float], str]:
-    """
-    קובע offset_bps, pcts, splits, atr_mult לפי פרופיל:
-    - אם המשתמש שלח במפורש pcts/splits/offset_bps/atr_mult — זה גובר (profile='custom')
-    - אחרת אם PROFILE_AUTO_SELECT=1 — בוחר בין base/extreme לפי ADX/ATR
-    - אחרת — base
-    """
     explicit_offset = payload.get("offset_bps")
     explicit_pcts   = payload.get("pcts")
     explicit_splits = payload.get("splits")
@@ -1328,32 +1286,17 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
         atrpct = (atr / px) if (atr > 0 and px > 0) else 0.0
         is_extreme = (adx >= ADX_EXTREME_MIN) or (atrpct >= ATRPCT_EXTREME_MIN)
         if is_extreme:
-            prof = {
-                "offset_bps": PROFILE_EXTREME_BE_BPS,
-                "pcts": PROFILE_EXTREME_PCTS[:],
-                "splits": PROFILE_EXTREME_SPLITS[:],
-                "atr_mult": PROFILE_EXTREME_ATR_MULT,
-            }
+            prof = {"offset_bps": PROFILE_EXTREME_BE_BPS, "pcts": PROFILE_EXTREME_PCTS[:], "splits": PROFILE_EXTREME_SPLITS[:], "atr_mult": PROFILE_EXTREME_ATR_MULT}
             return prof, ind, "extreme"
         else:
-            prof = {
-                "offset_bps": PROFILE_BASE_BE_BPS,
-                "pcts": PROFILE_BASE_PCTS[:],
-                "splits": PROFILE_BASE_SPLITS[:],
-                "atr_mult": PROFILE_BASE_ATR_MULT,
-            }
+            prof = {"offset_bps": PROFILE_BASE_BE_BPS, "pcts": PROFILE_BASE_PCTS[:], "splits": PROFILE_BASE_SPLITS[:], "atr_mult": PROFILE_BASE_ATR_MULT}
             return prof, ind, "base"
 
     ind = {"atr": 0.0, "adx": 0.0, "price": 0.0}
-    prof = {
-        "offset_bps": PROFILE_BASE_BE_BPS,
-        "pcts": PROFILE_BASE_PCTS[:],
-        "splits": PROFILE_BASE_SPLITS[:],
-        "atr_mult": PROFILE_BASE_ATR_MULT,
-    }
+    prof = {"offset_bps": PROFILE_BASE_BE_BPS, "pcts": PROFILE_BASE_PCTS[:], "splits": PROFILE_BASE_SPLITS[:], "atr_mult": PROFILE_BASE_ATR_MULT}
     return prof, ind, "base"
 
-# ==================== NEW: /manage-once (Bearer) ====================
+# ==================== /manage-once ====================
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
         return value
@@ -1384,17 +1327,12 @@ def _pos_side_from_amt(side_text: str, pos_amt: float) -> str:
     return "LONG" if pos_amt >= 0 else "SHORT"
 
 @router.post("/manage-once")
-async def manage_once(
-    request: Request,
-    payload: Dict[str, Any] = Body(...),
-):
+async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     _require_bearer(request)
-
     symbol = (payload.get("symbol") or "").upper().strip()
     if not symbol:
         raise HTTPException(status_code=422, detail="missing symbol")
 
-    # Direct Binance path (load client first for indicators/profile selection)
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
@@ -1408,7 +1346,6 @@ async def manage_once(
     client = Client(api_key, api_sec)
     _align_position_mode(client)
 
-    # Fetch open position
     pos_amt = 0.0
     entry_price = None
     side_txt = None
@@ -1427,15 +1364,12 @@ async def manage_once(
     if not side_txt or not entry_price or abs(pos_amt) <= 0:
         return {"ok": True, "skipped": True, "reason": "no_open_position"}
 
-    # ===== פרופיל ונגזרות (עם אפשרות override בבקשה) =====
     prof, indicators, profile_name = await _select_profile_for_symbol(client, symbol, payload)
-
     offset_bps = int(prof["offset_bps"])
     pcts: List[float] = list(prof["pcts"])
     splits: List[float] = list(prof["splits"])
-    atr_mult = prof["atr_mult"]  # יכול להיות None
+    atr_mult = prof["atr_mult"]
 
-    # Validate pcts/splits
     if len(pcts) != len(splits) or not (0.999 <= sum(splits) <= 1.001):
         raise HTTPException(status_code=422, detail="pcts/splits mismatch or splits must sum to 1.0")
     if any(x <= 0 for x in pcts):
@@ -1443,14 +1377,11 @@ async def manage_once(
     if any(x <= 0 for x in splits):
         raise HTTPException(status_code=422, detail="splits must be > 0")
 
-    # Filters
     tick, step = _get_filters(client, symbol)
 
-    # 1) Move SL to BE + offset_bps
     be_price = float(entry_price) * (1.0 + (offset_bps / 10_000.0)) if side_txt == "BUY" else float(entry_price) * (1.0 - (offset_bps / 10_000.0))
     be_price = _bn_round(be_price, tick)
 
-    # Cancel existing STOP/TS orders
     try:
         open_orders = client.futures_get_open_orders(symbol=symbol)
         for o in open_orders or []:
@@ -1461,7 +1392,6 @@ async def manage_once(
     except Exception:
         pass
 
-    # Place SL at BE+offset
     try:
         sl_kwargs = dict(
             symbol=symbol,
@@ -1476,7 +1406,6 @@ async def manage_once(
     except Exception as e:
         logger.warning("place_be_stop_failed: %s", e)
 
-    # 2) TP Ladder (reduceOnly)
     price_now = None
     with suppress(Exception):
         tick_data = client.futures_symbol_ticker(symbol=symbol)
@@ -1512,7 +1441,6 @@ async def manage_once(
         except Exception as e:
             logger.warning("place_tp_failed[%s]: %s", i, e)
 
-    # 3) Trailing ATR*atr_mult → callbackRate
     placed_trail = None
     if atr_mult is not None:
         try:
@@ -1551,13 +1479,7 @@ async def manage_once(
         "be_stop_price": be_price,
         "tp": placed_tp,
         "trail": placed_trail,
-        "profile": {
-            "name": profile_name,
-            "offset_bps": offset_bps,
-            "pcts": pcts,
-            "splits": splits,
-            "atr_mult": atr_mult,
-        },
+        "profile": {"name": profile_name, "offset_bps": offset_bps, "pcts": pcts, "splits": splits, "atr_mult": atr_mult},
         "indicators": {
             "adx": round(float(indicators.get("adx", 0.0)), 2),
             "atr": float(indicators.get("atr", 0.0)),
