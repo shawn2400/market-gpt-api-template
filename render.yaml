@@ -30,7 +30,7 @@ services:
       - { key: APP_MODULE,                 value: "main:app" }
       - { key: PYTHONPATH,                 value: "/app" }
       - { key: WEB_CONCURRENCY,            value: "1" }
-      - { key: GUNICORN_TIMEOUT,           value: "180" }      # גובר על ברירת מחדל ב-Dockerfile
+      - { key: GUNICORN_TIMEOUT,           value: "180" }
       - { key: GUNICORN_GRACEFUL_TIMEOUT,  value: "45" }
       - { key: GUNICORN_KEEPALIVE,         value: "30" }
       - { key: GUNICORN_MAX_REQUESTS,      value: "500" }
@@ -66,7 +66,6 @@ services:
       - { key: PROTECT_APPROVE_ROUTES,     value: "1" }
       - { key: PROTECT_DIGEST_ROUTES,      value: "1" }
       - { key: ENABLE_HSTS,                value: "1" }
-      # הערה: /debug/env כלול לנוחות דיבוג. בפרודקשן שקול להסיר.
       - { key: SECURITY_PUBLIC_PATHS,      value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/debug/env" }
       - { key: SECURITY_PUBLIC_PREFIXES,   value: "/public,/price,/static,/risk" }
 
@@ -248,6 +247,9 @@ services:
       - { key: SMART_MANAGE_PCTS,            value: "3,6,12" }
       - { key: SMART_MANAGE_SPLITS,          value: "0.25,0.25,0.50" }
       - { key: SMART_MANAGE_TRAIL_ATR_MULT,  value: "2.6" }
+      # >>> Ultra Log flags (התווספו) <<<
+      - { key: SM_ULTRA_LOG,                 value: "1" }
+      - { key: SM_LOG_PREFIX,                value: "smart_manage" }
 
       # ========================= Hedge & Auto-Flip =========================
       - { key: HEDGE_ENABLE,                 value: "1" }
