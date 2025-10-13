@@ -28,11 +28,12 @@ ts_s(){ date +%s; }
 sig_hmac(){ printf "%s" "$2" | openssl dgst -sha256 -mac HMAC -macopt hexkey:"$1" | awk '{print $2}'; }
 mbx_sig(){ printf "%s" "$1" | openssl dgst -sha256 -hmac "$BINANCE_API_SECRET" -binary | xxd -p -c 256; }
 
+# json helpers בלי jq (פשוטים)
 jnum(){ printf "%s" "$1" | tr -d '\n' | sed -n 's/.*"'"$2"'":[[:space:]]*\([-0-9.]\+\).*/\1/p' | head -n1; }
 jstr(){ printf "%s" "$1" | tr -d '\n' | sed -n 's/.*"'"$2"'":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1; }
 
-quant_floor() {
-python3 - <<PY
+# ריצפה לכמות לפי stepSize, ועיגול למחיר לפי tickSize
+quant_floor() { python3 - <<PY
 from decimal import Decimal, getcontext
 getcontext().prec = 28
 v=Decimal("$1"); s=Decimal("$2")
@@ -41,9 +42,7 @@ d=len(str(s).split('.')[-1]) if '.' in str(s) else 0
 print(f"{q:.{d}f}")
 PY
 }
-
-price_round() {
-python3 - <<PY
+price_round() { python3 - <<PY
 from decimal import Decimal, getcontext
 getcontext().prec = 28
 p=Decimal("$1"); t=Decimal("$2")
@@ -53,6 +52,7 @@ print(f"{q:.{d}f}")
 PY
 }
 
+# מחירים/פילטרים מהבורסה (לדיוק לכל סימבול)
 get_mark_price(){ curl -sS "https://fapi.binance.com/fapi/v1/premiumIndex?symbol=$1" | sed -n 's/.*"markPrice":"\([0-9.]\+\)".*/\1/p'; }
 get_filters(){
   local EX="$(curl -sS "https://fapi.binance.com/fapi/v1/exchangeInfo?symbol=$1")"
@@ -61,6 +61,7 @@ get_filters(){
   echo "${STEP:-0.001}|${TICK:-0.10}"
 }
 
+# מיפוי ליניארי מה-Score אל טווחי LEV/BUDGET
 calc_linear(){
 python3 - <<PY
 v=$1; a=6.0; b=8.8
@@ -71,17 +72,15 @@ print(int(round(c + t*(d-c))))
 PY
 }
 
-# ====== Composite scorer for timeframe: Score+ADX+ATR% ======
-# נורמליזציה: score∈[0,10]→[0,1]; ADX∈[10,40]→[0,1]; ATR%∈[0,5%]→[0,1] (קלמפ)
-# משקולות ברירת-מחדל: wS=0.55, wA=0.35, wV=0.10
+# ====== ציון משוקלל ל-timeframe: Score+ADX+ATR% ======
 tf_score(){
 python3 - <<PY
-import sys, json
+import sys
 score=float(sys.argv[1]); adx=float(sys.argv[2]); atrp=float(sys.argv[3])
 def clamp(x,a,b): return max(a,min(b,x))
-s = clamp(score/10.0, 0, 1)
-a = clamp((adx-10)/30.0, 0, 1)
-v = clamp(atrp/5.0, 0, 1)
+s = clamp(score/10.0, 0, 1)         # Score: 0..10 -> 0..1
+a = clamp((adx-10)/30.0, 0, 1)      # ADX:   10..40 -> 0..1
+v = clamp(atrp/5.0, 0, 1)           # ATR%:  0..5%  -> 0..1
 wS, wA, wV = 0.55, 0.35, 0.10
 print( round(wS*s + wA*a + wV*v, 6) )
 PY
@@ -95,14 +94,11 @@ best_interval_for(){
     local R="$(curl -sS "$HOST/scan/public-now?symbol=$S&interval=$I&rich=1" || true)"
     [ -z "$R" ] && R="$(curl -sS "$HOST/scan/now?symbol=$S&interval=$I&rich=1" -H "Authorization: Bearer $TOKEN" || true)"
     [ -z "$R" ] && continue
-    local sc="$(jnum "$R" "score")"
-    local adx="$(jnum "$R" "adx")"
-    local atrp="$(jnum "$R" "atr_pct")"
-    [ -z "$sc" ] && continue
-    [ -z "$adx" ] && adx="0"
-    [ -z "$atrp" ] && atrp="0"
+    local sc="$(jnum "$R" "score")"; [ -z "$sc" ] && continue
+    local adx="$(jnum "$R" "adx")";   [ -z "$adx" ] && adx="0"
+    local atr="$(jnum "$R" "atr_pct")"; [ -z "$atr" ] && atr="0"
     awk "BEGIN{exit !($sc >= $SCORE_MIN)}" || continue
-    local comp="$(tf_score "$sc" "$adx" "$atrp")"
+    local comp="$(tf_score "$sc" "$adx" "$atr")"
     if [ -z "$best_val" ] || awk "BEGIN{exit !($comp > $best_val)}"; then
       best_val="$comp"; best_i="$I"
     fi
@@ -118,8 +114,7 @@ pick_symbol(){
     for S in "${SYMS[@]}"; do
       local C; C="$(printf "%s" "$TOP" | tr -d '\n' | sed -n 's/.*{"symbol":"'"$S"'".\{1,200\}}/\0/p' | head -n1)"
       [ -z "$C" ] && continue
-      local sc="$(jnum "$C" "score")"
-      [ -z "$sc" ] && continue
+      local sc="$(jnum "$C" "score")"; [ -z "$sc" ] && continue
       awk "BEGIN{exit !($sc >= $SCORE_MIN)}" || continue
       if [ -z "$bsc" ] || awk "BEGIN{exit !($sc > $bsc)}"; then best="$S"; bsc="$sc"; fi
     done
@@ -130,8 +125,7 @@ pick_symbol(){
     local R="$(curl -sS "$HOST/scan/public-now?symbol=$S&interval=15m&rich=1" || true)"
     [ -z "$R" ] && R="$(curl -sS "$HOST/scan/now?symbol=$S&interval=15m&rich=1" -H "Authorization: Bearer $TOKEN" || true)"
     [ -z "$R" ] && continue
-    local sc="$(jnum "$R" "score")"
-    [ -z "$sc" ] && continue
+    local sc="$(jnum "$R" "score")"; [ -z "$sc" ] && continue
     awk "BEGIN{exit !($sc >= $SCORE_MIN)}" || continue
     if [ -z "$bsc" ] || awk "BEGIN{exit !($sc > $bsc)}"; then best="$S"; bsc="$sc"; fi
   done
@@ -139,8 +133,8 @@ pick_symbol(){
 }
 
 decide_side(){
-  local sc="$1" adx="$2" guess="${3:-}"
-  [ -n "$guess" ] && { [[ "$guess" =~ ^(long|buy|LONG|BUY)$ ]] && echo BUY && return; [[ "$guess" =~ ^(short|sell|SHORT|SELL)$ ]] && echo SELL && return; }
+  local sc="$1" adx="$2" hint="${3:-}"
+  [ -n "$hint" ] && { [[ "$hint" =~ ^(long|buy|LONG|BUY)$ ]] && echo BUY && return; [[ "$hint" =~ ^(short|sell|SHORT|SELL)$ ]] && echo SELL && return; }
   awk "BEGIN{exit !($adx >= 28 && $sc >= 7.3)}" && { echo BUY;  return; }
   awk "BEGIN{exit !($adx >= 28 && $sc <  7.3)}" && { echo SELL; return; }
   echo BUY
@@ -200,32 +194,32 @@ main(){
     echo "[auto-pick] manager_not_available"; exit 0
   fi
 
-  # best symbol (score גבוה) מתוך UNIVERSE
+  # best symbol
   local PS="$(pick_symbol)"; [ -z "$PS" ] && { echo "[auto-pick] no symbol"; exit 0; }
   local SYMBOL="${PS%%|*}"
 
-  # בחר timeframe ע"פ משקלול Score+ADX+ATR%
+  # best interval
   local INTERVAL="$(best_interval_for "$SYMBOL")"
   [ -z "$INTERVAL" ] && { echo "[auto-pick] no interval"; exit 0; }
 
-  # משוך נתונים (כולל side/score/adx/atr_pct)
+  # fetch metrics
   local R="$(curl -sS "$HOST/scan/public-now?symbol=$SYMBOL&interval=$INTERVAL&rich=1" || true)"
   [ -z "$R" ] && R="$(curl -sS "$HOST/scan/now?symbol=$SYMBOL&interval=$INTERVAL&rich=1" -H "Authorization: Bearer $TOKEN" || true)"
   local SCORE="$(jnum "$R" "score")"
-  local ADX="$(jnum "$R" "adx")"; [ -z "$ADX" ] && ADX="0"
-  local ATRP="$(jnum "$R" "atr_pct")"; [ -z "$ATRP" ] && ATRP="0"
-  local SIDE_GUESS="$(jstr "$R" "side")"
+  local ADX="$(jnum "$R" "adx")";    [ -z "$ADX" ] && ADX="0"
+  local ATRP="$(jnum "$R" "atr_pct")";[ -z "$ATRP" ] && ATRP="0"
+  local SIDE_HINT="$(jstr "$R" "side")"
 
   awk "BEGIN{exit !($SCORE >= $SCORE_MIN)}" || { echo "[auto-pick] score too low"; exit 0; }
   awk "BEGIN{exit !($ADX >= $ADX_MIN)}"     || { echo "[auto-pick] adx too low"; exit 0; }
 
-  local SIDE="$(decide_side "$SCORE" "$ADX" "$SIDE_GUESS")"
+  local SIDE="$(decide_side "$SCORE" "$ADX" "$SIDE_HINT")"
   IFS='|' read -r PCTS SPLITS ATR OFF <<<"$(profile_map "$SCORE" "$ADX")"
 
   local LEV="$(calc_linear "$SCORE" "$LEV_MIN" "$LEV_MAX")"
   local BUDGET="$(calc_linear "$SCORE" "$BUDGET_MIN" "$BUDGET_MAX")"
 
-  # דיוק לכל מטבע: stepSize/tickSize
+  # precision לכל סימבול
   local MP="$(get_mark_price "$SYMBOL")"
   IFS='|' read -r QSTEP TICK <<<"$(get_filters "$SYMBOL")"
   local RAW_QTY="$(python3 - <<PY
@@ -255,7 +249,7 @@ JSON
     create_ticket "$PAYLOAD"
     exit 0
   else
-    # פתיחה מיידית + ניהול (כמות מעוגלת לפי stepSize, מחיר לפי tickSize)
+    # פתיחה מיידית + ניהול
     binance_open_market "$SYMBOL" "$SIDE" "$LEV" "$QTY" | sed 's/.*/[binance] &/'
     local BODY="{\"symbol\":\"$SYMBOL\",\"offset_bps\":$OFF,\"pcts\":$PCTS,\"splits\":$SPLITS,\"atr_mult\":$ATR}"
     manage_once_signed "$BODY" | sed 's/.*/[manage-once] &/'
