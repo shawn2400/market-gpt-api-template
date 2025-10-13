@@ -60,7 +60,7 @@ services:
       - { key: PROTECT_APPROVE_ROUTES,     value: "1" }
       - { key: PROTECT_DIGEST_ROUTES,      value: "1" }
       - { key: ENABLE_HSTS,                value: "1" }
-      - { key: SECURITY_PUBLIC_PATHS,      value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version" }
+      - { key: SECURITY_PUBLIC_PATHS,      value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/debug/env" }  # <<< הוספתי /debug/env
       - { key: SECURITY_PUBLIC_PREFIXES,   value: "/public,/price,/static,/risk" }
 
       # ========================= Anti-Replay =========================
@@ -118,7 +118,6 @@ services:
       # ========================= Router Enablement =========================
       - { key: ENABLE_AI_ROUTES,            value: "1" }
       - { key: PRICE_MONITOR_DISABLE,       value: "0" }
-      # אל תגדיר ROUTES_ONLY.
 
       # ========================= Scanner / Universe =========================
       - { key: SCAN_SOURCE,                 value: "binance-futures" }
