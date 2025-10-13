@@ -29,19 +29,17 @@ ARG APP_VERSION=2.18.0
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONOPTIMIZE=1 \
-    WEB_CONCURRENCY=1 \
-    GUNICORN_TIMEOUT=120 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/app \
     APP_MODULE=main:app \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    WEB_CONCURRENCY=1 \
+    GUNICORN_TIMEOUT=120 \
     MPLCONFIGDIR=/app/.cache/matplotlib \
     TZ=Asia/Jerusalem \
     DEBIAN_FRONTEND=noninteractive \
     PORT=10000 \
     APP_VERSION=${APP_VERSION} \
     ALGOGPT_VERSION=${APP_VERSION}
-# שים לב: אין כאן שום ENV ל-MODE / INSTANCE_ID כדי שלא "יאפה" ברירת-מחדל לתוך התמונה.
-# הערכים האלה יבואו רק מה-ENV של Render.
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     curl tini ca-certificates tzdata git \
@@ -51,18 +49,19 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
     openssl vim-common \
  && rm -rf /var/lib/apt/lists/*
 
+# התקנת התלויות מהשכבה הראשונה
 COPY --from=builder /install /usr/local
 
-# משתמש לא־שורש
+# משתמש לא־root
 RUN useradd -ms /bin/bash appuser
 
 WORKDIR /app
 COPY . .
 
-# הטבעת גרסה לקובץ (fallback ל-/meta/version)
+# כתיבת גרסה ל-/app/VERSION (fallback ל-/meta/version)
 RUN printf "%s\n" "${APP_VERSION}" > /app/VERSION || true
 
-# הרשאות ותיקיות נדרשות
+# הרשאות ותיקיות
 RUN mkdir -p /app/static /app/logs /app/data /app/.cache \
  && chmod 755 /app/static /app/logs /app/.cache /app/data || true \
  && chown -R appuser:appuser /app \
@@ -81,6 +80,7 @@ EXPOSE 10000
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
+# הערה: כל משתני הסביבה (INSTANCE/MODE וכו') מגיעים מ-Render, לא כאן.
 CMD ["/bin/sh","-lc","/app/prestart.sh 2>/dev/null || true; \
   gunicorn ${APP_MODULE} -c gunicorn_conf.py \
     --workers ${WEB_CONCURRENCY:-1} \
@@ -89,6 +89,7 @@ CMD ["/bin/sh","-lc","/app/prestart.sh 2>/dev/null || true; \
     --graceful-timeout 30 \
     --keep-alive 5 \
     --worker-class uvicorn.workers.UvicornWorker"]
+
 
 
 
