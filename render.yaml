@@ -113,7 +113,7 @@ services:
       # ========================= Router Enablement =========================
       - { key: ENABLE_AI_ROUTES,      value: "1" }
       - { key: PRICE_MONITOR_DISABLE, value: "0" }
-      # לא להגדיר ROUTES_ONLY
+      # שים לב: לא להגדיר ROUTES_ONLY כלל.
 
       # ========================= Scanner / Universe =========================
       - { key: SCAN_SOURCE,            value: "binance-futures" }
@@ -337,11 +337,6 @@ services:
       - { key: INTERNAL_JWT_PUBLIC_KEY,   fromSecret: INTERNAL_JWT_PUBLIC_KEY }
       - { key: BINANCE_API_KEY,           fromSecret: BINANCE_API_KEY }
       - { key: BINANCE_API_SECRET,        fromSecret: BINANCE_API_SECRET }
-
-
-
-
-
 
 
 
