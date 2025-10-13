@@ -1,16 +1,16 @@
 # routes/alerts.py
 from __future__ import annotations
 import os, hmac, hashlib, time, json, logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Tuple
 from contextlib import suppress
 
-from fastapi import APIRouter, Body, Header
+from fastapi import APIRouter, Body, Header, Request, HTTPException
 from pydantic import BaseModel
 
 logger = logging.getLogger("algogpt.alerts")
 router = APIRouter(tags=["alerts"])
 
-# ===== Auth =====
+# ===== Auth (רך) =====
 API_TOKEN = (os.getenv("API_TOKEN") or os.getenv("PRIMARY_API_TOKEN") or "").strip()
 
 def _api_key_ok(hdr: Optional[str]) -> bool:
@@ -23,29 +23,53 @@ INGEST_SEC = (os.getenv("ALERTS_INGEST_HMAC_SECRET") or "").strip()
 INGEST_HEX = (os.getenv("ALERTS_INGEST_HMAC_KEY_IS_HEX", "0").lower() in ("1","true","yes","on"))
 DEBUG_HMAC  = (os.getenv("DEBUG_ALERTS_HMAC_CHECK","0").lower() in ("1","true","yes","on"))
 
-def _hmac_check(route: str, body_bytes: bytes, ts: Optional[str], nonce: Optional[str], sig: Optional[str]) -> tuple[bool,str]:
+def _hmac_check(route: str, body_bytes: bytes, ts: Optional[str], nonce: Optional[str], sig: Optional[str]) -> Tuple[bool,str]:
     if not INGEST_SEC:
         return True, "no_secret"
     if not (ts and nonce and sig):
         return False, "missing_headers"
-    msg = f"{route}|{ts}|{nonce}|".encode("utf-8") + body_bytes
+    msg = f"{route}|{ts}|{nonce}|".encode("utf-8") + (body_bytes or b"")
     key = bytes.fromhex(INGEST_SEC) if INGEST_HEX and len(INGEST_SEC) % 2 == 0 else INGEST_SEC.encode("utf-8")
     calc = hmac.new(key, msg, hashlib.sha256).hexdigest()
     return (calc == sig, "bad_sig" if calc != sig else "ok")
 
-# ===== Optional ConfirmStore & Telegram =====
+# ===== Optional ConfirmStore =====
+_HAS_CONFIRM = False
 with suppress(Exception):
-    from utils.trade_executor import ConfirmStore  # type: ignore
+    # נסה קודם מ-main (אם הוגדר שם)
+    from main import ConfirmStore as _ConfirmStoreMain  # type: ignore
+    ConfirmStore = _ConfirmStoreMain  # type: ignore
     _HAS_CONFIRM = True
-with suppress(Exception):
-    _HAS_CONFIRM
-except NameError:
-    _HAS_CONFIRM = False
+if not _HAS_CONFIRM:
+    # Fallback קטן בזיכרון — לא חובה.
+    class ConfirmStore:  # type: ignore
+        _items: Dict[str, Dict[str, Any]] = {}
+        @classmethod
+        def create(cls, req: Dict[str, Any]) -> None:
+            cls._items[str(req.get("ticket_id","TKT"))] = {"req": dict(req), "ts": time.time()}
+    _HAS_CONFIRM = True
 
-with suppress(Exception):
-    from utils.telegram_notifier import send_trade_approval  # type: ignore
+# ===== Telegram send helper (רך) =====
+async def _tg_send_plan(plan: Dict[str, Any]) -> None:
+    with suppress(Exception):
+        from utils.alerts import send_telegram_message  # type: ignore
+        sym = plan.get("symbol","")
+        side = plan.get("side","")
+        lev = plan.get("leverage","")
+        qty = plan.get("qty","")
+        lines = [
+            "🔔 <b>Trade Ingest</b>",
+            f"• {sym} {side} qty=<code>{qty}</code> lev=<code>{lev}</code>",
+        ]
+        if plan.get("budget_usd"):
+            lines.append(f"• Budget: <code>${plan['budget_usd']}</code>")
+        if plan.get("score") is not None:
+            lines.append(f"• Score: <code>{plan['score']}</code>")
+        if plan.get("why"):
+            lines.append(f"• Note: {plan['why']}")
+        await send_telegram_message("\n".join(lines), parse_mode="HTML", disable_preview=True)
 
-# ===== Binance helpers (רק למחיר ו־filters) =====
+# ===== Binance helpers (רק למחיר) =====
 def _get_client_soft():
     try:
         from binance.client import Client  # type: ignore
@@ -90,7 +114,7 @@ def _ticket_id_for(req: IngestReq) -> str:
     base = {
         "symbol": req.symbol.upper(),
         "side": req.side.upper(),
-        "market": req.market.lower(),
+        "market": (req.market or "futures").lower(),
         "timeframe": req.timeframe,
         "reason": req.reason or "",
         "score": float(req.score or 0),
@@ -106,29 +130,31 @@ def _compute_qty_from_budget(symbol: str, budget_usd: float, leverage: int) -> t
         px = _last_price(cli, symbol)
         if px <= 0:
             return 0.0, "bad_price"
-        # futures notional = qty * price; margin = notional / leverage
-        # לכן qty ≈ (budget_usd * leverage) / price
         qty = (float(budget_usd) * float(leverage)) / px
         return float(qty), None
     except Exception as e:
         return 0.0, f"price_fetch_failed: {e}"
 
+# ===== Endpoints =====
 @router.post("/alerts/ingest")
 async def alerts_ingest(
     req: IngestReq = Body(...),
+    request: Request = None,
     x_api_key: Optional[str] = Header(None, alias="x-api-key"),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
-    raw_body: bytes = Body(b""),
 ):
     # API key (רך): אם הוגדר, נדרוש אותו
     if not _api_key_ok(x_api_key):
         return {"ok": False, "error": "unauthorized"}
 
-    # HMAC אופציונלי
+    # HMAC אופציונלי (לפי גוף המקורי)
+    raw_body = b""
+    with suppress(Exception):
+        raw_body = await request.body() if request else json.dumps(req.dict()).encode("utf-8")
     if DEBUG_HMAC and INGEST_SEC:
-        ok, why = _hmac_check("/alerts/ingest", raw_body or json.dumps(req.dict()).encode("utf-8"), x_timestamp, x_nonce, x_signature)
+        ok, why = _hmac_check("/alerts/ingest", raw_body, x_timestamp, x_nonce, x_signature)
         if not ok:
             return {"ok": False, "error": f"hmac_{why}"}
 
@@ -139,9 +165,8 @@ async def alerts_ingest(
 
     qty = req.qty
     if qty is None:
-        # לחשב מכסף + מינוף
         bud = float(req.budget_usd or 0.0)
-        lev = int(req.leverage or os.getenv("DEFAULT_LEVERAGE","5"))
+        lev = int(req.leverage or int(os.getenv("DEFAULT_LEVERAGE","5")))
         if bud <= 0:
             return {"ok": False, "error": "qty_or_budget_required"}
         qty, qerr = _compute_qty_from_budget(sym, bud, lev)
@@ -150,13 +175,12 @@ async def alerts_ingest(
         req.qty = qty
         req.leverage = lev
 
-    # בנה מזה “תוכנית” לטלגרם
     plan: Dict[str, Any] = {
         "symbol": sym,
         "side": side,
-        "market": req.market.lower(),
+        "market": (req.market or "futures").lower(),
         "timeframe": req.timeframe,
-        "leverage": int(req.leverage or os.getenv("DEFAULT_LEVERAGE","5")),
+        "leverage": int(req.leverage or int(os.getenv("DEFAULT_LEVERAGE","5"))),
         "qty": float(req.qty or 0),
         "score": float(req.score or 0),
         "why": req.reason or "",
@@ -167,37 +191,22 @@ async def alerts_ingest(
         "require_approval": bool(req.require_approval if req.require_approval is not None else True),
     }
 
-    # צור ticket_id אם חסר
     tid = req.ticket_id or _ticket_id_for(req)
     plan["ticket_id"] = tid
 
-    # ConfirmStore (אם קיים)
     if _HAS_CONFIRM:
-        try:
-            payload = {
-                "ticket_id": tid,
-                "source": "ingest",
-                "symbol": sym,
-                "market": req.market.lower(),
-                "timeframe": req.timeframe,
-                "side": side,
-                "score": float(req.score or 0),
-                "reason": req.reason or "",
-                "require_approval": bool(plan["require_approval"]),
-                "ts": int(time.time()),
-            }
-            with suppress(Exception):
-                ConfirmStore.create(payload)  # type: ignore
-        except Exception as e:
-            logger.warning("ConfirmStore.create failed: %s", e)
+        with suppress(Exception):
+            ConfirmStore.create({  # type: ignore
+                "ticket_id": tid, "source": "ingest",
+                "symbol": sym, "market": plan["market"], "timeframe": req.timeframe,
+                "side": side, "score": float(req.score or 0), "reason": req.reason or "",
+                "require_approval": bool(plan["require_approval"]), "ts": int(time.time()),
+            })
 
-    # שלח הודעת אישור לטלגרם (רך)
-    with suppress(Exception):
-        await send_trade_approval(tid, plan)  # type: ignore
+    await _tg_send_plan(plan)  # רך: אם נכשל לא מפיל
 
     return {"ok": True, "ticket_id": tid, "symbol": sym, "qty": float(req.qty or 0), "leverage": int(plan["leverage"])}
 
-# Optional: ping
 @router.get("/alerts/ingest")
 async def alerts_ingest_health():
     return {"ok": True, "ingest": "ready"}
