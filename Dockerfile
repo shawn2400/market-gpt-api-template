@@ -40,6 +40,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=10000 \
     APP_VERSION=${APP_VERSION} \
     ALGOGPT_VERSION=${APP_VERSION}
+# שים לב: אין כאן שום ENV ל-MODE / INSTANCE_ID כדי שלא "יאפה" ברירת-מחדל לתוך התמונה.
+# הערכים האלה יבואו רק מה-ENV של Render.
 
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     curl tini ca-certificates tzdata git \
