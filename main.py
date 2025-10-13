@@ -290,7 +290,7 @@ async def _public_rate_limit(request: Request, call_next):
     p = request.url.path
     if request.method.upper() != "GET":
         return await call_next(request)
-    ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+    ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.client.host if request.client else "0.0.0.0")
     rules = {
         "/scan/public-topk": (PUBLIC_TOPK_RPS, PUBLIC_TOPK_WINDOW),
         "/scan/public-now": (PUBLIC_NOW_RPS, PUBLIC_NOW_WINDOW),
@@ -1290,7 +1290,7 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
             return prof, ind, "extreme"
         else:
             prof = {"offset_bps": PROFILE_BASE_BE_BPS, "pcts": PROFILE_BASE_PCTS[:], "splits": PROFILE_BASE_SPLITS[:], "atr_mult": PROFILE_BASE_ATR_MULT}
-            return prof, ind, "base"}
+            return prof, ind, "base"
 
     ind = {"atr": 0.0, "adx": 0.0, "price": 0.0}
     prof = {"offset_bps": PROFILE_BASE_BE_BPS, "pcts": PROFILE_BASE_PCTS[:], "splits": PROFILE_BASE_SPLITS[:], "atr_mult": PROFILE_BASE_ATR_MULT}
@@ -1715,6 +1715,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
