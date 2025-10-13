@@ -306,7 +306,11 @@ async def _public_rate_limit(request: Request, call_next):
 
 # ==================== Public Cache/Etag middleware ====================
 def _should_public_cache(path: str) -> bool:
-    for prefix in PUBLIC_CACHE_PATHS:
+    for prefix in (os.getenv("PUBLIC_CACHE_PATHS") or "").split(",") if os.getenv("PUBLIC_CACHE_PATHS") else []:
+        if prefix and path.startswith(prefix.strip()):
+            return True
+    # ברירת מחדל (שקולה להגדרה בגג הקובץ)
+    for prefix in ["/scan/public-topk","/scan/public-now","/topk"]:
         if path.startswith(prefix):
             return True
     return False
@@ -1522,7 +1526,8 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
         if total == 0:
             await _send_telegram_html(f"ℹ️ No expired approvals in last {hours}h.")
             return {"ok": True, "sent": True, "count": 0}
-        by_sym: Counter = Counter((str(e.get("symbol", "")).upper(), str(e.get("side", "")).upper()) for e in events)
+        from collections import Counter as _C
+        by_sym: _C = _C((str(e.get("symbol", "")).upper(), str(e.get("side", "")).upper()) for e in events)
         lines = [f"⏱️ <b>Expired approvals</b> (last {hours}h) · total: <b>{total}</b>"]
         for (sym, side), cnt in by_sym.most_common(20):
             lines.append(f"• {sym} {side}: <code>{cnt}</code>")
@@ -1557,6 +1562,7 @@ async def telegram_hook_alias(request: Request):
 # ==================== Register routers ====================
 try:
     from routes.manager import router as manager_router  # type: ignore
+    # שים לב: ב־routes/manager.py שינוי המסלול ל־/manage-once-lite, אין התנגשויות.
     app.include_router(manager_router)
 except Exception as e:
     logger.warning("manager router not loaded: %s", e)
@@ -1604,7 +1610,7 @@ try:
 except Exception as e:
     logger.warning("meta router not loaded: %s", e)
 
-# ✅ חדש: חיבור alerts router
+# ✅ alerts router
 try:
     from routes.alerts import router as alerts_router  # type: ignore
     app.include_router(alerts_router)
