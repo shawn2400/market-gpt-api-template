@@ -82,6 +82,7 @@ async def _head_compat_and_soft_readyz(request: Request, call_next):
         scope_copy["method"] = "GET"
         new_req = Request(scope_copy, receive=request.receive)
         resp = await call_next(new_req)
+        # keep headers, drop body for HEAD
         return StarletteResponse(status_code=resp.status_code, headers=dict(resp.headers), media_type=resp.media_type)
     return await call_next(request)
 
@@ -309,7 +310,7 @@ def _should_public_cache(path: str) -> bool:
     for prefix in (os.getenv("PUBLIC_CACHE_PATHS") or "").split(",") if os.getenv("PUBLIC_CACHE_PATHS") else []:
         if prefix and path.startswith(prefix.strip()):
             return True
-    # ברירת מחדל (שקולה להגדרה בגג הקובץ)
+    # ברירת מחדל
     for prefix in ["/scan/public-topk","/scan/public-now","/topk"]:
         if path.startswith(prefix):
             return True
@@ -322,7 +323,7 @@ async def _public_cache_etag(request: Request, call_next):
     try:
         resp: Response = await call_next(request)
     except RuntimeError as e:
-        # תיקון שורש: אל תקרוס על "No response returned"
+        # אל תקרוס על "No response returned"
         if "No response returned" in str(e):
             return PlainTextResponse("", status_code=204)
         raise
@@ -373,7 +374,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
         if preview_url: row.append({"text": "👁 Preview", "url": preview_url})
         if approve_url: row.append({"text": "✅ Approve", "url": approve_url})
         if reject_url:  row.append({"text": "❌ Reject", "url": reject_url})
-        payload["reply_markup"] = {"inline_keyboard": [[r for r in row]]}
+        payload["reply_markup"] = {"inline_keyboard": [row]}
     cli = _get_shared_async_client()
     for attempt in range(3):
         try:
@@ -1548,7 +1549,7 @@ async def _telegram_webhook_core(request: Request) -> Dict[str, Any]:
     TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
     if TELEGRAM_WEBHOOK_SECRET and secret != TELEGRAM_WEBHOOK_SECRET:
         raise HTTPException(status_code=401, detail="Bad secret")
-    _ = await request.body()
+    _ = await request.body()  # consume
     return {"ok": True}
 
 @app.post("/telegram/webhook")
@@ -1648,7 +1649,7 @@ def health_head():
 
 @app.get("/readyz/strict", tags=["meta"])
 async def readyz_strict():
-    # תיקון: הגבלת זמן קצרה ל-ping כדי למנוע תקיעה של health checks
+    # הגבלת זמן קצרה ל-ping כדי למנוע תקיעה של health checks
     try:
         r = await _get_redis_cached()
         if r:
@@ -1721,6 +1722,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
