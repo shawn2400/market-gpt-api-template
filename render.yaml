@@ -1,327 +1,342 @@
-envVars:
-  # ===== Runtime =====
-  - { key: APP_NAME,               value: "algogpt" }
-  - { key: APP_TITLE,              value: "AlgoGPT API" }
-  - { key: ALGOGPT_VERSION,        value: "2.18.0" }
-  - { key: INSTANCE_ID,            value: "algogpt-prod" }
-  - { key: PORT,                   value: "10000" }
-  - { key: APP_MODULE,             value: "main:app" }
-  - { key: PYTHONPATH,             value: "/app" }
-  - { key: WEB_CONCURRENCY,        value: "1" }
-  - { key: GUNICORN_TIMEOUT,       value: "180" }
-  - { key: LOG_LEVEL,              value: "INFO" }
-  - { key: UVICORN_ACCESS_LOG,     value: "false" }
-  - { key: UVICORN_LOG_LEVEL,      value: "info" }
-  - { key: HTTP_MAX_CONNECTIONS,   value: "30" }
-  - { key: HTTP_MAX_KEEPALIVE,     value: "200" }
+services:
+  - type: web
+    name: algogpt-prod
+    env: docker
+    region: frankfurt
+    plan: pro
+    autoDeploy: false
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /meta/version
 
-  # ===== Base URLs =====
-  - { key: PUBLIC_HOST,            value: "https://algogpt-docker.onrender.com" }
-  - { key: CONTEXT_URL,            value: "https://algogpt-docker.onrender.com" }
-  - { key: WEBHOOK_HOST,           value: "https://algogpt-docker.onrender.com" }
+    disk:
+      name: data
+      mountPath: /app/data
+      sizeGB: 1
 
-  # ===== OpenAPI / Docs =====
-  - { key: DOCS_URL,               value: "/docs" }
-  - { key: REDOC_URL,              value: "/redoc" }
-  - { key: OPENAPI_URL,            value: "/openapi.json" }
-  - { key: ENABLE_READONLY_HTTP,   value: "1" }
-  - { key: READONLY_ENDPOINTS,     value: "summary,prices_top,news_cache,health" }
-  - { key: OPENAPI_INCLUDE_TAGS,   value: "meta,Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk,alerts,aliases" }
-  - { key: OPENAPI_HIDE_PATTERNS,  value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*" }
-  - { key: OPENAPI_PUBLIC_MAX_OPS, value: "30" }
+    envVars:
+      # ========================= Runtime & Logging =========================
+      - { key: APP_NAME,               value: "algogpt" }
+      - { key: APP_TITLE,              value: "AlgoGPT API" }
+      - { key: ALGOGPT_VERSION,        value: "2.18.0" }
+      - { key: INSTANCE_ID,            value: "algogpt-prod" }
+      - { key: PORT,                   value: "10000" }
+      - { key: APP_MODULE,             value: "main:app" }
+      - { key: PYTHONPATH,             value: "/app" }
+      - { key: WEB_CONCURRENCY,        value: "1" }
+      - { key: GUNICORN_TIMEOUT,       value: "180" }
+      - { key: LOG_LEVEL,              value: "INFO" }
+      - { key: UVICORN_ACCESS_LOG,     value: "false" }
+      - { key: UVICORN_LOG_LEVEL,      value: "info" }
+      - { key: HTTP_MAX_CONNECTIONS,   value: "30" }
+      - { key: HTTP_MAX_KEEPALIVE,     value: "200" }
 
-  # ===== CORS =====
-  - { key: CORS_ALLOW_ORIGINS,     value: "https://algogpt-docker.onrender.com" }
-  - { key: CORS_ALLOW_HEADERS,     value: "*" }
-  - { key: CORS_ALLOW_METHODS,     value: "*" }
-  - { key: CORS_ALLOW_CREDENTIALS, value: "0" }
+      # ========================= Base URLs =========================
+      - { key: PUBLIC_HOST,            value: "https://algogpt-docker.onrender.com" }
+      - { key: CONTEXT_URL,            value: "https://algogpt-docker.onrender.com" }
+      - { key: WEBHOOK_HOST,           value: "https://algogpt-docker.onrender.com" }
 
-  # ===== Security =====
-  - { key: PROTECT_APPROVE_ROUTES,   value: "1" }
-  - { key: PROTECT_DIGEST_ROUTES,    value: "1" }
-  - { key: ENABLE_HSTS,              value: "1" }
-  - { key: SECURITY_PUBLIC_PATHS,    value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version" }
-  - { key: SECURITY_PUBLIC_PREFIXES, value: "/public,/price,/static,/risk" }
+      # ========================= OpenAPI / Docs =========================
+      - { key: DOCS_URL,               value: "/docs" }
+      - { key: REDOC_URL,              value: "/redoc" }
+      - { key: OPENAPI_URL,            value: "/openapi.json" }
+      - { key: ENABLE_READONLY_HTTP,   value: "1" }
+      - { key: READONLY_ENDPOINTS,     value: "summary,prices_top,news_cache,health" }
+      - { key: OPENAPI_INCLUDE_TAGS,   value: "meta,Status,Public Feed,Price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk,alerts,aliases" }
+      - { key: OPENAPI_HIDE_PATTERNS,  value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*" }
+      - { key: OPENAPI_PUBLIC_MAX_OPS, value: "30" }
 
-  # ===== Anti-Replay =====
-  - { key: ANTI_REPLAY_ENABLE,            value: "1" }
-  - { key: ANTI_REPLAY_WINDOW_SEC,        value: "60" }
-  - { key: ANTI_REPLAY_REQUIRE_SIGNATURE, value: "1" }
-  - { key: SIGNED_TS_MAX_SKEW_SEC,        value: "60" }
-  - { key: SIGNED_NONCE_TTL_SEC,          value: "120" }
+      # ========================= CORS =========================
+      - { key: CORS_ALLOW_ORIGINS,     value: "https://algogpt-docker.onrender.com" }
+      - { key: CORS_ALLOW_HEADERS,     value: "*" }
+      - { key: CORS_ALLOW_METHODS,     value: "*" }
+      - { key: CORS_ALLOW_CREDENTIALS, value: "0" }
 
-  # ===== Rate Limit =====
-  - { key: RATE_LIMIT_ENABLE,       value: "1" }
-  - { key: RL_FAIL_OPEN,            value: "0" }
-  - { key: RATE_LIMIT_BACKEND,      value: "redis" }
-  - { key: PUBLIC_TOPK_RPS,         value: "2" }
-  - { key: PUBLIC_TOPK_WINDOW,      value: "3" }
-  - { key: PUBLIC_NOW_RPS,          value: "2" }
-  - { key: PUBLIC_NOW_WINDOW,       value: "3" }
-  - { key: PUBLIC_CACHE_MAX_AGE,    value: "20" }
-  - { key: PUBLIC_CACHE_PATHS,      value: "/scan/public-topk,/scan/public-now,/topk" }
+      # ========================= Security / Hardening =========================
+      - { key: PROTECT_APPROVE_ROUTES,   value: "1" }
+      - { key: PROTECT_DIGEST_ROUTES,    value: "1" }
+      - { key: ENABLE_HSTS,              value: "1" }
+      - { key: SECURITY_PUBLIC_PATHS,    value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version" }
+      - { key: SECURITY_PUBLIC_PREFIXES, value: "/public,/price,/static,/risk" }
 
-  # ===== Redis =====
-  - { key: REQUIRE_REDIS,                 value: "1" }
-  - { key: CONFIRMSTORE_ENABLE,           value: "0" }
-  - { key: USE_REDIS_IDEM,                value: "1" }
-  - { key: SETEX_STRICT,                  value: "1" }
-  - { key: REDIS_CONNECT_TIMEOUT,         value: "8.0" }
-  - { key: REDIS_SOCKET_TIMEOUT,          value: "8.0" }
-  - { key: REDIS_POOL_MAX_CONNECTIONS,    value: "30" }
-  - { key: REDIS_PING_RETRIES,            value: "3" }
-  - { key: REDIS_PING_RETRY_BACKOFF_SEC,  value: "0.6" }
-  - { key: REDIS_CLIENT_NAME,             value: "algogpt" }
-  - { key: REDIS_SSL_NO_VERIFY,           value: "0" }
-  - { key: REDIS_NAMESPACE,               value: "ops-supervisor-web" }
-  - { key: REDIS_URL,         fromSecret: REDIS_URL }
-  - { key: ALGOGPT_REDIS_URL, fromSecret: REDIS_URL }
+      # ========================= Anti-Replay =========================
+      - { key: ANTI_REPLAY_ENABLE,            value: "1" }
+      - { key: ANTI_REPLAY_WINDOW_SEC,        value: "60" }
+      - { key: ANTI_REPLAY_REQUIRE_SIGNATURE, value: "1" }
+      - { key: SIGNED_TS_MAX_SKEW_SEC,        value: "60" }
+      - { key: SIGNED_NONCE_TTL_SEC,          value: "120" }
 
-  # ===== Exchange Defaults =====
-  - { key: DEFAULT_MARKET,              value: "futures" }
-  - { key: POSITION_MODE_OVERRIDE,      value: "hedge" }
-  - { key: BINANCE_MARGIN_TYPE_DEFAULT, value: "ISOLATED" }
-  - { key: BINANCE_FUTURES_HTTP_BASE,   value: "https://fapi.binance.com" }
-  - { key: BINANCE_FUTURES_WS_BASE,     value: "wss://fstream.binance.com" }
-  - { key: BINANCE_SPOT_HTTP_BASE,      value: "https://api.binance.com" }
-  - { key: BINANCE_TESTNET,             value: "false" }
-  - { key: BINANCE_WORKING_TYPE,        value: "MARK_PRICE" }
-  - { key: BINANCE_HTTP_TIMEOUT,        value: "10.0" }
-  - { key: BINANCE_MAX_RETRIES,         value: "2" }
-  - { key: BINANCE_RECV_WINDOW,         value: "45000" }
-  - { key: LISTENKEY_KEEPALIVE_SEC,     value: "1800" }
-  - { key: WS_KEEPALIVE_SEC,            value: "25" }
-  - { key: USE_WS,                      value: "1" }
-  - { key: EXCHANGE_INFO_TTL_SEC,       value: "900" }
-  - { key: USER_STREAM_ENABLE,          value: "1" }
+      # ========================= Rate Limit =========================
+      - { key: RATE_LIMIT_ENABLE,       value: "1" }
+      - { key: RL_FAIL_OPEN,            value: "0" }
+      - { key: RATE_LIMIT_BACKEND,      value: "redis" }
+      - { key: PUBLIC_TOPK_RPS,         value: "2" }
+      - { key: PUBLIC_TOPK_WINDOW,      value: "3" }
+      - { key: PUBLIC_NOW_RPS,          value: "2" }
+      - { key: PUBLIC_NOW_WINDOW,       value: "3" }
+      - { key: PUBLIC_CACHE_MAX_AGE,    value: "20" }
+      - { key: PUBLIC_CACHE_PATHS,      value: "/scan/public-topk,/scan/public-now,/topk" }
 
-  # ===== Router =====
-  - { key: ENABLE_AI_ROUTES,      value: "1" }
-  - { key: PRICE_MONITOR_DISABLE, value: "0" }
-  # חשוב: אל תגדיר ROUTES_ONLY (להשאיר ריק). זה חתך לך ראוטים חיוניים.
+      # ========================= Redis =========================
+      - { key: REQUIRE_REDIS,                 value: "1" }
+      - { key: CONFIRMSTORE_ENABLE,           value: "0" }
+      - { key: USE_REDIS_IDEM,                value: "1" }
+      - { key: SETEX_STRICT,                  value: "1" }
+      - { key: REDIS_CONNECT_TIMEOUT,         value: "8.0" }
+      - { key: REDIS_SOCKET_TIMEOUT,          value: "8.0" }
+      - { key: REDIS_POOL_MAX_CONNECTIONS,    value: "30" }
+      - { key: REDIS_PING_RETRIES,            value: "3" }
+      - { key: REDIS_PING_RETRY_BACKOFF_SEC,  value: "0.6" }
+      - { key: REDIS_CLIENT_NAME,             value: "algogpt" }
+      - { key: REDIS_SSL_NO_VERIFY,           value: "0" }
+      - { key: REDIS_NAMESPACE,               value: "ops-supervisor-web" }
+      - { key: REDIS_URL,         fromSecret: REDIS_URL }
+      - { key: ALGOGPT_REDIS_URL, fromSecret: REDIS_URL }
 
-  # ===== Scanner / Universe =====
-  - { key: SCAN_SOURCE,            value: "binance-futures" }
-  - { key: UNIVERSE_MODE,          value: "exchange" }
-  - { key: SCAN_INTERVALS,         value: "5m,15m,1h,4h" }
-  - { key: SCAN_MAX_SYMBOLS,       value: "150" }
-  - { key: TOP_SYMBOLS,            value: "150" }
-  - { key: SUGGEST_FUTURES,        value: "1" }
-  - { key: SUGGEST_INTERVAL_SEC,   value: "45" }
-  - { key: SUGGEST_CAP_PER_CYCLE,  value: "30" }
+      # ========================= Exchange Defaults =========================
+      - { key: DEFAULT_MARKET,              value: "futures" }
+      - { key: POSITION_MODE_OVERRIDE,      value: "hedge" }
+      - { key: BINANCE_MARGIN_TYPE_DEFAULT, value: "ISOLATED" }
+      - { key: BINANCE_FUTURES_HTTP_BASE,   value: "https://fapi.binance.com" }
+      - { key: BINANCE_FUTURES_WS_BASE,     value: "wss://fstream.binance.com" }
+      - { key: BINANCE_SPOT_HTTP_BASE,      value: "https://api.binance.com" }
+      - { key: BINANCE_TESTNET,             value: "false" }
+      - { key: BINANCE_WORKING_TYPE,        value: "MARK_PRICE" }
+      - { key: BINANCE_HTTP_TIMEOUT,        value: "10.0" }
+      - { key: BINANCE_MAX_RETRIES,         value: "2" }
+      - { key: BINANCE_RECV_WINDOW,         value: "45000" }
+      - { key: LISTENKEY_KEEPALIVE_SEC,     value: "1800" }
+      - { key: WS_KEEPALIVE_SEC,            value: "25" }
+      - { key: USE_WS,                      value: "1" }
+      - { key: EXCHANGE_INFO_TTL_SEC,       value: "900" }
+      - { key: USER_STREAM_ENABLE,          value: "1" }
 
-  # ===== Indicators / Gates =====
-  - { key: INDICATOR_INTERVALS,     value: "15m,1h,4h,1d" }
-  - { key: ENABLE_INDICATOR_EXIT,   value: "1" }
-  - { key: ADX_MIN,                 value: "22" }
-  - { key: FEAT_DAILY_CAPS,         value: "0" }
-  - { key: FEAT_DEBOUNCE_LIMIT,     value: "1" }
-  - { key: FEAT_QUALITY_ENFORCE,    value: "1" }
-  - { key: FEAT_SPREAD_DEPTH,       value: "1" }
-  - { key: FEAT_TF_ALIGN,           value: "0" }
-  - { key: FEAT_VOLUME_GATE,        value: "0" }
-  - { key: FEAT_COOLDOWN,           value: "0" }
-  - { key: MAX_ATR_PCT,             value: "3" }
+      # ========================= Router Enablement =========================
+      - { key: ENABLE_AI_ROUTES,      value: "1" }
+      - { key: PRICE_MONITOR_DISABLE, value: "0" }
+      # אל תגדיר ROUTES_ONLY — השאר לא מוגדר.
 
-  # ===== Watchlist =====
-  - { key: ALLOWLIST_MODE,         value: "off" }
-  - { key: SYMBOLS_ALLOWLIST_PATH, value: "config/symbols_allowlist.json" }
-  - { key: WATCHLIST,              value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT" }
+      # ========================= Scanner / Universe =========================
+      - { key: SCAN_SOURCE,            value: "binance-futures" }
+      - { key: UNIVERSE_MODE,          value: "exchange" }
+      - { key: SCAN_INTERVALS,         value: "5m,15m,1h,4h" }
+      - { key: SCAN_MAX_SYMBOLS,       value: "150" }
+      - { key: SCAN_MAX_LIMIT,         value: "0" }
+      - { key: SCAN_CONCURRENCY,       value: "4" }
+      - { key: TOP_SYMBOLS,            value: "150" }
+      - { key: SUGGEST_FUTURES,        value: "1" }
+      - { key: SUGGEST_INTERVAL_SEC,   value: "45" }
+      - { key: SUGGEST_CAP_PER_CYCLE,  value: "30" }
 
-  # ===== Scan CRON =====
-  - { key: SCAN_CRON_ENABLE,        value: "1" }
-  - { key: SCAN_CRON_EVERY_SEC,     value: "45" }
-  - { key: SCAN_CRON_TIMEFRAME,     value: "15m" }
-  - { key: SCAN_CRON_KLINES,        value: "200" }
-  - { key: SCAN_CRON_LIMIT,         value: "12" }
-  - { key: SCAN_CRON_MIN_SCORE,     value: "6.8" }
-  - { key: SCAN_REARM_SCORE,        value: "6" }
-  - { key: SCAN_DEDUPE_WINDOW_SEC,  value: "300" }
-  - { key: SCAN_TTL_SEC,            value: "900" }
-  - { key: SCAN_RICH,               value: "1" }
-  - { key: DEFAULT_LEVERAGE,        value: "10" }
-  - { key: DEFAULT_STAKE_USDT,      value: "50" }
+      # ========================= Indicators / Gates =========================
+      - { key: INDICATOR_INTERVALS,     value: "15m,1h,4h,1d" }
+      - { key: ENABLE_INDICATOR_EXIT,   value: "1" }
+      - { key: ADX_MIN,                 value: "22" }
+      - { key: FEAT_DAILY_CAPS,         value: "0" }
+      - { key: FEAT_DEBOUNCE_LIMIT,     value: "1" }
+      - { key: FEAT_QUALITY_ENFORCE,    value: "1" }
+      - { key: FEAT_SPREAD_DEPTH,       value: "1" }
+      - { key: FEAT_TF_ALIGN,           value: "0" }
+      - { key: FEAT_VOLUME_GATE,        value: "0" }
+      - { key: FEAT_COOLDOWN,           value: "0" }
+      - { key: MAX_ATR_PCT,             value: "3" }
 
-  # ===== Approvals =====
-  - { key: APPROVAL_ENABLED,             value: "1" }
-  - { key: REQUIRE_TELEGRAM_APPROVAL,    value: "1" }
-  - { key: AUTO_OPEN_ON_APPROVE,         value: "1" }
-  - { key: SINK_ENFORCE_APPROVALS,       value: "1" }
-  - { key: APPROVAL_REQUIRE_WATCHLIST,   value: "0" }
-  - { key: APPROVAL_RR_MIN,              value: "1.15" }
-  - { key: APPROVAL_SUCCESS_MIN,         value: "50" }
-  - { key: APPROVAL_MAX_SL_PCT,          value: "3.0" }
-  - { key: APPROVAL_REQUIRE_FRESH_PRICE, value: "1" }
-  - { key: APPROVAL_DUP_COOLDOWN_SEC,    value: "0" }
-  - { key: APPROVE_BEFORE_GATE,          value: "1" }
-  - { key: CONFIRM_TTL_SEC,              value: "120" }
-  - { key: OPS_TICKET_TTL_SEC,           value: "1800" }
-  - { key: ONLY_TRADE_NOTIFICATIONS,     value: "1" }
-  - { key: STARTUP_NOTIFY_ENABLE,        value: "0" }
-  - { key: ADMIN_CHAT_ID,                value: "449087907" }
-  - { key: TELEGRAM_CHAT_ID,             value: "449087907" }
-  - { key: TELEGRAM_ADMIN_IDS,           value: "449087907" }
-  - { key: TELEGRAM_AUTO_WEBHOOK,        value: "1" }
-  - { key: TELEGRAM_PARSE_MODE,          value: "HTML" }
+      # ========================= Watchlist =========================
+      - { key: ALLOWLIST_MODE,         value: "off" }
+      - { key: SYMBOLS_ALLOWLIST_PATH, value: "config/symbols_allowlist.json" }
+      - { key: WATCHLIST,              value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT" }
 
-  # ===== Trade & Orders =====
-  - { key: EXECUTE_TRADES,         value: "1" }
-  - { key: ALLOW_MARKET_ENTRY,     value: "1" }
-  - { key: MANAGER_WRITES_ORDERS,  value: "1" }
-  - { key: ORDERS_USE_OCO,         value: "1" }
-  - { key: ORDER_ID_PREFIX,        value: "ALG" }
-  - { key: ORDER_ID_INCLUDE_TS,    value: "1" }
-  - { key: ORDER_BACKOFF_BASE_MS,  value: "120" }
-  - { key: ORDER_BACKOFF_MAX_MS,   value: "1600" }
-  - { key: ORDER_ROUND_TO_TICK,    value: "1" }
-  - { key: USE_EXCHANGE_FILTERS,   value: "1" }
-  - { key: ORD_VERIFY_TIMEOUT_MS,  value: "800" }
-  - { key: ORD_CANCEL_STRATEGY,    value: "MINIMAL" }
-  - { key: MAX_TRADES_PER_TICK,    value: "1" }
-  - { key: MIN_NOTIONAL_USDT,      value: "5" }
-  - { key: MAX_TRADE_BUDGET,       value: "600" }
+      # ========================= Scan CRON =========================
+      - { key: SCAN_CRON_ENABLE,        value: "1" }
+      - { key: SCAN_CRON_EVERY_SEC,     value: "45" }
+      - { key: SCAN_CRON_TIMEFRAME,     value: "15m" }
+      - { key: SCAN_CRON_KLINES,        value: "200" }
+      - { key: SCAN_CRON_LIMIT,         value: "12" }
+      - { key: SCAN_CRON_MIN_SCORE,     value: "6.8" }
+      - { key: SCAN_REARM_SCORE,        value: "6" }
+      - { key: SCAN_DEDUPE_WINDOW_SEC,  value: "300" }
+      - { key: SCAN_TTL_SEC,            value: "900" }
+      - { key: SCAN_RICH,               value: "1" }
+      - { key: DEFAULT_LEVERAGE,        value: "10" }
+      - { key: DEFAULT_STAKE_USDT,      value: "50" }
 
-  # ===== Precision overrides (BTCUSDT) =====
-  - { key: PRICE_DP_OVERRIDE__BTCUSDT, value: "1" }
-  - { key: QTY_STEP_OVERRIDE__BTCUSDT, value: "0.001" }
+      # ========================= Approvals =========================
+      - { key: APPROVAL_ENABLED,             value: "1" }
+      - { key: REQUIRE_TELEGRAM_APPROVAL,    value: "1" }
+      - { key: AUTO_OPEN_ON_APPROVE,         value: "1" }
+      - { key: SINK_ENFORCE_APPROVALS,       value: "1" }
+      - { key: APPROVAL_REQUIRE_WATCHLIST,   value: "0" }
+      - { key: APPROVAL_RR_MIN,              value: "1.15" }
+      - { key: APPROVAL_SUCCESS_MIN,         value: "50" }
+      - { key: APPROVAL_MAX_SL_PCT,          value: "3.0" }
+      - { key: APPROVAL_REQUIRE_FRESH_PRICE, value: "1" }
+      - { key: APPROVAL_DUP_COOLDOWN_SEC,    value: "0" }
+      - { key: APPROVE_BEFORE_GATE,          value: "1" }
+      - { key: CONFIRM_TTL_SEC,              value: "120" }
+      - { key: OPS_TICKET_TTL_SEC,           value: "1800" }
+      - { key: ONLY_TRADE_NOTIFICATIONS,     value: "1" }
+      - { key: STARTUP_NOTIFY_ENABLE,        value: "0" }
+      - { key: ADMIN_CHAT_ID,                value: "449087907" }
+      - { key: TELEGRAM_CHAT_ID,             value: "449087907" }
+      - { key: TELEGRAM_ADMIN_IDS,           value: "449087907" }
+      - { key: TELEGRAM_AUTO_WEBHOOK,        value: "1" }
+      - { key: TELEGRAM_PARSE_MODE,          value: "HTML" }
 
-  # ===== Auto QTY =====
-  - { key: AUTO_QTY_ENABLE,            value: "1" }
-  - { key: AUTO_QTY_MODE,              value: "notional" }
-  - { key: AUTO_QTY_MARGIN_BUFFER_PCT, value: "0.20" }
+      # ========================= Trade & Orders =========================
+      - { key: EXECUTE_TRADES,         value: "1" }
+      - { key: ALLOW_MARKET_ENTRY,     value: "1" }
+      - { key: MANAGER_WRITES_ORDERS,  value: "1" }
+      - { key: ORDERS_USE_OCO,         value: "1" }
+      - { key: ORDER_ID_PREFIX,        value: "ALG" }
+      - { key: ORDER_ID_INCLUDE_TS,    value: "1" }
+      - { key: ORDER_BACKOFF_BASE_MS,  value: "120" }
+      - { key: ORDER_BACKOFF_MAX_MS,   value: "1600" }
+      - { key: ORDER_ROUND_TO_TICK,    value: "1" }
+      - { key: USE_EXCHANGE_FILTERS,   value: "1" }
+      - { key: ORD_VERIFY_TIMEOUT_MS,  value: "800" }
+      - { key: ORD_CANCEL_STRATEGY,    value: "MINIMAL" }
+      - { key: MAX_TRADES_PER_TICK,    value: "1" }
+      - { key: MIN_NOTIONAL_USDT,      value: "5" }
+      - { key: MAX_TRADE_BUDGET,       value: "600" }
 
-  # ===== SL/TP / BE / Trail / Ladder (קריטי לניהול דינמי) =====
-  - { key: NATIVE_TPSL_ENABLE,        value: "0" }
-  - { key: SL_MONOTONIC,              value: "1" }
-  - { key: PERCENT_GUARD_ENABLE,      value: "1" }
-  - { key: PERCENT_PRICE_GUARD_BPS,   value: "150" }
-  - { key: ENTRY_BAND_BPS,            value: "10" }
-  - { key: ENTRY_GAP_MAX_PCT,         value: "0.80" }
-  - { key: ENTRY_GAP_WARN_PCT,        value: "0.50" }
-  - { key: STOP_BAND_BPS,             value: "12" }
-  - { key: TP_BE_ONLY_AFTER_TP1,      value: "0" }
-  - { key: STREAM_TP_BE,              value: "1" }
-  - { key: TP_LADDER_ON_APPROVE,      value: "1" }
-  - { key: LADDER_TP_ENABLE,          value: "1" }
-  - { key: LADDER_SL_ENABLE,          value: "1" }
-  - { key: TP_MAX_LADDERS,            value: "3" }
-  - { key: TRAIL_ENABLE,              value: "1" }
-  - { key: TRAIL_ATR_MULT,            value: "2.6" }
-  - { key: ATR_UPDATE_COOLDOWN_SEC,   value: "20" }
-  - { key: ATR_MIN_DELTA,             value: "0.02" }
-  - { key: BE_ARM_PCT,                value: "0.6" }
-  - { key: BE_GUARD_ENABLE,           value: "1" }
-  - { key: BE_GUARD_EVERY_SEC,        value: "20" }
-  - { key: TP_BE_OFFSET_BPS,          value: "5" }
+      # ======== Binance precision overrides (BTCUSDT) =========
+      - { key: PRICE_DP_OVERRIDE__BTCUSDT, value: "1" }
+      - { key: QTY_STEP_OVERRIDE__BTCUSDT, value: "0.001" }
 
-  # ===== Smart-Manage =====
-  - { key: SMART_MANAGE_ON_APPROVE,     value: "1" }
-  - { key: SMART_MANAGE_BE_OFFSET_BPS,  value: "5" }
-  - { key: SMART_MANAGE_PCTS,           value: "3,6,12" }
-  - { key: SMART_MANAGE_SPLITS,         value: "0.25,0.25,0.50" }
-  - { key: SMART_MANAGE_TRAIL_ATR_MULT, value: "2.6" }
+      # ========================= Auto QTY =========================
+      - { key: AUTO_QTY_ENABLE,            value: "1" }
+      - { key: AUTO_QTY_MODE,              value: "notional" }
+      - { key: AUTO_QTY_MARGIN_BUFFER_PCT, value: "0.20" }
 
-  # ===== Hedge / Auto-Flip =====
-  - { key: HEDGE_ENABLE,            value: "1" }
-  - { key: ALLOW_OPPOSITE_SIDE,     value: "1" }
-  - { key: AUTO_SIDE_SWITCH,        value: "1" }
-  - { key: AUTO_REOPEN_ON_EXIT,     value: "1" }
+      # ========================= SL/TP / BE / Trail / Ladder =========================
+      - { key: NATIVE_TPSL_ENABLE,        value: "0" }
+      - { key: SL_MONOTONIC,              value: "1" }
+      - { key: PERCENT_GUARD_ENABLE,      value: "1" }
+      - { key: PERCENT_PRICE_GUARD_BPS,   value: "150" }
+      - { key: ENTRY_BAND_BPS,            value: "10" }
+      - { key: ENTRY_GAP_MAX_PCT,         value: "0.80" }
+      - { key: ENTRY_GAP_WARN_PCT,        value: "0.50" }
+      - { key: STOP_BAND_BPS,             value: "12" }
+      - { key: TP_BE_ONLY_AFTER_TP1,      value: "0" }
+      - { key: STREAM_TP_BE,              value: "1" }
+      - { key: TP_LADDER_ON_APPROVE,      value: "1" }
+      - { key: LADDER_TP_ENABLE,          value: "1" }
+      - { key: LADDER_SL_ENABLE,          value: "1" }
+      - { key: TP_MAX_LADDERS,            value: "3" }
+      - { key: TRAIL_ENABLE,              value: "1" }
+      - { key: TRAIL_ATR_MULT,            value: "2.6" }
+      - { key: ATR_UPDATE_COOLDOWN_SEC,   value: "20" }
+      - { key: ATR_MIN_DELTA,             value: "0.02" }
+      - { key: BE_ARM_PCT,                value: "0.6" }
+      - { key: BE_GUARD_ENABLE,           value: "1" }
+      - { key: BE_GUARD_EVERY_SEC,        value: "20" }
+      - { key: TP_BE_OFFSET_BPS,          value: "5" }
 
-  # ===== Auto-Tune =====
-  - { key: AUTO_TUNE_ENABLE,           value: "1" }
-  - { key: AUTO_MIN_SCORE_BASE,        value: "7.0" }
-  - { key: AUTO_MIN_SCORE_RANGE,       value: "6.2,7.9" }
-  - { key: AUTO_ADX_MIN_BASE,          value: "22" }
-  - { key: AUTO_ADX_RANGE,             value: "20,35" }
-  - { key: TARGET_TRADES_PER_DAY_MIN,  value: "4" }
-  - { key: TARGET_TRADES_PER_DAY_MAX,  value: "12" }
-  - { key: AUTO_TUNE_LOOKBACK_MIN,     value: "180" }
-  - { key: AUTO_BACKOFF_SEC,           value: "900" }
+      # ========================= Smart-Manage =========================
+      - { key: SMART_MANAGE_ON_APPROVE,     value: "1" }
+      - { key: SMART_MANAGE_BE_OFFSET_BPS,  value: "5" }
+      - { key: SMART_MANAGE_PCTS,           value: "3,6,12" }
+      - { key: SMART_MANAGE_SPLITS,         value: "0.25,0.25,0.50" }
+      - { key: SMART_MANAGE_TRAIL_ATR_MULT, value: "2.6" }
 
-  # ===== Auto-Tune TP/SL =====
-  - { key: AUTO_TP_ENABLE,             value: "1" }
-  - { key: SL_ATR_MULT_BASE,           value: "0.90" }
-  - { key: TP1_ATR_MULT_BASE,          value: "1.60" }
-  - { key: TP2_ATR_MULT_BASE,          value: "3.20" }
-  - { key: TP3_ATR_MULT_BASE,          value: "5.20" }
-  - { key: ADX_TP_BOOST_THRESH,        value: "28" }
-  - { key: ADX_TP_BOOST_PCT,           value: "18" }
-  - { key: ADX_STRONG_SL_TIGHTEN_PCT,  value: "14" }
-  - { key: ADX_LOW_SL_RELAX_PCT,       value: "10" }
-  - { key: ADX_LOW_TP_SHRINK_PCT,      value: "15" }
+      # ========================= Hedge & Auto-Flip =========================
+      - { key: HEDGE_ENABLE,            value: "1" }
+      - { key: ALLOW_OPPOSITE_SIDE,     value: "1" }
+      - { key: AUTO_SIDE_SWITCH,        value: "1" }
+      - { key: AUTO_REOPEN_ON_EXIT,     value: "1" }
 
-  # ===== Dynamic Profiles & Notifications =====
-  - { key: DYN_TOOLBOX_ENABLE,             value: "1" }
-  - { key: DYN_SCORE_BANDS,                value: "conservative:<6.0;base:6.0-7.5;aggressive:7.5-8.5;extreme:>=8.5" }
-  - { key: DYN_PROFILE_AUTO_ENABLE,        value: "1" }
-  - { key: DYN_PROFILE_AUTO_SOURCE,        value: "score,adx" }
-  - { key: DYN_PROFILE_SWITCH_HYSTERESIS,  value: "0.2" }
-  - { key: DYN_PROFILE_MIN_DWELL_SEC,      value: "120" }
-  - { key: DYN_PROFILE_NOTIFY_ENABLE,         value: "1" }
-  - { key: DYN_PROFILE_NOTIFY_CHANNELS,       value: "telegram,logs" }
-  - { key: DYN_PROFILE_NOTIFY_MIN_DWELL_SEC,  value: "60" }
-  - { key: DYN_PROFILE_NOTIFY_COOLDOWN_SEC,   value: "45" }
-  - { key: DYN_PROFILE_NOTIFY_INCLUDE_STATE,  value: "1" }
-  - { key: DYN_PROFILE_NOTIFY_PARSE_MODE,     value: "HTML" }
-  - { key: DYN_PROFILE_NOTIFY_TEMPLATE,       value: "<b>Profile Switch</b> — <code>{symbol}</code>\n<b>{old}</b> ➜ <b>{new}</b>\nScore: <b>{score:.2f}</b> | ADX: <b>{adx:.0f}</b>\nLev: <b>{lev}</b> | Budget: <b>{budget}</b>\nTP: <b>{tp_pcts}</b> / Splits: <b>{splits}</b>\nTrail ATR: <b>{trail_atr}</b> | BE: <b>{be_pct}%</b>\n⏱ {ts} (UTC)" }
+      # ========================= Auto-Tune (Score/ADX) =========================
+      - { key: AUTO_TUNE_ENABLE,           value: "1" }
+      - { key: AUTO_MIN_SCORE_BASE,        value: "7.0" }
+      - { key: AUTO_MIN_SCORE_RANGE,       value: "6.2,7.9" }
+      - { key: AUTO_ADX_MIN_BASE,          value: "22" }
+      - { key: AUTO_ADX_RANGE,             value: "20,35" }
+      - { key: TARGET_TRADES_PER_DAY_MIN,  value: "4" }
+      - { key: TARGET_TRADES_PER_DAY_MAX,  value: "12" }
+      - { key: AUTO_TUNE_LOOKBACK_MIN,     value: "180" }
+      - { key: AUTO_BACKOFF_SEC,           value: "900" }
 
-  # ===== Health / Digest =====
-  - { key: HEALTH_PRICE_MAX_AGE,        value: "30" }
-  - { key: HEALTH_TP_GRACE_SEC,         value: "8" }
-  - { key: HEALTH_TP1_ENABLE,           value: "0" }
-  - { key: HEALTH_TP1_INTERVAL_SEC,     value: "1200" }
-  - { key: HEALTH_TP1_ONLY_WITH_POSITION, value: "1" }
-  - { key: TP1_TAGS,                    value: "TP1,tp1,tp_1,TAKE_PROFIT_1" }
-  - { key: OPS_DIGEST_INTERVAL_HOURS,   value: "3" }
-  - { key: OPS_HEARTBEAT_ENABLE,        value: "1" }
-  - { key: OPS_HEARTBEAT_EVERY_MIN,     value: "5" }
-  - { key: HEARTBEAT_HOURS,             value: "2" }
-  - { key: HEARTBEAT_MIN_SCORE,         value: "6" }
+      # ========================= Auto-Tune TP/SL (ADX) =========================
+      - { key: AUTO_TP_ENABLE,             value: "1" }
+      - { key: SL_ATR_MULT_BASE,           value: "0.90" }
+      - { key: TP1_ATR_MULT_BASE,          value: "1.60" }
+      - { key: TP2_ATR_MULT_BASE,          value: "3.20" }
+      - { key: TP3_ATR_MULT_BASE,          value: "5.20" }
+      - { key: ADX_TP_BOOST_THRESH,        value: "28" }
+      - { key: ADX_TP_BOOST_PCT,           value: "18" }
+      - { key: ADX_STRONG_SL_TIGHTEN_PCT,  value: "14" }
+      - { key: ADX_LOW_SL_RELAX_PCT,       value: "10" }
+      - { key: ADX_LOW_TP_SHRINK_PCT,      value: "15" }
 
-  # ===== Defaults =====
-  - { key: ETA_SMART_ENABLE,            value: "1" }
-  - { key: ETA_VELOCITY_WINDOW,         value: "30" }
-  - { key: DEFAULT_INTERVAL,            value: "15m" }
+      # ========================= Dynamic Profile Auto-Switch & Notifs ============
+      - { key: DYN_TOOLBOX_ENABLE,             value: "1" }
+      - { key: DYN_SCORE_BANDS,                value: "conservative:<6.0;base:6.0-7.5;aggressive:7.5-8.5;extreme:>=8.5" }
+      - { key: DYN_PROFILE_AUTO_ENABLE,        value: "1" }
+      - { key: DYN_PROFILE_AUTO_SOURCE,        value: "score,adx" }
+      - { key: DYN_PROFILE_SWITCH_HYSTERESIS,  value: "0.2" }
+      - { key: DYN_PROFILE_MIN_DWELL_SEC,      value: "120" }
+      - { key: DYN_PROFILE_NOTIFY_ENABLE,         value: "1" }
+      - { key: DYN_PROFILE_NOTIFY_CHANNELS,       value: "telegram,logs" }
+      - { key: DYN_PROFILE_NOTIFY_MIN_DWELL_SEC,  value: "60" }
+      - { key: DYN_PROFILE_NOTIFY_COOLDOWN_SEC,   value: "45" }
+      - { key: DYN_PROFILE_NOTIFY_INCLUDE_STATE,  value: "1" }
+      - { key: DYN_PROFILE_NOTIFY_PARSE_MODE,     value: "HTML" }
+      - { key: DYN_PROFILE_NOTIFY_TEMPLATE,       value: "<b>Profile Switch</b> — <code>{symbol}</code>\n<b>{old}</b> ➜ <b>{new}</b>\nScore: <b>{score:.2f}</b> | ADX: <b>{adx:.0f}</b>\nLev: <b>{lev}</b> | Budget: <b>{budget}</b>\nTP: <b>{tp_pcts}</b> / Splits: <b>{splits}</b>\nTrail ATR: <b>{trail_atr}</b> | BE: <b>{be_pct}%</b>\n⏱ {ts} (UTC)" }
 
-  # ===== Guarder =====
-  - { key: GUARDER_ENABLE,              value: "1" }
-  - { key: GUARDER_INTERVAL_SEC,        value: "45" }
+      # ========================= Health / Digest =========================
+      - { key: HEALTH_PRICE_MAX_AGE,        value: "30" }
+      - { key: HEALTH_TP_GRACE_SEC,         value: "8" }
+      - { key: HEALTH_TP1_ENABLE,           value: "0" }
+      - { key: HEALTH_TP1_INTERVAL_SEC,     value: "1200" }
+      - { key: HEALTH_TP1_ONLY_WITH_POSITION, value: "1" }
+      - { key: TP1_TAGS,                    value: "TP1,tp1,tp_1,TAKE_PROFIT_1" }
+      - { key: OPS_DIGEST_INTERVAL_HOURS,   value: "3" }
+      - { key: OPS_HEARTBEAT_ENABLE,        value: "1" }
+      - { key: OPS_HEARTBEAT_EVERY_MIN,     value: "5" }
+      - { key: HEARTBEAT_HOURS,             value: "2" }
+      - { key: HEARTBEAT_MIN_SCORE,         value: "6" }
 
-  # ===== Risk rails =====
-  - { key: DAILY_LOSS_CAP_USDT,     value: "300" }
-  - { key: KILL_ON_CAP,             value: "1" }
-  - { key: PRICE_PROTECT,           value: "1" }
+      # ========================= ETA / Defaults =========================
+      - { key: ETA_SMART_ENABLE,            value: "1" }
+      - { key: ETA_VELOCITY_WINDOW,         value: "30" }
+      - { key: DEFAULT_INTERVAL,            value: "15m" }
 
-  # ===== Misc / Storage / Metrics =====
-  - { key: METRICS_ENABLE,              value: "true" }
-  - { key: PNL_TRACKING,                value: "true" }
-  - { key: PARAMS_DIR,                  value: "params/optimized" }
-  - { key: DATABASE_URL,                value: "sqlite:////app/data/algogpt.db" }
-  - { key: PRICE_CACHE_TTL_MS,          value: "250" }
-  - { key: PRICE_MAX_AGE_SEC,           value: "15" }
-  - { key: PRICE_WS_FRESH_TTL,          value: "60" }
-  - { key: PRICE_SCAN_INTERVAL,         value: "30" }
+      # ========================= Guarder =========================
+      - { key: GUARDER_ENABLE,              value: "1" }
+      - { key: GUARDER_INTERVAL_SEC,        value: "45" }
 
-  # ===== Managers (קריטי) =====
-  - { key: MANAGER_ENABLE,              value: "1" }
-  - { key: TRADE_MANAGER_ENABLE,        value: "1" }
+      # ========================= Risk rails =========================
+      - { key: DAILY_LOSS_CAP_USDT,     value: "300" }
+      - { key: KILL_ON_CAP,             value: "1" }
+      - { key: PRICE_PROTECT,           value: "1" }
 
-  # ===== Secrets (להשאיר כסודות ברנדר!) =====
-  - { key: API_BEARER_TOKEN,          fromSecret: API_BEARER_TOKEN }
-  - { key: API_TOKEN,                 fromSecret: API_TOKEN }
-  - { key: PRIMARY_API_TOKEN,         fromSecret: PRIMARY_API_TOKEN }
-  - { key: API_SIGNING_SECRET,        fromSecret: API_SIGNING_SECRET }
-  - { key: OPS_SIGN_SECRET,           fromSecret: OPS_SIGN_SECRET }
-  - { key: WEBHOOK_HMAC_SECRET,       fromSecret: WEBHOOK_HMAC_SECRET }
-  - { key: OPENAI_API_KEY,            fromSecret: OPENAI_API_KEY }
-  - { key: TELEGRAM_BOT_TOKEN,        fromSecret: TELEGRAM_BOT_TOKEN }
-  - { key: TELEGRAM_WEBHOOK_SECRET,   fromSecret: TELEGRAM_WEBHOOK_SECRET }
-  - { key: ALERTS_INGEST_HMAC_SECRET, fromSecret: ALERTS_INGEST_HMAC_SECRET }
-  - { key: INTERNAL_JWT_PUBLIC_KEY,   fromSecret: INTERNAL_JWT_PUBLIC_KEY }
-  - { key: BINANCE_API_KEY,           fromSecret: BINANCE_API_KEY }
-  - { key: BINANCE_API_SECRET,        fromSecret: BINANCE_API_SECRET }
+      # ========================= Misc / Storage / Metrics =========================
+      - { key: METRICS_ENABLE,              value: "true" }
+      - { key: PNL_TRACKING,                value: "true" }
+      - { key: PARAMS_DIR,                  value: "params/optimized" }
+      - { key: DATABASE_URL,                value: "sqlite:////app/data/algogpt.db" }
+      - { key: PRICE_CACHE_TTL_MS,          value: "250" }
+      - { key: PRICE_MAX_AGE_SEC,           value: "15" }
+      - { key: PRICE_WS_FRESH_TTL,          value: "60" }
+      - { key: PRICE_SCAN_INTERVAL,         value: "30" }
 
+      # ========================= Managers (קריטי) =========================
+      - { key: MANAGER_ENABLE,              value: "1" }
+      - { key: TRADE_MANAGER_ENABLE,        value: "1" }
 
+      # ========================= Secrets =========================
+      - { key: API_BEARER_TOKEN,          fromSecret: API_BEARER_TOKEN }
+      - { key: API_TOKEN,                 fromSecret: API_TOKEN }
+      - { key: PRIMARY_API_TOKEN,         fromSecret: PRIMARY_API_TOKEN }
+      - { key: API_SIGNING_SECRET,        fromSecret: API_SIGNING_SECRET }
+      - { key: OPS_SIGN_SECRET,           fromSecret: OPS_SIGN_SECRET }
+      - { key: WEBHOOK_HMAC_SECRET,       fromSecret: WEBHOOK_HMAC_SECRET }
+      - { key: OPENAI_API_KEY,            fromSecret: OPENAI_API_KEY }
+      - { key: TELEGRAM_BOT_TOKEN,        fromSecret: TELEGRAM_BOT_TOKEN }
+      - { key: TELEGRAM_WEBHOOK_SECRET,   fromSecret: TELEGRAM_WEBHOOK_SECRET }
+      - { key: ALERTS_INGEST_HMAC_SECRET, fromSecret: ALERTS_INGEST_HMAC_SECRET }
+      - { key: INTERNAL_JWT_PUBLIC_KEY,   fromSecret: INTERNAL_JWT_PUBLIC_KEY }
+      - { key: BINANCE_API_KEY,           fromSecret: BINANCE_API_KEY }
+      - { key: BINANCE_API_SECRET,        fromSecret: BINANCE_API_SECRET }
 
 
 
