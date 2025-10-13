@@ -1,3 +1,6 @@
+להלן קובץ **main.py** מעודכן, מלא 1:1, עם פרופיל **Extreme** ובחירה אוטומטית לפי **ADX/ATR** במסלול `/manage-once` + החזרת אינדיקטורים ופרטי הפרופיל:
+
+```python
 # main.py
 from __future__ import annotations
 
@@ -320,6 +323,7 @@ async def _public_cache_etag(request: Request, call_next):
     try:
         resp: Response = await call_next(request)
     except RuntimeError as e:
+        # תיקון לבאג "No response returned" – תחזיר 204 במקום קריסה
         if "No response returned" in str(e):
             return PlainTextResponse("", status_code=204)
         raise
@@ -1218,6 +1222,139 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
         await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>" + ",".join(emergencies) + "</code>")
     return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
 
+# ==================== NEW: Profile ENV & helpers for ADX/ATR auto-select ====================
+# ------ Profiles & auto-select (ADX/ATR) ------
+PROFILE_AUTO_SELECT = os.getenv("PROFILE_AUTO_SELECT", "1").lower() in ("1", "true", "yes", "on")
+
+# Base profile (שמרני/ברירת מחדל)
+PROFILE_BASE_BE_BPS = int(os.getenv("PROFILE_BASE_BE_BPS", "5"))  # BE = 5bps
+PROFILE_BASE_PCTS = [float(x) for x in (os.getenv("PROFILE_BASE_PCTS", "4,8,16")).split(",") if x.strip()]
+PROFILE_BASE_SPLITS = [float(x) for x in (os.getenv("PROFILE_BASE_SPLITS", "0.30,0.30,0.40")).split(",") if x.strip()]
+PROFILE_BASE_ATR_MULT = float(os.getenv("PROFILE_BASE_ATR_MULT", "0") or 0) or None
+
+# Extreme profile (אגרסיבי)
+PROFILE_EXTREME_BE_BPS = int(os.getenv("PROFILE_EXTREME_BE_BPS", "2"))  # BE = 2bps
+PROFILE_EXTREME_PCTS = [float(x) for x in (os.getenv("PROFILE_EXTREME_PCTS", "2,4,8")).split(",") if x.strip()]
+PROFILE_EXTREME_SPLITS = [float(x) for x in (os.getenv("PROFILE_EXTREME_SPLITS", "0.25,0.35,0.40")).split(",") if x.strip()]
+PROFILE_EXTREME_ATR_MULT = float(os.getenv("PROFILE_EXTREME_ATR_MULT", "1.6"))
+
+# טריגרים לפרופיל Extreme
+ADX_EXTREME_MIN = float(os.getenv("ADX_EXTREME_MIN", "28"))
+ATRPCT_EXTREME_MIN = float(os.getenv("ATRPCT_EXTREME_MIN", "0.007"))  # ATR/price >= 0.7%
+
+def _wilder_smooth(values: List[float], period: int) -> List[float]:
+    """Wilder smoothing for ATR/DM series."""
+    if not values or period <= 0 or len(values) < period:
+        return []
+    smoothed = [sum(values[:period]) / period]
+    for v in values[period:]:
+        smoothed.append((smoothed[-1] * (period - 1) + v) / period)
+    return smoothed
+
+def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -> Dict[str, float]:
+    """
+    klines: Binance futures_klines rows
+    return: {"atr": float, "adx": float, "price": float}
+    """
+    try:
+        highs = [float(k[2]) for k in klines]
+        lows  = [float(k[3]) for k in klines]
+        closes= [float(k[4]) for k in klines]
+        if len(closes) < period + 2:
+            return {"atr": 0.0, "adx": 0.0, "price": closes[-1] if closes else 0.0}
+
+        trs = []
+        plus_dm = []
+        minus_dm = []
+        for i in range(1, len(closes)):
+            h, l, ph, pl, pc = highs[i], lows[i], highs[i-1], lows[i-1], closes[i-1]
+            tr = max(h - l, abs(h - pc), abs(l - pc))
+            trs.append(tr)
+            up_move = h - ph
+            down_move = pl - l
+            plus_dm.append(up_move if (up_move > down_move and up_move > 0) else 0.0)
+            minus_dm.append(down_move if (down_move > up_move and down_move > 0) else 0.0)
+
+        atr_series = _wilder_smooth(trs, period)
+        plus_dm_s  = _wilder_smooth(plus_dm, period)
+        minus_dm_s = _wilder_smooth(minus_dm, period)
+        if not (atr_series and plus_dm_s and minus_dm_s):
+            return {"atr": 0.0, "adx": 0.0, "price": closes[-1]}
+
+        atr = atr_series[-1]
+        plus_di = [(p / atr_series[i]) * 100 if atr_series[i] > 0 else 0.0 for i, p in enumerate(plus_dm_s)]
+        minus_di = [(m / atr_series[i]) * 100 if atr_series[i] > 0 else 0.0 for i, m in enumerate(minus_dm_s)]
+        dx = []
+        for i in range(min(len(plus_di), len(minus_di))):
+            s = plus_di[i] + minus_di[i]
+            d = abs(plus_di[i] - minus_di[i])
+            dx.append((d / s) * 100 if s > 0 else 0.0)
+        adx_series = _wilder_smooth(dx, period)
+        adx = adx_series[-1] if adx_series else 0.0
+        return {"atr": float(atr), "adx": float(adx), "price": float(closes[-1])}
+    except Exception:
+        return {"atr": 0.0, "adx": 0.0, "price": 0.0}
+
+async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, float], str]:
+    """
+    קובע offset_bps, pcts, splits, atr_mult לפי פרופיל:
+    - אם המשתמש שלח במפורש pcts/splits/offset_bps/atr_mult — זה גובר (profile='custom')
+    - אחרת אם PROFILE_AUTO_SELECT=1 — בוחר בין base/extreme לפי ADX/ATR
+    - אחרת — base
+    """
+    explicit_offset = payload.get("offset_bps")
+    explicit_pcts   = payload.get("pcts")
+    explicit_splits = payload.get("splits")
+    explicit_atr    = payload.get("atr_mult")
+    if explicit_pcts and explicit_splits:
+        prof = {
+            "offset_bps": int(explicit_offset if explicit_offset is not None else PROFILE_BASE_BE_BPS),
+            "pcts": [float(x) for x in explicit_pcts],
+            "splits": [float(x) for x in explicit_splits],
+            "atr_mult": (float(explicit_atr) if explicit_atr is not None else PROFILE_BASE_ATR_MULT),
+        }
+        kl = []
+        with suppress(Exception):
+            kl = client.futures_klines(symbol=symbol, interval="5m", limit=120)
+        ind = _compute_indicators_from_klines(kl, period=14)
+        return prof, ind, "custom"
+
+    if PROFILE_AUTO_SELECT:
+        kl = []
+        with suppress(Exception):
+            kl = client.futures_klines(symbol=symbol, interval="5m", limit=120)
+        ind = _compute_indicators_from_klines(kl, period=14)
+        atr = ind.get("atr", 0.0)
+        px  = ind.get("price", 0.0)
+        adx = ind.get("adx", 0.0)
+        atrpct = (atr / px) if (atr > 0 and px > 0) else 0.0
+        is_extreme = (adx >= ADX_EXTREME_MIN) or (atrpct >= ATRPCT_EXTREME_MIN)
+        if is_extreme:
+            prof = {
+                "offset_bps": PROFILE_EXTREME_BE_BPS,
+                "pcts": PROFILE_EXTREME_PCTS[:],
+                "splits": PROFILE_EXTREME_SPLITS[:],
+                "atr_mult": PROFILE_EXTREME_ATR_MULT,
+            }
+            return prof, ind, "extreme"
+        else:
+            prof = {
+                "offset_bps": PROFILE_BASE_BE_BPS,
+                "pcts": PROFILE_BASE_PCTS[:],
+                "splits": PROFILE_BASE_SPLITS[:],
+                "atr_mult": PROFILE_BASE_ATR_MULT,
+            }
+            return prof, ind, "base"
+
+    ind = {"atr": 0.0, "adx": 0.0, "price": 0.0}
+    prof = {
+        "offset_bps": PROFILE_BASE_BE_BPS,
+        "pcts": PROFILE_BASE_PCTS[:],
+        "splits": PROFILE_BASE_SPLITS[:],
+        "atr_mult": PROFILE_BASE_ATR_MULT,
+    }
+    return prof, ind, "base"
+
 # ==================== NEW: /manage-once (Bearer) ====================
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
@@ -1259,26 +1396,7 @@ async def manage_once(
     if not symbol:
         raise HTTPException(status_code=422, detail="missing symbol")
 
-    # Defaults (דינמי לפי מה שביקשת)
-    offset_bps = int(payload.get("offset_bps") or os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS", "5")))
-    pcts: List[float] = payload.get("pcts") or [1.5, 3.0, 6.0]
-    splits: List[float] = payload.get("splits") or [0.30, 0.30, 0.40]
-    atr_mult = payload.get("atr_mult", None)
-
-    # ולידציה
-    if len(pcts) != len(splits) or not (0.999 <= sum(splits) <= 1.001):
-        raise HTTPException(status_code=422, detail="pcts/splits mismatch or splits must sum to 1.0")
-    if any(x <= 0 for x in pcts):
-        raise HTTPException(status_code=422, detail="pcts must be > 0")
-    if any(x <= 0 for x in splits):
-        raise HTTPException(status_code=422, detail="splits must be > 0")
-
-    # נסה להפעיל מנהל פנימי אם נטען Route חיצוני (routes.manager)
-    internal_delegated = False
-    with suppress(Exception):
-        mgr = getattr(app, "routes", None)
-
-    # עבודה ישירה מול Binance אם אין מנהל
+    # Direct Binance path (load client first for indicators/profile selection)
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
@@ -1292,7 +1410,7 @@ async def manage_once(
     client = Client(api_key, api_sec)
     _align_position_mode(client)
 
-    # משוך פוזיציה קיימת
+    # Fetch open position
     pos_amt = 0.0
     entry_price = None
     side_txt = None
@@ -1311,14 +1429,30 @@ async def manage_once(
     if not side_txt or not entry_price or abs(pos_amt) <= 0:
         return {"ok": True, "skipped": True, "reason": "no_open_position"}
 
-    # פילטרים לעיגול
+    # ===== פרופיל ונגזרות (עם אפשרות override בבקשה) =====
+    prof, indicators, profile_name = await _select_profile_for_symbol(client, symbol, payload)
+
+    offset_bps = int(prof["offset_bps"])
+    pcts: List[float] = list(prof["pcts"])
+    splits: List[float] = list(prof["splits"])
+    atr_mult = prof["atr_mult"]  # יכול להיות None
+
+    # Validate pcts/splits
+    if len(pcts) != len(splits) or not (0.999 <= sum(splits) <= 1.001):
+        raise HTTPException(status_code=422, detail="pcts/splits mismatch or splits must sum to 1.0")
+    if any(x <= 0 for x in pcts):
+        raise HTTPException(status_code=422, detail="pcts must be > 0")
+    if any(x <= 0 for x in splits):
+        raise HTTPException(status_code=422, detail="splits must be > 0")
+
+    # Filters
     tick, step = _get_filters(client, symbol)
 
-    # 1) העברת סטופ ל־BE + offset_bps
+    # 1) Move SL to BE + offset_bps
     be_price = float(entry_price) * (1.0 + (offset_bps / 10_000.0)) if side_txt == "BUY" else float(entry_price) * (1.0 - (offset_bps / 10_000.0))
     be_price = _bn_round(be_price, tick)
 
-    # בטל סטופים קיימים מסוג SL/STOP כדי למנוע כפילויות
+    # Cancel existing STOP/TS orders
     try:
         open_orders = client.futures_get_open_orders(symbol=symbol)
         for o in open_orders or []:
@@ -1329,7 +1463,7 @@ async def manage_once(
     except Exception:
         pass
 
-    # הצב SL ל־BE+offset
+    # Place SL at BE+offset
     try:
         sl_kwargs = dict(
             symbol=symbol,
@@ -1384,7 +1518,6 @@ async def manage_once(
     placed_trail = None
     if atr_mult is not None:
         try:
-            # משוך Klines 1m ל־ATR (14)
             kl = client.futures_klines(symbol=symbol, interval="1m", limit=50)
             highs = [float(k[2]) for k in kl]
             lows  = [float(k[3]) for k in kl]
@@ -1397,7 +1530,6 @@ async def manage_once(
             atr = sum(trs[-14:]) / float(min(14, len(trs))) if trs else 0.0
             px = base_price
             callback_rate = max(0.1, min(5.0, (atr * float(atr_mult) / px) * 100.0 if px > 0 else 0.5))
-            # הצב Trailing Stop Market לכל הפוזיציה שנותרה
             trail_kwargs = dict(
                 symbol=symbol,
                 side="SELL" if side_txt == "BUY" else "BUY",
@@ -1421,6 +1553,20 @@ async def manage_once(
         "be_stop_price": be_price,
         "tp": placed_tp,
         "trail": placed_trail,
+        "profile": {
+            "name": profile_name,
+            "offset_bps": offset_bps,
+            "pcts": pcts,
+            "splits": splits,
+            "atr_mult": atr_mult,
+        },
+        "indicators": {
+            "adx": round(float(indicators.get("adx", 0.0)), 2),
+            "atr": float(indicators.get("atr", 0.0)),
+            "price": float(indicators.get("price", 0.0)),
+            "atr_pct": round(float(indicators.get("atr", 0.0)) / float(indicators.get("price", 1.0)), 6) if indicators.get("price", 0.0) else 0.0,
+            "thresholds": {"ADX_EXTREME_MIN": ADX_EXTREME_MIN, "ATRPCT_EXTREME_MIN": ATRPCT_EXTREME_MIN},
+        },
     }
     return result
 
@@ -1641,6 +1787,8 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+```
+
 
 
 
