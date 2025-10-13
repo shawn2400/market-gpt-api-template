@@ -1,4 +1,3 @@
-# main.py
 from __future__ import annotations
 
 import os, json, time, hmac, re, hashlib, secrets, logging, traceback, inspect, asyncio, threading, math
@@ -281,8 +280,8 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
     if not rec or (now - rec["start"]) >= window_sec:
         bucket[key] = {"start": now, "count": 1}
         return False
-    rec["count"] += 1
-    return rec["count"] > int(limit)
+    rec["count"] += 1    # type: ignore[index]
+    return rec["count"] > int(limit)  # type: ignore[index]
 
 @app.middleware("http")
 async def _public_rate_limit(request: Request, call_next):
@@ -319,6 +318,7 @@ async def _public_cache_etag(request: Request, call_next):
     try:
         resp: Response = await call_next(request)
     except RuntimeError as e:
+        # תיקון שורש: אל תקרוס על "No response returned"
         if "No response returned" in str(e):
             return PlainTextResponse("", status_code=204)
         raise
@@ -1290,7 +1290,7 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
             return prof, ind, "extreme"
         else:
             prof = {"offset_bps": PROFILE_BASE_BE_BPS, "pcts": PROFILE_BASE_PCTS[:], "splits": PROFILE_BASE_SPLITS[:], "atr_mult": PROFILE_BASE_ATR_MULT}
-            return prof, ind, "base"
+            return prof, ind, "base"}
 
     ind = {"atr": 0.0, "adx": 0.0, "price": 0.0}
     prof = {"offset_bps": PROFILE_BASE_BE_BPS, "pcts": PROFILE_BASE_PCTS[:], "splits": PROFILE_BASE_SPLITS[:], "atr_mult": PROFILE_BASE_ATR_MULT}
@@ -1604,6 +1604,13 @@ try:
 except Exception as e:
     logger.warning("meta router not loaded: %s", e)
 
+# ✅ חדש: חיבור alerts router
+try:
+    from routes.alerts import router as alerts_router  # type: ignore
+    app.include_router(alerts_router)
+except Exception as e:
+    logger.warning("alerts router not loaded: %s", e)
+
 app.include_router(router)
 
 # ==================== Meta & Fallbacks ====================
@@ -1635,10 +1642,11 @@ def health_head():
 
 @app.get("/readyz/strict", tags=["meta"])
 async def readyz_strict():
+    # תיקון: הגבלת זמן קצרה ל-ping כדי למנוע תקיעה של health checks
     try:
         r = await _get_redis_cached()
         if r:
-            await r.ping()
+            await asyncio.wait_for(r.ping(), timeout=0.6)
     except Exception as e:
         logger.warning("readyz.strict.redis_ping_failed: %s", e)
         return PlainTextResponse("redis_fail", status_code=503)
@@ -1707,6 +1715,36 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
