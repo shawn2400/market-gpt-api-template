@@ -106,9 +106,6 @@ def _auth_headers() -> Dict[str, str]:
     h = {"Accept": "application/json"}
     if API_TOKEN:
         h["x-api-key"] = API_TOKEN
-    # ✅ הוספת Authorization Bearer במידה וזמין
-    if API_BEARER_TOKEN:
-        h["Authorization"] = f"Bearer {API_BEARER_TOKEN}"
     return h
 
 async def _post_alerts_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -116,7 +113,7 @@ async def _post_alerts_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("ALERTS_INGEST_URL/PUBLIC_HOST not configured")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as cli:
         r = await cli.post(ALERTS_INGEST_URL, json=payload, headers=_auth_headers())
-        data: Dict[str, Any]
+        data = {}
         try:
             data = r.json()
         except Exception:
@@ -152,7 +149,7 @@ def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
     }
     for k in ["prob_overall_pct","prob_tp1_pct","prob_tp2_pct","prob_tp3_pct",
               "eta_open_min","eta_tp1_min","eta_tp2_min","eta_tp3_min","expiry_ts","tp_splits","position_side","note",
-              "entry_price", "price", "budget_usd", "approve_url", "reject_url", "ticket_url", "ttl_sec"]:
+              "entry_price","price","approve_url","reject_url","ticket_url","budget_usd","ttl_sec"]:
         if obj.get(k) is not None:
             payload[k] = obj.get(k)
 
@@ -203,7 +200,7 @@ async def _notify_telegram_approval_from_obj(obj: Dict[str, Any], ticket_id: str
     tp_legs = []
     for i in (1,2,3):
         v = obj.get(f"tp{i}")
-        if v is None:
+        if v is None: 
             continue
         try:
             tp_legs.append({"stopPrice": float(v), "split": obj.get("tp_splits", [0.4,0.35,0.25])[i-1] if isinstance(obj.get("tp_splits"), list) else None})
@@ -356,8 +353,8 @@ async def alerts_trades_update(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"decision failed: {e}")
 
-# === One-shot manager hook (renamed to avoid path collision) ===
-
+# === One-shot manager hook (LITE) ===
+# חשוב: שונה מ־/manage-once של main.py כדי לא ליצור התנגשויות
 class ManageOnceReq(BaseModel):
     symbol: Optional[str] = None
     offset_bps: Optional[int] = None
@@ -373,15 +370,15 @@ def _bearer_ok(auth_header: Optional[str]) -> bool:
     token = auth_header.split(" ", 1)[1].strip()
     return token == API_BEARER_TOKEN
 
-@router.post("/manager/manage-once")
-async def manage_once_proxy(
+@router.post("/manage-once-lite")
+async def manage_once_lite(
     req: ManageOnceReq = Body(...),
     authorization: Optional[str] = Header(None, alias="Authorization"),
 ) -> Dict[str, Any]:
     """
     Lightweight endpoint invoked internally to perform a single management cycle for a symbol.
     Tries to call a concrete manager if available; otherwise returns ok=True so the caller won't back off.
-    (Renamed to /manager/manage-once to avoid path collision with main:/manage-once)
+    נפרד מה־/manage-once המרכזי של main.py כדי למנוע כפילויות.
     """
     if not _bearer_ok(authorization):
         raise HTTPException(status_code=401, detail="Unauthorized")
