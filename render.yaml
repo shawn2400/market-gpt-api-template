@@ -18,18 +18,19 @@ services:
       - { key: APP_NAME,                   value: "algogpt" }
       - { key: APP_TITLE,                  value: "AlgoGPT Service" }
       - { key: ALGOGPT_VERSION,            value: "2.18.0" }
+
+      # === Instance identity (קריטי! מכסה כל אליאס בקוד) ===
       - { key: INSTANCE_ID,                value: "algogpt-prod" }
-      # גיבוי לשכבות קוד שקוראות שמות שונים (אם יש):
       - { key: INSTANCE,                   value: "algogpt-prod" }
       - { key: APP_INSTANCE,               value: "algogpt-prod" }
       - { key: SERVICE_INSTANCE,           value: "algogpt-prod" }
 
-      - { key: MODE,                       value: "run" }   # חובה כדי שה-Manager יעבוד
+      - { key: MODE,                       value: "run" }      # חובה: מפעיל את ה-Manager
       - { key: PORT,                       value: "10000" }
       - { key: APP_MODULE,                 value: "main:app" }
       - { key: PYTHONPATH,                 value: "/app" }
       - { key: WEB_CONCURRENCY,            value: "1" }
-      - { key: GUNICORN_TIMEOUT,           value: "180" }
+      - { key: GUNICORN_TIMEOUT,           value: "180" }      # גובר על ברירת מחדל ב-Dockerfile
       - { key: GUNICORN_GRACEFUL_TIMEOUT,  value: "45" }
       - { key: GUNICORN_KEEPALIVE,         value: "30" }
       - { key: GUNICORN_MAX_REQUESTS,      value: "500" }
@@ -65,6 +66,7 @@ services:
       - { key: PROTECT_APPROVE_ROUTES,     value: "1" }
       - { key: PROTECT_DIGEST_ROUTES,      value: "1" }
       - { key: ENABLE_HSTS,                value: "1" }
+      # הערה: /debug/env כלול לנוחות דיבוג. בפרודקשן שקול להסיר.
       - { key: SECURITY_PUBLIC_PATHS,      value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/debug/env" }
       - { key: SECURITY_PUBLIC_PREFIXES,   value: "/public,/price,/static,/risk" }
 
