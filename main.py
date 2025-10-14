@@ -82,7 +82,6 @@ async def _head_compat_and_soft_readyz(request: Request, call_next):
         scope_copy["method"] = "GET"
         new_req = Request(scope_copy, receive=request.receive)
         resp = await call_next(new_req)
-        # keep headers, drop body for HEAD
         return StarletteResponse(status_code=resp.status_code, headers=dict(resp.headers), media_type=resp.media_type)
     return await call_next(request)
 
@@ -310,7 +309,6 @@ def _should_public_cache(path: str) -> bool:
     for prefix in (os.getenv("PUBLIC_CACHE_PATHS") or "").split(",") if os.getenv("PUBLIC_CACHE_PATHS") else []:
         if prefix and path.startswith(prefix.strip()):
             return True
-    # ברירת מחדל
     for prefix in ["/scan/public-topk","/scan/public-now","/topk"]:
         if path.startswith(prefix):
             return True
@@ -318,38 +316,49 @@ def _should_public_cache(path: str) -> bool:
 
 @app.middleware("http")
 async def _public_cache_etag(request: Request, call_next):
-    if request.method.upper() != "GET" or not _should_public_cache(request.url.path):
-        return await call_next(request)
+    # רשת ביטחון לכל המסלולים נגד "No response returned"
     try:
-        resp: Response = await call_next(request)
-    except RuntimeError as e:
-        # אל תקרוס על "No response returned"
-        if "No response returned" in str(e):
-            return PlainTextResponse("", status_code=204)
-        raise
-    try:
-        if int(getattr(resp, "status_code", 200)) >= 400:
-            return resp
-        hdrs_lower = {k.lower() for k in resp.headers.keys()}
-        if "cache-control" not in hdrs_lower:
-            resp.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_MAX_AGE}"
-        body = b""
-        with suppress(Exception):
-            body = resp.body if getattr(resp, "body", None) else b""
-        if not body:
-            return resp
-        etag = '"' + hashlib.md5(body).hexdigest() + '"'
-        if "etag" not in hdrs_lower:
-            resp.headers["ETag"] = etag
-        inm = request.headers.get("If-None-Match")
-        if inm and inm == etag and resp.status_code == 200:
-            fresh = Response(status_code=304)
-            fresh.headers["Cache-Control"] = resp.headers.get("Cache-Control", f"public, max-age={PUBLIC_CACHE_MAX_AGE}")
-            fresh.headers["ETag"] = etag
-            return fresh
+        if request.method.upper() != "GET" or not _should_public_cache(request.url.path):
+            try:
+                return await call_next(request)
+            except RuntimeError as e:
+                if "No response returned" in str(e):
+                    return PlainTextResponse("", status_code=204)
+                raise
+
+        try:
+            resp: Response = await call_next(request)
+        except RuntimeError as e:
+            if "No response returned" in str(e):
+                return PlainTextResponse("", status_code=204)
+            raise
+
+        try:
+            if int(getattr(resp, "status_code", 200)) >= 400:
+                return resp
+            hdrs_lower = {k.lower() for k in resp.headers.keys()}
+            if "cache-control" not in hdrs_lower:
+                resp.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_MAX_AGE}"
+            body = b""
+            with suppress(Exception):
+                body = resp.body if getattr(resp, "body", None) else b""
+            if not body:
+                return resp
+            etag = '"' + hashlib.md5(body).hexdigest() + '"'
+            if "etag" not in hdrs_lower:
+                resp.headers["ETag"] = etag
+            inm = request.headers.get("If-None-Match")
+            if inm and inm == etag and resp.status_code == 200:
+                fresh = Response(status_code=304)
+                fresh.headers["Cache-Control"] = resp.headers.get("Cache-Control", f"public, max-age={PUBLIC_CACHE_MAX_AGE}")
+                fresh.headers["ETag"] = etag
+                return fresh
+        except Exception:
+            pass
+        return resp
     except Exception:
-        pass
-    return resp
+        # לא להפיל את הבקשה אם יש תקלה במידלוור
+        return await call_next(request)
 
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
@@ -1563,7 +1572,6 @@ async def telegram_hook_alias(request: Request):
 # ==================== Register routers ====================
 try:
     from routes.manager import router as manager_router  # type: ignore
-    # שים לב: ב־routes/manager.py שינוי המסלול ל־/manage-once-lite, אין התנגשויות.
     app.include_router(manager_router)
 except Exception as e:
     logger.warning("manager router not loaded: %s", e)
@@ -1611,7 +1619,6 @@ try:
 except Exception as e:
     logger.warning("meta router not loaded: %s", e)
 
-# ✅ alerts router
 try:
     from routes.alerts import router as alerts_router  # type: ignore
     app.include_router(alerts_router)
@@ -1649,7 +1656,6 @@ def health_head():
 
 @app.get("/readyz/strict", tags=["meta"])
 async def readyz_strict():
-    # הגבלת זמן קצרה ל-ping כדי למנוע תקיעה של health checks
     try:
         r = await _get_redis_cached()
         if r:
@@ -1722,6 +1728,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
