@@ -22,7 +22,7 @@ services:
       - key: ALGOGPT_VERSION
         value: "2.18.0"
 
-      # === Instance identity (קריטי! מכסה כל אליאס בקוד) ===
+      # === Instance identity ===
       - key: INSTANCE_ID
         value: "algogpt-prod"
       - key: INSTANCE
@@ -107,7 +107,7 @@ services:
       - key: ENABLE_HSTS
         value: "1"
       - key: SECURITY_PUBLIC_PATHS
-        value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/debug/env"
+        value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/scan/public-topk,/scan/public-stream,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/debug/env"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
 
@@ -251,9 +251,9 @@ services:
       - key: FEAT_SPREAD_DEPTH
         value: "1"
       - key: FEAT_TF_ALIGN
-        value: "1"          # היה 0 — מפעיל יישור TF
+        value: "1"
       - key: FEAT_VOLUME_GATE
-        value: "1"          # היה 0 — מפעיל פילטר נפח
+        value: "1"
       - key: FEAT_COOLDOWN
         value: "0"
       - key: MAX_ATR_PCT
@@ -305,7 +305,7 @@ services:
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
       - key: APPROVAL_RR_MIN
-        value: "1.30"       # היה 1.15 — שיפור יחס סיכוי/סיכון מינימלי
+        value: "1.30"
       - key: APPROVAL_SUCCESS_MIN
         value: "50"
       - key: APPROVAL_MAX_SL_PCT
@@ -339,7 +339,7 @@ services:
       - key: EXECUTE_TRADES
         value: "1"
       - key: ALLOW_MARKET_ENTRY
-        value: "0"          # היה 1 — SOP: Limit/Stop-Limit בלבד
+        value: "0"
       - key: MANAGER_WRITES_ORDERS
         value: "1"
       - key: ORDERS_USE_OCO
@@ -367,9 +367,9 @@ services:
       - key: MAX_TRADE_BUDGET
         value: "600"
       - key: ORDER_TRIGGER
-        value: "mark"       # טריגר ברירת מחדל ל-TP/SL מותנים
+        value: "mark"
       - key: POST_ONLY
-        value: "1"          # העדפת Maker היכן שרלוונטי
+        value: "1"
 
       # ======== Binance precision overrides (BTCUSDT) =========
       - key: PRICE_DP_OVERRIDE__BTCUSDT
@@ -393,17 +393,17 @@ services:
       - key: PERCENT_GUARD_ENABLE
         value: "1"
       - key: PERCENT_PRICE_GUARD_BPS
-        value: "180"        # היה 150 — פחות false triggers בספייקים
+        value: "180"
       - key: ENTRY_BAND_BPS
-        value: "25"         # היה 10 — פחות פספוס/ביטולי כניסה
+        value: "25"
       - key: ENTRY_GAP_MAX_PCT
         value: "0.80"
       - key: ENTRY_GAP_WARN_PCT
         value: "0.50"
       - key: STOP_BAND_BPS
-        value: "20"         # היה 12 — יציבות טובה יותר ל-SL
+        value: "20"
       - key: TP_BE_ONLY_AFTER_TP1
-        value: "1"          # היה 0 — BE רק אחרי TP1
+        value: "1"
       - key: STREAM_TP_BE
         value: "1"
       - key: TP_LADDER_ON_APPROVE
@@ -417,32 +417,31 @@ services:
       - key: TRAIL_ENABLE
         value: "1"
       - key: TRAIL_ATR_MULT
-        value: "1.6"        # היה 2.6 — הדוק יותר; להתאים לפי ביצועים/ADX
+        value: "1.6"
       - key: ATR_UPDATE_COOLDOWN_SEC
         value: "20"
       - key: ATR_MIN_DELTA
         value: "0.02"
       - key: BE_ARM_PCT
-        value: "1.2"        # היה 0.6 — BE לא מוקדם מדי
+        value: "1.2"
       - key: BE_GUARD_ENABLE
         value: "1"
       - key: BE_GUARD_EVERY_SEC
         value: "20"
       - key: TP_BE_OFFSET_BPS
-        value: "12"         # היה 5 — BE+0.12% למניעת “נשימות” קצרות
+        value: "12"
 
       # ========================= Smart-Manage =========================
       - key: SMART_MANAGE_ON_APPROVE
         value: "1"
       - key: SMART_MANAGE_BE_OFFSET_BPS
-        value: "12"         # היה 5 — מסונכרן עם TP_BE_OFFSET_BPS
+        value: "12"
       - key: SMART_MANAGE_PCTS
         value: "3,6,12"
       - key: SMART_MANAGE_SPLITS
         value: "0.25,0.25,0.50"
       - key: SMART_MANAGE_TRAIL_ATR_MULT
-        value: "1.6"        # היה 2.6 — תאום עם TRAIL_ATR_MULT
-      # >>> Ultra Log flags <<<
+        value: "1.6"
       - key: SM_ULTRA_LOG
         value: "1"
       - key: SM_LOG_PREFIX
@@ -462,7 +461,7 @@ services:
       - key: AUTO_TUNE_ENABLE
         value: "1"
       - key: AUTO_MIN_SCORE_BASE
-        value: "8.5"        # היה 7.0 — Quality Gate לפי SOP
+        value: "8.5"
       - key: AUTO_MIN_SCORE_RANGE
         value: "6.2,7.9"
       - key: AUTO_ADX_MIN_BASE
@@ -472,7 +471,7 @@ services:
       - key: TARGET_TRADES_PER_DAY_MIN
         value: "4"
       - key: TARGET_TRADES_PER_DAY_MAX
-        value: "10"         # היה 12 — מתאים יעד 3–10 ליום
+        value: "10"
       - key: AUTO_TUNE_LOOKBACK_MIN
         value: "180"
       - key: AUTO_BACKOFF_SEC
@@ -500,7 +499,7 @@ services:
       - key: ADX_LOW_TP_SHRINK_PCT
         value: "15"
 
-      # ========================= Dynamic Profile Auto-Switch & Notifs ============
+      # ========================= Dynamic Profile =========================
       - key: DYN_TOOLBOX_ENABLE
         value: "1"
       - key: DYN_SCORE_BANDS
@@ -592,17 +591,17 @@ services:
       - key: PRICE_SCAN_INTERVAL
         value: "30"
 
-      # ========================= Managers (קריטי) =========================
+      # ========================= Managers =========================
       - key: MANAGER_ENABLE
         value: "1"
       - key: TRADE_MANAGER_ENABLE
         value: "1"
       - key: MANAGER_INTERVAL_SEC
-        value: "10"         # הוספה — קצב ניהול חי
+        value: "10"
       - key: ALLOW_MANAGE_OPEN_TRADES
-        value: "1"          # הוספה — ניהול פוזיציות חי (SL/TP/BE/Trail)
+        value: "1"
 
-      # (אופציונלי) BTC-Gate — אם נתמך בקוד אצלך
+      # (אופציונלי) BTC-Gate
       - key: BTC_GATE_ENABLE
         value: "1"
       - key: BTC_GATE_TF
@@ -611,6 +610,16 @@ services:
         value: "ema21>=ema50"
       - key: BTC_SHORT_REQ
         value: "ema21<=ema50"
+
+      # ======== Public feed knobs (חדשים) ========
+      - key: PUBLIC_REQUIRE_BEARER
+        value: "1"
+      - key: PUBLIC_SSE_HEARTBEAT_SEC
+        value: "20"
+      - key: PUBLIC_SSE_MAX_IDLE_SEC
+        value: "300"
+      - key: PUBLIC_SSE_GZIP
+        value: "0"   # מומלץ להשאיר 0 ברוב הפרוקסים
 
       # ========================= Secrets =========================
       - key: API_BEARER_TOKEN
@@ -639,6 +648,7 @@ services:
         fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
         fromSecret: BINANCE_API_SECRET
+
 
 
 
