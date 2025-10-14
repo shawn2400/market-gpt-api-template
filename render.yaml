@@ -33,7 +33,7 @@ services:
         value: "algogpt-prod"
 
       - key: MODE
-        value: "run"
+        value: "run"                     # ← ריצה מלאה (לא approve)
       - key: PORT
         value: "10000"
       - key: APP_MODULE
@@ -117,7 +117,7 @@ services:
       - key: ANTI_REPLAY_WINDOW_SEC
         value: "60"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
-        value: "1"
+        value: "1"                 # ← /position-ops/* דורש חתימה
       - key: SIGNED_TS_MAX_SKEW_SEC
         value: "60"
       - key: SIGNED_NONCE_TTL_SEC
@@ -193,7 +193,7 @@ services:
       - key: BINANCE_HTTP_TIMEOUT
         value: "10.0"
       - key: BINANCE_MAX_RETRIES
-        value: "0"                 # להימנע מספייקי weight
+        value: "0"                 # ↓ נמנע מספייקי weight
       - key: BINANCE_RECV_WINDOW
         value: "45000"
       - key: LISTENKEY_KEEPALIVE_SEC
@@ -225,9 +225,9 @@ services:
       - key: SCAN_MAX_LIMIT
         value: "0"
       - key: SCAN_CONCURRENCY
-        value: "2"                 # פחות מקביליות → פחות עומס
+        value: "2"                 # ↓ פחות מקביליות
       - key: TOP_SYMBOLS
-        value: "80"                # מצמצם כמות קריאות
+        value: "80"                # ↓ פחות סמבולים
       - key: SUGGEST_FUTURES
         value: "1"
       - key: SUGGEST_INTERVAL_SEC
@@ -407,7 +407,7 @@ services:
       - key: STREAM_TP_BE
         value: "1"
       - key: TP_LADDER_ON_APPROVE
-        value: "0"                  # ריענון TP גם לפוז' פעילות
+        value: "0"                  # ריענון גם לפוז’ חיות
       - key: LADDER_TP_ENABLE
         value: "1"
       - key: LADDER_SL_ENABLE
@@ -433,7 +433,7 @@ services:
       - key: TRAIL_IN_CHOP
         value: "1"                  # Trail גם ב-ADX נמוך
       - key: TP_SL_REFRESH_SEC
-        value: "420"                # רענון סולמות כל ~7 דק'
+        value: "420"                # רענון סולמות ~7 דק'
       - key: MANAGER_REISSUE_ENABLE
         value: "1"
       - key: MANAGER_REISSUE_POLICY
@@ -597,7 +597,7 @@ services:
       - key: PRICE_WS_FRESH_TTL
         value: "60"
       - key: PRICE_SCAN_INTERVAL
-        value: "45"
+        value: "45"                # ↓ נשען על WS
 
       # ========================= Managers =========================
       - key: MANAGER_ENABLE
@@ -605,7 +605,7 @@ services:
       - key: TRADE_MANAGER_ENABLE
         value: "1"
       - key: MANAGER_INTERVAL_SEC
-        value: "15"
+        value: "15"               # ↓ ריווח טיקים = פחות עומס
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
@@ -656,6 +656,7 @@ services:
         fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
         fromSecret: BINANCE_API_SECRET
+
 
 
 
