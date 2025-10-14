@@ -649,17 +649,10 @@ async def execute_trade_live(
         "base_price": float(base_price), "dry_run": False,
         "entry_policy": f"HYBRID_LIMIT_STOP({ENTRY_BAND_BPS}/{STOP_BAND_BPS}bps)+MARKET_ESCALATION",
         "gate": gate, "risk": risk, "entry_result": entry_res,
-        "tp_orders": [], "sl_orders": [],
-        "sanity_ok": sanity_ok, "sanity_bps": sanity_bps,
+        "tp_orders": [], "sl_orders": [], "sanity_ok": sanity_ok, "sanity_bps": sanity_bps,
         "position_side": position_side, "reduce_only": reduce_only,
-        "budget_used": float(budget or 0.0), "quality": score_for_budget,
-        "adx": adx_for_lev,
-        "trail": {
-            "enabled": trail_enabled,
-            "atr_mult": trail_mult,
-            "freeze": trail_freeze_enabled,
-            "callback_rate_pct": trail_callback_pct,
-        },
+        "budget_used": float(budget or 0.0), "quality": score_for_budget, "adx": adx_for_lev,
+        "trail": {"enabled": trail_enabled, "atr_mult": trail_mult, "freeze": trail_freeze_enabled, "callback_rate_pct": None},
     }
 
     close_side = _close_side_for(side)
@@ -722,14 +715,19 @@ async def execute_trade_live(
         eff_ps = _effective_position_side(position_side)
         qty_str, _ = _q_qty(sym, float(qty))
 
-        if trail_callback_pct is None:
-            trail_callback_pct = max(TRAIL_CALLBACK_MIN_PCT, min(TRAIL_CALLBACK_MAX_PCT, 0.5))
+        if plan["trail"]["callback_rate_pct"] is None:
+            # calc on live mark if לא חושב קודם
+            mark_now = float(get_price(sym) or futures_mark_price(sym) or base_price)
+            with suppress(Exception):
+                kl = _fetch_klines_raw(sym, "1m", 60)
+                atr_now = _atr_from_klines(kl, 14) if kl else None
+            plan["trail"]["callback_rate_pct"] = _compute_trailing_callback_pct(mark_now, atr_now, float(trail_mult)) or 0.5
 
         args: Dict[str, Any] = dict(
             symbol=sym,
             side=close_side,
             type="TRAILING_STOP_MARKET",
-            callbackRate=f"{float(trail_callback_pct):.2f}",
+            callbackRate=f"{float(plan['trail']['callback_rate_pct']):.2f}",
             workingType="MARK_PRICE",
             quantity=qty_str,
             newClientOrderId=_coid("SL_TRAIL", sym, close_side),
@@ -753,7 +751,7 @@ async def execute_trade_live(
         )
         plan["sl_orders"].append({
             "type": "TRAILING_STOP_MARKET",
-            "callbackRate": float(trail_callback_pct),
+            "callbackRate": float(plan["trail"]["callback_rate_pct"]),
             "activationPrice": activation_str,
             "qty": float(qty),
             "response": res.get("response", res),
