@@ -76,14 +76,19 @@ app = FastAPI(
 # ---------- Safe HEAD & /readyz (first middleware) ----------
 @app.middleware("http")
 async def _head_compat_and_soft_readyz(request: Request, call_next):
+    # Fast /readyz path
     if request.url.path == "/readyz":
         return PlainTextResponse("ok", status_code=200)
+
+    # Normalize HEAD to GET, but keep bodyless response semantics
     if request.method == "HEAD":
         scope_copy = dict(request.scope)
         scope_copy["method"] = "GET"
         new_req = Request(scope_copy, receive=request.receive)
         resp = await call_next(new_req)
+        # Return same status + headers, no body
         return StarletteResponse(status_code=resp.status_code, headers=dict(resp.headers), media_type=resp.media_type)
+
     return await call_next(request)
 
 # ---------- CORS ----------
@@ -115,11 +120,13 @@ def _port() -> int:
     except Exception:
         return 10000
 
+
 def get_internal_base() -> str:
     internal = (os.getenv("INTERNAL_BASE") or "").strip()
     if internal:
         return internal.rstrip("/")
     return f"http://127.0.0.1:{_port()}"
+
 
 PUBLIC_HOST = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip().rstrip("/")
 WATCHLIST = [s.strip().upper() for s in (os.getenv("WATCHLIST", "") or "").split(",") if s.strip()] or ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "NEARUSDT"]
@@ -165,11 +172,14 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
     key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text) == 64 else secret_hex_or_text.encode("utf-8")
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
+
 def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600, action: Optional[str] = None) -> str:
     if not HMAC_SECRET:
         route = "/ops/ui/ticket"
-        if action == "approve": route = "/ops/approve"
-        elif action == "reject": route = "/ops/reject"
+        if action == "approve":
+            route = "/ops/approve"
+        elif action == "reject":
+            route = "/ops/reject"
         sep = "&" if "?" in route else "?"
         return f"{base}{route}{sep}ticket_id={ticket_id}"
     exp = int(time.time()) + int(ttl_sec)
@@ -177,6 +187,7 @@ def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600,
     sig = _sign_hex(HMAC_SECRET, to_sign)
     sep = "&" if "?" in path else "?"
     return f"{base}{path}{sep}ticket_id={ticket_id}&exp={exp}&sig={sig}"
+
 
 def _verify_signed_params(ticket_id: str, exp: str, sig: str, path: str) -> bool:
     if not (HMAC_SECRET and ticket_id and exp and sig):
@@ -190,24 +201,30 @@ def _verify_signed_params(ticket_id: str, exp: str, sig: str, path: str) -> bool
     expected = _sign_hex(HMAC_SECRET, f"{path}|{ticket_id}|{exp}|{NS}".encode("utf-8"))
     return hmac.compare_digest(expected, sig)
 
+
 # ==================== Simple ConfirmStore (in-memory fallback) ====================
 class ConfirmStore:
     _items: Dict[str, Dict[str, Any]] = {}
+
     @classmethod
     def create(cls, req: Dict[str, Any]) -> None:
         tid = str(req.get("ticket_id") or f"T_{int(time.time())}_{secrets.token_hex(3)}")
         cls._items[tid] = {"ticket_id": tid, "req": dict(req), "ts": time.time(), "approved": None}
+
     @classmethod
     def decide(cls, ticket_id: str, approved: bool) -> None:
         it = cls._items.get(str(ticket_id))
         if it:
             it["approved"] = bool(approved)
+
     @classmethod
     def pending(cls) -> List[Dict[str, Any]]:
         return [v for v in cls._items.values() if v.get("approved") is None]
+
     @classmethod
     def remove(cls, ticket_id: str) -> None:
         cls._items.pop(str(ticket_id), None)
+
 
 # ==================== Shared HTTP and Redis ====================
 try:
@@ -216,6 +233,7 @@ except Exception:
     aioredis = None  # type: ignore
 
 _shared_client_lock = threading.Lock()
+
 def _get_shared_async_client() -> httpx.AsyncClient:
     cli: Optional[httpx.AsyncClient] = getattr(app.state, "shared_async_client", None)
     if cli and not cli.is_closed:
@@ -233,6 +251,7 @@ def _get_shared_async_client() -> httpx.AsyncClient:
         app.state.shared_async_client = cli
         return cli
 
+
 async def _get_redis_cached():
     if not (aioredis and REDIS_URL):
         return None
@@ -242,6 +261,7 @@ async def _get_redis_cached():
     r = aioredis.from_url(REDIS_URL, decode_responses=True)
     app.state.redis = r
     return r
+
 
 # ==================== Security headers middleware ====================
 @app.middleware("http")
@@ -255,6 +275,7 @@ async def _security_headers(request: Request, call_next):
     if os.getenv("ENABLE_HSTS", "0").lower() in ("1", "true", "yes", "on"):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
     return resp
+
 
 # ==================== Public Rate Limit middleware ====================
 async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
@@ -271,6 +292,8 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
             return int(cur) > int(limit)
     except Exception as e:
         logger.debug("rate_limit_redis_fallback: %s", e)
+
+    # in-memory fallback
     bucket = getattr(app.state, "rl_mem", None)
     if bucket is None:
         bucket = {}
@@ -281,8 +304,9 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
     if not rec or (now - rec["start"]) >= window_sec:
         bucket[key] = {"start": now, "count": 1}
         return False
-    rec["count"] += 1    # type: ignore[index]
+    rec["count"] += 1  # type: ignore[index]
     return rec["count"] > int(limit)  # type: ignore[index]
+
 
 @app.middleware("http")
 async def _public_rate_limit(request: Request, call_next):
@@ -305,65 +329,70 @@ async def _public_rate_limit(request: Request, call_next):
             break
     return await call_next(request)
 
+
 # ==================== Public Cache/Etag middleware ====================
 def _should_public_cache(path: str) -> bool:
     for prefix in (os.getenv("PUBLIC_CACHE_PATHS") or "").split(",") if os.getenv("PUBLIC_CACHE_PATHS") else []:
         if prefix and path.startswith(prefix.strip()):
             return True
-    for prefix in ["/scan/public-topk","/scan/public-now","/topk"]:
+    for prefix in ["/scan/public-topk", "/scan/public-now", "/topk"]:
         if path.startswith(prefix):
             return True
     return False
 
+
 @app.middleware("http")
 async def _public_cache_etag(request: Request, call_next):
     # רשת ביטחון לכל המסלולים נגד "No response returned"
-    try:
-        if request.method.upper() != "GET" or not _should_public_cache(request.url.path):
-            try:
-                return await call_next(request)
-            except RuntimeError as e:
-                if "No response returned" in str(e):
-                    return PlainTextResponse("", status_code=204)
-                raise
-
+    if request.method.upper() != "GET" or not _should_public_cache(request.url.path):
         try:
-            resp: Response = await call_next(request)
+            return await call_next(request)
         except RuntimeError as e:
             if "No response returned" in str(e):
                 return PlainTextResponse("", status_code=204)
             raise
 
-        try:
-            if int(getattr(resp, "status_code", 200)) >= 400:
-                return resp
-            hdrs_lower = {k.lower() for k in resp.headers.keys()}
-            if "cache-control" not in hdrs_lower:
-                resp.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_MAX_AGE}"
-            body = b""
-            with suppress(Exception):
-                body = resp.body if getattr(resp, "body", None) else b""
-            if not body:
-                return resp
-            etag = '"' + hashlib.md5(body).hexdigest() + '"'
-            if "etag" not in hdrs_lower:
-                resp.headers["ETag"] = etag
-            inm = request.headers.get("If-None-Match")
-            if inm and inm == etag and resp.status_code == 200:
-                fresh = Response(status_code=304)
-                fresh.headers["Cache-Control"] = resp.headers.get("Cache-Control", f"public, max-age={PUBLIC_CACHE_MAX_AGE}")
-                fresh.headers["ETag"] = etag
-                return fresh
-        except Exception:
-            pass
-        return resp
+    # compute response once
+    try:
+        resp: Response = await call_next(request)
+    except RuntimeError as e:
+        if "No response returned" in str(e):
+            return PlainTextResponse("", status_code=204)
+        raise
     except Exception:
-        # לא להפיל את הבקשה אם יש תקלה במידלוור
+        # don't break the request chain if middleware fails
         return await call_next(request)
+
+    # skip caching for errors
+    try:
+        if int(getattr(resp, "status_code", 200)) >= 400:
+            return resp
+        hdrs_lower = {k.lower() for k in resp.headers.keys()}
+        if "cache-control" not in hdrs_lower:
+            resp.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_MAX_AGE}"
+        body = b""
+        with suppress(Exception):
+            body = resp.body if getattr(resp, "body", None) else b""
+        if not body:
+            return resp
+        etag = '"' + hashlib.md5(body).hexdigest() + '"'
+        if "etag" not in hdrs_lower:
+            resp.headers["ETag"] = etag
+        inm = request.headers.get("If-None-Match")
+        if inm and inm == etag and resp.status_code == 200:
+            fresh = Response(status_code=304)
+            fresh.headers["Cache-Control"] = resp.headers.get("Cache-Control", f"public, max-age={PUBLIC_CACHE_MAX_AGE}")
+            fresh.headers["ETag"] = etag
+            return fresh
+    except Exception:
+        pass
+    return resp
+
 
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
 
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                               reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
@@ -381,9 +410,12 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
     }
     if approve_url or reject_url or preview_url:
         row: List[Dict[str, Any]] = []
-        if preview_url: row.append({"text": "👁 Preview", "url": preview_url})
-        if approve_url: row.append({"text": "✅ Approve", "url": approve_url})
-        if reject_url:  row.append({"text": "❌ Reject", "url": reject_url})
+        if preview_url:
+            row.append({"text": "👁 Preview", "url": preview_url})
+        if approve_url:
+            row.append({"text": "✅ Approve", "url": approve_url})
+        if reject_url:
+            row.append({"text": "❌ Reject", "url": reject_url})
         payload["reply_markup"] = {"inline_keyboard": [row]}
     cli = _get_shared_async_client()
     for attempt in range(3):
@@ -411,6 +443,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
             await asyncio.sleep(0.6 * (attempt + 1))
     return {"ok": False, "error": "telegram_send_exhausted"}
 
+
 async def _ensure_telegram_webhook() -> None:
     if not TELEGRAM_AUTO_WEBHOOK:
         return
@@ -435,6 +468,7 @@ async def _ensure_telegram_webhook() -> None:
         logger.info("telegram.setWebhook: %s", "ok" if ok else f"bad_status={r.status_code}")
     except Exception as e:
         logger.info("telegram.setWebhook.failed: %s", e)
+
 
 # ==================== Price helpers ====================
 async def get_last_price_async(symbol: str) -> Optional[float]:
@@ -476,13 +510,17 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
                 return v
     return None
 
+
 # ==================== Misc helpers ====================
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
+
+
 def _parse_mode(note: Optional[str]) -> Optional[str]:
     if not note:
         return None
     m = _MODE_RX.search(str(note))
     return m.group(1).upper() if m else None
+
 
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
     try:
@@ -493,9 +531,11 @@ def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) 
         bad = {"tp_kind", "sl_kind", "entry_kind", "entry_offset", "tp_offset", "sl_offset"}
         return {k: v for k, v in kwargs.items() if k not in bad}
 
+
 def _is_code_4061(err: Union[Exception, str]) -> bool:
     s = str(err)
     return "code=-4061" in s or "position side does not match" in s.lower()
+
 
 def _align_position_mode(client) -> None:
     mode_override = (os.getenv("POSITION_MODE_OVERRIDE", "") or "").strip().lower()
@@ -505,21 +545,27 @@ def _align_position_mode(client) -> None:
         elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
 
+
 # ==================== Order ID helper ====================
 try:
     from utils.order_ids import build_client_order_id  # type: ignore
 except Exception:
+
     def _coid_fit_local(s: str, limit: int = 36) -> str:
         if len(s) <= limit:
             return s
         h = hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
         return f"{s[:limit - (len(h) + 1)]}_{h}"
+
     def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Optional[str] = None) -> str:
         prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
-        sym = str(symbol).upper(); sd = str(side).upper(); rl = str(role).upper().replace("@", "_")
+        sym = str(symbol).upper()
+        sd = str(side).upper()
+        rl = str(role).upper().replace("@", "_")
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
+
 
 # ==================== Execute trade helpers ====================
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
@@ -546,7 +592,10 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         with suppress(Exception):
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
         base_kwargs: Dict[str, Any] = {
-            "symbol": symbol, "side": side, "type": "MARKET", "quantity": qty,
+            "symbol": symbol,
+            "side": side,
+            "type": "MARKET",
+            "quantity": qty,
             "newClientOrderId": build_client_order_id(symbol, side, role="ENTRY"),
         }
         pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
@@ -573,6 +622,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         return {"ok": False, "error": "order_failed", "detail": str(e)}
 
+
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     execute_trade_live = None
     with suppress(Exception):
@@ -597,8 +647,8 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "bad_ticket_params"}
     try:
         from binance.client import Client  # type: ignore
-        api_key = os.getenv("BINANCE_API_KEY","").strip()
-        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
+        api_key = os.getenv("BINANCE_API_KEY", "").strip()
+        api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
         if api_key and api_sec and leverage > 0 and symbol:
             cli_ = Client(api_key, api_sec)
             _align_position_mode(cli_)
@@ -607,10 +657,20 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
     base_kwargs: Dict[str, Any] = dict(
-        symbol=symbol, side=side, budget=None, leverage=leverage, dry_run=False, quantity=qty,
-        entry=None, tp_targets=tp_targets or None, sl_targets=sl_targets or None,
-        tp_splits=ticket.get("tp_splits"), sl_splits=None, confirm_first=False,
-        telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0), position_side=pos_side,
+        symbol=symbol,
+        side=side,
+        budget=None,
+        leverage=leverage,
+        dry_run=False,
+        quantity=qty,
+        entry=None,
+        tp_targets=tp_targets or None,
+        sl_targets=sl_targets or None,
+        tp_splits=ticket.get("tp_splits"),
+        sl_splits=None,
+        confirm_first=False,
+        telegram_chat_id=int(os.getenv("TELEGRAM_CHAT_ID") or 0),
+        position_side=pos_side,
         reduce_only=bool(ticket.get("reduce_only", False)),
     )
     clean = _filter_kwargs_for_callable(execute_trade_live, base_kwargs)
@@ -620,10 +680,13 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
 
+
 # ==================== Smart manage etc. ====================
+
 def _anti_replay_required() -> bool:
-    return os.getenv("ANTI_REPLAY_ENABLE", "0").lower() in ("1","true","yes","on") and \
-           os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "0").lower() in ("1","true","yes","on")
+    return os.getenv("ANTI_REPLAY_ENABLE", "0").lower() in ("1", "true", "yes", "on") and \
+           os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "0").lower() in ("1", "true", "yes", "on")
+
 
 async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
                             pcts: Optional[List[float]] = None, splits: Optional[List[float]] = None,
@@ -633,9 +696,12 @@ async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
     if not token:
         return {"ok": False, "skipped": True, "reason": "missing token"}
     body: Dict[str, Any] = {"symbol": symbol}
-    if offset_bps is not None: body["offset_bps"] = offset_bps
-    if pcts is not None: body["pcts"] = pcts
-    if splits is not None: body["splits"] = splits
+    if offset_bps is not None:
+        body["offset_bps"] = offset_bps
+    if pcts is not None:
+        body["pcts"] = pcts
+    if splits is not None:
+        body["splits"] = splits
     if atr_mult is not None:
         body["callback_rate"] = None
         body["atr_mult"] = atr_mult
@@ -665,6 +731,7 @@ async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
         await asyncio.sleep(0.6 * (attempt + 1))
     return {"ok": False, "error": "smart_manage_exhausted"}
 
+
 def _smart_manage_env() -> Dict[str, Any]:
     def _csvf(val: Optional[str]) -> Optional[List[float]]:
         if not val:
@@ -673,6 +740,7 @@ def _smart_manage_env() -> Dict[str, Any]:
             return [float(x.strip()) for x in val.split(",") if x.strip()]
         except Exception:
             return None
+
     return {
         "enable": os.getenv("SMART_MANAGE_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on"),
         "offset_bps": int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS", "5"))),
@@ -681,13 +749,16 @@ def _smart_manage_env() -> Dict[str, Any]:
         "atr_mult": float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None,
     }
 
+
 # ======== AUTO QTY/LEV ========
+
 def _round_qty(q: float, dec: int) -> float:
     try:
         fmt = "{:0." + str(int(dec)) + "f}"
         return float(fmt.format(q))
     except Exception:
         return float(f"{q:.3f}")
+
 
 async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     symbol = (ticket.get("symbol") or "").upper()
@@ -745,8 +816,10 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket["position_side"] = ""
     return new_ticket
 
+
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
+
 
 def _require_bearer(request: Request) -> None:
     if os.getenv("PROTECT_APPROVE_ROUTES", "1").lower() not in ("1", "true", "yes", "on"):
@@ -757,22 +830,43 @@ def _require_bearer(request: Request) -> None:
     if not (auth.startswith("Bearer ") and auth.split(" ", 1)[1].strip() == API_BEARER_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+
 def _rows_kv_html(t: Dict[str, Any]) -> str:
     def cv(k, default="—"):
         v = t.get(k, default)
         return default if v in (None, "", []) else _md_html(str(v))
+
     rows = []
     for k in (
-        "ticket_id", "symbol", "side", "qty", "leverage", "position_side", "budget", "score",
-        "tp1", "tp2", "tp3", "sl", "eta_tp1_min", "eta_tp2_min", "eta_tp3_min",
-        "prob_overall_pct", "prob_tp1_pct", "prob_tp2_pct", "prob_tp3_pct",
-        "tp_splits", "expiry_ts", "note",
+        "ticket_id",
+        "symbol",
+        "side",
+        "qty",
+        "leverage",
+        "position_side",
+        "budget",
+        "score",
+        "tp1",
+        "tp2",
+        "tp3",
+        "sl",
+        "eta_tp1_min",
+        "eta_tp2_min",
+        "eta_tp3_min",
+        "prob_overall_pct",
+        "prob_tp1_pct",
+        "prob_tp2_pct",
+        "prob_tp3_pct",
+        "tp_splits",
+        "expiry_ts",
+        "note",
     ):
         rows.append(
             f"<tr><th style='text-align:left;padding:.35rem .6rem;background:#fafafa'>{k}</th>"
             f"<td style='padding:.35rem .6rem'>{cv(k)}</td></tr>"
         )
     return "\n".join(rows)
+
 
 def _html(msg: str) -> HTMLResponse:
     return HTMLResponse(
@@ -782,6 +876,7 @@ def _html(msg: str) -> HTMLResponse:
         "<p style='color:#666'>אפשר לחזור חזרה לטלגרם.</p>"
         "</body>"
     )
+
 
 async def _load_ticket(ticket_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
     if aioredis and REDIS_URL:
@@ -802,10 +897,14 @@ async def _load_ticket(ticket_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
                     return dict(it.get("req") or it), "memory"
     return None, "none"
 
+
 async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[bool] = None) -> None:
     event: Dict[str, Any] = {
-        "ts": time.time(), "ticket_id": ticket_id, "status": final_status,
-        "src": source, "ns": NS,
+        "ts": time.time(),
+        "ticket_id": ticket_id,
+        "status": final_status,
+        "src": source,
+        "ns": NS,
         "reason": ("expired" if final_status is None else ("approved" if final_status else "rejected")),
     }
     fetched_req: Optional[Dict[str, Any]] = None
@@ -831,7 +930,8 @@ async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[boo
         base = f"{ticket_id}:{event.get('symbol', '')}:{event.get('side', '')}"
         event["idem"] = hashlib.md5(base.encode("utf-8")).hexdigest()[:10]
     else:
-        event["symbol"] = ""; event["side"] = ""
+        event["symbol"] = ""
+        event["side"] = ""
         event["idem"] = hashlib.md5(f"{ticket_id}".encode("utf-8")).hexdigest()[:10]
     if aioredis and REDIS_URL:
         with suppress(Exception):
@@ -845,6 +945,7 @@ async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[boo
                 await r.delete(f"{NS}:ticket:{ticket_id}")
     with suppress(Exception):
         ConfirmStore.remove(ticket_id)
+
 
 @router.post("/ops/ticket")
 async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = None):
@@ -863,6 +964,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         price_now = None
         with suppress(Exception):
             price_now = await get_last_price_async(symbol)
+
         def _smart(symbol: str, side: str, price_now: Optional[float], tps: List[Optional[float]]) -> Dict[str, Any]:
             if not price_now:
                 return {}
@@ -873,6 +975,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
                     out[f"eta_tp{i}_min"] = max(1, int(dist_bps / max(1, ETA_VELOCITY_WINDOW)))
             out.setdefault("eta_open_min", out.get("eta_tp1_min", 2))
             return out
+
         etas = _smart(symbol, side, price_now, [payload.get("tp1"), payload.get("tp2"), payload.get("tp3")])
         payload.update(etas)
 
@@ -882,16 +985,31 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     bud_max = payload.get("budget_max") or (payload.get("budget_range") or [None, None])[-1]
 
     req_body: Dict[str, Any] = {
-        "ticket_id": tid, "symbol": symbol, "side": side, "qty": qty, "leverage": lev,
-        "position_side": position_side, "budget": budget, "note": note,
-        "leverage_min": lev_min, "leverage_max": lev_max,
-        "budget_min": bud_min, "budget_max": bud_max,
+        "ticket_id": tid,
+        "symbol": symbol,
+        "side": side,
+        "qty": qty,
+        "leverage": lev,
+        "position_side": position_side,
+        "budget": budget,
+        "note": note,
+        "leverage_min": lev_min,
+        "leverage_max": lev_max,
+        "budget_min": bud_min,
+        "budget_max": bud_max,
         "score": payload.get("score"),
         "eta_open_min": payload.get("eta_open_min"),
-        "tp1": payload.get("tp1"), "tp2": payload.get("tp2"), "tp3": payload.get("tp3"),
-        "eta_tp1_min": payload.get("eta_tp1_min"), "eta_tp2_min": payload.get("eta_tp2_min"), "eta_tp3_min": payload.get("eta_tp3_min"),
-        "sl": payload.get("sl"), "prob_overall_pct": payload.get("prob_overall_pct"),
-        "prob_tp1_pct": payload.get("prob_tp1_pct"), "prob_tp2_pct": payload.get("prob_tp2_pct"), "prob_tp3_pct": payload.get("prob_tp3_pct"),
+        "tp1": payload.get("tp1"),
+        "tp2": payload.get("tp2"),
+        "tp3": payload.get("tp3"),
+        "eta_tp1_min": payload.get("eta_tp1_min"),
+        "eta_tp2_min": payload.get("eta_tp2_min"),
+        "eta_tp3_min": payload.get("eta_tp3_min"),
+        "sl": payload.get("sl"),
+        "prob_overall_pct": payload.get("prob_overall_pct"),
+        "prob_tp1_pct": payload.get("prob_tp1_pct"),
+        "prob_tp2_pct": payload.get("prob_tp2_pct"),
+        "prob_tp3_pct": payload.get("prob_tp3_pct"),
         "tp_splits": payload.get("tp_splits"),
         "expiry_ts": payload.get("expiry_ts"),
     }
@@ -917,7 +1035,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     preview_url = _build_signed_link(base, "/ops/ui/ticket/signed", tid, ttl_sec=900, action="preview")
     approve_url = _build_signed_link(base, "/ops/approve/signed", tid, ttl_sec=900, action="approve")
-    reject_url  = _build_signed_link(base, "/ops/reject/signed",  tid, ttl_sec=900, action="reject")
+    reject_url = _build_signed_link(base, "/ops/reject/signed", tid, ttl_sec=900, action="reject")
 
     lines = [
         "⚠️ <b>Approval Needed</b>",
@@ -956,15 +1074,17 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         "telegram_result": tg_resp,
     }
 
+
 def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
     mode = _parse_mode(ticket.get("note"))
     if mode in ("MARKET", "HYBRID", "AUTO"):
         return mode
-    return "HYBRID" if os.getenv("TP_LADDER_ON_APPROVE", "1").lower() in ("1","true","yes","on") else "MARKET"
+    return "HYBRID" if os.getenv("TP_LADDER_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on") else "MARKET"
+
 
 def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLResponse:
     approve_url = _build_signed_link(base, "/ops/approve/signed", ticket_id, ttl_sec=900, action="approve")
-    reject_url  = _build_signed_link(base, "/ops/reject/signed", ticket_id, ttl_sec=900, action="reject")
+    reject_url = _build_signed_link(base, "/ops/reject/signed", ticket_id, ttl_sec=900, action="reject")
     body = (
         "<!doctype html><meta charset='utf-8'>"
         "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.45'>"
@@ -981,6 +1101,7 @@ def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLR
     )
     return HTMLResponse(body)
 
+
 @router.get("/ops/ui/ticket")
 async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     _require_bearer(request)
@@ -996,6 +1117,7 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     return _render_ticket_html(ticket_id, rec, base)
 
+
 @router.get("/ops/ui/ticket/signed")
 async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
     if not _verify_signed_params(ticket_id, exp, sig, "/ops/ui/ticket/signed"):
@@ -1006,18 +1128,22 @@ async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), s
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     return _render_ticket_html(ticket_id, rec, base)
 
+
 def _maybe_protect_routes(request: Request) -> None:
     _require_bearer(request)
+
 
 @router.get("/ops/approve")
 async def approve(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
     _maybe_protect_routes(request)
     return await _approve_core(ticket_id)
 
+
 @router.get("/ops/reject")
 async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
     _maybe_protect_routes(request)
     return await _reject_core(ticket_id)
+
 
 @router.get("/ops/approve/signed")
 async def approve_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
@@ -1025,11 +1151,13 @@ async def approve_signed(ticket_id: str = Query(...), exp: str = Query(...), sig
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _approve_core(ticket_id)
 
+
 @router.get("/ops/reject/signed")
 async def reject_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
     if not _verify_signed_params(ticket_id, exp, sig, "/ops/reject/signed"):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _reject_core(ticket_id)
+
 
 async def _approve_core(ticket_id: str):
     ticket, source = await _load_ticket(ticket_id)
@@ -1052,7 +1180,7 @@ async def _approve_core(ticket_id: str):
               else _execute_trade(ticket))
     )
     ok = bool(exec_res.get("ok"))
-    if (not ok) and flow in ("HYBRID", "AUTO") and (os.getenv("PROPOSE_BLOCK_ON_FAIL","0").lower() not in ("1","true","yes","on")):
+    if (not ok) and flow in ("HYBRID", "AUTO") and (os.getenv("PROPOSE_BLOCK_ON_FAIL", "0").lower() not in ("1", "true", "yes", "on")):
         retry_res = await _execute_trade(ticket)
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
@@ -1061,7 +1189,7 @@ async def _approve_core(ticket_id: str):
             sm = _smart_manage_env()
             if sm.get("enable", True):
                 await _smart_manage_now(
-                    str(ticket.get("symbol","")).upper(),
+                    str(ticket.get("symbol", "")).upper(),
                     offset_bps=sm.get("offset_bps"),
                     pcts=sm.get("pcts"),
                     splits=sm.get("splits"),
@@ -1074,7 +1202,8 @@ async def _approve_core(ticket_id: str):
         msg = (
             f"✅ <b>Approved</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
             f"• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n• Flow: <code>{flow}</code>\n— — —\nבוצע והועבר לניהול."
-            if ok else
+            if ok
+            else
             f"⚠️ <b>Approve Failed</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
             f"• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n• Flow: <code>{flow}</code>\n— — —\n"
             f"שגיאה: <code>{_md_html(json.dumps(exec_res, ensure_ascii=False))}</code>"
@@ -1082,6 +1211,7 @@ async def _approve_core(ticket_id: str):
         await _send_telegram_html(msg)
     await _delete_ticket(ticket_id, source, final_status=ok)
     return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.") if ok else _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
+
 
 async def _reject_core(ticket_id: str):
     ticket, source = await _load_ticket(ticket_id)
@@ -1095,6 +1225,7 @@ async def _reject_core(ticket_id: str):
     await _delete_ticket(ticket_id, source, final_status=False)
     return _html("⛔️ נדחה — הכרטיס הוסר.")
 
+
 # ==================== Real-time TRADE EVENTS ====================
 @router.post("/ops/trade-event")
 async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = None):
@@ -1107,14 +1238,18 @@ async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = No
     if not etype or not symbol:
         raise HTTPException(status_code=422, detail="Missing event or symbol")
     lines = [f"📣 <b>Trade update</b> · <code>{_md_html(symbol)}</code>"]
-    if side: lines.append(f"• Side: <code>{_md_html(side)}</code>")
+    if side:
+        lines.append(f"• Side: <code>{_md_html(side)}</code>")
     lines.append(f"• Event: <b>{_md_html(etype)}</b>")
-    if "price" in payload: lines.append(f"• Price: <code>{_md_html(payload['price'])}</code>")
-    if "qty" in payload: lines.append(f"• Qty: <code>{_md_html(payload['qty'])}</code>")
+    if "price" in payload:
+        lines.append(f"• Price: <code>{_md_html(payload['price'])}</code>")
+    if "qty" in payload:
+        lines.append(f"• Qty: <code>{_md_html(payload['qty'])}</code>")
     if "lev" in payload or "leverage" in payload:
         lv = payload.get("lev", payload.get("leverage"))
         lines.append(f"• Lev: <code>{_md_html(lv)}</code>")
-    if desc: lines.append(f"• Note: {_md_html(desc)}")
+    if desc:
+        lines.append(f"• Note: {_md_html(desc)}")
     if extra:
         try:
             trimmed = json.dumps(extra, ensure_ascii=False)[:400]
@@ -1123,6 +1258,7 @@ async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = No
             pass
     await _send_telegram_html("\n".join(lines))
     return {"ok": True}
+
 
 # ==================== Digest/UI/etc. ====================
 @router.get("/ops/ui/pending")
@@ -1143,7 +1279,8 @@ async def ui_pending(request: Request = None):
                         raw = await r.get(k)
                         if not raw:
                             continue
-                        obj = json.loads(raw); req = obj.get("req") or {}
+                        obj = json.loads(raw)
+                        req = obj.get("req") or {}
                         items.append(req)
                     if cursor == 0:
                         break
@@ -1182,6 +1319,7 @@ async def ui_pending(request: Request = None):
     )
     return HTMLResponse(body)
 
+
 @router.post("/guard/smoke/run")
 async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
     _require_bearer(request)
@@ -1215,6 +1353,7 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
         await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>" + ",".join(emergencies) + "</code>")
     return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
 
+
 # ==================== Profiles (auto-select) ====================
 PROFILE_AUTO_SELECT = os.getenv("PROFILE_AUTO_SELECT", "1").lower() in ("1", "true", "yes", "on")
 
@@ -1231,6 +1370,7 @@ PROFILE_EXTREME_ATR_MULT = float(os.getenv("PROFILE_EXTREME_ATR_MULT", "1.6"))
 ADX_EXTREME_MIN = float(os.getenv("ADX_EXTREME_MIN", "28"))
 ATRPCT_EXTREME_MIN = float(os.getenv("ATRPCT_EXTREME_MIN", "0.007"))
 
+
 def _wilder_smooth(values: List[float], period: int) -> List[float]:
     if not values or period <= 0 or len(values) < period:
         return []
@@ -1239,22 +1379,25 @@ def _wilder_smooth(values: List[float], period: int) -> List[float]:
         smoothed.append((smoothed[-1] * (period - 1) + v) / period)
     return smoothed
 
+
 def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -> Dict[str, float]:
     try:
         highs = [float(k[2]) for k in klines]
-        lows  = [float(k[3]) for k in klines]
-        closes= [float(k[4]) for k in klines]
+        lows = [float(k[3]) for k in klines]
+        closes = [float(k[4]) for k in klines]
         if len(closes) < period + 2:
             return {"atr": 0.0, "adx": 0.0, "price": closes[-1] if closes else 0.0}
         trs, plus_dm, minus_dm = [], [], []
         for i in range(1, len(closes)):
-            h, l, ph, pl, pc = highs[i], lows[i], highs[i-1], lows[i-1], closes[i-1]
-            tr = max(h - l, abs(h - pc), abs(l - pc)); trs.append(tr)
-            up_move = h - ph; down_move = pl - l
+            h, l, ph, pl, pc = highs[i], lows[i], highs[i - 1], lows[i - 1], closes[i - 1]
+            tr = max(h - l, abs(h - pc), abs(l - pc))
+            trs.append(tr)
+            up_move = h - ph
+            down_move = pl - l
             plus_dm.append(up_move if (up_move > down_move and up_move > 0) else 0.0)
             minus_dm.append(down_move if (down_move > up_move and down_move > 0) else 0.0)
         atr_series = _wilder_smooth(trs, period)
-        plus_dm_s  = _wilder_smooth(plus_dm, period)
+        plus_dm_s = _wilder_smooth(plus_dm, period)
         minus_dm_s = _wilder_smooth(minus_dm, period)
         if not (atr_series and plus_dm_s and minus_dm_s):
             return {"atr": 0.0, "adx": 0.0, "price": closes[-1]}
@@ -1272,11 +1415,12 @@ def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -
     except Exception:
         return {"atr": 0.0, "adx": 0.0, "price": 0.0}
 
+
 async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, float], str]:
     explicit_offset = payload.get("offset_bps")
-    explicit_pcts   = payload.get("pcts")
+    explicit_pcts = payload.get("pcts")
     explicit_splits = payload.get("splits")
-    explicit_atr    = payload.get("atr_mult")
+    explicit_atr = payload.get("atr_mult")
     if explicit_pcts and explicit_splits:
         prof = {
             "offset_bps": int(explicit_offset if explicit_offset is not None else PROFILE_BASE_BE_BPS),
@@ -1296,7 +1440,7 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
             kl = client.futures_klines(symbol=symbol, interval="5m", limit=120)
         ind = _compute_indicators_from_klines(kl, period=14)
         atr = ind.get("atr", 0.0)
-        px  = ind.get("price", 0.0)
+        px = ind.get("price", 0.0)
         adx = ind.get("adx", 0.0)
         atrpct = (atr / px) if (atr > 0 and px > 0) else 0.0
         is_extreme = (adx >= ADX_EXTREME_MIN) or (atrpct >= ATRPCT_EXTREME_MIN)
@@ -1311,11 +1455,14 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
     prof = {"offset_bps": PROFILE_BASE_BE_BPS, "pcts": PROFILE_BASE_PCTS[:], "splits": PROFILE_BASE_SPLITS[:], "atr_mult": PROFILE_BASE_ATR_MULT}
     return prof, ind, "base"
 
+
 # ==================== /manage-once ====================
+
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
         return value
     return math.floor(value / step) * step
+
 
 def _get_filters(client, symbol: str) -> Tuple[float, float]:
     tick = 0.1
@@ -1334,12 +1481,14 @@ def _get_filters(client, symbol: str) -> Tuple[float, float]:
         pass
     return tick, step
 
+
 def _pos_side_from_amt(side_text: str, pos_amt: float) -> str:
     if side_text == "BUY":
         return "LONG"
     if side_text == "SELL":
         return "SHORT"
     return "LONG" if pos_amt >= 0 else "SHORT"
+
 
 @router.post("/manage-once")
 async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
@@ -1486,11 +1635,11 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
         try:
             kl = client.futures_klines(symbol=symbol, interval="1m", limit=50)
             highs = [float(k[2]) for k in kl]
-            lows  = [float(k[3]) for k in kl]
-            closes= [float(k[4]) for k in kl]
+            lows = [float(k[3]) for k in kl]
+            closes = [float(k[4]) for k in kl]
             trs = []
             for i in range(1, len(kl)):
-                h, l, pc = highs[i], lows[i], closes[i-1]
+                h, l, pc = highs[i], lows[i], closes[i - 1]
                 tr = max(h - l, abs(h - pc), abs(l - pc))
                 trs.append(tr)
             atr = sum(trs[-14:]) / float(min(14, len(trs))) if trs else 0.0
@@ -1530,9 +1679,10 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     }
     return result
 
+
 @router.get("/ops/digest/expired")
 async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = None):
-    if os.getenv("PROTECT_DIGEST_ROUTES", "1").lower() in ("1","true","yes","on"):
+    if os.getenv("PROTECT_DIGEST_ROUTES", "1").lower() in ("1", "true", "yes", "on"):
         _require_bearer(request)
     if not (aioredis and REDIS_URL and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID):
         return {"ok": False, "error": "digest_dependencies_missing"}
@@ -1570,13 +1720,17 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
         lines.append("— — —")
         lines.append("<b>Last events</b>:")
         for e in events[:5]:
-            t = int(e.get("ts", now)); idem = e.get("idem", ""); sym = str(e.get("symbol", "")).upper(); side = str(e.get("side", "")).upper()
+            t = int(e.get("ts", now))
+            idem = e.get("idem", "")
+            sym = str(e.get("symbol", "")).upper()
+            side = str(e.get("side", "")).upper()
             lines.append(f"• {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(t))}Z · {sym} {side} · <code>{idem}</code>")
         await _send_telegram_html("\n".join(lines))
         return {"ok": True, "sent": True, "count": total}
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
+
 
 # ==================== Telegram webhook ====================
 async def _telegram_webhook_core(request: Request) -> Dict[str, Any]:
@@ -1587,13 +1741,16 @@ async def _telegram_webhook_core(request: Request) -> Dict[str, Any]:
     _ = await request.body()  # consume
     return {"ok": True}
 
+
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
     return await _telegram_webhook_core(request)
 
+
 @app.post("/telegram/hook")
 async def telegram_hook_alias(request: Request):
     return await _telegram_webhook_core(request)
+
 
 # ==================== Register routers ====================
 try:
@@ -1653,34 +1810,41 @@ except Exception as e:
 
 app.include_router(router)
 
+
 # ==================== Meta & Fallbacks ====================
-@app.get("/", response_class=PlainTextResponse, tags=["meta"])
+@app.get("/", response_class=PlainTextResponse, tags=["meta"]) 
 def root() -> str:
     name = os.getenv("APP_NAME", "algogpt")
     return f"{name} online"
 
-@app.head("/", response_class=PlainTextResponse, tags=["meta"])
+
+@app.head("/", response_class=PlainTextResponse, tags=["meta"]) 
 def root_head() -> str:
     return ""
 
-@app.get("/meta/version", tags=["meta"])
+
+@app.get("/meta/version", tags=["meta"]) 
 def meta_version_fallback():
     return {"name": os.getenv("APP_NAME", "algogpt"), "version": os.getenv("ALGOGPT_VERSION", "dev"), "ts": int(time.time()), "ok": True}
 
-@app.head("/meta/version", tags=["meta"])
+
+@app.head("/meta/version", tags=["meta"]) 
 def meta_version_head():
     return PlainTextResponse("", status_code=200)
 
-@app.get("/health", tags=["meta"])
+
+@app.get("/health", tags=["meta"]) 
 def health_fallback():
     boot = getattr(app.state, "boot_ts", None)
     return {"ok": True, "uptime_sec": int(time.time() - (boot or time.time()))}
 
-@app.head("/health", tags=["meta"])
+
+@app.head("/health", tags=["meta"]) 
 def health_head():
     return PlainTextResponse("", status_code=200)
 
-@app.get("/readyz/strict", tags=["meta"])
+
+@app.get("/readyz/strict", tags=["meta"]) 
 async def readyz_strict():
     try:
         r = await _get_redis_cached()
@@ -1691,7 +1855,8 @@ async def readyz_strict():
         return PlainTextResponse("redis_fail", status_code=503)
     return PlainTextResponse("ok", status_code=200)
 
-@app.get("/debug/env", tags=["debug"])
+
+@app.get("/debug/env", tags=["debug"]) 
 def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
     allowlist = set([k.strip() for k in (keys or "").split(",") if k.strip()]) if keys else set()
     safe: Dict[str, Any] = {}
@@ -1703,9 +1868,11 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
         safe[k] = v
     return {"ok": True, "env": safe}
 
-@app.head("/debug/env", tags=["debug"])
+
+@app.head("/debug/env", tags=["debug"]) 
 def debug_env_head():
     return PlainTextResponse("", status_code=200)
+
 
 # ==================== Global error handler ====================
 @app.exception_handler(Exception)
@@ -1718,6 +1885,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         payload["detail"] = str(exc)
     return JSONResponse(status_code=500, content=payload)
 
+
 # ==================== Startup / Shutdown ====================
 @app.on_event("startup")
 async def _startup_tasks():
@@ -1727,12 +1895,15 @@ async def _startup_tasks():
     app.state.bg_started = True
     app.state.boot_ts = time.time()
     _ = _get_shared_async_client()
+
     async def _late_webhook():
         with suppress(Exception):
             if TELEGRAM_AUTO_WEBHOOK:
                 await asyncio.sleep(1.0)
                 await _ensure_telegram_webhook()
+
     asyncio.create_task(_late_webhook())
+
 
 @app.on_event("shutdown")
 async def _shutdown_tasks():
@@ -1748,12 +1919,15 @@ async def _shutdown_tasks():
             await r.connection_pool.disconnect()
     logger.info("Application shutdown complete.")
 
+
 if __name__ == "__main__":
     import uvicorn
+
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
