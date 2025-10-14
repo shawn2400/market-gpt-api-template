@@ -241,7 +241,7 @@ services:
       - key: ENABLE_INDICATOR_EXIT
         value: "1"
       - key: ADX_MIN
-        value: "22"
+        value: "20"              # ↓ מאפשר דינמיקה כש-ADX≈19–20
       - key: FEAT_DAILY_CAPS
         value: "0"
       - key: FEAT_DEBOUNCE_LIMIT
@@ -430,6 +430,14 @@ services:
         value: "20"
       - key: TP_BE_OFFSET_BPS
         value: "12"
+      - key: TRAIL_IN_CHOP
+        value: "1"              # חדש: אפשר Trail גם כש-ADX נמוך
+      - key: TP_SL_REFRESH_SEC
+        value: "300"            # חדש: ריענון סולמות כל 5 דק'
+      - key: MANAGER_REISSUE_ENABLE
+        value: "1"              # חדש: ביטול/הנפקה מחדש דינמית
+      - key: MANAGER_REISSUE_POLICY
+        value: "cancel_replace"  # חדש: שיטת רענון
 
       # ========================= Smart-Manage =========================
       - key: SMART_MANAGE_ON_APPROVE
@@ -611,7 +619,7 @@ services:
       - key: BTC_SHORT_REQ
         value: "ema21<=ema50"
 
-      # ======== Public feed knobs (חדשים) ========
+      # ======== Public feed knobs ========
       - key: PUBLIC_REQUIRE_BEARER
         value: "1"
       - key: PUBLIC_SSE_HEARTBEAT_SEC
@@ -619,7 +627,7 @@ services:
       - key: PUBLIC_SSE_MAX_IDLE_SEC
         value: "300"
       - key: PUBLIC_SSE_GZIP
-        value: "0"   # מומלץ להשאיר 0 ברוב הפרוקסים
+        value: "0"
 
       # ========================= Secrets =========================
       - key: API_BEARER_TOKEN
