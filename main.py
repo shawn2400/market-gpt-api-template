@@ -1,3 +1,4 @@
+# main.py
 from __future__ import annotations
 
 import os, json, time, hmac, re, hashlib, secrets, logging, traceback, inspect, asyncio, threading, math
@@ -1378,6 +1379,16 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     if not side_txt or not entry_price or abs(pos_amt) <= 0:
         return {"ok": True, "skipped": True, "reason": "no_open_position"}
 
+    # --- Get filters and price first (moved up) ---
+    tick, step = _get_filters(client, symbol)
+    price_now = None
+    with suppress(Exception):
+        tick_data = client.futures_symbol_ticker(symbol=symbol)
+        if tick_data and "price" in tick_data:
+            price_now = float(tick_data["price"])
+    base_price = price_now or entry_price
+
+    # --- Profile selection ---
     prof, indicators, profile_name = await _select_profile_for_symbol(client, symbol, payload)
     offset_bps = int(prof["offset_bps"])
     pcts: List[float] = list(prof["pcts"])
@@ -1391,11 +1402,30 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     if any(x <= 0 for x in splits):
         raise HTTPException(status_code=422, detail="splits must be > 0")
 
-    tick, step = _get_filters(client, symbol)
+    # --- Correct BE stop computation (fix) ---
+    # For a LONG (side_txt == BUY) we want the stop BELOW entry (minus offset);
+    # For a SHORT (side_txt == SELL) we want the stop ABOVE entry (plus offset).
+    if side_txt == "BUY":
+        be_price = float(entry_price) * (1.0 - (offset_bps / 10_000.0))
+    else:
+        be_price = float(entry_price) * (1.0 + (offset_bps / 10_000.0))
 
-    be_price = float(entry_price) * (1.0 + (offset_bps / 10_000.0)) if side_txt == "BUY" else float(entry_price) * (1.0 - (offset_bps / 10_000.0))
+    # Round to tick
     be_price = _bn_round(be_price, tick)
 
+    # Nudge to the safe side vs. current mark price to avoid immediate trigger:
+    # Binance STOP rules: SELL stop triggers when price <= stop; BUY stop triggers when price >= stop.
+    if price_now:
+        if side_txt == "BUY":
+            # SELL STOP should be below current price; if it isn't, nudge down by one tick
+            if be_price >= price_now:
+                be_price = _bn_round(price_now - tick, tick)
+        else:
+            # BUY STOP should be above current price; if it isn't, nudge up by one tick
+            if be_price <= price_now:
+                be_price = _bn_round(price_now + tick, tick)
+
+    # --- Cancel existing protective stops/trails before placing ours ---
     try:
         open_orders = client.futures_get_open_orders(symbol=symbol)
         for o in open_orders or []:
@@ -1406,6 +1436,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     except Exception:
         pass
 
+    # --- Place BE protective stop ---
     try:
         sl_kwargs = dict(
             symbol=symbol,
@@ -1420,12 +1451,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     except Exception as e:
         logger.warning("place_be_stop_failed: %s", e)
 
-    price_now = None
-    with suppress(Exception):
-        tick_data = client.futures_symbol_ticker(symbol=symbol)
-        if tick_data and "price" in tick_data:
-            price_now = float(tick_data["price"])
-    base_price = price_now or entry_price
+    # --- Build TP ladder from current/entry base price ---
     tps: List[float] = []
     for pct in pcts:
         if side_txt == "BUY":
@@ -1728,6 +1754,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
