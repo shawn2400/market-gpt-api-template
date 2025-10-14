@@ -1,7 +1,12 @@
 # routes/price.py
 from __future__ import annotations
-import asyncio, time, logging, os
-from typing import Optional
+
+import asyncio
+import time
+import logging
+import os
+from typing import Optional, Tuple
+
 from fastapi import APIRouter, Path, HTTPException, Query
 from pydantic import BaseModel
 import httpx
@@ -45,7 +50,7 @@ class PriceResponse(BaseModel):
 async def get_price_hint() -> PriceResponse:
     return PriceResponse(ok=True, error='Use /price/{symbol} (e.g., /price/BTCUSDT)')
 
-async def _redis_get(key: str):
+async def _redis_get(key: str) -> Optional[float]:
     if not redis_client:
         return None
     try:
@@ -59,7 +64,7 @@ async def _redis_get(key: str):
         logger.warning(f"[PRICE] Redis get failed: {e}")
         return None
 
-async def _redis_set(key: str, value: float, ex: int = 30):
+async def _redis_set(key: str, value: float, ex: int = 30) -> None:
     if not redis_client:
         return
     try:
@@ -109,7 +114,7 @@ async def _binance_spot_price(symbol: str) -> Optional[float]:
         logger.warning(f"[PRICE] SPOT ticker failed for {symbol}: {e}")
         return None
 
-async def _resolve_price(sym: str) -> Optional[tuple[float,str]]:
+async def _resolve_price(sym: str) -> Optional[Tuple[float, str]]:
     # Redis
     val = await _redis_get(f"price:{sym}")
     if val is not None:
@@ -158,8 +163,8 @@ async def get_price_last(symbol: str = Query(..., min_length=3)) -> PriceRespons
 
 @router.get("/stream_status", summary="[compat] price stream status")
 async def price_stream_status():
-    enabled = os.getenv("USE_WS","1").lower() in ("1","true","yes","on")
-    return {"ok": True, "enabled": enabled, "interval_sec": int(os.getenv("PRICE_SCAN_INTERVAL","30") or 30)}
+    enabled = os.getenv("USE_WS", "1").lower() in ("1", "true", "yes", "on")
+    return {"ok": True, "enabled": enabled, "interval_sec": int(os.getenv("PRICE_SCAN_INTERVAL", "30") or 30)}
 
 # הדינמי בסוף – כדי לא לבלוע /last ו-/stream_status
 @router.get("/{symbol}", response_model=PriceResponse, summary="Latest price by symbol")
@@ -171,6 +176,7 @@ async def get_price_symbol(symbol: str = Path(..., min_length=3, example="BTCUSD
     price, source = res
     update_price(sym, price)
     return PriceResponse(ok=True, symbol=sym, price=price, source=source, ts=time.time())
+
 
 
 
