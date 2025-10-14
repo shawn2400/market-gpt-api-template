@@ -251,9 +251,9 @@ services:
       - key: FEAT_SPREAD_DEPTH
         value: "1"
       - key: FEAT_TF_ALIGN
-        value: "0"
+        value: "1"          # היה 0 — מפעיל יישור TF
       - key: FEAT_VOLUME_GATE
-        value: "0"
+        value: "1"          # היה 0 — מפעיל פילטר נפח
       - key: FEAT_COOLDOWN
         value: "0"
       - key: MAX_ATR_PCT
@@ -305,7 +305,7 @@ services:
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
       - key: APPROVAL_RR_MIN
-        value: "1.15"
+        value: "1.30"       # היה 1.15 — שיפור יחס סיכוי/סיכון מינימלי
       - key: APPROVAL_SUCCESS_MIN
         value: "50"
       - key: APPROVAL_MAX_SL_PCT
@@ -339,7 +339,7 @@ services:
       - key: EXECUTE_TRADES
         value: "1"
       - key: ALLOW_MARKET_ENTRY
-        value: "1"
+        value: "0"          # היה 1 — SOP: Limit/Stop-Limit בלבד
       - key: MANAGER_WRITES_ORDERS
         value: "1"
       - key: ORDERS_USE_OCO
@@ -366,6 +366,10 @@ services:
         value: "5"
       - key: MAX_TRADE_BUDGET
         value: "600"
+      - key: ORDER_TRIGGER
+        value: "mark"       # טריגר ברירת מחדל ל-TP/SL מותנים
+      - key: POST_ONLY
+        value: "1"          # העדפת Maker היכן שרלוונטי
 
       # ======== Binance precision overrides (BTCUSDT) =========
       - key: PRICE_DP_OVERRIDE__BTCUSDT
@@ -389,17 +393,17 @@ services:
       - key: PERCENT_GUARD_ENABLE
         value: "1"
       - key: PERCENT_PRICE_GUARD_BPS
-        value: "150"
+        value: "180"        # היה 150 — פחות false triggers בספייקים
       - key: ENTRY_BAND_BPS
-        value: "10"
+        value: "25"         # היה 10 — פחות פספוס/ביטולי כניסה
       - key: ENTRY_GAP_MAX_PCT
         value: "0.80"
       - key: ENTRY_GAP_WARN_PCT
         value: "0.50"
       - key: STOP_BAND_BPS
-        value: "12"
+        value: "20"         # היה 12 — יציבות טובה יותר ל-SL
       - key: TP_BE_ONLY_AFTER_TP1
-        value: "0"
+        value: "1"          # היה 0 — BE רק אחרי TP1
       - key: STREAM_TP_BE
         value: "1"
       - key: TP_LADDER_ON_APPROVE
@@ -413,31 +417,31 @@ services:
       - key: TRAIL_ENABLE
         value: "1"
       - key: TRAIL_ATR_MULT
-        value: "2.6"
+        value: "1.6"        # היה 2.6 — הדוק יותר; להתאים לפי ביצועים/ADX
       - key: ATR_UPDATE_COOLDOWN_SEC
         value: "20"
       - key: ATR_MIN_DELTA
         value: "0.02"
       - key: BE_ARM_PCT
-        value: "0.6"
+        value: "1.2"        # היה 0.6 — BE לא מוקדם מדי
       - key: BE_GUARD_ENABLE
         value: "1"
       - key: BE_GUARD_EVERY_SEC
         value: "20"
       - key: TP_BE_OFFSET_BPS
-        value: "5"
+        value: "12"         # היה 5 — BE+0.12% למניעת “נשימות” קצרות
 
       # ========================= Smart-Manage =========================
       - key: SMART_MANAGE_ON_APPROVE
         value: "1"
       - key: SMART_MANAGE_BE_OFFSET_BPS
-        value: "5"
+        value: "12"         # היה 5 — מסונכרן עם TP_BE_OFFSET_BPS
       - key: SMART_MANAGE_PCTS
         value: "3,6,12"
       - key: SMART_MANAGE_SPLITS
         value: "0.25,0.25,0.50"
       - key: SMART_MANAGE_TRAIL_ATR_MULT
-        value: "2.6"
+        value: "1.6"        # היה 2.6 — תאום עם TRAIL_ATR_MULT
       # >>> Ultra Log flags <<<
       - key: SM_ULTRA_LOG
         value: "1"
@@ -458,7 +462,7 @@ services:
       - key: AUTO_TUNE_ENABLE
         value: "1"
       - key: AUTO_MIN_SCORE_BASE
-        value: "7.0"
+        value: "8.5"        # היה 7.0 — Quality Gate לפי SOP
       - key: AUTO_MIN_SCORE_RANGE
         value: "6.2,7.9"
       - key: AUTO_ADX_MIN_BASE
@@ -468,7 +472,7 @@ services:
       - key: TARGET_TRADES_PER_DAY_MIN
         value: "4"
       - key: TARGET_TRADES_PER_DAY_MAX
-        value: "12"
+        value: "10"         # היה 12 — מתאים יעד 3–10 ליום
       - key: AUTO_TUNE_LOOKBACK_MIN
         value: "180"
       - key: AUTO_BACKOFF_SEC
@@ -593,6 +597,20 @@ services:
         value: "1"
       - key: TRADE_MANAGER_ENABLE
         value: "1"
+      - key: MANAGER_INTERVAL_SEC
+        value: "10"         # הוספה — קצב ניהול חי
+      - key: ALLOW_MANAGE_OPEN_TRADES
+        value: "1"          # הוספה — ניהול פוזיציות חי (SL/TP/BE/Trail)
+
+      # (אופציונלי) BTC-Gate — אם נתמך בקוד אצלך
+      - key: BTC_GATE_ENABLE
+        value: "1"
+      - key: BTC_GATE_TF
+        value: "15m"
+      - key: BTC_LONG_REQ
+        value: "ema21>=ema50"
+      - key: BTC_SHORT_REQ
+        value: "ema21<=ema50"
 
       # ========================= Secrets =========================
       - key: API_BEARER_TOKEN
@@ -621,6 +639,7 @@ services:
         fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
         fromSecret: BINANCE_API_SECRET
+
 
 
 
