@@ -1,8 +1,12 @@
 # storage/trades_store.py
 from __future__ import annotations
-import json, threading, os
+
+import json
+import threading
+import os
 from typing import Optional, Dict, List
-from utils.trade_state import Trade, TradeState
+
+from utils.trade_state import Trade, TradeState  # type: ignore
 
 _REDIS_URL = os.getenv("REDIS_URL", "").strip()
 _NAMESPACE = os.getenv("REDIS_NAMESPACING", "algogpt:v2").strip()
@@ -39,7 +43,7 @@ def get(trade_id: str) -> Optional[Trade]:
             s = _redis.get(_key(trade_id))
             if s:
                 d = json.loads(s)
-                t = Trade(**{**d, "state": TradeState(d["state"])})
+                t = Trade({**d, "state": TradeState(d["state"])})
                 return t
         except Exception:
             pass
@@ -53,6 +57,7 @@ def list_open() -> List[Trade]:
     out: List[Trade] = []
     if _redis:
         try:
+            # אפשר לממש סריקה ב־Redis בהמשך
             raise RuntimeError("scan not implemented")
         except Exception:
             pass
@@ -85,4 +90,7 @@ def set_state(trade_id: str, to: TradeState) -> Optional[Trade]:
 
 
 __all__ = ["save", "get", "list_open", "set_state", "get_all_state"]
+
+
+
 
