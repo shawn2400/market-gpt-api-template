@@ -25,14 +25,14 @@ except Exception:
 try:
     from utils.telegram_notifier import send_trade_approval  # type: ignore
 except Exception:
-    async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
+    async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:  # type: ignore
         return None
 
 # --- טקסט לטלגרם (Heartbeat) ---
 try:
     from utils.telegram_notifier_core import _tg_send as _tg_send_text  # type: ignore
 except Exception:
-    async def _tg_send_text(text: str, chat_id: Optional[int] = None) -> None:
+    async def _tg_send_text(text: str, chat_id: Optional[int] = None) -> None:  # type: ignore
         return None
 
 # --- דאטה שוק (klines/price) ---
@@ -274,7 +274,7 @@ def _auto_tp_sl(*, side: Optional[str], entry: float, atr_pct: Optional[float], 
 
     adx_boost_thr = _get_env_float("ADX_TP_BOOST_THRESH", 30.0)
     adx_tp_boost_pct = _get_env_float("ADX_TP_BOOST_PCT", 10.0) / 100.0
-    adx_sl_tight_pct = _get_env_float("ADX_STRONG_SL_TIGHTEN_PCT", 10.0) / 100.0
+    adx_strong_sl_tight_pct = _get_env_float("ADX_STRONG_SL_TIGHTEN_PCT", 10.0) / 100.0
     adx_low_sl_relax_pct = _get_env_float("ADX_LOW_SL_RELAX_PCT", 10.0) / 100.0
     adx_low_tp_shrink_pct = _get_env_float("ADX_LOW_TP_SHRINK_PCT", 10.0) / 100.0
 
@@ -301,7 +301,7 @@ def _auto_tp_sl(*, side: Optional[str], entry: float, atr_pct: Optional[float], 
     else:
         return {"stopPrice": None}, []
 
-    # (מקום להרחבות לפי ADX — כרגע לא משנים מחירים/ספליטים)
+    # (hook ל־ADX אם תרצה בעתיד)
     return {"stopPrice": sl}, tps
 
 # ============================
@@ -372,9 +372,9 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
         age_min = int((now - _LAST_GOOD_TS) // 60)
         txt = (
             'בס"ד\n'
-            f"ℹ️ Heartbeat: לא נמצאו טריידים ≥ {min_score} מזה ~{age_min} ד׳.\n"
+            f"ℹ Heartbeat: לא נמצאו טריידים ≥ {min_score} מזה ~{age_min} ד׳.\n"
             f"נרשמו רק ציונים נמוכים יותר (למשל ~{low}-{max(low, min_score - 0.5):.1f}).\n"
-            "_בעזרת השם נעשה ונצליח_ 🙏"
+            "בעזרת השם נעשה ונצליח 🙏"
         )
         try:
             cid = int(chat_id)
@@ -384,7 +384,7 @@ async def _heartbeat_if_needed(chat_id: Optional[str], notify: Optional[str],
         try:
             await _tg_send_text(txt, chat_id=cid)
         except Exception as e:
-            LOG.warning({"event": "heartbeat.send_failed", "error": str(e)})
+            LOG.warning({'event': 'heartbeat.send_failed', 'error': str(e)})
         finally:
             _LAST_GOOD_TS = now
 
@@ -408,7 +408,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
         avg_loss = statistics.fmean(losses) if any(losses) else 0.0
         if avg_loss == 0:
             return 100.0
-        rs = avg_gain / (avg_loss or 1e-9)
+        rs = (avg_gain / (avg_loss or 1e-9)) if avg_loss else 0.0
         return 100.0 - (100.0 / (1.0 + rs))
 
     def _ema(seq: List[float], n: int) -> float:
@@ -487,7 +487,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             closes: List[float]
             raw_rows: Optional[List[List[float]]] = None
 
-            if hasattr(df, "__getitem__") and "close" in getattr(df, "columns", []):
+            if hasattr(df, "_getitem_") and "close" in getattr(df, "columns", []):
                 closes = [float(x) for x in df["close"]]
                 if "high" in df.columns and "low" in df.columns:
                     raw_rows = [[None, None, float(h), float(l), float(c)]
@@ -531,7 +531,7 @@ async def _compute_signals(market: str, quote: str, limit: int, timeframe: str, 
             if side == "BUY" and rsi_val is not None and rsi_val >= 55 and close > max(ema21, ema50):
                 conf_bonus = 0.5 if (plus_di and minus_di and plus_di > minus_di) else 0.3
             elif side == "SELL" and rsi_val is not None and rsi_val <= 45 and close < min(ema21, ema50):
-                conf_bonus = 0.5 if (plus_di and minus_di and minus_di > plus_di) else 0.3
+                conf_bonus = 0.5 if (minus_di and plus_di and minus_di > plus_di) else 0.3
             if adx is not None:
                 if adx < adx_min:
                     score_2_base *= 0.4
@@ -877,6 +877,7 @@ async def public_topk(
         "Cache-Control": _cache_control(),
         "Last-Modified": _last_modified(),
     })
+
 
 
 
