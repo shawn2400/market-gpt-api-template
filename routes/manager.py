@@ -9,7 +9,6 @@ from fastapi import APIRouter, HTTPException, Header, Body
 from pydantic import BaseModel
 
 from utils.anti_replay import verify_request
-# הסרתי את build_ticket_buttons שהיה גורם ל־ImportError
 from utils.telegram_notifier import TelegramNotifier, send_trade_approval  # type: ignore
 
 logger = logging.getLogger("algogpt.manager")
@@ -19,7 +18,7 @@ BASE_DIR   = Path(os.getenv("BASE_DIR", "/app"))
 INGEST_DIR = Path(os.getenv("INGEST_DIR", str(BASE_DIR / "static" / "cache")))
 MANAGER_ENABLE       = os.getenv("MANAGER_ENABLE", "1").lower() in ("1","true","yes","on")
 MANAGER_INTERVAL_SEC = int(os.getenv("MANAGER_INTERVAL_SEC", "10"))
-# תיקון סוגר מיותר כאן:
+# <<< תיקון סוגר מיותר שהיה גורם ל־SyntaxError >>>
 CONFIRMSTORE_ENABLE  = os.getenv("CONFIRMSTORE_ENABLE", "1").lower() in ("1","true","yes","on")
 
 PUBLIC_HOST = (os.getenv("PUBLIC_HOST", "") or os.getenv("WEBHOOK_HOST", "")).rstrip("/")
@@ -114,7 +113,6 @@ async def _post_alerts_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("ALERTS_INGEST_URL/PUBLIC_HOST not configured")
     async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as cli:
         r = await cli.post(ALERTS_INGEST_URL, json=payload, headers=_auth_headers())
-        data = {}
         try:
             data = r.json()
         except Exception:
@@ -191,17 +189,13 @@ def _create_ticket_fallback(obj: Dict[str, Any]) -> Optional[str]:
         return None
 
 async def _notify_telegram_approval_from_obj(obj: Dict[str, Any], ticket_id: str) -> None:
-    """
-    בונה plan מינימלי ושולח הודעת אישור עשירה לטלגרם דרך send_trade_approval
-    """
     symbol = str(obj.get("symbol","")).upper()
     side   = str(obj.get("side","")).upper()
     leverage = obj.get("leverage") or DEFAULT_LEVERAGE
-    # נרכיב TP/SL בפורמט שה־notifier יודע לפרש (price/stopPrice)
     tp_legs = []
     for i in (1,2,3):
         v = obj.get(f"tp{i}")
-        if v is None: 
+        if v is None:
             continue
         try:
             tp_legs.append({"stopPrice": float(v), "split": obj.get("tp_splits", [0.4,0.35,0.25])[i-1] if isinstance(obj.get("tp_splits"), list) else None})
@@ -259,7 +253,6 @@ async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
             payload = _build_ingest_payload(obj)
             resp = await _post_alerts_ingest(payload)
             logger.info("alerts/ingest ok: %s", resp)
-            # שליחת אישור לטלגרם (עשיר)
             await _notify_telegram_approval_from_obj(obj, ticket_id=payload["ticket_id"])
             return tid
         except Exception as e:
@@ -355,7 +348,7 @@ async def alerts_trades_update(
         raise HTTPException(status_code=500, detail=f"decision failed: {e}")
 
 # === One-shot manager hook (LITE) ===
-# חשוב: שונה מ־/manage-once של main.py כדי לא ליצור התנגשויות
+
 class ManageOnceReq(BaseModel):
     symbol: Optional[str] = None
     offset_bps: Optional[int] = None
@@ -365,7 +358,7 @@ class ManageOnceReq(BaseModel):
 
 def _bearer_ok(auth_header: Optional[str]) -> bool:
     if not API_BEARER_TOKEN:
-        return True  # אם אין מפתח – לא חוסמים (סביבה מקומית)
+        return True  # ללא טוקן — לא חוסמים (לוקאלי)
     if not (auth_header and auth_header.startswith("Bearer ")):
         return False
     token = auth_header.split(" ", 1)[1].strip()
@@ -384,7 +377,6 @@ async def manage_once_lite(
     if not _bearer_ok(authorization):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-    # Try optional concrete implementation if present
     try:
         from routes.position_ops import manage_once as real_manage_once  # type: ignore
         payload: Dict[str, Any] = {k: v for k, v in req.dict().items() if v is not None}
@@ -397,7 +389,6 @@ async def manage_once_lite(
         res = await pm_manage_once(**{k: v for k, v in req.dict().items() if v is not None})  # type: ignore
         return {"ok": True, "delegated": True, "result": res}
     except Exception:
-        # Fallback: noop success so the periodic caller won't backoff
         return {"ok": True, "delegated": False, "skipped": True, "reason": "manager_not_available"}
 
 # === Background loop (optional) ===
@@ -412,8 +403,6 @@ async def _manager_loop():
             logger.error("manager_loop error: %s", e)
         await asyncio.sleep(max(3, MANAGER_INTERVAL_SEC))
 
-# הערה: APIRouter תומך באירועי on_event בגרסאות FastAPI מודרניות. אם בסביבה שלך זה לא נתמך,
-# אפשר להעביר זאת ל-app.on_event בצד main.py אחרי include_router(router).
 @router.on_event("startup")
 async def _startup():
     if MANAGER_ENABLE:
