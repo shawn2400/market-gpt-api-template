@@ -21,6 +21,18 @@ SSE_HEARTBEAT_SEC = int(os.getenv("PUBLIC_SSE_HEARTBEAT_SEC", "20") or "20")
 SSE_MAX_IDLE_SEC  = int(os.getenv("PUBLIC_SSE_MAX_IDLE_SEC",  "300") or "300")
 SSE_GZIP          = os.getenv("PUBLIC_SSE_GZIP", "0").lower() in ("1","true","yes","on")
 
+# --- New: light rate-limit knobs (safe defaults) ---
+# HTML pages (web views) – per-IP sliding 1s window
+PUBLIC_WEB_RPS        = int(os.getenv("PUBLIC_WEB_RPS", "2") or "2")      # 2 req/sec
+PUBLIC_WEB_BURST      = int(os.getenv("PUBLIC_WEB_BURST", "6") or "6")    # burst allowance
+# REST (JSON) – per-IP sliding 1s window (very mild; most הגנה ב-CDN/Render)
+PUBLIC_REST_RPS       = int(os.getenv("PUBLIC_REST_RPS", "5") or "5")
+PUBLIC_REST_BURST     = int(os.getenv("PUBLIC_REST_BURST", "15") or "15")
+# SSE connection caps
+PUBLIC_SSE_MAX_CONNS          = int(os.getenv("PUBLIC_SSE_MAX_CONNS", "80") or "80")         # global cap
+PUBLIC_SSE_MAX_CONNS_PER_IP   = int(os.getenv("PUBLIC_SSE_MAX_CONNS_PER_IP", "4") or "4")    # per-IP cap
+PUBLIC_RL_NS          = os.getenv("PUBLIC_RL_NS", f"{NS}:rl").strip()
+
 # ticket signing secret (fallbacks)
 TICKET_SECRET = (
     os.getenv("API_SIGNING_SECRET")
@@ -117,7 +129,7 @@ def _verify_ticket(token: str) -> bool:
         return False
     return True
 
-# === Security ===
+# === Security helpers ===
 def _bearer_header_ok(auth_header: Optional[str]) -> bool:
     if not PUBLIC_REQUIRE_BEARER:
         return True
@@ -134,25 +146,19 @@ def _extract_any_token(
     cookie_auth: Optional[str],
     cookie_sse: Optional[str],
 ) -> Tuple[str, str]:
-    """
-    מחזיר (kind, token):
-      kind in {"bearer","ticket","none"}
-    """
     # 1) Authorization: Bearer ...
     if auth_header and auth_header.startswith("Bearer "):
         tok = auth_header.split(" ", 1)[1].strip()
         if API_BEARER_TOKEN and hmac.compare_digest(tok, API_BEARER_TOKEN):
             return "bearer", tok
-
-    # 2) Query: t / token
+    # 2) Query t/token
     if q_token:
         tok = q_token.strip()
         if API_BEARER_TOKEN and hmac.compare_digest(tok, API_BEARER_TOKEN):
             return "bearer", tok
         if _verify_ticket(tok):
             return "ticket", tok
-
-    # 3) Cookies (sse_token / auth)
+    # 3) Cookies
     for tok in (cookie_sse or "", cookie_auth or ""):
         tok = (tok or "").strip()
         if not tok:
@@ -161,11 +167,113 @@ def _extract_any_token(
             return "bearer", tok
         if _verify_ticket(tok):
             return "ticket", tok
-
     return "none", ""
 
 def _deny():
     raise HTTPException(status_code=401, detail="Unauthorized")
+
+# === RL helpers (Redis-based, ultra-lightweight) ===
+def _client_ip(request: Request) -> str:
+    # trust uvicorn's client; if behind proxy, consider X-Forwarded-For at your ingress
+    return (request.client.host if request.client else "0.0.0.0") or "0.0.0.0"
+
+async def _rate_limit(request: Request, scope: str, rps: int, burst: int) -> bool:
+    """
+    Sliding-second coarse limiter per ip+scope using Redis INCR with 1s TTL.
+    Returns True if allowed, False if over limit.
+    """
+    if rps <= 0 or burst <= 0:
+        return True
+    r = await _get_redis()
+    if not r:
+        # if no redis, fail-open but log (Render health should still shield)
+        logger.debug("public: RL skip (no redis)")
+        return True
+    ip = _client_ip(request)
+    now = int(time.time())
+    key = f"{PUBLIC_RL_NS}:{scope}:{ip}:{now}"
+    try:
+        n = await r.incr(key)
+        if n == 1:
+            await r.expire(key, 2)  # keep a second + epsilon
+        # allow up to max(rps, burst) within the second window
+        limit = max(rps, burst)
+        allowed = n <= limit
+        if not allowed:
+            logger.debug("public: RL hit scope=%s ip=%s n=%s limit=%s", scope, ip, n, limit)
+        return allowed
+    except Exception as e:
+        logger.debug("public: RL error %s", e)
+        return True  # fail-open
+
+async def _sse_try_register(request: Request) -> Tuple[bool, Optional[str], Optional[str]]:
+    """
+    Track concurrent SSE connections: global + per-IP. Returns (ok, key_global, key_ip).
+    Caller must call _sse_unregister on disconnect.
+    """
+    r = await _get_redis()
+    if not r:
+        return True, None, None  # fail-open
+    ip = _client_ip(request)
+    key_g = f"{PUBLIC_RL_NS}:sse:conn:global"
+    key_i = f"{PUBLIC_RL_NS}:sse:conn:ip:{ip}"
+    try:
+        # small pipeline
+        pipe = r.pipeline()
+        pipe.incr(key_g)
+        pipe.expire(key_g, 120)
+        pipe.incr(key_i)
+        pipe.expire(key_i, 120)
+        g_val, _, i_val, _ = await pipe.execute()
+        if (PUBLIC_SSE_MAX_CONNS > 0 and int(g_val) > PUBLIC_SSE_MAX_CONNS) \
+           or (PUBLIC_SSE_MAX_CONNS_PER_IP > 0 and int(i_val) > PUBLIC_SSE_MAX_CONNS_PER_IP):
+            # roll back (best-effort)
+            with contextlib.suppress(Exception):
+                await r.decr(key_g)
+                await r.decr(key_i)
+            return False, key_g, key_i
+        return True, key_g, key_i
+    except Exception as e:
+        logger.debug("public: sse register error %s", e)
+        return True, None, None
+
+async def _sse_unregister(keys: Tuple[Optional[str], Optional[str]]) -> None:
+    r = await _get_redis()
+    if not r:
+        return
+    key_g, key_i = keys
+    try:
+        pipe = r.pipeline()
+        if key_g: pipe.decr(key_g)
+        if key_i: pipe.decr(key_i)
+        await pipe.execute()
+    except Exception:
+        pass
+
+# === Security headers for HTML/Streams ===
+def _secure_html_response(html: str) -> HTMLResponse:
+    resp = HTMLResponse(html)
+    # CSP: allow self; inline styles are used -> 'unsafe-inline' for style only
+    resp.headers.setdefault("Content-Security-Policy",
+        "default-src 'self'; "
+        "script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "connect-src 'self' https: wss:; "
+        "img-src 'self' data:; "
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    resp.headers.setdefault("Permissions-Policy", "geolocation=(), microphone=(), camera=()")
+    return resp
+
+def _attach_security_headers(resp: Response) -> Response:
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    # CSP for streams (no html); keep connect-src open to same-origin
+    resp.headers.setdefault("Content-Security-Policy",
+        "default-src 'self'; connect-src 'self' https: wss:; object-src 'none'")
+    return resp
 
 # === Helpers ===
 def _json_md5(obj: Any) -> str:
@@ -251,6 +359,10 @@ async def public_now(
     auth: Optional[str] = Cookie(None),
     sse_token: Optional[str] = Cookie(None),
 ):
+    # RL for REST
+    if not await _rate_limit(request, "rest_now", PUBLIC_REST_RPS, PUBLIC_REST_BURST):
+        raise HTTPException(status_code=429, detail="rate_limited")
+
     kind, tok = _extract_any_token(request, authorization, t or token, auth, sse_token)
     if PUBLIC_REQUIRE_BEARER and kind == "none":
         _deny()
@@ -276,6 +388,9 @@ async def public_topk(
     auth: Optional[str] = Cookie(None),
     sse_token: Optional[str] = Cookie(None),
 ):
+    if not await _rate_limit(request, "rest_topk", PUBLIC_REST_RPS, PUBLIC_REST_BURST):
+        raise HTTPException(status_code=429, detail="rate_limited")
+
     kind, tok = _extract_any_token(request, authorization, t or token, auth, sse_token)
     if PUBLIC_REQUIRE_BEARER and kind == "none":
         _deny()
@@ -307,6 +422,9 @@ async def public_topk_snapshot(
     auth: Optional[str] = Cookie(None),
     sse_token: Optional[str] = Cookie(None),
 ):
+    if not await _rate_limit(request, "rest_topk_snap", PUBLIC_REST_RPS, PUBLIC_REST_BURST):
+        raise HTTPException(status_code=429, detail="rate_limited")
+
     kind, tok = _extract_any_token(request, authorization, t or token, auth, sse_token)
     if PUBLIC_REQUIRE_BEARER and kind == "none":
         _deny()
@@ -321,7 +439,7 @@ async def public_topk_snapshot(
     return _json_response(out, etag=_json_md5(out), request=request)
 
 # === SSE (Pub/Sub Redis) ===
-async def _sse_chunks(last_event_id: Optional[str], accept_gzip: bool) -> AsyncIterator[bytes]:
+async def _sse_chunks(last_event_id: Optional[str], accept_gzip: bool, sse_keys: Tuple[Optional[str], Optional[str]]) -> AsyncIterator[bytes]:
     r = await _get_redis()
     started = time.time()
     last_sent = time.time()
@@ -365,6 +483,8 @@ async def _sse_chunks(last_event_id: Optional[str], accept_gzip: bool) -> AsyncI
             yield emit(b": keep-alive\n\n")
         if compressor:
             yield compressor.flush()
+        # unregister counters
+        await _sse_unregister(sse_keys)
         return
 
     pubsub = r.pubsub(ignore_subscribe_messages=True)
@@ -413,6 +533,8 @@ async def _sse_chunks(last_event_id: Optional[str], accept_gzip: bool) -> AsyncI
             await pubsub.close()
         if compressor:
             yield compressor.flush()
+        # unregister counters
+        await _sse_unregister(sse_keys)
 
 @router.get("/scan/public-stream")
 async def public_stream(
@@ -429,6 +551,11 @@ async def public_stream(
     if PUBLIC_REQUIRE_BEARER and kind == "none":
         _deny()
 
+    # Connection caps (global + per-IP) — stops storms
+    ok, key_g, key_i = await _sse_try_register(request)
+    if not ok:
+        raise HTTPException(status_code=429, detail="too_many_sse_connections")
+
     accept_gzip = "gzip" in (request.headers.get("accept-encoding","").lower())
     headers = {
         "Cache-Control": "no-cache",
@@ -437,11 +564,13 @@ async def public_stream(
     }
     if SSE_GZIP and accept_gzip:
         headers["Content-Encoding"] = "gzip"
-    return StreamingResponse(
-        _sse_chunks(last_event_id, accept_gzip=accept_gzip),
+
+    resp = StreamingResponse(
+        _sse_chunks(last_event_id, accept_gzip=accept_gzip, sse_keys=(key_g, key_i)),
         media_type="text/event-stream",
         headers=headers,
     )
+    return _attach_security_headers(resp)
 
 # === Ticket issue (returns JSON and optional Set-Cookie) ===
 @router.post("/public/sse-ticket")
@@ -493,7 +622,6 @@ async def ticket_inspect(
     if q and API_BEARER_TOKEN and hmac.compare_digest(q, API_BEARER_TOKEN):
         return JSONResponse({"valid": True, "kind": "bearer", "info": {"note": "bearer matches API_BEARER_TOKEN"}})
 
-    # אם אין ב-query, ניקח מה־cookies/headers
     if not q:
         # Authorization Bearer
         if authorization and authorization.startswith("Bearer "):
@@ -528,7 +656,6 @@ async def ticket_inspect(
 async def legacy_topk_redirect(
     request: Request,
 ):
-    # משמר את מחרוזת השאילתה
     dest = "/scan/public-topk"
     if request.url.query:
         dest = f"{dest}?{request.url.query}"
@@ -548,6 +675,9 @@ async def topk_csv(
     auth: Optional[str] = Cookie(None),
     sse_token: Optional[str] = Cookie(None),
 ):
+    if not await _rate_limit(request, "rest_topk_csv", PUBLIC_REST_RPS, PUBLIC_REST_BURST):
+        raise HTTPException(status_code=429, detail="rate_limited")
+
     kind, tok = _extract_any_token(request, authorization, t or token, auth, sse_token)
     if PUBLIC_REQUIRE_BEARER and kind == "none":
         _deny()
@@ -569,7 +699,7 @@ async def topk_csv(
         lines.append(",".join(row))
     payload = "\n".join(lines) + "\n"
 
-    return PlainTextResponse(
+    resp = PlainTextResponse(
         payload,
         media_type="text/csv; charset=utf-8",
         headers={
@@ -577,12 +707,16 @@ async def topk_csv(
             "Content-Disposition": 'inline; filename="topk.csv"',
         },
     )
+    return _attach_security_headers(resp)
 
 # === Lightweight HTML web (SSE-first, polling fallback) for TOPK ===
 @router.get("/scan/public-topk/web")
 async def public_topk_web(
     request: Request,
 ) -> HTMLResponse:
+    if not await _rate_limit(request, "web_topk", PUBLIC_WEB_RPS, PUBLIC_WEB_BURST):
+        # משיבים דף קטן עם הודעת 429 כדי לא “לשבור” UX
+        return _secure_html_response("<!doctype html><title>Too Many Requests</title><h3 style='font-family:sans-serif;color:#e11d48'>Rate limited</h3>")
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -661,6 +795,8 @@ async def public_topk_web(
     status.textContent = 'connecting…';
     try {{
       const url = new URL('/scan/public-stream', location.origin);
+      const qs = new URLSearchParams(location.search);
+      const t = qs.get('t') || qs.get('token') || '';
       if (t) url.searchParams.set('t', t);
       es = new EventSource(url.toString());
       es.addEventListener('topk', (e)=>{
@@ -692,6 +828,8 @@ async def public_topk_web(
     async function pull() {{
       try {{
         const url = new URL('/scan/public-topk', location.origin);
+        const qs = new URLSearchParams(location.search);
+        const t = qs.get('t') || qs.get('token') || '';
         if (t) url.searchParams.set('t', t);
         url.searchParams.set('k', '10');
         const res = await fetch(url.toString(), {{ credentials: 'same-origin' }});
@@ -714,13 +852,15 @@ async def public_topk_web(
 </script>
 </body>
 </html>"""
-    return HTMLResponse(html)
+    return _secure_html_response(html)
 
 # === Lightweight HTML web (SSE-first, polling fallback) for NOW ===
 @router.get("/scan/public-now/web")
 async def public_now_web(
     request: Request,
 ) -> HTMLResponse:
+    if not await _rate_limit(request, "web_now", PUBLIC_WEB_RPS, PUBLIC_WEB_BURST):
+        return _secure_html_response("<!doctype html><title>Too Many Requests</title><h3 style='font-family:sans-serif;color:#e11d48'>Rate limited</h3>")
     html = f"""<!doctype html>
 <html lang="en">
 <head>
@@ -866,7 +1006,6 @@ async def public_now_web(
 
   applyBtn.addEventListener('click', ()=>{
     currentSymbols = (symbolsInp.value||'').trim();
-    // מרענן מיד
     startPolling();
   });
 
@@ -875,9 +1014,10 @@ async def public_now_web(
 </script>
 </body>
 </html>"""
-    return HTMLResponse(html)
+    return _secure_html_response(html)
 
 # === Done ===
+
 
 
 
