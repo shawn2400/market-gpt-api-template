@@ -1,10 +1,9 @@
 # routes/public.py
 from __future__ import annotations
-import os, json, time, hashlib, logging, asyncio, contextlib, zlib, io, csv
-from typing import Any, Dict, List, Optional, AsyncIterator, Set
-
-from fastapi import APIRouter, Query, Header, HTTPException, Request, Response, status
-from fastapi.responses import JSONResponse, StreamingResponse, RedirectResponse, HTMLResponse
+import os, json, time, hashlib, logging, asyncio, contextlib, zlib, hmac, base64
+from typing import Any, Dict, List, Optional, AsyncIterator, Tuple
+from fastapi import APIRouter, Query, Header, HTTPException, Request, Response, status, Cookie
+from fastapi.responses import JSONResponse, StreamingResponse, HTMLResponse, RedirectResponse, PlainTextResponse
 
 logger = logging.getLogger("algogpt.public")
 router = APIRouter(tags=["Public Feed"])
@@ -12,13 +11,27 @@ router = APIRouter(tags=["Public Feed"])
 # === Env ===
 NS = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
 REDIS_URL = (os.getenv("REDIS_URL") or os.getenv("ALGOGPT_REDIS_URL") or "").strip()
+
 PUBLIC_CACHE_MAX_AGE = int(os.getenv("PUBLIC_CACHE_MAX_AGE", "20") or "20")
 PUBLIC_REQUIRE_BEARER = os.getenv("PUBLIC_REQUIRE_BEARER", "1").lower() in ("1","true","yes","on")
+
 API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
+
 SSE_HEARTBEAT_SEC = int(os.getenv("PUBLIC_SSE_HEARTBEAT_SEC", "20") or "20")
-SSE_MAX_IDLE_SEC = int(os.getenv("PUBLIC_SSE_MAX_IDLE_SEC", "300") or "300")
+SSE_MAX_IDLE_SEC  = int(os.getenv("PUBLIC_SSE_MAX_IDLE_SEC",  "300") or "300")
+SSE_GZIP          = os.getenv("PUBLIC_SSE_GZIP", "0").lower() in ("1","true","yes","on")
+
+# ticket signing secret (fallbacks)
+TICKET_SECRET = (
+    os.getenv("API_SIGNING_SECRET")
+    or os.getenv("OPS_SIGN_SECRET")
+    or API_BEARER_TOKEN
+).encode("utf-8")
+TICKET_DEFAULT_TTL = 600  # 10 דקות
+TICKET_MAX_TTL     = 900  # 15 דקות hard cap
+TICKET_AUD         = "sse"
+
 PUBSUB_CHANNEL = f"{NS}:public:events"
-SSE_GZIP = os.getenv("PUBLIC_SSE_GZIP", "0").lower() in ("1","true","yes","on")
 
 # === Redis (async) ===
 _aioredis = None
@@ -40,14 +53,72 @@ async def _get_redis():
         if _redis_client:
             return _redis_client
         try:
-            _redis_client = _aioredis.from_url(REDIS_URL, decode_responses=True)
+            _redis_client = _aioredis.from_url(
+                REDIS_URL,
+                decode_responses=True,
+                client_name=os.getenv("REDIS_CLIENT_NAME", "algogpt.public"),
+                socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT", "8.0")),
+                socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT", "8.0")),
+                max_connections=int(os.getenv("REDIS_POOL_MAX_CONNECTIONS", "30")),
+            )
         except Exception as e:
             logger.warning("public: redis connect failed: %s", e)
             _redis_client = None
     return _redis_client
 
+# === Small JWT-like (HMAC-SHA256) ticket, no external deps ===
+def _b64url(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+def _b64url_decode(s: str) -> bytes:
+    pad = '=' * (-len(s) % 4)
+    return base64.urlsafe_b64decode((s + pad).encode("ascii"))
+
+def _sign(parts: List[str]) -> str:
+    msg = ".".join(parts).encode("utf-8")
+    return _b64url(hmac.new(TICKET_SECRET, msg, hashlib.sha256).digest())
+
+def _issue_ticket(sub: str = "viewer", ttl: int = TICKET_DEFAULT_TTL) -> Tuple[str, int]:
+    ttl = int(max(60, min(ttl, TICKET_MAX_TTL)))
+    iat = int(time.time())
+    exp = iat + ttl
+    header = {"alg": "HS256", "typ": "JWT", "aud": TICKET_AUD}
+    payload = {"sub": sub, "iat": iat, "exp": exp, "aud": TICKET_AUD}
+    p1 = _b64url(json.dumps(header, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    p2 = _b64url(json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8"))
+    sig = _sign([p1, p2])
+    return f"{p1}.{p2}.{sig}", exp
+
+def _decode_ticket(token: str) -> Tuple[Optional[dict], Optional[dict]]:
+    try:
+        p1, p2, _ = token.split(".")
+        header = json.loads(_b64url_decode(p1))
+        payload = json.loads(_b64url_decode(p2))
+        return header, payload
+    except Exception:
+        return None, None
+
+def _verify_ticket(token: str) -> bool:
+    try:
+        p1, p2, sig = token.split(".")
+    except Exception:
+        return False
+    good_sig = _sign([p1, p2])
+    if not hmac.compare_digest(sig, good_sig):
+        return False
+    try:
+        payload = json.loads(_b64url_decode(p2))
+    except Exception:
+        return False
+    if payload.get("aud") != TICKET_AUD:
+        return False
+    exp = int(payload.get("exp") or 0)
+    if exp < int(time.time()):
+        return False
+    return True
+
 # === Security ===
-def _bearer_ok(auth_header: Optional[str]) -> bool:
+def _bearer_header_ok(auth_header: Optional[str]) -> bool:
     if not PUBLIC_REQUIRE_BEARER:
         return True
     if not API_BEARER_TOKEN:
@@ -55,6 +126,43 @@ def _bearer_ok(auth_header: Optional[str]) -> bool:
     if not (auth_header and auth_header.startswith("Bearer ")):
         return False
     return auth_header.split(" ", 1)[1].strip() == API_BEARER_TOKEN
+
+def _extract_any_token(
+    request: Request,
+    auth_header: Optional[str],
+    q_token: Optional[str],
+    cookie_auth: Optional[str],
+    cookie_sse: Optional[str],
+) -> Tuple[str, str]:
+    """
+    מחזיר (kind, token):
+      kind in {"bearer","ticket","none"}
+    """
+    # 1) Authorization: Bearer ...
+    if auth_header and auth_header.startswith("Bearer "):
+        tok = auth_header.split(" ", 1)[1].strip()
+        if API_BEARER_TOKEN and hmac.compare_digest(tok, API_BEARER_TOKEN):
+            return "bearer", tok
+
+    # 2) Query: t / token
+    if q_token:
+        tok = q_token.strip()
+        if API_BEARER_TOKEN and hmac.compare_digest(tok, API_BEARER_TOKEN):
+            return "bearer", tok
+        if _verify_ticket(tok):
+            return "ticket", tok
+
+    # 3) Cookies (sse_token / auth)
+    for tok in (cookie_sse or "", cookie_auth or ""):
+        tok = (tok or "").strip()
+        if not tok:
+            continue
+        if API_BEARER_TOKEN and hmac.compare_digest(tok, API_BEARER_TOKEN):
+            return "bearer", tok
+        if _verify_ticket(tok):
+            return "ticket", tok
+
+    return "none", ""
 
 def _deny():
     raise HTTPException(status_code=401, detail="Unauthorized")
@@ -80,7 +188,7 @@ async def _read_json(key: str) -> Optional[Any]:
         logger.debug("public: read_json fail: %s", e)
         return None
 
-def _symbols_set(symbols: Optional[str]) -> Optional[Set[str]]:
+def _symbols_set(symbols: Optional[str]) -> Optional[set]:
     if not symbols:
         return None
     s = [x.strip().upper() for x in symbols.split(",") if x.strip()]
@@ -90,7 +198,7 @@ def _filter_topk(items: List[Dict[str, Any]],
                  k: int,
                  min_score: Optional[float],
                  side: Optional[str],
-                 symbols_set: Optional[Set[str]]) -> List[Dict[str, Any]]:
+                 symbols_set: Optional[set]) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
     sside = (side or "").upper()
     for it in items:
@@ -109,7 +217,7 @@ def _filter_topk(items: List[Dict[str, Any]],
             continue
     return out
 
-def _filter_now(items: List[Dict[str, Any]], symbols_set: Optional[Set[str]]) -> List[Dict[str, Any]]:
+def _filter_now(items: List[Dict[str, Any]], symbols_set: Optional[set]) -> List[Dict[str, Any]]:
     if not symbols_set:
         return items
     out: List[Dict[str, Any]] = []
@@ -132,53 +240,21 @@ def _json_response(payload: Dict[str, Any], etag: Optional[str], request: Reques
         resp.headers.setdefault("ETag", f"\"{etag}\"")
     return resp
 
-# === LEGACY REDIRECTS / PROXY ===
-
-@router.get("/topk")
-async def legacy_topk_redirect(request: Request):
-    """
-    תאימות לאחור: מפנה לנתיב החדש, משמר querystring ומתודה.
-    """
-    target = str(request.url.replace(path="/scan/public-topk"))
-    return RedirectResponse(url=target, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
-
-@router.get("/now")
-async def legacy_now_redirect(request: Request):
-    target = str(request.url.replace(path="/scan/public-now"))
-    return RedirectResponse(url=target, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
-
-@router.get("/topk.json")
-async def legacy_topk_proxy(
-    request: Request,
-    k: int = Query(5, ge=1, le=50),
-    min_score: Optional[float] = Query(None, ge=0.0),
-    side: Optional[str] = Query(None, pattern="^(?i)(buy|sell)$"),
-    symbols: Optional[str] = Query(None),
-    authorization: Optional[str] = Header(None, alias="Authorization"),
-):
-    """
-    תאימות לאחור ללא רידיירקט: מחזיר JSON זהה ל-/scan/public-topk
-    ושומר Authorization (אין איבוד כותרות).
-    """
-    return await public_topk(
-        request=request,
-        k=k,
-        min_score=min_score,
-        side=side,
-        symbols=symbols,
-        authorization=authorization,
-    )
-
-# === REST ===
-
+# === REST: NOW ===
 @router.get("/scan/public-now")
 async def public_now(
     request: Request,
     symbols: Optional[str] = Query(None, description="comma-separated symbols filter, e.g. BTCUSDT,ETHUSDT"),
     authorization: Optional[str] = Header(None, alias="Authorization"),
+    t: Optional[str] = Query(None, description="ticket or bearer token"),
+    token: Optional[str] = Query(None, description="ticket or bearer token (alias)"),
+    auth: Optional[str] = Cookie(None),
+    sse_token: Optional[str] = Cookie(None),
 ):
-    if not _bearer_ok(authorization):
+    kind, tok = _extract_any_token(request, authorization, t or token, auth, sse_token)
+    if PUBLIC_REQUIRE_BEARER and kind == "none":
         _deny()
+
     obj = await _read_json(f"{NS}:public:now") or {"ts": int(time.time()), "items": []}
     items = obj.get("items") or []
     filt = _filter_now(items, _symbols_set(symbols))
@@ -186,6 +262,7 @@ async def public_now(
     etag = _json_md5(out)
     return _json_response(out, etag=etag, request=request)
 
+# === REST: TOPK ===
 @router.get("/scan/public-topk")
 async def public_topk(
     request: Request,
@@ -194,8 +271,13 @@ async def public_topk(
     side: Optional[str] = Query(None, pattern="^(?i)(buy|sell)$"),
     symbols: Optional[str] = Query(None, description="comma-separated symbols filter"),
     authorization: Optional[str] = Header(None, alias="Authorization"),
+    t: Optional[str] = Query(None, description="ticket or bearer token"),
+    token: Optional[str] = Query(None, description="ticket or bearer token (alias)"),
+    auth: Optional[str] = Cookie(None),
+    sse_token: Optional[str] = Cookie(None),
 ):
-    if not _bearer_ok(authorization):
+    kind, tok = _extract_any_token(request, authorization, t or token, auth, sse_token)
+    if PUBLIC_REQUIRE_BEARER and kind == "none":
         _deny()
 
     obj = await _read_json(f"{NS}:public:topk")
@@ -220,9 +302,15 @@ async def public_topk(
 async def public_topk_snapshot(
     request: Request,
     authorization: Optional[str] = Header(None, alias="Authorization"),
+    t: Optional[str] = Query(None),
+    token: Optional[str] = Query(None),
+    auth: Optional[str] = Cookie(None),
+    sse_token: Optional[str] = Cookie(None),
 ):
-    if not _bearer_ok(authorization):
+    kind, tok = _extract_any_token(request, authorization, t or token, auth, sse_token)
+    if PUBLIC_REQUIRE_BEARER and kind == "none":
         _deny()
+
     obj = await _read_json(f"{NS}:public:topk") or {"ts": int(time.time()), "items": []}
     out = {
         "ok": True,
@@ -231,65 +319,6 @@ async def public_topk_snapshot(
         "items": obj.get("items") or []
     }
     return _json_response(out, etag=_json_md5(out), request=request)
-
-# === CSV Export ===
-
-@router.get("/topk.csv")
-async def public_topk_csv(
-    request: Request,
-    k: int = Query(5, ge=1, le=50),
-    min_score: Optional[float] = Query(None, ge=0.0),
-    side: Optional[str] = Query(None, pattern="^(?i)(buy|sell)$"),
-    symbols: Optional[str] = Query(None),
-    authorization: Optional[str] = Header(None, alias="Authorization"),
-):
-    """
-    ייצוא CSV ל-topk עם אותם פילטרים/סינונים.
-    """
-    if not _bearer_ok(authorization):
-        _deny()
-
-    obj = await _read_json(f"{NS}:public:topk") or {"ts": int(time.time()), "items": []}
-    items = obj.get("items") or []
-    items = _filter_topk(items, k=k, min_score=min_score, side=side, symbols_set=_symbols_set(symbols))
-
-    # הכנת CSV קטן בזיכרון (k<=50 — זניח)
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    # כותרת: תעדוף שדות שכיחים; כותבים רק אם קיימים באייטם הראשון
-    header = ["symbol","side","score","price","timeframe","reason","tp1","tp2","tp3","sl","prob_overall_pct"]
-    writer.writerow(header)
-    for it in items:
-        row = [
-            it.get("symbol"),
-            it.get("side"),
-            it.get("score"),
-            it.get("price") or it.get("entry_price"),
-            it.get("timeframe"),
-            (it.get("reason") or "").replace("\n"," ").strip(),
-            it.get("tp1"),
-            it.get("tp2"),
-            it.get("tp3"),
-            it.get("sl"),
-            it.get("prob_overall_pct"),
-        ]
-        writer.writerow(row)
-
-    data = buf.getvalue().encode("utf-8")
-    etag = hashlib.md5(data).hexdigest()
-    headers = {
-        "Content-Type": "text/csv; charset=utf-8",
-        "Content-Disposition": 'attachment; filename="topk.csv"',
-        "Cache-Control": f"public, max-age={PUBLIC_CACHE_MAX_AGE}",
-        "ETag": f"\"{etag}\"",
-    }
-
-    # If-None-Match -> 304
-    inm = request.headers.get("if-none-match") or request.headers.get("If-None-Match")
-    if etag and inm and etag in inm:
-        return Response(status_code=status.HTTP_304_NOT_MODIFIED)
-
-    return Response(content=data, media_type="text/csv; charset=utf-8", headers=headers)
 
 # === SSE (Pub/Sub Redis) ===
 async def _sse_chunks(last_event_id: Optional[str], accept_gzip: bool) -> AsyncIterator[bytes]:
@@ -302,14 +331,13 @@ async def _sse_chunks(last_event_id: Optional[str], accept_gzip: bool) -> AsyncI
         body = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
         return f"event: {event}\nid: {eid}\ndata: {body}\n\n".encode("utf-8")
 
-    # optional gzip (ברירת מחדל OFF כי פרוקסים לעתים עושים באפרינג)
     compressor = zlib.compressobj(wbits=16+zlib.MAX_WBITS) if (SSE_GZIP and accept_gzip) else None
     def emit(b: bytes) -> bytes:
         if compressor:
             return compressor.compress(b)
         return b
 
-    # first snapshots
+    # initial snapshots
     try:
         now_obj = await _read_json(f"{NS}:public:now") or {"ts": int(time.time()), "items": []}
         chunk = pack("now", {"ts": int(now_obj.get("ts") or time.time()), "items": now_obj.get("items") or []})
@@ -319,14 +347,17 @@ async def _sse_chunks(last_event_id: Optional[str], accept_gzip: bool) -> AsyncI
         pass
     try:
         topk_obj = await _read_json(f"{NS}:public:topk") or {"ts": int(time.time()), "items": [], "k": 0}
-        chunk = pack("topk", {"ts": int(topk_obj.get("ts") or time.time()), "k": int(topk_obj.get("k") or len(topk_obj.get("items") or [])), "items": topk_obj.get("items") or []})
+        chunk = pack("topk", {
+            "ts": int(topk_obj.get("ts") or time.time()),
+            "k": int(topk_obj.get("k") or len(topk_obj.get("items") or [])),
+            "items": topk_obj.get("items") or []})
         yield emit(chunk)
         last_sent = time.time()
     except Exception:
         pass
 
     if not r:
-        # אין Redis — שולחים heartbeat בלבד עד ניתוק עדין
+        # אין Redis — heartbeats בלבד עד ניתוק עדין
         while True:
             await asyncio.sleep(SSE_HEARTBEAT_SEC)
             if time.time() - last_sent > SSE_MAX_IDLE_SEC:
@@ -368,7 +399,10 @@ async def _sse_chunks(last_event_id: Optional[str], accept_gzip: bool) -> AsyncI
                     yield emit(pack("now", {"ts": int(obj.get("ts") or time.time()), "items": obj.get("items") or []}))
                 else:
                     obj = await _read_json(f"{NS}:public:topk") or {"ts": int(time.time()), "items": [], "k": 0}
-                    yield emit(pack("topk", {"ts": int(obj.get("ts") or time.time()), "k": int(obj.get("k") or len(obj.get("items") or [])), "items": obj.get("items") or []}))
+                    yield emit(pack("topk", {
+                        "ts": int(obj.get("ts") or time.time()),
+                        "k": int(obj.get("k") or len(obj.get("items") or [])),
+                        "items": obj.get("items") or []}))
                 last_sent = time.time()
             except Exception as e:
                 logger.debug("public: sse message parse fail: %s", e)
@@ -385,9 +419,16 @@ async def public_stream(
     request: Request,
     authorization: Optional[str] = Header(None, alias="Authorization"),
     last_event_id: Optional[str] = Header(None, alias="Last-Event-ID"),
+    t: Optional[str] = Query(None, description="ticket or bearer token"),
+    token: Optional[str] = Query(None, description="ticket or bearer token (alias)"),
+    auth: Optional[str] = Cookie(None),
+    sse_token: Optional[str] = Cookie(None),
 ):
-    if not _bearer_ok(authorization):
+    # אימות: Bearer או Ticket ב־Query/Cookie
+    kind, tok = _extract_any_token(request, authorization, t or token, auth, sse_token)
+    if PUBLIC_REQUIRE_BEARER and kind == "none":
         _deny()
+
     accept_gzip = "gzip" in (request.headers.get("accept-encoding","").lower())
     headers = {
         "Cache-Control": "no-cache",
@@ -402,101 +443,441 @@ async def public_stream(
         headers=headers,
     )
 
-# === Lightweight HTML monitor ===
+# === Ticket issue (returns JSON and optional Set-Cookie) ===
+@router.post("/public/sse-ticket")
+@router.get("/public/sse-ticket")
+async def issue_sse_ticket(
+    request: Request,
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    bearer: Optional[str] = Query(None, description="fallback: bearer via query"),
+    ttl: Optional[int] = Query(TICKET_DEFAULT_TTL, ge=60, le=TICKET_MAX_TTL),
+    cookie: Optional[int] = Query(1, description="1=set cookie, 0=just return JSON"),
+):
+    # דרישת Bearer תקף כדי להנפיק ticket
+    ok = False
+    if _bearer_header_ok(authorization):
+        ok = True
+    elif bearer and API_BEARER_TOKEN and hmac.compare_digest(bearer.strip(), API_BEARER_TOKEN):
+        ok = True
 
+    if not ok:
+        _deny()
+
+    tok, exp = _issue_ticket(sub="viewer", ttl=int(ttl or TICKET_DEFAULT_TTL))
+    resp = JSONResponse({"ok": True, "t": tok, "exp": exp})
+    if cookie:
+        # SameSite=Lax מספיק ל־EventSource באותו דומיין; חוצה־דומיין => שקול SameSite=None;Secure
+        resp.set_cookie(
+            key="sse_token",
+            value=tok,
+            max_age=int((ttl or TICKET_DEFAULT_TTL)),
+            httponly=True,
+            secure=True,
+            samesite="Lax",
+            path="/",
+        )
+    return resp
+
+# === Ticket introspection ===
+@router.get("/public/ticket/inspect")
+async def ticket_inspect(
+    request: Request,
+    t: Optional[str] = Query(None, description="ticket (or bearer) to inspect"),
+    token: Optional[str] = Query(None, description="alias for t"),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    auth: Optional[str] = Cookie(None),
+    sse_token: Optional[str] = Cookie(None),
+):
+    # נבדוק קודם אם התקבל Bearer (קביל) – “תקף”, אך אין payload כמו לטיקט
+    q = (t or token or "").strip()
+    if q and API_BEARER_TOKEN and hmac.compare_digest(q, API_BEARER_TOKEN):
+        return JSONResponse({"valid": True, "kind": "bearer", "info": {"note": "bearer matches API_BEARER_TOKEN"}})
+
+    # אם אין ב-query, ניקח מה־cookies/headers
+    if not q:
+        # Authorization Bearer
+        if authorization and authorization.startswith("Bearer "):
+            val = authorization.split(" ", 1)[1].strip()
+            if API_BEARER_TOKEN and hmac.compare_digest(val, API_BEARER_TOKEN):
+                return JSONResponse({"valid": True, "kind": "bearer", "info": {"note": "bearer matches API_BEARER_TOKEN"}})
+        # cookies (ticket/bearer)
+        for cand in (sse_token or "", auth or ""):
+            cand = cand.strip()
+            if not cand:
+                continue
+            if API_BEARER_TOKEN and hmac.compare_digest(cand, API_BEARER_TOKEN):
+                return JSONResponse({"valid": True, "kind": "bearer", "info": {"note": "bearer matches API_BEARER_TOKEN"}})
+            q = cand
+            break
+
+    if not q:
+        return JSONResponse({"valid": False, "error": "no token provided"}, status_code=400)
+
+    valid = _verify_ticket(q)
+    h, p = _decode_ticket(q)
+    return JSONResponse({
+        "valid": bool(valid),
+        "kind": "ticket",
+        "header": h or {},
+        "payload": p or {},
+        "now": int(time.time()),
+    }, status_code=200 if valid else 400)
+
+# === Legacy redirect: /topk -> /scan/public-topk ===
+@router.get("/topk")
+async def legacy_topk_redirect(
+    request: Request,
+):
+    # משמר את מחרוזת השאילתה
+    dest = "/scan/public-topk"
+    if request.url.query:
+        dest = f"{dest}?{request.url.query}"
+    return RedirectResponse(url=dest, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
+# === CSV export: /topk.csv ===
+@router.get("/topk.csv")
+async def topk_csv(
+    request: Request,
+    k: int = Query(5, ge=1, le=200),
+    min_score: Optional[float] = Query(None, ge=0.0),
+    side: Optional[str] = Query(None, pattern="^(?i)(buy|sell)$"),
+    symbols: Optional[str] = Query(None),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+    t: Optional[str] = Query(None),
+    token: Optional[str] = Query(None),
+    auth: Optional[str] = Cookie(None),
+    sse_token: Optional[str] = Cookie(None),
+):
+    kind, tok = _extract_any_token(request, authorization, t or token, auth, sse_token)
+    if PUBLIC_REQUIRE_BEARER and kind == "none":
+        _deny()
+
+    obj = await _read_json(f"{NS}:public:topk") or {"ts": int(time.time()), "items": []}
+    items = obj.get("items") or []
+    items = _filter_topk(items, k=k, min_score=min_score, side=side, symbols_set=_symbols_set(symbols))
+
+    cols = ["symbol","side","score","timeframe","entry_price","tp1","tp2","tp3","sl","reason","prob_overall_pct","prob_tp1_pct","prob_tp2_pct","prob_tp3_pct","eta_open_min","eta_tp1_min","eta_tp2_min","eta_tp3_min","ts"]
+    lines = [",".join(cols)]
+    for it in items:
+        row = []
+        for c in cols:
+            v = it.get(c, "")
+            if isinstance(v, (list, dict)):
+                v = json.dumps(v, ensure_ascii=False, separators=(",", ":"))
+            s = str(v).replace("\n", " ").replace("\r", " ").replace(",", " ")
+            row.append(s)
+        lines.append(",".join(row))
+    payload = "\n".join(lines) + "\n"
+
+    return PlainTextResponse(
+        payload,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Cache-Control": f"public, max-age={PUBLIC_CACHE_MAX_AGE}",
+            "Content-Disposition": 'inline; filename="topk.csv"',
+        },
+    )
+
+# === Lightweight HTML web (SSE-first, polling fallback) for TOPK ===
 @router.get("/scan/public-topk/web")
-async def public_topk_web() -> HTMLResponse:
-    """
-    דף HTML קל־משקל לצפייה חיה ב-topk/now.
-    עובד עם polling + Authorization Header שהמשתמש מדביק ידנית (נמנע משינוי backend).
-    """
-    html = """<!doctype html>
+async def public_topk_web(
+    request: Request,
+) -> HTMLResponse:
+    html = f"""<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta http-equiv="Cache-Control" content="no-store" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>AlgoGPT — Public TopK Live</title>
+<meta charset="utf-8"/>
+<title>AlgoGPT — Live TopK</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
 <style>
-  :root { color-scheme: dark light; }
-  body { font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, Noto Sans, "Apple Color Emoji","Segoe UI Emoji"; margin: 16px; }
-  header { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-  input[type="text"]{ padding:6px 8px; min-width:280px; }
-  .row { display:grid; grid-template-columns: 110px 60px 60px 100px 1fr; gap:8px; padding:8px; border-bottom: 1px solid #4444; }
-  .head { font-weight:600; border-bottom: 2px solid #8884; }
-  .buy { color: #0a0; font-weight:600; }
-  .sell { color: #d33; font-weight:600; }
-  .muted { opacity:.7 }
-  .wrap { max-width: 1100px; }
-  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; }
+  body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background: #0b0f14; color: #e2e8f0; }}
+  header {{ position: sticky; top:0; background: #0b0f14; padding: 12px 16px; border-bottom: 1px solid #1f2937; display:flex; gap:12px; align-items:center; }}
+  .badge {{ font-size:12px; padding:2px 8px; border-radius:999px; background:#1f2937; }}
+  .ok {{ background:#065f46; }}
+  .err {{ background:#7f1d1d; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th, td {{ padding: 8px 10px; border-bottom: 1px solid #1f2937; font-size:14px; }}
+  th {{ text-align:left; color:#94a3b8; }}
+  .buy {{ color:#10b981; font-weight:600; }}
+  .sell {{ color:#ef4444; font-weight:600; }}
+  .muted {{ color:#94a3b8; }}
+  .row:hover {{ background:#0f172a; }}
+  .wrap {{ max-width: 1100px; margin: 0 auto; padding: 0 12px; }}
 </style>
 </head>
 <body>
-  <header>
-    <h2>TopK Live</h2>
-    <label>Bearer: <input id="token" type="text" placeholder="paste API Bearer token" /></label>
-    <label>Symbols: <input id="symbols" type="text" placeholder="BTCUSDT,ETHUSDT" /></label>
-    <label>Side: 
-      <select id="side">
-        <option value="">Any</option>
-        <option value="BUY">BUY</option>
-        <option value="SELL">SELL</option>
-      </select>
-    </label>
-    <label>Min score: <input id="min_score" type="number" step="0.1" min="0" style="width:80px"/></label>
-    <label>K: <input id="k" type="number" min="1" max="50" value="10" style="width:60px"/></label>
-    <button id="go">Refresh</button>
-    <span class="muted mono" id="ts"></span>
-  </header>
-
-  <div class="wrap">
-    <div class="row head"><div>Symbol</div><div>Side</div><div>Score</div><div>Price</div><div>Why</div></div>
-    <div id="list"></div>
-  </div>
-
+<header class="wrap">
+  <div><strong>TopK Live</strong> <span id="status" class="badge">connecting…</span></div>
+  <div class="muted" id="stamp"></div>
+</header>
+<div class="wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Side</th><th>Score</th><th>TF</th><th>Entry</th><th>TPs</th><th>SL</th><th>Why</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
 <script>
-const $ = (s)=>document.querySelector(s);
-function fmtTs(t){ const d = new Date((t||0)*1000); return isFinite(+d)? d.toISOString().replace('T',' ').replace('Z',' UTC'):''; }
+(function() {{
+  const qs = new URLSearchParams(location.search);
+  const t = qs.get('t') || qs.get('token') || '';
+  const rows = document.getElementById('rows');
+  const status = document.getElementById('status');
+  const stamp  = document.getElementById('stamp');
 
-async function fetchTopk(){
-  const tok = $("#token").value.trim();
-  const k = +($("#k").value||10);
-  const params = new URLSearchParams();
-  params.set("k", String(Math.max(1, Math.min(50, k))));
-  const ms = $("#min_score").value.trim(); if (ms) params.set("min_score", ms);
-  const sd = $("#side").value; if (sd) params.set("side", sd);
-  const sy = $("#symbols").value.trim(); if (sy) params.set("symbols", sy);
+  function fmt(n, d=2) {{ 
+    if (n === undefined || n === null || isNaN(n)) return '';
+    return Number(n).toFixed(d);
+  }}
+  function paintTopk(items) {{
+    rows.innerHTML = '';
+    for (const it of items) {{
+      const tr = document.createElement('tr');
+      tr.className = 'row';
+      const side = (it.side||'').toUpperCase();
+      const tp1 = it.tp1 ?? '';
+      const tp2 = it.tp2 ?? '';
+      const tp3 = it.tp3 ?? '';
+      tr.innerHTML = `
+        <td><strong>${{it.symbol||''}}</strong></td>
+        <td class="${{side==='BUY'?'buy':'sell'}}">${{side}}</td>
+        <td>${{fmt(it.score||0,2)}}</td>
+        <td class="muted">${{it.timeframe||''}}</td>
+        <td>${{fmt(it.entry_price||it.price||'', 4)}}</td>
+        <td class="muted">${{[tp1,tp2,tp3].filter(x=>x!==''&&x!==undefined).join(' / ')}}</td>
+        <td class="muted">${{it.sl??''}}</td>
+        <td class="muted">${{(it.reason||'').slice(0,80)}}</td>
+      `;
+      rows.appendChild(tr);
+    }}
+    stamp.textContent = new Date().toLocaleTimeString();
+  }}
 
-  const headers = {};
-  if (tok) headers["Authorization"] = "Bearer " + tok;
+  let es;
+  function startSSE() {{
+    status.textContent = 'connecting…';
+    try {{
+      const url = new URL('/scan/public-stream', location.origin);
+      if (t) url.searchParams.set('t', t);
+      es = new EventSource(url.toString());
+      es.addEventListener('topk', (e)=>{
+        try {{
+          const data = JSON.parse(e.data||'{{}}');
+          paintTopk(data.items||[]);
+          status.textContent = 'live';
+          status.className = 'badge ok';
+        }} catch {{}}
+      });
+      es.addEventListener('open', ()=> {{
+        status.textContent = 'live';
+        status.className = 'badge ok';
+      }});
+      es.addEventListener('error', ()=> {{
+        status.textContent = 'disconnected';
+        status.className = 'badge err';
+        es && es.close();
+        setTimeout(()=> startPolling(), 1200);
+      }});
+    }} catch (e) {{
+      startPolling();
+    }}
+  }}
 
-  const res = await fetch("/scan/public-topk?"+params.toString(), { headers });
-  if (!res.ok) throw new Error("HTTP " + res.status);
-  const data = await res.json();
-  $("#ts").textContent = "ts: " + fmtTs(data.ts) + " | k=" + data.k;
-  const list = $("#list");
-  list.innerHTML = "";
-  (data.items||[]).forEach(x=>{
-    const row = document.createElement("div");
-    row.className = "row";
-    const side = String(x.side||"").toUpperCase();
-    row.innerHTML = `
-      <div>${x.symbol||""}</div>
-      <div class="${side==="BUY"?"buy":(side==="SELL"?"sell":"")}">${side||""}</div>
-      <div>${(x.score??"").toString()}</div>
-      <div>${(x.price??x.entry_price??"")}</div>
-      <div>${(x.reason||"").replace(/\\n/g," ")}</div>`;
-    list.appendChild(row);
-  });
-}
+  let poller;
+  async function startPolling() {{
+    if (poller) clearInterval(poller);
+    async function pull() {{
+      try {{
+        const url = new URL('/scan/public-topk', location.origin);
+        if (t) url.searchParams.set('t', t);
+        url.searchParams.set('k', '10');
+        const res = await fetch(url.toString(), {{ credentials: 'same-origin' }});
+        if (!res.ok) throw new Error('http '+res.status);
+        const data = await res.json();
+        paintTopk(data.items||[]);
+        status.textContent = 'polling';
+        status.className = 'badge';
+      }} catch (e) {{
+        status.textContent = 'error';
+        status.className = 'badge err';
+      }}
+    }}
+    await pull();
+    poller = setInterval(pull, 10000);
+  }}
 
-$("#go").addEventListener("click", fetchTopk);
-setInterval(()=>{ $("#go").disabled = true; fetchTopk().finally(()=>$("#go").disabled=false); }, 15000);
-fetchTopk().catch(console.error);
+  startSSE();
+}})();
 </script>
 </body>
-</html>
-"""
-    return HTMLResponse(content=html, headers={"Cache-Control": "no-store"})
+</html>"""
+    return HTMLResponse(html)
+
+# === Lightweight HTML web (SSE-first, polling fallback) for NOW ===
+@router.get("/scan/public-now/web")
+async def public_now_web(
+    request: Request,
+) -> HTMLResponse:
+    html = f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>AlgoGPT — Live Now</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<style>
+  body {{ font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background: #0b0f14; color: #e2e8f0; }}
+  header {{ position: sticky; top:0; background: #0b0f14; padding: 12px 16px; border-bottom: 1px solid #1f2937; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }}
+  .badge {{ font-size:12px; padding:2px 8px; border-radius:999px; background:#1f2937; }}
+  .ok {{ background:#065f46; }}
+  .err {{ background:#7f1d1d; }}
+  table {{ width: 100%; border-collapse: collapse; }}
+  th, td {{ padding: 8px 10px; border-bottom: 1px solid #1f2937; font-size:14px; }}
+  th {{ text-align:left; color:#94a3b8; }}
+  .buy {{ color:#10b981; font-weight:600; }}
+  .sell {{ color:#ef4444; font-weight:600; }}
+  .muted {{ color:#94a3b8; }}
+  .row:hover {{ background:#0f172a; }}
+  .wrap {{ max-width: 1200px; margin: 0 auto; padding: 0 12px; }}
+  input, select {{ background:#0f172a; color:#e5e7eb; border:1px solid #1f2937; border-radius:8px; padding:6px 8px; }}
+</style>
+</head>
+<body>
+<header class="wrap">
+  <div><strong>Now Live</strong> <span id="status" class="badge">connecting…</span></div>
+  <div class="muted" id="stamp"></div>
+  <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
+    <label class="muted">Symbols</label>
+    <input id="symbols" placeholder="e.g. BTCUSDT,ETHUSDT" />
+    <button id="apply" style="background:#1f2937; color:#e5e7eb; border:1px solid #334155; border-radius:8px; padding:6px 10px; cursor:pointer;">Apply</button>
+  </div>
+</header>
+<div class="wrap">
+  <table>
+    <thead>
+      <tr>
+        <th>Symbol</th><th>Side</th><th>Score</th><th>TF</th><th>Price</th><th>Entry</th><th>TPs</th><th>SL</th><th>Why</th>
+      </tr>
+    </thead>
+    <tbody id="rows"></tbody>
+  </table>
+</div>
+<script>
+(function() {{
+  const qs = new URLSearchParams(location.search);
+  const t = qs.get('t') || qs.get('token') || '';
+  const rows = document.getElementById('rows');
+  const status = document.getElementById('status');
+  const stamp  = document.getElementById('stamp');
+  const symbolsInp = document.getElementById('symbols');
+  const applyBtn = document.getElementById('apply');
+
+  function fmt(n, d=4) {{
+    if (n === undefined || n === null || isNaN(n)) return '';
+    return Number(n).toFixed(d);
+  }}
+  function paintNow(items) {{
+    rows.innerHTML = '';
+    for (const it of items) {{
+      const tr = document.createElement('tr');
+      tr.className = 'row';
+      const side = (it.side||'').toUpperCase();
+      const tp1 = it.tp1 ?? '';
+      const tp2 = it.tp2 ?? '';
+      const tp3 = it.tp3 ?? '';
+      tr.innerHTML = `
+        <td><strong>${{it.symbol||''}}</strong></td>
+        <td class="${{side==='BUY'?'buy':'sell'}}">${{side}}</td>
+        <td>${{(it.score!==undefined && it.score!==null) ? Number(it.score).toFixed(2) : ''}}</td>
+        <td class="muted">${{it.timeframe||''}}</td>
+        <td>${{fmt(it.price||'', 4)}}</td>
+        <td>${{fmt(it.entry_price||'', 4)}}</td>
+        <td class="muted">${{[tp1,tp2,tp3].filter(x=>x!==''&&x!==undefined).join(' / ')}}</td>
+        <td class="muted">${{it.sl??''}}</td>
+        <td class="muted">${{(it.reason||'').slice(0,80)}}</td>
+      `;
+      rows.appendChild(tr);
+    }}
+    stamp.textContent = new Date().toLocaleTimeString();
+  }}
+
+  let currentSymbols = (qs.get('symbols')||'').trim();
+  symbolsInp.value = currentSymbols;
+
+  let es;
+  function startSSE() {{
+    status.textContent = 'connecting…';
+    try {{
+      const url = new URL('/scan/public-stream', location.origin);
+      if (t) url.searchParams.set('t', t);
+      es = new EventSource(url.toString());
+      es.addEventListener('now', (e)=>{
+        try {{
+          const data = JSON.parse(e.data||'{{}}');
+          let items = data.items||[];
+          if (currentSymbols) {{
+            const set = new Set(currentSymbols.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean));
+            items = items.filter(x=> set.has(String(x.symbol||'').toUpperCase()));
+          }}
+          paintNow(items);
+          status.textContent = 'live';
+          status.className = 'badge ok';
+        }} catch {{}}
+      });
+      es.addEventListener('open', ()=> {{
+        status.textContent = 'live';
+        status.className = 'badge ok';
+      }});
+      es.addEventListener('error', ()=> {{
+        status.textContent = 'disconnected';
+        status.className = 'badge err';
+        es && es.close();
+        setTimeout(()=> startPolling(), 1200);
+      }});
+    }} catch (e) {{
+      startPolling();
+    }}
+  }}
+
+  let poller;
+  async function startPolling() {{
+    if (poller) clearInterval(poller);
+    async function pull() {{
+      try {{
+        const url = new URL('/scan/public-now', location.origin);
+        if (t) url.searchParams.set('t', t);
+        if (currentSymbols) url.searchParams.set('symbols', currentSymbols);
+        const res = await fetch(url.toString(), {{ credentials: 'same-origin' }});
+        if (!res.ok) throw new Error('http '+res.status);
+        const data = await res.json();
+        paintNow(data.items||[]);
+        status.textContent = 'polling';
+        status.className = 'badge';
+      }} catch (e) {{
+        status.textContent = 'error';
+        status.className = 'badge err';
+      }}
+    }}
+    await pull();
+    poller = setInterval(pull, 10000);
+  }}
+
+  applyBtn.addEventListener('click', ()=>{
+    currentSymbols = (symbolsInp.value||'').trim();
+    // מרענן מיד
+    startPolling();
+  });
+
+  startSSE();
+}})();
+</script>
+</body>
+</html>"""
+    return HTMLResponse(html)
+
+# === Done ===
+
 
 
