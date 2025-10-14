@@ -33,7 +33,7 @@ services:
         value: "algogpt-prod"
 
       - key: MODE
-        value: "run"      # חובה: מפעיל את ה-Manager
+        value: "run"
       - key: PORT
         value: "10000"
       - key: APP_MODULE
@@ -438,6 +438,7 @@ services:
         value: "0.25,0.25,0.50"
       - key: SMART_MANAGE_TRAIL_ATR_MULT
         value: "2.6"
+      # >>> Ultra Log flags <<<
       - key: SM_ULTRA_LOG
         value: "1"
       - key: SM_LOG_PREFIX
@@ -620,6 +621,7 @@ services:
         fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
         fromSecret: BINANCE_API_SECRET
+
 
 
 
