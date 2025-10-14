@@ -241,7 +241,7 @@ services:
       - key: ENABLE_INDICATOR_EXIT
         value: "1"
       - key: ADX_MIN
-        value: "20"              # ↓ מאפשר דינמיקה כש-ADX≈19–20
+        value: "20"
       - key: FEAT_DAILY_CAPS
         value: "0"
       - key: FEAT_DEBOUNCE_LIMIT
@@ -403,11 +403,11 @@ services:
       - key: STOP_BAND_BPS
         value: "20"
       - key: TP_BE_ONLY_AFTER_TP1
-        value: "1"
+        value: "0"                 # ← BE+ בלי לחכות ל-TP1
       - key: STREAM_TP_BE
         value: "1"
       - key: TP_LADDER_ON_APPROVE
-        value: "1"
+        value: "0"                 # ← הנפקת/רענון TP גם לפוז' קיימות
       - key: LADDER_TP_ENABLE
         value: "1"
       - key: LADDER_SL_ENABLE
@@ -423,7 +423,7 @@ services:
       - key: ATR_MIN_DELTA
         value: "0.02"
       - key: BE_ARM_PCT
-        value: "1.2"
+        value: "0.6"               # ← חימוש BE מהיר יותר
       - key: BE_GUARD_ENABLE
         value: "1"
       - key: BE_GUARD_EVERY_SEC
@@ -431,13 +431,13 @@ services:
       - key: TP_BE_OFFSET_BPS
         value: "12"
       - key: TRAIL_IN_CHOP
-        value: "1"              # חדש: אפשר Trail גם כש-ADX נמוך
+        value: "1"                 # ← Trail גם ב-ADX נמוך
       - key: TP_SL_REFRESH_SEC
-        value: "300"            # חדש: ריענון סולמות כל 5 דק'
+        value: "300"               # ← רענון סולמות כל 5 דק'
       - key: MANAGER_REISSUE_ENABLE
-        value: "1"              # חדש: ביטול/הנפקה מחדש דינמית
+        value: "1"                 # ← ביטול/הנפקה-מחדש
       - key: MANAGER_REISSUE_POLICY
-        value: "cancel_replace"  # חדש: שיטת רענון
+        value: "cancel_replace"
 
       # ========================= Smart-Manage =========================
       - key: SMART_MANAGE_ON_APPROVE
