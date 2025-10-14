@@ -1,9 +1,20 @@
 # main.py
 from __future__ import annotations
 
-import os, json, time, hmac, re, hashlib, secrets, logging, traceback, inspect, asyncio, threading, math
+import os
+import json
+import time
+import hmac
+import re
+import hashlib
+import secrets
+import logging
+import traceback
+import inspect
+import asyncio
+import threading
+import math
 from contextlib import suppress
-from collections import Counter
 from typing import Any, Dict, List, Optional, Callable, Tuple, Union
 
 import httpx
@@ -313,6 +324,7 @@ async def _public_rate_limit(request: Request, call_next):
     if not RATE_LIMIT_ENABLE:
         return await call_next(request)
     p = request.url.path
+    # HEAD הופך ל-GET במידלוור הראשון, כך שזה מכוסה
     if request.method.upper() != "GET":
         return await call_next(request)
     ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.client.host if request.client else "0.0.0.0")
@@ -332,7 +344,8 @@ async def _public_rate_limit(request: Request, call_next):
 
 # ==================== Public Cache/Etag middleware ====================
 def _should_public_cache(path: str) -> bool:
-    for prefix in (os.getenv("PUBLIC_CACHE_PATHS") or "").split(",") if os.getenv("PUBLIC_CACHE_PATHS") else []:
+    paths_cfg = (os.getenv("PUBLIC_CACHE_PATHS") or "").split(",") if os.getenv("PUBLIC_CACHE_PATHS") else []
+    for prefix in paths_cfg:
         if prefix and path.startswith(prefix.strip()):
             return True
     for prefix in ["/scan/public-topk", "/scan/public-now", "/topk"]:
@@ -359,11 +372,8 @@ async def _public_cache_etag(request: Request, call_next):
         if "No response returned" in str(e):
             return PlainTextResponse("", status_code=204)
         raise
-    except Exception:
-        # don't break the request chain if middleware fails
-        return await call_next(request)
 
-    # skip caching for errors
+    # skip caching for errors / empty body
     try:
         if int(getattr(resp, "status_code", 200)) >= 400:
             return resp
@@ -385,7 +395,8 @@ async def _public_cache_etag(request: Request, call_next):
             fresh.headers["ETag"] = etag
             return fresh
     except Exception:
-        pass
+        # אל תקרוס – החזר את התשובה כפי שהיא
+        return resp
     return resp
 
 
@@ -1461,6 +1472,7 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
         return value
+    # שימוש ב-floor (גם לערכים קטנים מאוד) כדי לכבד tick/step
     return math.floor(value / step) * step
 
 
@@ -1552,8 +1564,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
         raise HTTPException(status_code=422, detail="splits must be > 0")
 
     # --- Correct BE stop computation (fix) ---
-    # For a LONG (side_txt == BUY) we want the stop BELOW entry (minus offset);
-    # For a SHORT (side_txt == SELL) we want the stop ABOVE entry (plus offset).
     if side_txt == "BUY":
         be_price = float(entry_price) * (1.0 - (offset_bps / 10_000.0))
     else:
@@ -1562,15 +1572,12 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     # Round to tick
     be_price = _bn_round(be_price, tick)
 
-    # Nudge to the safe side vs. current mark price to avoid immediate trigger:
-    # Binance STOP rules: SELL stop triggers when price <= stop; BUY stop triggers when price >= stop.
+    # Nudge to the safe side vs. current mark price to avoid immediate trigger
     if price_now:
         if side_txt == "BUY":
-            # SELL STOP should be below current price; if it isn't, nudge down by one tick
             if be_price >= price_now:
                 be_price = _bn_round(price_now - tick, tick)
         else:
-            # BUY STOP should be above current price; if it isn't, nudge up by one tick
             if be_price <= price_now:
                 be_price = _bn_round(price_now + tick, tick)
 
@@ -1830,39 +1837,39 @@ app.include_router(router)
 
 
 # ==================== Meta & Fallbacks ====================
-@app.get("/", response_class=PlainTextResponse, tags=["meta"]) 
+@app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
     name = os.getenv("APP_NAME", "algogpt")
     return f"{name} online"
 
 
-@app.head("/", response_class=PlainTextResponse, tags=["meta"]) 
+@app.head("/", response_class=PlainTextResponse, tags=["meta"])
 def root_head() -> str:
     return ""
 
 
-@app.get("/meta/version", tags=["meta"]) 
+@app.get("/meta/version", tags=["meta"])
 def meta_version_fallback():
     return {"name": os.getenv("APP_NAME", "algogpt"), "version": os.getenv("ALGOGPT_VERSION", "dev"), "ts": int(time.time()), "ok": True}
 
 
-@app.head("/meta/version", tags=["meta"]) 
+@app.head("/meta/version", tags=["meta"])
 def meta_version_head():
     return PlainTextResponse("", status_code=200)
 
 
-@app.get("/health", tags=["meta"]) 
+@app.get("/health", tags=["meta"])
 def health_fallback():
     boot = getattr(app.state, "boot_ts", None)
     return {"ok": True, "uptime_sec": int(time.time() - (boot or time.time()))}
 
 
-@app.head("/health", tags=["meta"]) 
+@app.head("/health", tags=["meta"])
 def health_head():
     return PlainTextResponse("", status_code=200)
 
 
-@app.get("/readyz/strict", tags=["meta"]) 
+@app.get("/readyz/strict", tags=["meta"])
 async def readyz_strict():
     try:
         r = await _get_redis_cached()
@@ -1874,7 +1881,7 @@ async def readyz_strict():
     return PlainTextResponse("ok", status_code=200)
 
 
-@app.get("/debug/env", tags=["debug"]) 
+@app.get("/debug/env", tags=["debug"])
 def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
     allowlist = set([k.strip() for k in (keys or "").split(",") if k.strip()]) if keys else set()
     safe: Dict[str, Any] = {}
@@ -1887,7 +1894,7 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
     return {"ok": True, "env": safe}
 
 
-@app.head("/debug/env", tags=["debug"]) 
+@app.head("/debug/env", tags=["debug"])
 def debug_env_head():
     return PlainTextResponse("", status_code=200)
 
@@ -1990,6 +1997,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
