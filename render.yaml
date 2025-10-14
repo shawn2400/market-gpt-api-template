@@ -33,7 +33,7 @@ services:
         value: "algogpt-prod"
 
       - key: MODE
-        value: "run"
+        value: "run"                 # ← חובה לניהול אוטומטי
       - key: PORT
         value: "10000"
       - key: APP_MODULE
@@ -193,7 +193,7 @@ services:
       - key: BINANCE_HTTP_TIMEOUT
         value: "10.0"
       - key: BINANCE_MAX_RETRIES
-        value: "2"
+        value: "1"                  # ↓ מפחית התפרצויות לרייט־לימיט
       - key: BINANCE_RECV_WINDOW
         value: "45000"
       - key: LISTENKEY_KEEPALIVE_SEC
@@ -403,11 +403,11 @@ services:
       - key: STOP_BAND_BPS
         value: "20"
       - key: TP_BE_ONLY_AFTER_TP1
-        value: "0"                 # ← BE+ בלי לחכות ל-TP1
+        value: "0"           # BE+/הידוק בלי להמתין ל-TP1
       - key: STREAM_TP_BE
         value: "1"
       - key: TP_LADDER_ON_APPROVE
-        value: "0"                 # ← הנפקת/רענון TP גם לפוז' קיימות
+        value: "0"           # לא תלוי approve בלבד — גם ריענון חי
       - key: LADDER_TP_ENABLE
         value: "1"
       - key: LADDER_SL_ENABLE
@@ -423,7 +423,7 @@ services:
       - key: ATR_MIN_DELTA
         value: "0.02"
       - key: BE_ARM_PCT
-        value: "0.6"               # ← חימוש BE מהיר יותר
+        value: "0.6"
       - key: BE_GUARD_ENABLE
         value: "1"
       - key: BE_GUARD_EVERY_SEC
@@ -431,11 +431,11 @@ services:
       - key: TP_BE_OFFSET_BPS
         value: "12"
       - key: TRAIL_IN_CHOP
-        value: "1"                 # ← Trail גם ב-ADX נמוך
+        value: "1"           # Trail גם כש-ADX נמוך
       - key: TP_SL_REFRESH_SEC
-        value: "300"               # ← רענון סולמות כל 5 דק'
+        value: "300"         # ריענון סולמות כל 5 דק'
       - key: MANAGER_REISSUE_ENABLE
-        value: "1"                 # ← ביטול/הנפקה-מחדש
+        value: "1"           # cancel+replace אם צריך
       - key: MANAGER_REISSUE_POLICY
         value: "cancel_replace"
 
@@ -609,7 +609,7 @@ services:
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
-      # (אופציונלי) BTC-Gate
+      # (Optional) BTC-Gate
       - key: BTC_GATE_ENABLE
         value: "1"
       - key: BTC_GATE_TF
