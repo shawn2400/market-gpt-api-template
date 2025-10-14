@@ -33,7 +33,7 @@ services:
         value: "algogpt-prod"
 
       - key: MODE
-        value: "run"                 # ← חובה לניהול אוטומטי
+        value: "run"
       - key: PORT
         value: "10000"
       - key: APP_MODULE
@@ -193,7 +193,7 @@ services:
       - key: BINANCE_HTTP_TIMEOUT
         value: "10.0"
       - key: BINANCE_MAX_RETRIES
-        value: "1"                  # ↓ מפחית התפרצויות לרייט־לימיט
+        value: "0"                # ↓ לא לירות ריטריים שמנפחים weight
       - key: BINANCE_RECV_WINDOW
         value: "45000"
       - key: LISTENKEY_KEEPALIVE_SEC
@@ -225,9 +225,9 @@ services:
       - key: SCAN_MAX_LIMIT
         value: "0"
       - key: SCAN_CONCURRENCY
-        value: "4"
+        value: "2"                # ↓ פחות מקביליות → פחות פיקים
       - key: TOP_SYMBOLS
-        value: "150"
+        value: "80"               # ↓ מצמצם משקל סריקות
       - key: SUGGEST_FUTURES
         value: "1"
       - key: SUGGEST_INTERVAL_SEC
@@ -403,11 +403,11 @@ services:
       - key: STOP_BAND_BPS
         value: "20"
       - key: TP_BE_ONLY_AFTER_TP1
-        value: "0"           # BE+/הידוק בלי להמתין ל-TP1
+        value: "0"                 # BE+ מיידי אפשרי
       - key: STREAM_TP_BE
         value: "1"
       - key: TP_LADDER_ON_APPROVE
-        value: "0"           # לא תלוי approve בלבד — גם ריענון חי
+        value: "0"                 # ריענון TP גם לפוזיציות פעילות
       - key: LADDER_TP_ENABLE
         value: "1"
       - key: LADDER_SL_ENABLE
@@ -423,7 +423,7 @@ services:
       - key: ATR_MIN_DELTA
         value: "0.02"
       - key: BE_ARM_PCT
-        value: "0.6"
+        value: "0.6"               # חימוש BE מהיר
       - key: BE_GUARD_ENABLE
         value: "1"
       - key: BE_GUARD_EVERY_SEC
@@ -431,11 +431,11 @@ services:
       - key: TP_BE_OFFSET_BPS
         value: "12"
       - key: TRAIL_IN_CHOP
-        value: "1"           # Trail גם כש-ADX נמוך
+        value: "1"                 # Trail גם ב-ADX נמוך
       - key: TP_SL_REFRESH_SEC
-        value: "300"         # ריענון סולמות כל 5 דק'
+        value: "420"               # רענון סולמות כל 7 דק'
       - key: MANAGER_REISSUE_ENABLE
-        value: "1"           # cancel+replace אם צריך
+        value: "1"                 # ביטול/הנפקה-מחדש חכם
       - key: MANAGER_REISSUE_POLICY
         value: "cancel_replace"
 
@@ -597,7 +597,7 @@ services:
       - key: PRICE_WS_FRESH_TTL
         value: "60"
       - key: PRICE_SCAN_INTERVAL
-        value: "30"
+        value: "45"               # ↓ פחות פולינג, נשען על WS
 
       # ========================= Managers =========================
       - key: MANAGER_ENABLE
@@ -605,7 +605,7 @@ services:
       - key: TRADE_MANAGER_ENABLE
         value: "1"
       - key: MANAGER_INTERVAL_SEC
-        value: "10"
+        value: "15"               # ↓ ריווח טיקים → פחות עומס
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
@@ -656,6 +656,7 @@ services:
         fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
         fromSecret: BINANCE_API_SECRET
+
 
 
 
