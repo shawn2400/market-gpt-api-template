@@ -1752,7 +1752,8 @@ async def telegram_hook_alias(request: Request):
     return await _telegram_webhook_core(request)
 
 
-# ==================== Register routers ====================
+# ==================== Register routers (incl. missing/optional) ====================
+# קיימים:
 try:
     from routes.manager import router as manager_router  # type: ignore
     app.include_router(manager_router)
@@ -1808,6 +1809,23 @@ try:
 except Exception as e:
     logger.warning("alerts router not loaded: %s", e)
 
+# חדשים/אופציונליים (לפי ה-tags/קונפיג):
+for mod, tag in (
+    ("routes.ops_ui", "ops-ui"),
+    ("routes.ops_flags", "ops-flags"),
+    ("routes.position_ops", "position-ops"),
+    ("routes.ops_digest", "ops-digest"),
+    ("routes.aliases", "aliases"),
+    ("routes.public", "Public Feed"),
+    ("routes.ai", "AI"),
+):
+    try:
+        module = __import__(mod, fromlist=["router"])
+        app.include_router(getattr(module, "router"), tags=[tag])
+    except Exception as e:
+        logger.warning("%s router not loaded: %s", mod, e)
+
+# הליבה שלנו
 app.include_router(router)
 
 
@@ -1887,6 +1905,37 @@ async def global_exception_handler(request: Request, exc: Exception):
 
 
 # ==================== Startup / Shutdown ====================
+
+def _collect_critical_env_warnings() -> List[str]:
+    warnings: List[str] = []
+    # Redis
+    if REQUIRE_REDIS and not REDIS_URL:
+        warnings.append("REQUIRE_REDIS=1 but REDIS_URL is missing")
+    # API bearer
+    if os.getenv("PROTECT_APPROVE_ROUTES", "1").lower() in ("1", "true", "yes", "on") and not API_BEARER_TOKEN:
+        warnings.append("PROTECT_APPROVE_ROUTES=1 but API_BEARER_TOKEN is missing")
+    # Telegram
+    if (STARTUP_NOTIFY_ENABLE or os.getenv("REQUIRE_TELEGRAM_APPROVAL", "0") in ("1","true","yes","on")):
+        if not TELEGRAM_BOT_TOKEN:
+            warnings.append("Telegram enabled but TELEGRAM_BOT_TOKEN is missing")
+        if not ADMIN_CHAT_ID:
+            warnings.append("Telegram enabled but TELEGRAM_CHAT_ID/ADMIN_CHAT_ID is missing")
+    # HMAC/signed links
+    if os.getenv("TELEGRAM_AUTO_WEBHOOK", "1") in ("1","true","yes","on") and not TELEGRAM_WEBHOOK_SECRET:
+        warnings.append("TELEGRAM_AUTO_WEBHOOK=1 but TELEGRAM_WEBHOOK_SECRET is missing")
+    if not HMAC_SECRET:
+        warnings.append("WEBHOOK_HMAC_SECRET/OPS_SIGN_SECRET missing — signed approve links will degrade to plain URLs")
+    # Binance keys (only warn if trade execution is enabled)
+    if os.getenv("EXECUTE_TRADES", "0").lower() in ("1","true","yes","on"):
+        if not os.getenv("BINANCE_API_KEY") or not os.getenv("BINANCE_API_SECRET"):
+            warnings.append("EXECUTE_TRADES=1 but BINANCE_API_KEY/SECRET are missing")
+    # Anti-replay signature
+    if os.getenv("ANTI_REPLAY_ENABLE", "0").lower() in ("1", "true", "yes", "on"):
+        if os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "0").lower() in ("1", "true", "yes", "on") and not os.getenv("API_SIGNING_SECRET"):
+            warnings.append("ANTI_REPLAY_REQUIRE_SIGNATURE=1 but API_SIGNING_SECRET is missing")
+    return warnings
+
+
 @app.on_event("startup")
 async def _startup_tasks():
     if getattr(app.state, "bg_started", False):
@@ -1896,11 +1945,25 @@ async def _startup_tasks():
     app.state.boot_ts = time.time()
     _ = _get_shared_async_client()
 
+    # --- NEW: central env warnings ---
+    env_w = _collect_critical_env_warnings()
+    if env_w:
+        logger.warning("=== Startup env warnings (%d) ===", len(env_w))
+        for w in env_w:
+            logger.warning("env: %s", w)
+
     async def _late_webhook():
         with suppress(Exception):
             if TELEGRAM_AUTO_WEBHOOK:
                 await asyncio.sleep(1.0)
                 await _ensure_telegram_webhook()
+        # Optional startup ping
+        if STARTUP_NOTIFY_ENABLE and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID:
+            try:
+                txt = f"🟢 <b>{_md_html(os.getenv('INSTANCE_ID','algogpt'))}</b> up · v{_md_html(APP_VERSION)}"
+                await _send_telegram_html(txt)
+            except Exception:
+                pass
 
     asyncio.create_task(_late_webhook())
 
@@ -1927,6 +1990,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
