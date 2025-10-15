@@ -37,7 +37,7 @@ services:
       - key: PORT
         value: "10000"
       - key: APP_MODULE
-        value: "main_ultratop:app"
+        value: "main:app"            # ← תואם ל-main.py החדש
       - key: PYTHONPATH
         value: "/app"
       - key: WEB_CONCURRENCY
@@ -401,6 +401,16 @@ services:
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
         value: "0.20"
 
+      # (אופציונלי) טווחי AUTO ל־LEV/BUDGET — יתיישרו עם main.py החדש
+      - key: AUTO_LEV_MIN
+        value: "15"
+      - key: AUTO_LEV_MAX
+        value: "25"
+      - key: AUTO_BUDGET_MIN
+        value: "100"
+      - key: AUTO_BUDGET_MAX
+        value: "200"
+
       # ========================= SL/TP / BE / Trail / Ladder =========================
       - key: NATIVE_TPSL_ENABLE
         value: "0"
@@ -423,7 +433,7 @@ services:
       - key: STREAM_TP_BE
         value: "1"
       - key: TP_LADDER_ON_APPROVE
-        value: "0"
+        value: "0"                    # 0=MARKET, 1=HYBRID (armed). השארתי כפי שנתת.
       - key: LADDER_TP_ENABLE
         value: "1"
       - key: LADDER_SL_ENABLE
@@ -523,7 +533,7 @@ services:
       - key: ADX_LOW_TP_SHRINK_PCT
         value: "15"
 
-      # ========================= Dynamic Profile =========================
+      # ========================= Dynamic Profile (manage-once) =========================
       - key: DYN_TOOLBOX_ENABLE
         value: "1"
       - key: DYN_SCORE_BANDS
@@ -550,6 +560,30 @@ services:
         value: "HTML"
       - key: DYN_PROFILE_NOTIFY_TEMPLATE
         value: "<b>Profile Switch</b> — <code>{symbol}</code>\n<b>{old}</b> ➜ <b>{new}</b>\nScore: <b>{score:.2f}</b> | ADX: <b>{adx:.0f}</b>\nLev: <b>{lev}</b> | Budget: <b>{budget}</b>\nTP: <b>{tp_pcts}</b> / Splits: <b>{splits}</b>\nTrail ATR: <b>{trail_atr}</b> | BE: <b>{be_pct}%</b>\n⏱ {ts} (UTC)"
+
+      # ----- NEW: Profile/env for manage-once (תואם ל-main.py) -----
+      - key: PROFILE_AUTO_SELECT
+        value: "1"
+      - key: PROFILE_BASE_BE_BPS
+        value: "5"
+      - key: PROFILE_BASE_PCTS
+        value: "4,8,16"
+      - key: PROFILE_BASE_SPLITS
+        value: "0.30,0.30,0.40"
+      - key: PROFILE_BASE_ATR_MULT
+        value: "0"
+      - key: PROFILE_EXTREME_BE_BPS
+        value: "2"
+      - key: PROFILE_EXTREME_PCTS
+        value: "2,4,8"
+      - key: PROFILE_EXTREME_SPLITS
+        value: "0.25,0.35,0.40"
+      - key: PROFILE_EXTREME_ATR_MULT
+        value: "1.6"
+      - key: ADX_EXTREME_MIN
+        value: "28"
+      - key: ATRPCT_EXTREME_MIN
+        value: "0.007"
 
       # ========================= Health / Digest =========================
       - key: HEALTH_PRICE_MAX_AGE
@@ -684,6 +718,7 @@ services:
         fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
         fromSecret: BINANCE_API_SECRET
+
 
 
 
