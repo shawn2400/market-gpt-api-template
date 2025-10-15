@@ -254,25 +254,30 @@ def _verify_signed_params(ticket_id: str, exp: str, sig: str, path: str) -> bool
 # ==================== Simple ConfirmStore (in-memory fallback) ====================
 class ConfirmStore:
     _items: Dict[str, Dict[str, Any]] = {}
+    _lock = threading.Lock()
 
     @classmethod
     def create(cls, req: Dict[str, Any]) -> None:
-        tid = str(req.get("ticket_id") or f"T_{int(time.time())}_{secrets.token_hex(3)}")
-        cls._items[tid] = {"ticket_id": tid, "req": dict(req), "ts": time.time(), "approved": None}
+        with cls._lock:
+            tid = str(req.get("ticket_id") or f"T_{int(time.time())}_{secrets.token_hex(3)}")
+            cls._items[tid] = {"ticket_id": tid, "req": dict(req), "ts": time.time(), "approved": None}
 
     @classmethod
     def decide(cls, ticket_id: str, approved: bool) -> None:
-        it = cls._items.get(str(ticket_id))
-        if it:
-            it["approved"] = bool(approved)
+        with cls._lock:
+            it = cls._items.get(str(ticket_id))
+            if it:
+                it["approved"] = bool(approved)
 
     @classmethod
     def pending(cls) -> List[Dict[str, Any]]:
-        return [v for v in cls._items.values() if v.get("approved") is None]
+        with cls._lock:
+            return [v for v in cls._items.values() if v.get("approved") is None]
 
     @classmethod
     def remove(cls, ticket_id: str) -> None:
-        cls._items.pop(str(ticket_id), None)
+        with cls._lock:
+            cls._items.pop(str(ticket_id), None)
 
 
 # ==================== Shared HTTP and Redis ====================
@@ -342,13 +347,22 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
     except Exception as e:
         logger.debug("rate_limit_redis_fallback: %s", e)
 
-    # in-memory fallback
+    # in-memory fallback (+ cleanup)
     bucket = getattr(app.state, "rl_mem", None)
+    now = time.time()
     if bucket is None:
         bucket = {}
-        app.state.rlm_epoch = time.time()
+        app.state.rlm_epoch = now
         app.state.rl_mem = bucket
-    now = time.time()
+    # periodic cleanup
+    if now - getattr(app.state, "rlm_epoch", now) > 60:
+        stale = []
+        for k, rec in bucket.items():
+            if (now - rec.get("start", now)) >= max(PUBLIC_TOPK_WINDOW, PUBLIC_NOW_WINDOW):
+                stale.append(k)
+        for k in stale:
+            bucket.pop(k, None)
+        app.state.rlm_epoch = now
     rec = bucket.get(key)
     if not rec or (now - rec["start"]) >= window_sec:
         bucket[key] = {"start": now, "count": 1}
@@ -362,7 +376,6 @@ async def _public_rate_limit(request: Request, call_next):
     if not RATE_LIMIT_ENABLE:
         return await call_next(request)
     p = request.url.path
-    # HEAD הופך ל-GET במידלוור הראשון, כך שזה מכוסה
     if request.method.upper() != "GET":
         return await call_next(request)
     ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.client.host if request.client else "0.0.0.0")
@@ -579,6 +592,8 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
 # ==================== Misc helpers ====================
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
 
+# alias for readability
+to_thread = asyncio.to_thread
 
 def _parse_mode(note: Optional[str]) -> Optional[str]:
     if not note:
@@ -655,7 +670,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
         with suppress(Exception):
-            client.futures_change_leverage(symbol=symbol, leverage=leverage)
+            await to_thread(client.futures_change_leverage, symbol=symbol, leverage=leverage)
         base_kwargs: Dict[str, Any] = {
             "symbol": symbol,
             "side": side,
@@ -668,19 +683,19 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         if pos_side_supplied in ("LONG", "SHORT"):
             attempt_order["positionSide"] = pos_side_supplied
         try:
-            order = client.futures_create_order(**attempt_order)
+            order = await to_thread(client.futures_create_order, **attempt_order)
             return {"ok": True, "exchange": "binance_futures", "order": order}
         except Exception as e1:
             if not _is_code_4061(e1):
                 raise
             try:
-                order = client.futures_create_order(**base_kwargs)
+                order = await to_thread(client.futures_create_order, **base_kwargs)
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "no_positionSide"}
             except Exception as e2:
                 try:
                     retry2_kwargs = dict(base_kwargs)
                     retry2_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
-                    order = client.futures_create_order(**retry2_kwargs)
+                    order = await to_thread(client.futures_create_order, **retry2_kwargs)
                     return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "derived_positionSide"}
                 except Exception as e3:
                     return {"ok": False, "error": "order_failed", "detail": str(e3), "first_error": str(e1), "second_error": str(e2)}
@@ -718,7 +733,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
             cli_ = Client(api_key, api_sec)
             _align_position_mode(cli_)
             with suppress(Exception):
-                cli_.futures_change_leverage(symbol=symbol, leverage=leverage)
+                await to_thread(cli_.futures_change_leverage, symbol=symbol, leverage=leverage)
     except Exception:
         pass
     base_kwargs: Dict[str, Any] = dict(
@@ -1462,22 +1477,43 @@ def _round_tick_dir(value: float, step: float, direction: str) -> float:
     return math.floor(q) * step
 
 
-def _get_filters(client, symbol: str) -> Tuple[float, float]:
-    tick = 0.1
-    step = 0.001
+# ====== Cached exchange info (tick/step) ======
+async def _load_exchange_info_cached(client) -> Dict[str, Tuple[float, float]]:
+    """
+    Returns {symbol: (tick, step)} with a short TTL cache in app.state.
+    """
+    ttl = int(os.getenv("EXINFO_CACHE_TTL_SEC", "120") or 120)
+    now = time.time()
+    cache = getattr(app.state, "exinfo_cache", None)
+    if cache and (now - cache.get("ts", 0) <= ttl):
+        return cache.get("map", {})
+    # fetch on a thread
     try:
-        ex = client.futures_exchange_info()
+        ex = await to_thread(client.futures_exchange_info)
+    except Exception:
+        ex = {}
+    mapping: Dict[str, Tuple[float, float]] = {}
+    try:
         for s in ex.get("symbols", []):
-            if s.get("symbol") == symbol:
-                for f in s.get("filters", []):
-                    if f.get("filterType") == "PRICE_FILTER":
-                        tick = float(f.get("tickSize", tick))
-                    if f.get("filterType") == "LOT_SIZE":
-                        step = float(f.get("stepSize", step))
-                break
+            sym = s.get("symbol")
+            tick = 0.1
+            step = 0.001
+            for f in s.get("filters", []):
+                if f.get("filterType") == "PRICE_FILTER":
+                    tick = float(f.get("tickSize", tick))
+                if f.get("filterType") == "LOT_SIZE":
+                    step = float(f.get("stepSize", step))
+            if sym:
+                mapping[sym] = (tick, step)
     except Exception:
         pass
-    return tick, step
+    app.state.exinfo_cache = {"ts": now, "map": mapping}
+    return mapping
+
+
+async def _get_filters_async(client, symbol: str) -> Tuple[float, float]:
+    mapping = await _load_exchange_info_cached(client)
+    return mapping.get(symbol, (0.1, 0.001))
 
 
 def _pos_side_from_amt(side_text: str, pos_amt: float) -> str:
@@ -1497,7 +1533,7 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
     # 1) שליפת קליינים וחישוב אינדיקטורים
     klines = []
     try:
-        klines = client.futures_klines(symbol=symbol, interval="1m", limit=60)
+        klines = await to_thread(client.futures_klines, symbol=symbol, interval="1m", limit=60)
     except Exception:
         klines = []
     indicators = _compute_indicators_from_klines(klines or [], period=14)
@@ -1576,7 +1612,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     entry_price = None
     side_txt = None
     try:
-        positions = client.futures_position_information(symbol=symbol)
+        positions = await to_thread(client.futures_position_information, symbol=symbol)
         for p in positions:
             amt = float(p.get("positionAmt") or 0.0)
             if abs(amt) > 0:
@@ -1590,11 +1626,11 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     if not side_txt or not entry_price or abs(pos_amt) <= 0:
         return {"ok": True, "skipped": True, "reason": "no_open_position"}
 
-    # --- Get filters and price first (moved up) ---
-    tick, step = _get_filters(client, symbol)
+    # --- Get filters and price first (cached) ---
+    tick, step = await _get_filters_async(client, symbol)
     price_now = None
     with suppress(Exception):
-        tick_data = client.futures_symbol_ticker(symbol=symbol)
+        tick_data = await to_thread(client.futures_symbol_ticker, symbol=symbol)
         if tick_data and "price" in tick_data:
             price_now = float(tick_data["price"])
     base_price = price_now or entry_price
@@ -1632,12 +1668,12 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
 
     # --- Cancel existing protective stops/trails before placing ours ---
     try:
-        open_orders = client.futures_get_open_orders(symbol=symbol)
+        open_orders = await to_thread(client.futures_get_open_orders, symbol=symbol)
         for o in open_orders or []:
             t = o.get("type", "")
             if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
                 with suppress(Exception):
-                    client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+                    await to_thread(client.futures_cancel_order, symbol=symbol, orderId=o.get("orderId"))
     except Exception:
         pass
 
@@ -1652,7 +1688,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
             workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
             newClientOrderId=build_client_order_id(symbol, "SELL" if side_txt == "BUY" else "BUY", role="SL@BE"),
         )
-        client.futures_create_order(**sl_kwargs)
+        await to_thread(client.futures_create_order, **sl_kwargs)
     except Exception as e:
         logger.warning("place_be_stop_failed: %s", e)
 
@@ -1666,8 +1702,14 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
 
     qty_abs = abs(pos_amt)
     placed_tp = []
-    for i, (tp_price, split) in enumerate(zip(tps, splits), start=1):
-        qty_i = _bn_round(qty_abs * float(split), step)
+
+    # ensure sum(qtys)==pos by allocating rounding residue to last TP
+    qty_plan = [max(0.0, _bn_round(qty_abs * float(s), step)) for s in splits]
+    residue = max(0.0, _bn_round(qty_abs, step) - _bn_round(sum(qty_plan), step))
+    if residue > 0 and qty_plan:
+        qty_plan[-1] = _bn_round(qty_plan[-1] + residue, step)
+
+    for i, (tp_price, qty_i) in enumerate(zip(tps, qty_plan), start=1):
         if qty_i <= 0:
             continue
         tp_kwargs = dict(
@@ -1681,7 +1723,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
             newClientOrderId=build_client_order_id(symbol, "SELL" if side_txt == "BUY" else "BUY", role=f"TP{i}"),
         )
         try:
-            client.futures_create_order(**tp_kwargs)
+            await to_thread(client.futures_create_order, **tp_kwargs)
             placed_tp.append({"i": i, "price": tp_price, "qty": qty_i})
         except Exception as e:
             logger.warning("place_tp_failed[%s]: %s", i, e)
@@ -1689,7 +1731,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     placed_trail = None
     if atr_mult is not None:
         try:
-            kl = client.futures_klines(symbol=symbol, interval="1m", limit=50)
+            kl = await to_thread(client.futures_klines, symbol=symbol, interval="1m", limit=50)
             highs = [float(k[2]) for k in kl]
             lows = [float(k[3]) for k in kl]
             closes = [float(k[4]) for k in kl]
@@ -1710,7 +1752,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
                 workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
                 newClientOrderId=build_client_order_id(symbol, "SELL" if side_txt == "BUY" else "BUY", role="TRAIL"),
             )
-            client.futures_create_order(**trail_kwargs)
+            await to_thread(client.futures_create_order, **trail_kwargs)
             placed_trail = {"callbackRate": round(callback_rate, 1)}
         except Exception as e:
             logger.warning("place_trailing_failed: %s", e)
@@ -1873,7 +1915,7 @@ for mod, tag in (
     ("routes.ops_digest", "ops-digest"),
     ("routes.aliases", "aliases"),
     ("routes.public", "Public Feed"),
-    # ✅ הוספתי תמיכה גם במודול public_web:
+    # ✅ תמיכה גם במודול public_web:
     ("routes.public_web", "Public Feed"),
     ("routes.ai", "AI"),
 ):
@@ -1959,7 +2001,9 @@ async def global_exception_handler(request: Request, exc: Exception):
     payload: Dict[str, Any] = {"ok": False, "error": "internal_error", "id": error_id}
     if show_detail:
         payload["detail"] = str(exc)
-    return JSONResponse(status_code=500, content=payload)
+    resp = JSONResponse(status_code=500, content=payload)
+    resp.headers["X-Error-ID"] = error_id
+    return resp
 
 
 # ==================== Startup / Shutdown ====================
@@ -2018,7 +2062,7 @@ async def _trail_rt_loop():
     client = Client(api_key, api_sec)
     _align_position_mode(client)
 
-    def _symbols_to_check() -> List[str]:
+    def _symbols_to_check_sync() -> List[str]:
         if TRAIL_RT_WATCH:
             return TRAIL_RT_WATCH[:TRAIL_RT_MAX_SYMBOLS]
         # derive from positions
@@ -2043,14 +2087,14 @@ async def _trail_rt_loop():
 
     while True:
         try:
-            syms = _symbols_to_check()
+            syms = await to_thread(_symbols_to_check_sync)
             for sym in syms:
                 # position?
                 pos_amt = 0.0
                 side_txt = None
                 entry_price = 0.0
                 with suppress(Exception):
-                    infos = client.futures_position_information(symbol=sym)
+                    infos = await to_thread(client.futures_position_information, symbol=sym)
                     for p in infos:
                         amt = float(p.get("positionAmt") or 0.0)
                         if abs(amt) > 0:
@@ -2064,7 +2108,7 @@ async def _trail_rt_loop():
                 # last price
                 px_now = entry_price
                 with suppress(Exception):
-                    t = client.futures_symbol_ticker(symbol=sym)
+                    t = await to_thread(client.futures_symbol_ticker, symbol=sym)
                     if t and "price" in t:
                         px_now = float(t["price"]) or px_now
                 if px_now <= 0:
@@ -2073,7 +2117,7 @@ async def _trail_rt_loop():
                 # quick ATR
                 atr = 0.0
                 with suppress(Exception):
-                    kl = client.futures_klines(symbol=sym, interval="1m", limit=50)
+                    kl = await to_thread(client.futures_klines, symbol=sym, interval="1m", limit=50)
                     highs = [float(k[2]) for k in kl]
                     lows = [float(k[3]) for k in kl]
                     closes = [float(k[4]) for k in kl]
@@ -2090,7 +2134,7 @@ async def _trail_rt_loop():
                 # inspect open trail orders
                 existing = None
                 with suppress(Exception):
-                    oo = client.futures_get_open_orders(symbol=sym)
+                    oo = await to_thread(client.futures_get_open_orders, symbol=sym)
                     for o in oo or []:
                         if o.get("type") == "TRAILING_STOP_MARKET":
                             existing = o
@@ -2111,7 +2155,7 @@ async def _trail_rt_loop():
 
                 if need_adjust:
                     with suppress(Exception):
-                        client.futures_cancel_order(symbol=sym, orderId=existing.get("orderId"))  # type: ignore[arg-type]
+                        await to_thread(client.futures_cancel_order, symbol=sym, orderId=existing.get("orderId"))  # type: ignore[arg-type]
                     need_place = True
 
                 if need_place:
@@ -2125,7 +2169,7 @@ async def _trail_rt_loop():
                         newClientOrderId=build_client_order_id(sym, ("SELL" if side_txt == "BUY" else "BUY"), role="TRAIL@RT"),
                     )
                     with suppress(Exception):
-                        client.futures_create_order(**kwargs)
+                        await to_thread(client.futures_create_order, **kwargs)
         except Exception as e:
             logger.debug("trail_rt.loop_error: %s", e)
         await asyncio.sleep(max(3, TRAIL_RT_INTERVAL_SEC))
@@ -2189,6 +2233,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
