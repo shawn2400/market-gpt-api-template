@@ -455,12 +455,14 @@ def be(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
-    ar = _ar_check("/position-ops/be", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    ts_val = x_timestamp or x_ts
+    ar = _ar_check("/position-ops/be", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
         return ar
 
@@ -486,12 +488,14 @@ def trail(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
-    ar = _ar_check("/position-ops/trail", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    ts_val = x_timestamp or x_ts
+    ar = _ar_check("/position-ops/trail", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
         return ar
 
@@ -518,12 +522,14 @@ def sl_move(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
-    ar = _ar_check("/position-ops/sl/move", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    ts_val = x_timestamp or x_ts
+    ar = _ar_check("/position-ops/sl/move", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
         return ar
 
@@ -573,12 +579,14 @@ def tp_ladder(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
-    ar = _ar_check("/position-ops/tp/ladder", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    ts_val = x_timestamp or x_ts
+    ar = _ar_check("/position-ops/tp/ladder", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
         return ar
 
@@ -611,12 +619,14 @@ def tp_one(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
-    ar = _ar_check("/position-ops/tp/one", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    ts_val = x_timestamp or x_ts
+    ar = _ar_check("/position-ops/tp/one", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
         return ar
 
@@ -687,12 +697,14 @@ def tp_cancel(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
-    ar = _ar_check("/position-ops/tp/cancel", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    ts_val = x_timestamp or x_ts
+    ar = _ar_check("/position-ops/tp/cancel", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
         return ar
 
@@ -722,12 +734,14 @@ def close_fraction(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
-    ar = _ar_check("/position-ops/close", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    ts_val = x_timestamp or x_ts
+    ar = _ar_check("/position-ops/close", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
         return ar
 
@@ -753,12 +767,14 @@ def manage_once(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
-    ar = _ar_check("/position-ops/manage-once", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    ts_val = x_timestamp or x_ts
+    ar = _ar_check("/position-ops/manage-once", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
         return ar
 
@@ -910,12 +926,14 @@ async def auto_start(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
-    ar = _ar_check("/position-ops/auto/start", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    ts_val = x_timestamp or x_ts
+    ar = _ar_check("/position-ops/auto/start", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
         return ar
 
@@ -950,12 +968,14 @@ async def auto_start(
 async def auto_stop(
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
-    ar = _ar_check("/position-ops/auto/stop", body={}, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    ts_val = x_timestamp or x_ts
+    ar = _ar_check("/position-ops/auto/stop", body={}, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
         return ar
 
@@ -975,25 +995,29 @@ def cancel_tps_alias(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     # נשתמש בלוגיקת tp_cancel כדי לשמור על מקור אמת יחיד
+    ts_val = x_timestamp or x_ts
     return tp_cancel(payload=payload, Authorization=Authorization,
-                     x_timestamp=x_timestamp, x_nonce=x_nonce, x_signature=x_signature)
+                     x_timestamp=ts_val, x_ts=None, x_nonce=x_nonce, x_signature=x_signature)
 
 @router.post("/close-percent", summary="[ALIAS] Close by percent (maps pct→fraction and calls /close)")
 def close_percent_alias(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
     # בדיקת Anti-Replay למסלול האליאס
-    ar = _ar_check("/position-ops/close-percent", payload, ts=x_timestamp, nonce=x_nonce, sig=x_signature)
+    ts_val = x_timestamp or x_ts
+    ar = _ar_check("/position-ops/close-percent", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
         return ar
 
@@ -1012,6 +1036,43 @@ def close_percent_alias(
         return _err(cerr or "binance_client_error")
 
     return _close_impl(client, symbol=symbol, fraction=fraction)
+
+# =========================
+# Status route (חדש)
+# =========================
+@router.get("/status", summary="Position & open conditional orders status")
+def status(
+    symbol: str,
+    Authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+):
+    if not _auth_ok(Authorization):
+        return _err("unauthorized")
+    ts_val = x_timestamp or x_ts
+    ar = _ar_check("/position-ops/status", {"symbol": symbol}, ts=ts_val, nonce=x_nonce, sig=x_signature)
+    if ar:
+        return ar
+    client, cerr = _get_client_soft()
+    if not client:
+        return _err(cerr or "binance_client_error")
+    try:
+        side, abs_qty, entry = _fetch_position_side_qty_entry(client, symbol)
+        last = _last_price(client, symbol)
+    except HTTPException as he:
+        if he.status_code in (404, 409):
+            orders = client.futures_get_open_orders(symbol=symbol.upper()) or []
+            cond = [o for o in orders if "STOP" in (o.get("type","").upper()) or "TAKE_PROFIT" in (o.get("type","").upper())]
+            return _ok(symbol=symbol, has_position=False, orders=cond)
+        return _err("http_error", status=he.status_code, detail=str(he.detail))
+    except Exception as e:
+        return _err("exception", detail=str(e))
+    orders = client.futures_get_open_orders(symbol=symbol.upper()) or []
+    cond = [o for o in orders if "STOP" in (o.get("type","").upper()) or "TAKE_PROFIT" in (o.get("type","").upper())]
+    return _ok(symbol=symbol, has_position=True, side=side, qty=abs_qty, entry=entry, last=last, orders=cond)
+
 
 
 
