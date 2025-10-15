@@ -1,6 +1,4 @@
-הנה הגרסה המתוקנת (הוספתי `ULTRATOP_MODE: "noop"` ומדיניות ציבורית גם עבור `/ultra/health`):
 
-```yaml
 services:
   - type: web
     name: algogpt-prod
