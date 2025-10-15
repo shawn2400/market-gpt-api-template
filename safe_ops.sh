@@ -1,157 +1,141 @@
-cd /app
-rm -f safe_ops.sh
-
-cat > safe_ops.sh <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
 : "${PUBLIC_HOST:?need PUBLIC_HOST}"
 : "${API_BEARER_TOKEN:?need API_BEARER_TOKEN}"
-: "${API_SIGNING_SECRET:?need API_SIGNING_SECRET}"
 
-# ===== Anti-1003: token-bucket עדין =====
-BUCKET_FILE="/tmp/anti1003.bucket"
-BUCKET_CAP=${BUCKET_CAP:-6}      # burst tokens
-REFILL_RPS=${REFILL_RPS:-3}      # tokens/sec
+# חתימה: נעדיף OPS_SIGN_SECRET, ואם אין – נשתמש ב-API_SIGNING_SECRET
+SIGN_SECRET="${OPS_SIGN_SECRET:-${API_SIGNING_SECRET:-}}"
 
-_now_ms(){ date +%s%3N; }
-_bucket_take(){
-  local now cap tokens last tdelta add
-  now=$(_now_ms); cap=$BUCKET_CAP
-  mkdir -p "$(dirname "$BUCKET_FILE")" || true
+# ===== Token bucket =====
+BUCKET_FILE="/tmp/anti1003_bucket.ops"
+BUCKET_CAP=${BUCKET_CAP:-30}
+REFILL_INT=60
+WEIGHT=${WEIGHT:-1}
+
+now() { date +%s; }
+
+bucket_refill() {
+  local now_ts; now_ts=$(now)
   if [[ -f "$BUCKET_FILE" ]]; then
-    read -r last tokens < "$BUCKET_FILE" || { last=$now; tokens=$cap; }
-  else last=$now; tokens=$cap; fi
-  tdelta=$(( now - last ))
-  add=$(( (tdelta * REFILL_RPS) / 1000 ))
-  if (( add > 0 )); then
-    tokens=$(( tokens + add )); (( tokens > cap )) && tokens=$cap; last=$now
-  fi
-  if (( tokens <= 0 )); then sleep 0.35; _bucket_take; return; fi
-  tokens=$(( tokens - 1 ))
-  printf "%s %s\n" "$last" "$tokens" > "$BUCKET_FILE"
-}
-
-# ===== Nonce/HMAC גם בלי uuidgen/xxd =====
-_nonce(){
-  if command -v uuidgen >/dev/null 2>&1; then uuidgen
-  elif [[ -r /proc/sys/kernel/random/uuid ]]; then cat /proc/sys/kernel/random/uuid
-  else echo "nonce-$RANDOM-$(_now_ms)"; fi
-}
-_hmac_sha256_hex(){
-  if command -v xxd >/dev/null 2>&1; then
-    openssl dgst -sha256 -hmac "$API_SIGNING_SECRET" -binary | xxd -p -c 256
+    awk -v cutoff=$((now_ts-REFILL_INT)) '$1>=cutoff {print $1}' "$BUCKET_FILE" > "${BUCKET_FILE}.tmp" || true
+    mv "${BUCKET_FILE}.tmp" "$BUCKET_FILE"
   else
-    openssl dgst -sha256 -hmac "$API_SIGNING_SECRET" -binary | od -An -tx1 | tr -d ' \n'
+    : > "$BUCKET_FILE"
   fi
 }
-_sign(){ # METHOD PATH BODY TS NONCE
-  printf "%s\n%s\n%s\n%s\n%s" "$1" "$2" "$3" "$4" "$5" | _hmac_sha256_hex
+
+bucket_take() {
+  local used; used=$(wc -l < "$BUCKET_FILE" || echo 0)
+  if (( used + WEIGHT > BUCKET_CAP )); then
+    local oldest remain sleep_sec
+    oldest=$(head -n1 "$BUCKET_FILE" || echo $(now))
+    remain=$(( oldest + REFILL_INT - $(now) ))
+    (( remain > 0 )) && sleep "$remain"
+  fi
+  echo "$(now)" >> "$BUCKET_FILE"
 }
 
-_do_signed(){ # METHOD PATH [BODY]
-  _bucket_take
-  local method="$1" path="$2" body="${3:-}" ts nonce sig
-  ts=$(_now_ms); nonce=$(_nonce)
-  sig=$(_sign "$method" "$path" "$body" "$ts" "$nonce")
-  curl -sS -X "$method" "${PUBLIC_HOST}${path}" \
-    -H "Authorization: Bearer ${API_BEARER_TOKEN}" \
+json() { jq -c '.' 2>/dev/null || cat; }
+
+sign_and_post() {
+  # $1 method, $2 path, $3 raw_body
+  local method="$1" path="$2" body="$3"
+  local ts nonce sig
+  ts=$(date +%s%3N)
+  nonce=$(cat /proc/sys/kernel/random/uuid)
+  if [[ -z "${SIGN_SECRET:-}" ]]; then
+    echo '{"ok":false,"reason":"missing_sign_secret"}'
+    return 4
+  fi
+  sig=$(printf "%s\n%s\n%s\n%s\n%s" "$method" "$path" "$body" "$ts" "$nonce" | \
+        openssl dgst -sha256 -hmac "$SIGN_SECRET" -binary | od -An -tx1 | tr -d ' \n')
+  curl -sS -X "$method" "$PUBLIC_HOST$path" \
+    -H "Authorization: Bearer $API_BEARER_TOKEN" \
     -H "Content-Type: application/json" \
-    -H "X-TS: ${ts}" -H "X-Nonce: ${nonce}" -H "X-Signature: ${sig}" \
-    ${body:+ --data-binary "$body"}
-}
-_do_plain(){ # METHOD PATH [BODY]
-  _bucket_take
-  curl -sS -X "$1" "${PUBLIC_HOST}${2}" \
-    -H "Authorization: Bearer ${API_BEARER_TOKEN}" \
-    -H "Content-Type: application/json" \
-    ${3:+ --data-binary "$3"}
+    -H "X-TS: $ts" -H "X-Nonce: $nonce" -H "X-Signature: $sig" \
+    --data-binary "$body"
 }
 
-usage(){
-cat <<'USAGE'
-safe_ops.sh — /position-ops/* עם חתימה + anti-1003
+# ===== פריסה של ארגומנטים/ENV =====
+# נקבל SYMBOL גם מ-env וגם מארגומנט ראשון אחרי הפקודה
+require_symbol() {
+  local _sym="${SYMBOL:-${1:-}}"
+  if [[ -z "$_sym" ]]; then
+    echo "SYMBOL: need SYMBOL" >&2
+    exit 2
+  fi
+  echo "$_sym"
+}
 
-ENV חובה:
-  PUBLIC_HOST, API_BEARER_TOKEN, API_SIGNING_SECRET
+# ===== פקודות נתמכות =====
+usage() {
+  cat <<'USAGE'
+safe_ops.sh — שומר על קצב קריאות ומבצע חתימה ל-OPS
+שימוש:
+  SYMBOL=BTCUSDT ./safe_ops.sh manage-once
+  ./safe_ops.sh manage-once BTCUSDT
 
+  SYMBOL=BTCUSDT PRICE=12345 QTY=0.01 ./safe_ops.sh tp-one
+  ./safe_ops.sh tp-one BTCUSDT 12345 0.01
+
+  SYMBOL=BTCUSDT ./safe_ops.sh tp-cancel
+  ./safe_ops.sh tp-cancel BTCUSDT
+
+  SYMBOL=BTCUSDT ./safe_ops.sh trail
+  ./safe_ops.sh trail BTCUSDT
+
+משתנים:
+  PUBLIC_HOST, API_BEARER_TOKEN — חובה
+  OPS_SIGN_SECRET או API_SIGNING_SECRET — לחתימה
+  WEIGHT (ברירת מחדל 1), BUCKET_CAP (ברירת מחדל 30/דקה)
 פקודות:
-  manage-once [SYMBOL]                   — POST /manage-once (ללא חתימה)
-  tp-one    SYMBOL PRICE QTY             — POST /position-ops/tp/one
-  tp-ladder SYMBOL P1 P2 P3 Q1 Q2 Q3     — POST /position-ops/tp/ladder
-  be        SYMBOL [OFFSET_BPS=12]       — POST /position-ops/be/set
-  move-sl   SYMBOL PRICE                 — POST /position-ops/sl/move
-  tp-cancel SYMBOL                       — POST /position-ops/tp/cancel
-  trail-on  SYMBOL [ATR_MULT=1.6]        — POST /position-ops/trail/on
-  trail-off SYMBOL                       — POST /position-ops/trail/off
-  tp-refresh SYMBOL                      — POST /position-ops/tp/refresh
-  smart-now SYMBOL                       — POST /position-ops/smart/manage-now
-  help                                   — עזרה
+  manage-once  — POST /manage-once {"symbol":SYMBOL,"force":true}  (ללא חתימה)
+  tp-one       — POST /position-ops/tp/one {"symbol", "price", "qty", "side":"SELL","reduceOnly":true}
+  tp-cancel    — POST /position-ops/tp/cancel {"symbol":SYMBOL}
+  trail        — POST /position-ops/trail {"symbol":SYMBOL,"enable":true}
 USAGE
 }
 
 cmd="${1:-}"; shift || true
+bucket_refill; bucket_take
+
 case "$cmd" in
   manage-once)
-    sym="${1:-${SYMBOL:-}}"; [[ -n "${sym}" ]] || { echo "usage: manage-once SYMBOL  (או SYMBOL=... ./safe_ops.sh manage-once)"; exit 2; }
-    body=$(printf '{"symbol":"%s","force":true}' "$sym")
-    _do_plain "POST" "/manage-once" "$body"
+    sym=$(require_symbol "${1:-}")
+    curl -sS -X POST "$PUBLIC_HOST/manage-once" \
+      -H "Authorization: Bearer $API_BEARER_TOKEN" \
+      -H "Content-Type: application/json" \
+      --data-binary "$(jq -nc --arg s "$sym" '{symbol:$s,force:true}')" | json
     ;;
   tp-one)
-    sym="${1:-}"; price="${2:-}"; qty="${3:-}"
-    [[ -n "$sym" && -n "$price" && -n "$qty" ]] || { echo "usage: tp-one SYMBOL PRICE QTY"; exit 2; }
-    body=$(printf '{"symbol":"%s","price":%s,"qty":%s,"side":"SELL","reduceOnly":true}' "$sym" "$price" "$qty")
-    _do_signed "POST" "/position-ops/tp/one" "$body"
+    # args: SYMBOL PRICE QTY  (או דרך ENV)
+    if [[ -n "${1:-}" ]]; then SYMBOL="$1"; shift; fi
+    if [[ -n "${1:-}" ]]; then PRICE="$1"; shift; fi
+    if [[ -n "${1:-}" ]]; then QTY="$1"; shift; fi
+    sym=$(require_symbol)
+    : "${PRICE:?need PRICE}"; : "${QTY:?need QTY}"
+    body=$(jq -nc --arg s "$sym" --argjson p "$PRICE" --argjson q "$QTY" \
+            '{symbol:$s,price:$p,qty:$q,side:"SELL",reduceOnly:true}')
+    sign_and_post POST "/position-ops/tp/one" "$body" | json
     ;;
-  tp-ladder)
-    sym="${1:-}"; p1="${2:-}"; p2="${3:-}"; p3="${4:-}"; q1="${5:-}"; q2="${6:-}"; q3="${7:-}"
-    [[ -n "$sym" ]] || { echo "usage: tp-ladder SYMBOL [P1 P2 P3 Q1 Q2 Q3]"; exit 2; }
-    build_ladder(){ local acc="[" first=1; for i in 1 2 3; do eval "pp=\$p$i" "qq=\$q$i"
-      if [[ -n "${pp:-}" && -n "${qq:-}" ]]; then [[ $first -eq 0 ]] && acc+=", "; acc+=$(printf '{"price":%s,"qty":%s}' "$pp" "$qq"); first=0; fi
-    done; acc+="]"; printf "%s" "$acc"; }
-    ladder="$(build_ladder)"
-    body=$(printf '{"symbol":"%s","items":%s,"side":"SELL","reduceOnly":true}' "$sym" "$ladder")
-    _do_signed "POST" "/position-ops/tp/ladder" "$body"
+  tp-cancel)
+    sym=$(require_symbol "${1:-}")
+    body=$(jq -nc --arg s "$sym" '{symbol:$s}')
+    sign_and_post POST "/position-ops/tp/cancel" "$body" | json
     ;;
-  be)
-    sym="${1:-}"; off="${2:-12}"
-    [[ -n "$sym" ]] || { echo "usage: be SYMBOL [OFFSET_BPS]"; exit 2; }
-    body=$(printf '{"symbol":"%s","offset_bps":%s}' "$sym" "$off")
-    _do_signed "POST" "/position-ops/be/set" "$body"
+  trail)
+    sym=$(require_symbol "${1:-}")
+    body=$(jq -nc --arg s "$sym" '{symbol:$s,enable:true}')
+    sign_and_post POST "/position-ops/trail" "$body" | json
     ;;
-  move-sl)
-    sym="${1:-}"; price="${2:-}"
-    [[ -n "$sym" && -n "$price" ]] || { echo "usage: move-sl SYMBOL PRICE"; exit 2; }
-    body=$(printf '{"symbol":"%s","price":%s}' "$sym" "$price")
-    _do_signed "POST" "/position-ops/sl/move" "$body"
-    ;;
-  trail-on)
-    sym="${1:-}"; atr="${2:-1.6}"
-    [[ -n "$sym" ]] || { echo "usage: trail-on SYMBOL [ATR_MULT]"; exit 2; }
-    body=$(printf '{"symbol":"%s","atr_mult":%s,"enable":true}' "$sym" "$atr")
-    _do_signed "POST" "/position-ops/trail/on" "$body"
-    ;;
-  trail-off)
-    sym="${1:-}"; [[ -n "$sym" ]] || { echo "usage: trail-off SYMBOL"; exit 2; }
-    body=$(printf '{"symbol":"%s"}' "$sym")
-    _do_signed "POST" "/position-ops/trail/off" "$body"
-    ;;
-  tp-refresh)
-    sym="${1:-}"; [[ -n "$sym" ]] || { echo "usage: tp-refresh SYMBOL"; exit 2; }
-    body=$(printf '{"symbol":"%s"}' "$sym")
-    _do_signed "POST" "/position-ops/tp/refresh" "$body"
-    ;;
-  smart-now)
-    sym="${1:-}"; [[ -n "$sym" ]] || { echo "usage: smart-now SYMBOL"; exit 2; }
-    body=$(printf '{"symbol":"%s"}' "$sym")
-    _do_signed "POST" "/position-ops/smart/manage-now" "$body"
-    ;;
-  ""|-h|--help|help) usage ;;
-  *) echo "Unknown command: $cmd"; usage; exit 2 ;;
+  ""|-h|--help|help)
+    usage;;
+  *)
+    echo "Unknown command: $cmd" >&2
+    usage; exit 1;;
 esac
-EOF
 
-chmod +x /app/safe_ops.sh
 
 
 
