@@ -37,7 +37,7 @@ services:
       - key: PORT
         value: "10000"
       - key: APP_MODULE
-        value: "main_ultratop:app"   # ← רץ דרך השִׁמָּה, מתקין את UltraTop על main
+        value: "main:app"   # ← חוזר לרוץ דרך main.py; UltraTop יותקן כתת-אפליקציה ב-/ultra
       - key: PYTHONPATH
         value: "/app"
       - key: WEB_CONCURRENCY
@@ -718,6 +718,7 @@ services:
         fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
         fromSecret: BINANCE_API_SECRET
+
 
 
 
