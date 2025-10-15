@@ -1,7 +1,4 @@
-# main_ultratop.py — AlgoGPT UltraTop (WS-only), plug & play:
-# - Standalone: APP_MODULE=main_ultratop:app
-# - Sub-app: mount on /ultra
-# - Router attach: setup_ultratop(app, prefix="/ultra" | "")
+
 from __future__ import annotations
 
 import os, time, hmac, hashlib, json, logging, threading
