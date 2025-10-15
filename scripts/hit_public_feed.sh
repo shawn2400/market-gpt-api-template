@@ -28,7 +28,9 @@ for path in "/scan/public-topk" "/scan/public-now" "/topk"; do
     ok "$path"
     printf "%s\n\n" "$out"
   else
-    warn "$path failed"
+    # Try to catch likely 401 when bearer is required
+    code="$(curl -s -o /dev/null -w "%{http_code}" "${_auth[@]}" "${BASE_URL}${path}" || true)"
+    [[ "$code" == "401" || "$code" == "403" ]] && warn "$path unauthorized (PUBLIC_REQUIRE_BEARER=1?)" || warn "$path failed"
   fi
 done
 
@@ -37,7 +39,8 @@ if out="$(curl -fsS "${_auth[@]}" "${BASE_URL}/topk.csv" 2>/dev/null | head -n 1
   ok "/topk.csv"
   printf "%s\n\n" "$out"
 else
-  warn "/topk.csv failed"
+  code="$(curl -s -o /dev/null -w "%{http_code}" "${_auth[@]}" "${BASE_URL}/topk.csv" || true)"
+  [[ "$code" == "401" || "$code" == "403" ]] && warn "/topk.csv unauthorized" || warn "/topk.csv failed"
 fi
 
 # SSE (sample 5s)
@@ -46,7 +49,8 @@ if command -v timeout >/dev/null 2>&1; then
     ok "/public/sse-ticket (sample)"
     printf "%s\n\n" "$head"
   else
-    warn "/public/sse-ticket failed (maybe blocked or no events)"
+    code="$(curl -s -o /dev/null -w "%{http_code}" "${_auth[@]}" "${BASE_URL}/public/sse-ticket" || true)"
+    [[ "$code" == "401" || "$code" == "403" ]] && warn "/public/sse-ticket unauthorized" || warn "/public/sse-ticket failed (maybe blocked or no events)"
   fi
 else
   warn "skip SSE (timeout cmd missing)"
