@@ -26,9 +26,18 @@ DEFAULT_QTY_STEP = os.getenv("DEFAULT_QTY_STEP", "0.001")
 OPS_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "") or os.getenv("API_TOKEN", "")
 
 def _require_ops_bearer(request: Request):
-    # Optional protection: if env token set, require it.
-    if not token_ok(request.headers.get("Authorization"), OPS_BEARER_TOKEN):
-        raise HTTPException(status_code=401, detail="unauthorized")
+    """
+    אם הוגדר טוקן – נדרשת הזדהות.
+    מתקבל או Authorization: Bearer <token> או כותרת x-api-key עם אותו הטוקן.
+    """
+    tok = OPS_BEARER_TOKEN
+    if not tok:
+        return
+    auth = request.headers.get("Authorization") or ""
+    xkey = request.headers.get("x-api-key") or ""
+    if (auth.startswith("Bearer ") and auth.split(" ", 1)[1] == tok) or (xkey == tok):
+        return
+    raise HTTPException(status_code=401, detail="unauthorized")
 
 HTML_PAGE = """<!doctype html>
 <meta charset="utf-8">
@@ -264,28 +273,33 @@ window.API_BASE = '%API_BASE%'; window.API_KEY  = '%API_KEY%';
 </script>
 """
 
-@router.get("/ops/ui", response_class=HTMLResponse, summary="Simple HTML page to create approval tickets")
+@router.get("/ops/ui", response_class=HTMLResponse, summary="Simple HTML page to create approval tickets", dependencies=[Depends(_require_ops_bearer)])
 async def ops_ui():
+  # לא מזרימים מפתח API לדפדפן כדי למנוע דליפה
   html = (
       HTML_PAGE
       .replace("%API_BASE%", API_BASE or "")
-      .replace("%API_KEY%",  API_KEY  or "")
+      .replace("%API_KEY%",  "")  # לא מטמיעים מפתח לקוח
       .replace("%DEFAULT_QTY_STEP%", str(DEFAULT_QTY_STEP))
   )
   return HTMLResponse(html)
 
 @router.post("/ops/ui/ticket", dependencies=[Depends(_require_ops_bearer)])
-async def ui_proxy(payload: dict = Body(...)):
+async def ui_proxy(request: Request, payload: dict = Body(...)):
   """
-  Server-side proxy: if API_BASE set, forward to main service.
-  Otherwise, call local ticket creator (routes.ops_approve.create_ticket).
-  Always forward x-api-key if configured.
+  Proxy בצד שרת: אם API_BASE מוגדר – נעביר לשירות הראשי.
+  אחרת נקרא ליוצר טיקט מקומי. מעבירים Authorization אם הגיע, וגם x-api-key אם הוגדר בצד ה-UI.
   """
   base = API_BASE or ""
   try:
     if base:
       url = base.rstrip("/") + "/ops/ticket"
       headers = {"Content-Type": "application/json"}
+      # העברת Bearer מהמזמין, אם קיים
+      auth = request.headers.get("Authorization")
+      if auth:
+        headers["Authorization"] = auth
+      # אם יש מפתח מערכת – נוכל להעבירו כ-x-api-key לשרת היעד (במידה והוא מצפה לכך)
       if API_KEY:
         headers["x-api-key"] = API_KEY
       async with httpx.AsyncClient(timeout=12.0) as cli:
