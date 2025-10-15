@@ -32,7 +32,7 @@ _bucket_take(){
   printf "%s %s\n" "$last" "$tokens" > "$BUCKET_FILE"
 }
 
-# ===== nonce/hmac גם בלי uuidgen/xxd =====
+# ===== Nonce/HMAC גם בלי uuidgen/xxd =====
 _nonce(){
   if command -v uuidgen >/dev/null 2>&1; then uuidgen
   elif [[ -r /proc/sys/kernel/random/uuid ]]; then cat /proc/sys/kernel/random/uuid
@@ -82,7 +82,10 @@ ENV חובה:
   be        SYMBOL [OFFSET_BPS=12]       — POST /position-ops/be/set
   move-sl   SYMBOL PRICE                 — POST /position-ops/sl/move
   tp-cancel SYMBOL                       — POST /position-ops/tp/cancel
+  trail-on  SYMBOL [ATR_MULT=1.6]        — POST /position-ops/trail/on
   trail-off SYMBOL                       — POST /position-ops/trail/off
+  tp-refresh SYMBOL                      — POST /position-ops/tp/refresh
+  smart-now SYMBOL                       — POST /position-ops/smart/manage-now
   help                                   — עזרה
 USAGE
 }
@@ -90,7 +93,7 @@ USAGE
 cmd="${1:-}"; shift || true
 case "$cmd" in
   manage-once)
-    sym="${SYMBOL:-${1:-}}"; [[ -n "$sym" ]] || { echo "need SYMBOL"; exit 2; }
+    sym="${1:-${SYMBOL:-}}"; [[ -n "${sym}" ]] || { echo "usage: manage-once SYMBOL  (או SYMBOL=... ./safe_ops.sh manage-once)"; exit 2; }
     body=$(printf '{"symbol":"%s","force":true}' "$sym")
     _do_plain "POST" "/manage-once" "$body"
     ;;
@@ -122,15 +125,26 @@ case "$cmd" in
     body=$(printf '{"symbol":"%s","price":%s}' "$sym" "$price")
     _do_signed "POST" "/position-ops/sl/move" "$body"
     ;;
+  trail-on)
+    sym="${1:-}"; atr="${2:-1.6}"
+    [[ -n "$sym" ]] || { echo "usage: trail-on SYMBOL [ATR_MULT]"; exit 2; }
+    body=$(printf '{"symbol":"%s","atr_mult":%s,"enable":true}' "$sym" "$atr")
+    _do_signed "POST" "/position-ops/trail/on" "$body"
+    ;;
   trail-off)
     sym="${1:-}"; [[ -n "$sym" ]] || { echo "usage: trail-off SYMBOL"; exit 2; }
     body=$(printf '{"symbol":"%s"}' "$sym")
     _do_signed "POST" "/position-ops/trail/off" "$body"
     ;;
-  tp-cancel)
-    sym="${1:-}"; [[ -n "$sym" ]] || { echo "usage: tp-cancel SYMBOL"; exit 2; }
+  tp-refresh)
+    sym="${1:-}"; [[ -n "$sym" ]] || { echo "usage: tp-refresh SYMBOL"; exit 2; }
     body=$(printf '{"symbol":"%s"}' "$sym")
-    _do_signed "POST" "/position-ops/tp/cancel" "$body"
+    _do_signed "POST" "/position-ops/tp/refresh" "$body"
+    ;;
+  smart-now)
+    sym="${1:-}"; [[ -n "$sym" ]] || { echo "usage: smart-now SYMBOL"; exit 2; }
+    body=$(printf '{"symbol":"%s"}' "$sym")
+    _do_signed "POST" "/position-ops/smart/manage-now" "$body"
     ;;
   ""|-h|--help|help) usage ;;
   *) echo "Unknown command: $cmd"; usage; exit 2 ;;
