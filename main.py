@@ -1873,6 +1873,8 @@ for mod, tag in (
     ("routes.ops_digest", "ops-digest"),
     ("routes.aliases", "aliases"),
     ("routes.public", "Public Feed"),
+    # ✅ הוספתי תמיכה גם במודול public_web:
+    ("routes.public_web", "Public Feed"),
     ("routes.ai", "AI"),
 ):
     try:
@@ -2187,6 +2189,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
