@@ -92,6 +92,13 @@ TRAIL_RT_MAX_SYMBOLS = int(os.getenv("TRAIL_RT_MAX_SYMBOLS", "30") or 30)
 TRAIL_RT_ADJUST_THRESHOLD = float(os.getenv("TRAIL_RT_ADJUST_THRESHOLD", "0.2") or 0.2)  # % diff required to re-place
 TRAIL_RT_WATCH = [s.strip().upper() for s in (os.getenv("TRAIL_RT_WATCHLIST", "") or "").split(",") if s.strip()]
 
+# ===== NEW knobs from request =====
+IDEM_TTL_SEC = int(os.getenv("IDEM_TTL_SEC", "60") or 60)
+USE_REDIS_IDEM = os.getenv("USE_REDIS_IDEM", "0").lower() in ("1", "true", "yes", "on")
+TRAIL_PAUSE_WINDOWS = (os.getenv("TRAIL_PAUSE_WINDOWS", "") or "").strip()   # e.g. "22:00-02:00Z,11:30-12:00Z"
+AUTO_TRAIL_ADX_MIN = float(os.getenv("AUTO_TRAIL_ADX_MIN", "0") or 0.0)
+AUTO_TRAIL_ATRPCT_MAX = float(os.getenv("AUTO_TRAIL_ATRPCT_MAX", "0") or 0.0)
+
 # ==================== App & CORS ====================
 APP_TITLE = os.getenv("APP_TITLE", "AlgoGPT API")
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "dev")
@@ -112,7 +119,6 @@ ULTRATOP_MODE = os.getenv("ULTRATOP_MODE", "noop").lower()
 ULTRATOP_PREFIX = os.getenv("ULTRATOP_PREFIX", "/ultra")
 
 try:
-    # Import is safe even ב-noop (main_ultratop.py לא יצרף Router אוטומטית במצב זה)
     from main_ultratop import setup_ultratop  # type: ignore
     if ULTRATOP_MODE in ("mount", "embed", "attach"):
         setup_ultratop(app, prefix=ULTRATOP_PREFIX)
@@ -125,19 +131,14 @@ except Exception as e:
 # ---------- Safe HEAD & /readyz (first middleware) ----------
 @app.middleware("http")
 async def _head_compat_and_soft_readyz(request: Request, call_next):
-    # Fast /readyz path
     if request.url.path == "/readyz":
         return PlainTextResponse("ok", status_code=200)
-
-    # Normalize HEAD to GET, but keep bodyless response semantics
     if request.method == "HEAD":
         scope_copy = dict(request.scope)
         scope_copy["method"] = "GET"
         new_req = Request(scope_copy, receive=request.receive)
         resp = await call_next(new_req)
-        # Return same status + headers, no body
         return StarletteResponse(status_code=resp.status_code, headers=dict(resp.headers), media_type=resp.media_type)
-
     return await call_next(request)
 
 # ---------- CORS ----------
@@ -254,30 +255,25 @@ def _verify_signed_params(ticket_id: str, exp: str, sig: str, path: str) -> bool
 # ==================== Simple ConfirmStore (in-memory fallback) ====================
 class ConfirmStore:
     _items: Dict[str, Dict[str, Any]] = {}
-    _lock = threading.Lock()
 
     @classmethod
     def create(cls, req: Dict[str, Any]) -> None:
-        with cls._lock:
-            tid = str(req.get("ticket_id") or f"T_{int(time.time())}_{secrets.token_hex(3)}")
-            cls._items[tid] = {"ticket_id": tid, "req": dict(req), "ts": time.time(), "approved": None}
+        tid = str(req.get("ticket_id") or f"T_{int(time.time())}_{secrets.token_hex(3)}")
+        cls._items[tid] = {"ticket_id": tid, "req": dict(req), "ts": time.time(), "approved": None}
 
     @classmethod
     def decide(cls, ticket_id: str, approved: bool) -> None:
-        with cls._lock:
-            it = cls._items.get(str(ticket_id))
-            if it:
-                it["approved"] = bool(approved)
+        it = cls._items.get(str(ticket_id))
+        if it:
+            it["approved"] = bool(approved)
 
     @classmethod
     def pending(cls) -> List[Dict[str, Any]]:
-        with cls._lock:
-            return [v for v in cls._items.values() if v.get("approved") is None]
+        return [v for v in cls._items.values() if v.get("approved") is None]
 
     @classmethod
     def remove(cls, ticket_id: str) -> None:
-        with cls._lock:
-            cls._items.pop(str(ticket_id), None)
+        cls._items.pop(str(ticket_id), None)
 
 
 # ==================== Shared HTTP and Redis ====================
@@ -347,22 +343,13 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
     except Exception as e:
         logger.debug("rate_limit_redis_fallback: %s", e)
 
-    # in-memory fallback (+ cleanup)
+    # in-memory fallback
     bucket = getattr(app.state, "rl_mem", None)
-    now = time.time()
     if bucket is None:
         bucket = {}
-        app.state.rlm_epoch = now
+        app.state.rlm_epoch = time.time()
         app.state.rl_mem = bucket
-    # periodic cleanup
-    if now - getattr(app.state, "rlm_epoch", now) > 60:
-        stale = []
-        for k, rec in bucket.items():
-            if (now - rec.get("start", now)) >= max(PUBLIC_TOPK_WINDOW, PUBLIC_NOW_WINDOW):
-                stale.append(k)
-        for k in stale:
-            bucket.pop(k, None)
-        app.state.rlm_epoch = now
+    now = time.time()
     rec = bucket.get(key)
     if not rec or (now - rec["start"]) >= window_sec:
         bucket[key] = {"start": now, "count": 1}
@@ -407,7 +394,6 @@ def _should_public_cache(path: str) -> bool:
 
 @app.middleware("http")
 async def _public_cache_etag(request: Request, call_next):
-    # רשת ביטחון לכל המסלולים נגד "No response returned"
     if request.method.upper() != "GET" or not _should_public_cache(request.url.path):
         try:
             return await call_next(request)
@@ -415,54 +401,42 @@ async def _public_cache_etag(request: Request, call_next):
             if "No response returned" in str(e):
                 return PlainTextResponse("", status_code=204)
             raise
-
-    # compute response once
     try:
         resp: Response = await call_next(request)
     except RuntimeError as e:
         if "No response returned" in str(e):
             return PlainTextResponse("", status_code=204)
         raise
-
-    # skip caching for errors / empty body
     try:
         if int(getattr(resp, "status_code", 200)) >= 400:
             return resp
         hdrs_lower = {k.lower() for k in resp.headers.keys()}
-        # Cache-Control
         if "cache-control" not in hdrs_lower:
             resp.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_MAX_AGE}"
-        # Body (for ETag)
         body = b""
         with suppress(Exception):
             body = resp.body if getattr(resp, "body", None) else b""
         if not body:
-            # still ensure Vary header exists for clarity
             if "vary" not in hdrs_lower:
                 resp.headers["Vary"] = "If-None-Match"
             elif "if-none-match" not in resp.headers.get("Vary", "").lower():
                 resp.headers["Vary"] = resp.headers["Vary"] + ", If-None-Match"
             return resp
-        # ETag
         etag = '"' + hashlib.md5(body).hexdigest() + '"'
         if "etag" not in hdrs_lower:
             resp.headers["ETag"] = etag
-        # Vary: If-None-Match
         if "vary" not in hdrs_lower:
             resp.headers["Vary"] = "If-None-Match"
         elif "if-none-match" not in resp.headers.get("Vary", "").lower():
             resp.headers["Vary"] = resp.headers["Vary"] + ", If-None-Match"
-        # Conditional
         inm = request.headers.get("If-None-Match")
         if inm and inm == etag and resp.status_code == 200:
             fresh = Response(status_code=304)
             fresh.headers["Cache-Control"] = resp.headers.get("Cache-Control", f"public, max-age={PUBLIC_CACHE_MAX_AGE}")
             fresh.headers["ETag"] = etag
-            # also mirror Vary header for transparency
             fresh.headers["Vary"] = resp.headers.get("Vary", "If-None-Match")
             return fresh
     except Exception:
-        # אל תקרוס – החזר את התשובה כפי שהיא
         return resp
     return resp
 
@@ -474,6 +448,21 @@ def _md_html(s: str) -> str:
 
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                               reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
+    # --- NEW: idempotency on Redis to avoid duplicate sends within IDEM_TTL_SEC ---
+    if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
+        try:
+            r = await _get_redis_cached()
+            if r:
+                key_payload = json.dumps({"t": text, "a": approve_url, "r": reject_url, "p": preview_url}, ensure_ascii=False, separators=(",", ":"))
+                idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
+                ok = await r.setnx(idem_key, "1")
+                if not ok:
+                    return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
+                with suppress(Exception):
+                    await r.expire(idem_key, int(IDEM_TTL_SEC))
+        except Exception as e:
+            logger.debug("telegram_idem_warning: %s", e)
+
     if not TELEGRAM_BOT_TOKEN or not ADMIN_CHAT_ID:
         return {"ok": False, "skipped": True}
     try:
@@ -592,8 +581,6 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
 # ==================== Misc helpers ====================
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
 
-# alias for readability
-to_thread = asyncio.to_thread
 
 def _parse_mode(note: Optional[str]) -> Optional[str]:
     if not note:
@@ -670,7 +657,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
         with suppress(Exception):
-            await to_thread(client.futures_change_leverage, symbol=symbol, leverage=leverage)
+            client.futures_change_leverage(symbol=symbol, leverage=leverage)
         base_kwargs: Dict[str, Any] = {
             "symbol": symbol,
             "side": side,
@@ -683,19 +670,19 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         if pos_side_supplied in ("LONG", "SHORT"):
             attempt_order["positionSide"] = pos_side_supplied
         try:
-            order = await to_thread(client.futures_create_order, **attempt_order)
+            order = client.futures_create_order(**attempt_order)
             return {"ok": True, "exchange": "binance_futures", "order": order}
         except Exception as e1:
             if not _is_code_4061(e1):
                 raise
             try:
-                order = await to_thread(client.futures_create_order, **base_kwargs)
+                order = client.futures_create_order(**base_kwargs)
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "no_positionSide"}
             except Exception as e2:
                 try:
                     retry2_kwargs = dict(base_kwargs)
                     retry2_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
-                    order = await to_thread(client.futures_create_order, **retry2_kwargs)
+                    order = client.futures_create_order(**retry2_kwargs)
                     return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "derived_positionSide"}
                 except Exception as e3:
                     return {"ok": False, "error": "order_failed", "detail": str(e3), "first_error": str(e1), "second_error": str(e2)}
@@ -733,7 +720,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
             cli_ = Client(api_key, api_sec)
             _align_position_mode(cli_)
             with suppress(Exception):
-                await to_thread(cli_.futures_change_leverage, symbol=symbol, leverage=leverage)
+                cli_.futures_change_leverage(symbol=symbol, leverage=leverage)
     except Exception:
         pass
     base_kwargs: Dict[str, Any] = dict(
@@ -1477,43 +1464,22 @@ def _round_tick_dir(value: float, step: float, direction: str) -> float:
     return math.floor(q) * step
 
 
-# ====== Cached exchange info (tick/step) ======
-async def _load_exchange_info_cached(client) -> Dict[str, Tuple[float, float]]:
-    """
-    Returns {symbol: (tick, step)} with a short TTL cache in app.state.
-    """
-    ttl = int(os.getenv("EXINFO_CACHE_TTL_SEC", "120") or 120)
-    now = time.time()
-    cache = getattr(app.state, "exinfo_cache", None)
-    if cache and (now - cache.get("ts", 0) <= ttl):
-        return cache.get("map", {})
-    # fetch on a thread
+def _get_filters(client, symbol: str) -> Tuple[float, float]:
+    tick = 0.1
+    step = 0.001
     try:
-        ex = await to_thread(client.futures_exchange_info)
-    except Exception:
-        ex = {}
-    mapping: Dict[str, Tuple[float, float]] = {}
-    try:
+        ex = client.futures_exchange_info()
         for s in ex.get("symbols", []):
-            sym = s.get("symbol")
-            tick = 0.1
-            step = 0.001
-            for f in s.get("filters", []):
-                if f.get("filterType") == "PRICE_FILTER":
-                    tick = float(f.get("tickSize", tick))
-                if f.get("filterType") == "LOT_SIZE":
-                    step = float(f.get("stepSize", step))
-            if sym:
-                mapping[sym] = (tick, step)
+            if s.get("symbol") == symbol:
+                for f in s.get("filters", []):
+                    if f.get("filterType") == "PRICE_FILTER":
+                        tick = float(f.get("tickSize", tick))
+                    if f.get("filterType") == "LOT_SIZE":
+                        step = float(f.get("stepSize", step))
+                break
     except Exception:
         pass
-    app.state.exinfo_cache = {"ts": now, "map": mapping}
-    return mapping
-
-
-async def _get_filters_async(client, symbol: str) -> Tuple[float, float]:
-    mapping = await _load_exchange_info_cached(client)
-    return mapping.get(symbol, (0.1, 0.001))
+    return tick, step
 
 
 def _pos_side_from_amt(side_text: str, pos_amt: float) -> str:
@@ -1533,7 +1499,7 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
     # 1) שליפת קליינים וחישוב אינדיקטורים
     klines = []
     try:
-        klines = await to_thread(client.futures_klines, symbol=symbol, interval="1m", limit=60)
+        klines = client.futures_klines(symbol=symbol, interval="1m", limit=60)
     except Exception:
         klines = []
     indicators = _compute_indicators_from_klines(klines or [], period=14)
@@ -1587,6 +1553,51 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
     return prof, {"price": price, "atr": atr, "adx": adx}, profile_name
 # ------------------------------------------------------------------------------------------------
 
+# --- NEW: pause-windows parser for trailing loop (UTC) ---
+def _parse_pause_windows(spec: str) -> List[Tuple[int, int]]:
+    """
+    Parse "HH:MM-HH:MMZ,..." into list of (start_min, end_min) in UTC.
+    Supports overnight ranges (end < start).
+    """
+    windows: List[Tuple[int, int]] = []
+    for part in [p.strip() for p in (spec or "").split(",") if p.strip()]:
+        p = part.rstrip("Zz")
+        if "-" not in p:
+            continue
+        a, b = [x.strip() for x in p.split("-", 1)]
+        def _hm(s: str) -> Optional[int]:
+            try:
+                hh, mm = s.split(":")
+                h = int(hh); m = int(mm)
+                if 0 <= h < 24 and 0 <= m < 60:
+                    return h * 60 + m
+            except Exception:
+                return None
+            return None
+        s = _hm(a); e = _hm(b)
+        if s is None or e is None:
+            continue
+        windows.append((s, e))
+    return windows
+
+def _in_pause_window_utc(now: Optional[time.struct_time] = None) -> bool:
+    if not TRAIL_PAUSE_WINDOWS:
+        return False
+    try:
+        t = now or time.gmtime()
+        cur = t.tm_hour * 60 + t.tm_min
+        for s, e in _parse_pause_windows(TRAIL_PAUSE_WINDOWS):
+            if s <= e:
+                if s <= cur < e:
+                    return True
+            else:
+                # overnight window, e.g., 22:00-02:00
+                if cur >= s or cur < e:
+                    return True
+    except Exception:
+        return False
+    return False
+
 
 @router.post("/manage-once")
 async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
@@ -1612,7 +1623,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     entry_price = None
     side_txt = None
     try:
-        positions = await to_thread(client.futures_position_information, symbol=symbol)
+        positions = client.futures_position_information(symbol=symbol)
         for p in positions:
             amt = float(p.get("positionAmt") or 0.0)
             if abs(amt) > 0:
@@ -1626,11 +1637,11 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     if not side_txt or not entry_price or abs(pos_amt) <= 0:
         return {"ok": True, "skipped": True, "reason": "no_open_position"}
 
-    # --- Get filters and price first (cached) ---
-    tick, step = await _get_filters_async(client, symbol)
+    # --- Get filters and price first (moved up) ---
+    tick, step = _get_filters(client, symbol)
     price_now = None
     with suppress(Exception):
-        tick_data = await to_thread(client.futures_symbol_ticker, symbol=symbol)
+        tick_data = client.futures_symbol_ticker(symbol=symbol)
         if tick_data and "price" in tick_data:
             price_now = float(tick_data["price"])
     base_price = price_now or entry_price
@@ -1668,12 +1679,12 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
 
     # --- Cancel existing protective stops/trails before placing ours ---
     try:
-        open_orders = await to_thread(client.futures_get_open_orders, symbol=symbol)
+        open_orders = client.futures_get_open_orders(symbol=symbol)
         for o in open_orders or []:
             t = o.get("type", "")
             if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
                 with suppress(Exception):
-                    await to_thread(client.futures_cancel_order, symbol=symbol, orderId=o.get("orderId"))
+                    client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
     except Exception:
         pass
 
@@ -1688,7 +1699,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
             workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
             newClientOrderId=build_client_order_id(symbol, "SELL" if side_txt == "BUY" else "BUY", role="SL@BE"),
         )
-        await to_thread(client.futures_create_order, **sl_kwargs)
+        client.futures_create_order(**sl_kwargs)
     except Exception as e:
         logger.warning("place_be_stop_failed: %s", e)
 
@@ -1702,14 +1713,8 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
 
     qty_abs = abs(pos_amt)
     placed_tp = []
-
-    # ensure sum(qtys)==pos by allocating rounding residue to last TP
-    qty_plan = [max(0.0, _bn_round(qty_abs * float(s), step)) for s in splits]
-    residue = max(0.0, _bn_round(qty_abs, step) - _bn_round(sum(qty_plan), step))
-    if residue > 0 and qty_plan:
-        qty_plan[-1] = _bn_round(qty_plan[-1] + residue, step)
-
-    for i, (tp_price, qty_i) in enumerate(zip(tps, qty_plan), start=1):
+    for i, (tp_price, split) in enumerate(zip(tps, splits), start=1):
+        qty_i = _bn_round(qty_abs * float(split), step)
         if qty_i <= 0:
             continue
         tp_kwargs = dict(
@@ -1723,7 +1728,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
             newClientOrderId=build_client_order_id(symbol, "SELL" if side_txt == "BUY" else "BUY", role=f"TP{i}"),
         )
         try:
-            await to_thread(client.futures_create_order, **tp_kwargs)
+            client.futures_create_order(**tp_kwargs)
             placed_tp.append({"i": i, "price": tp_price, "qty": qty_i})
         except Exception as e:
             logger.warning("place_tp_failed[%s]: %s", i, e)
@@ -1731,7 +1736,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     placed_trail = None
     if atr_mult is not None:
         try:
-            kl = await to_thread(client.futures_klines, symbol=symbol, interval="1m", limit=50)
+            kl = client.futures_klines(symbol=symbol, interval="1m", limit=50)
             highs = [float(k[2]) for k in kl]
             lows = [float(k[3]) for k in kl]
             closes = [float(k[4]) for k in kl]
@@ -1752,7 +1757,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
                 workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
                 newClientOrderId=build_client_order_id(symbol, "SELL" if side_txt == "BUY" else "BUY", role="TRAIL"),
             )
-            await to_thread(client.futures_create_order, **trail_kwargs)
+            client.futures_create_order(**trail_kwargs)
             placed_trail = {"callbackRate": round(callback_rate, 1)}
         except Exception as e:
             logger.warning("place_trailing_failed: %s", e)
@@ -1851,7 +1856,6 @@ async def telegram_hook_alias(request: Request):
 
 
 # ==================== Register routers (incl. missing/optional) ====================
-# קיימים:
 try:
     from routes.manager import router as manager_router  # type: ignore
     app.include_router(manager_router)
@@ -1907,7 +1911,6 @@ try:
 except Exception as e:
     logger.warning("alerts router not loaded: %s", e)
 
-# חדשים/אופציונליים (לפי ה-tags/קונפיג):
 for mod, tag in (
     ("routes.ops_ui", "ops-ui"),
     ("routes.ops_flags", "ops-flags"),
@@ -1915,7 +1918,6 @@ for mod, tag in (
     ("routes.ops_digest", "ops-digest"),
     ("routes.aliases", "aliases"),
     ("routes.public", "Public Feed"),
-    # ✅ תמיכה גם במודול public_web:
     ("routes.public_web", "Public Feed"),
     ("routes.ai", "AI"),
 ):
@@ -1925,7 +1927,6 @@ for mod, tag in (
     except Exception as e:
         logger.warning("%s router not loaded: %s", mod, e)
 
-# הליבה שלנו
 app.include_router(router)
 
 
@@ -2001,40 +2002,34 @@ async def global_exception_handler(request: Request, exc: Exception):
     payload: Dict[str, Any] = {"ok": False, "error": "internal_error", "id": error_id}
     if show_detail:
         payload["detail"] = str(exc)
-    resp = JSONResponse(status_code=500, content=payload)
-    resp.headers["X-Error-ID"] = error_id
-    return resp
+    return JSONResponse(status_code=500, content=payload)
 
 
 # ==================== Startup / Shutdown ====================
 
 def _collect_critical_env_warnings() -> List[str]:
     warnings: List[str] = []
-    # Redis
     if REQUIRE_REDIS and not REDIS_URL:
         warnings.append("REQUIRE_REDIS=1 but REDIS_URL is missing")
-    # API bearer
     if os.getenv("PROTECT_APPROVE_ROUTES", "1").lower() in ("1", "true", "yes", "on") and not API_BEARER_TOKEN:
         warnings.append("PROTECT_APPROVE_ROUTES=1 but API_BEARER_TOKEN is missing")
-    # Telegram
     if STARTUP_NOTIFY_ENABLE or os.getenv("REQUIRE_TELEGRAM_APPROVAL", "0").lower() in ("1", "true", "yes", "on"):
         if not TELEGRAM_BOT_TOKEN:
             warnings.append("Telegram enabled but TELEGRAM_BOT_TOKEN is missing")
         if not ADMIN_CHAT_ID:
             warnings.append("Telegram enabled but TELEGRAM_CHAT_ID/ADMIN_CHAT_ID is missing")
-    # HMAC/signed links
     if os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on") and not TELEGRAM_WEBHOOK_SECRET:
         warnings.append("TELEGRAM_AUTO_WEBHOOK=1 but TELEGRAM_WEBHOOK_SECRET is missing")
     if not HMAC_SECRET:
         warnings.append("WEBHOOK_HMAC_SECRET/OPS_SIGN_SECRET missing — signed approve links will degrade to plain URLs")
-    # Binance keys (only warn if trade execution is enabled)
     if os.getenv("EXECUTE_TRADES", "0").lower() in ("1", "true", "yes", "on"):
         if not os.getenv("BINANCE_API_KEY") or not os.getenv("BINANCE_API_SECRET"):
             warnings.append("EXECUTE_TRADES=1 but BINANCE_API_KEY/SECRET are missing")
-    # Anti-replay signature
     if os.getenv("ANTI_REPLAY_ENABLE", "0").lower() in ("1", "true", "yes", "on"):
         if os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "0").lower() in ("1", "true", "yes", "on") and not os.getenv("API_SIGNING_SECRET"):
             warnings.append("ANTI_REPLAY_REQUIRE_SIGNATURE=1 but API_SIGNING_SECRET is missing")
+    if USE_REDIS_IDEM and not REDIS_URL:
+        warnings.append("USE_REDIS_IDEM=1 but REDIS_URL is missing")
     return warnings
 
 
@@ -2043,8 +2038,9 @@ async def _trail_rt_loop():
     """
     לולאת Trailing בזמן אמת (Best-effort):
     • מאתרת פוזיציות פתוחות (או לפי TRAIL_RT_WATCH).
-    • מחשבת ATR(1m) ומציבה/מכוונת TRIALING_STOP_MARKET עם reduceOnly.
-    • אם כבר קיים טריילינג דומה — לא מבטלת כדי לחסוך ריצודים.
+    • מחשבת ATR/ADX (1m) ומציבה/מכוונת TRIALING_STOP_MARKET עם reduceOnly.
+    • מכבדת חלונות השהיה (TRAIL_PAUSE_WINDOWS) ב־UTC.
+    • מסננת לפי AUTO_TRAIL_ADX_MIN / AUTO_TRAIL_ATRPCT_MAX.
     """
     if not TRAIL_RT_ENABLE:
         return
@@ -2062,10 +2058,9 @@ async def _trail_rt_loop():
     client = Client(api_key, api_sec)
     _align_position_mode(client)
 
-    def _symbols_to_check_sync() -> List[str]:
+    def _symbols_to_check() -> List[str]:
         if TRAIL_RT_WATCH:
             return TRAIL_RT_WATCH[:TRAIL_RT_MAX_SYMBOLS]
-        # derive from positions
         out: List[str] = []
         with suppress(Exception):
             infos = client.futures_account()['positions']
@@ -2078,7 +2073,6 @@ async def _trail_rt_loop():
                     continue
         if not out:
             return WATCHLIST[:TRAIL_RT_MAX_SYMBOLS]
-        # keep uniqueness and cap
         uniq: List[str] = []
         for s in out:
             if s and s not in uniq:
@@ -2087,14 +2081,19 @@ async def _trail_rt_loop():
 
     while True:
         try:
-            syms = await to_thread(_symbols_to_check_sync)
+            # Pause windows (UTC)
+            if _in_pause_window_utc():
+                await asyncio.sleep(max(3, TRAIL_RT_INTERVAL_SEC))
+                continue
+
+            syms = _symbols_to_check()
             for sym in syms:
                 # position?
                 pos_amt = 0.0
                 side_txt = None
                 entry_price = 0.0
                 with suppress(Exception):
-                    infos = await to_thread(client.futures_position_information, symbol=sym)
+                    infos = client.futures_position_information(symbol=sym)
                     for p in infos:
                         amt = float(p.get("positionAmt") or 0.0)
                         if abs(amt) > 0:
@@ -2108,24 +2107,26 @@ async def _trail_rt_loop():
                 # last price
                 px_now = entry_price
                 with suppress(Exception):
-                    t = await to_thread(client.futures_symbol_ticker, symbol=sym)
+                    t = client.futures_symbol_ticker(symbol=sym)
                     if t and "price" in t:
                         px_now = float(t["price"]) or px_now
                 if px_now <= 0:
                     continue
 
-                # quick ATR
-                atr = 0.0
+                # indicators (ATR & ADX)
+                kl = []
                 with suppress(Exception):
-                    kl = await to_thread(client.futures_klines, symbol=sym, interval="1m", limit=50)
-                    highs = [float(k[2]) for k in kl]
-                    lows = [float(k[3]) for k in kl]
-                    closes = [float(k[4]) for k in kl]
-                    trs = []
-                    for i in range(1, len(kl)):
-                        h, l, pc = highs[i], lows[i], closes[i - 1]
-                        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
-                    atr = sum(trs[-14:]) / float(min(14, len(trs))) if trs else 0.0
+                    kl = client.futures_klines(symbol=sym, interval="1m", limit=60)
+                ind = _compute_indicators_from_klines(kl or [], period=14)
+                atr = float(ind.get("atr") or 0.0)
+                adx = float(ind.get("adx") or 0.0)
+                atr_pct = (atr / px_now) if px_now > 0 else 0.0
+
+                # Optional filters
+                if AUTO_TRAIL_ADX_MIN > 0 and adx < AUTO_TRAIL_ADX_MIN:
+                    continue
+                if AUTO_TRAIL_ATRPCT_MAX > 0 and atr_pct > AUTO_TRAIL_ATRPCT_MAX:
+                    continue
 
                 cb = (atr * TRAIL_RT_ATR_MULT / px_now) * 100.0 if px_now > 0 else 0.5
                 cb = max(TRAIL_RT_MIN_CALLBACK, min(TRAIL_RT_MAX_CALLBACK, cb))
@@ -2134,19 +2135,17 @@ async def _trail_rt_loop():
                 # inspect open trail orders
                 existing = None
                 with suppress(Exception):
-                    oo = await to_thread(client.futures_get_open_orders, symbol=sym)
+                    oo = client.futures_get_open_orders(symbol=sym)
                     for o in oo or []:
                         if o.get("type") == "TRAILING_STOP_MARKET":
                             existing = o
                             break
 
-                # decide if adjust needed
                 need_place = False
                 need_adjust = False
                 if not existing:
                     need_place = True
                 else:
-                    # if current callbackRate differs meaningfully -> adjust
                     ex_cb = None
                     with suppress(Exception):
                         ex_cb = float(existing.get("callbackRate"))
@@ -2155,7 +2154,7 @@ async def _trail_rt_loop():
 
                 if need_adjust:
                     with suppress(Exception):
-                        await to_thread(client.futures_cancel_order, symbol=sym, orderId=existing.get("orderId"))  # type: ignore[arg-type]
+                        client.futures_cancel_order(symbol=sym, orderId=existing.get("orderId"))  # type: ignore[arg-type]
                     need_place = True
 
                 if need_place:
@@ -2169,7 +2168,7 @@ async def _trail_rt_loop():
                         newClientOrderId=build_client_order_id(sym, ("SELL" if side_txt == "BUY" else "BUY"), role="TRAIL@RT"),
                     )
                     with suppress(Exception):
-                        await to_thread(client.futures_create_order, **kwargs)
+                        client.futures_create_order(**kwargs)
         except Exception as e:
             logger.debug("trail_rt.loop_error: %s", e)
         await asyncio.sleep(max(3, TRAIL_RT_INTERVAL_SEC))
@@ -2184,7 +2183,6 @@ async def _startup_tasks():
     app.state.boot_ts = time.time()
     _ = _get_shared_async_client()
 
-    # --- NEW: central env warnings ---
     env_w = _collect_critical_env_warnings()
     if env_w:
         logger.warning("=== Startup env warnings (%d) ===", len(env_w))
@@ -2196,7 +2194,6 @@ async def _startup_tasks():
             if TELEGRAM_AUTO_WEBHOOK:
                 await asyncio.sleep(1.0)
                 await _ensure_telegram_webhook()
-        # Optional startup ping
         if STARTUP_NOTIFY_ENABLE and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID:
             try:
                 txt = f"🟢 <b>{_md_html(os.getenv('INSTANCE_ID','algogpt'))}</b> up · v{_md_html(APP_VERSION)}"
@@ -2206,7 +2203,6 @@ async def _startup_tasks():
 
     asyncio.create_task(_late_webhook())
 
-    # --- NEW: spawn real-time trailing manager
     if TRAIL_RT_ENABLE:
         asyncio.create_task(_trail_rt_loop())
 
@@ -2233,6 +2229,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
