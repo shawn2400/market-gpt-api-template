@@ -1,0 +1,72 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "AlgoGPT Dynamic Policy Schema",
+  "type": "object",
+  "properties": {
+    "breakeven": {
+      "type": "object",
+      "properties": {
+        "enable": { "type": "boolean" },
+        "only_after_tp1": { "type": "boolean" },
+        "offset_bps": { "type": "number", "minimum": 0 },
+        "guard_every_sec": { "type": "integer", "minimum": 0 },
+        "arm_pct": { "type": "number", "minimum": 0 }
+      },
+      "required": ["enable", "offset_bps"],
+      "additionalProperties": false
+    },
+    "trailing": {
+      "type": "object",
+      "properties": {
+        "enable": { "type": "boolean" },
+        "atr_mult": { "type": "number", "minimum": 0 },
+        "callback_min_pct": { "type": "number", "minimum": 0 },
+        "callback_max_pct": { "type": "number", "minimum": 0 },
+        "freeze_on_pullback": { "type": "boolean" }
+      },
+      "required": ["enable", "atr_mult"],
+      "additionalProperties": false
+    },
+    "ladder": {
+      "type": "object",
+      "properties": {
+        "tp": {
+          "type": "object",
+          "properties": {
+            "enable": { "type": "boolean" },
+            "splits": {
+              "type": "array",
+              "items": { "type": "number", "minimum": 0 },
+              "minItems": 1
+            },
+            "targets_pct": {
+              "type": "array",
+              "items": { "type": "number" },
+              "minItems": 1
+            },
+            "place_native": { "type": "boolean" }
+          },
+          "required": ["enable"],
+          "additionalProperties": false
+        },
+        "sl": {
+          "type": "object",
+          "properties": {
+            "enable": { "type": "boolean" },
+            "atr_mult": { "type": "number", "minimum": 0 },
+            "place_native": { "type": "boolean" }
+          },
+          "required": ["enable"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["tp", "sl"],
+      "additionalProperties": false
+    },
+    "thresholds": { "type": "object" },
+    "guards": { "type": "object" },
+    "sizing": { "type": "object" },
+    "regime": { "type": "object" }
+  },
+  "additionalProperties": true
+}
