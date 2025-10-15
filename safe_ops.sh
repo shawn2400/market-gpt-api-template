@@ -1,202 +1,153 @@
 #!/usr/bin/env bash
-# safe_ops.sh — לקוח CLI חתום ל־position-ops
-# דרישות ENV: PUBLIC_HOST, API_BEARER_TOKEN, OPS_SIGN_SECRET
+# safe_ops.sh — tiny helper for AlgoGPT ops
+# Usage examples at bottom.
+
 set -euo pipefail
 
-need() { : "${!1:?need $1}"; }
-need PUBLIC_HOST
-need API_BEARER_TOKEN
-need OPS_SIGN_SECRET
+# ===== Config via env =====
+HOST="${HOST:-http://127.0.0.1:10000}"
+TOKEN="${API_BEARER_TOKEN:-}"
+SIGN_SECRET="${API_SIGNING_SECRET:-}"   # optional (for /manage-once when anti-replay enabled)
 
-# ---------- חתימה כללית ----------
-sign_call() {
-  # שימוש: sign_call "/path" '{"json":"compact"}' [METHOD]
-  local path="$1"
-  local body="${2:-{}}"
-  local method="${3:-POST}"
-  local ts nonce payload sig
-  ts="$(date +%s)"
-  nonce="$(cat /proc/sys/kernel/random/uuid)"
-  payload="$(printf '%s\n%s\n%s\n%s\n%s' "$method" "$path" "$body" "$ts" "$nonce")"
-  sig="$(printf '%s' "$payload" | openssl dgst -sha256 -hmac "$OPS_SIGN_SECRET" -r | awk '{print $1}')"
-  if [ "$method" = "GET" ]; then
-    curl -fsS -X GET "$PUBLIC_HOST$path" \
-      -H "Authorization: Bearer $API_BEARER_TOKEN" \
-      -H "X-Timestamp: $ts" -H "X-Nonce: $nonce" -H "X-Signature: $sig"
-  else
-    curl -fsS -X "$method" "$PUBLIC_HOST$path" \
-      -H "Authorization: Bearer $API_BEARER_TOKEN" \
-      -H "Content-Type: application/json" \
-      -H "X-Timestamp: $ts" -H "X-Nonce: $nonce" -H "X-Signature: $sig" \
-      --data-binary "$body"
+# ===== Internals =====
+hdrs() {
+  local extra=()
+  [[ -n "$TOKEN" ]] && extra+=(-H "Authorization: Bearer $TOKEN")
+  extra+=(-H "Content-Type: application/json")
+  printf '%s\0' "${extra[@]}" | xargs -0 echo
+}
+sign_headers() {
+  # Creates X-Timestamp / X-Nonce / X-Signature headers for anti-replay.
+  # Signature = HMAC-SHA256(secret, f"{ts}.{nonce}.{body}")
+  local body="${1:-""}"
+  if [[ -z "$SIGN_SECRET" ]]; then
+    echo ""
+    return 0
   fi
+  local ts nonce sig
+  ts="$(date +%s)"
+  nonce="$(openssl rand -hex 8)"
+  sig="$(printf '%s.%s.%s' "$ts" "$nonce" "$body" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:${SIGN_SECRET}" -r | awk '{print $1}')"
+  echo -H "X-Timestamp: ${ts}" -H "X-Nonce: ${nonce}" -H "X-Signature: ${sig}"
 }
 
-# ---------- עזרה ----------
-usage() {
-  cat <<'USAGE'
-usage:
-  manage-once-lite SYMBOL
-  be SYMBOL [OFFSET_BPS]
-  trail SYMBOL [callbackRate|auto [ATR_MULT]]
-  trail-off SYMBOL
-  tp-one SYMBOL (pct:PCT | price:PX)
-  tp-ladder SYMBOL [PCTS_CSV] [SPLITS_CSV]
-  tp-cancel SYMBOL
-  sl-move SYMBOL PRICE
-  close SYMBOL [FRACTION 0..1]
-  status SYMBOL
-  auto-start ["SYM1,SYM2"] [EVERY_SEC]
-  auto-stop
-  open-top SYMBOL NOTIONAL_USDT LEVERAGE GATE(top|long|short|auto_up|auto_down) [--tp "1.8,3.2,5.5"] [--splits "0.4,0.35,0.25"] [--trail-atr 1.2|--trail-cb 1.0]
+# ===== Commands =====
+ticket() {
+  # ticket SYMBOL SIDE [QTY] [LEV] [NOTE]
+  local sym="${1:?SYMBOL}"; shift
+  local side="${1:?SIDE}"; shift
+  local qty="${1:-0}"; shift || true
+  local lev="${1:-0}"; shift || true
+  local note="${1:-"[mode: HYBRID]"}"
 
-דוגמאות:
-  ./safe_ops.sh manage-once-lite BTCUSDT
-  ./safe_ops.sh be BTCUSDT 8
-  ./safe_ops.sh trail BTCUSDT auto 1.2
-  ./safe_ops.sh tp-one BTCUSDT pct:2.5
-  ./safe_ops.sh tp-ladder BTCUSDT "3,6,12" "0.25,0.25,0.5"
-  ./safe_ops.sh sl-move BTCUSDT 12345.6
-  ./safe_ops.sh close BTCUSDT 0.25
-  ./safe_ops.sh status BTCUSDT
-  ./safe_ops.sh auto-start '["BTCUSDT","ETHUSDT"]' 20
-  ./safe_ops.sh open-top BTCUSDT 250 10 long --tp "2,4,7" --splits "0.4,0.35,0.25" --trail-atr 1.2
-USAGE
+  local body
+  body=$(cat <<JSON
+{"symbol":"${sym^^}","side":"${side^^}","qty":${qty},"leverage":${lev},"note":"${note}"}
+JSON
+)
+  curl -sS -X POST "$HOST/ops/ticket" $(hdrs) --data-raw "$body" | jq -r .
 }
 
-# ---------- פקודות ----------
+approve() { # approve TICKET_ID
+  local tid="${1:?ticket_id}"
+  curl -sS "$HOST/ops/approve?ticket_id=$tid" $(hdrs)
+}
+
+reject() { # reject TICKET_ID
+  local tid="${1:?ticket_id}"
+  curl -sS "$HOST/ops/reject?ticket_id=$tid" $(hdrs)
+}
+
+pending() {
+  curl -sS "$HOST/ops/ui/pending" $(hdrs)
+}
+
+manage_once() { # manage_once SYMBOL [offset_bps]  (auto profile if none)
+  local sym="${1:?SYMBOL}"
+  local offset="${2:-}"
+  local body
+  if [[ -n "$offset" ]]; then
+    body='{"symbol":"'"${sym^^}"'","offset_bps":'"$offset"'}'
+  else
+    body='{"symbol":"'"${sym^^}"'"}'
+  fi
+  curl -sS -X POST "$HOST/manage-once" $(hdrs) $(sign_headers "$body") --data-raw "$body" | jq -r .
+}
+
+smoke() { # smoke [CSV_SYMBOLS]
+  local syms="${1:-}"
+  local body
+  if [[ -n "$syms" ]]; then
+    body='"'"$syms"'"'
+  else
+    body='null'
+  fi
+  curl -sS -X POST "$HOST/guard/smoke/run" $(hdrs) --data-raw "$body" | jq -r .
+}
+
+digest() { # digest [HOURS]
+  local hrs="${1:-6}"
+  curl -sS "$HOST/ops/digest/expired?hours=$hrs" $(hdrs) | jq -r .
+}
+
+trade_event() { # trade_event SYMBOL EVENT [SIDE] [PRICE] [QTY] [LEV]
+  local sym="${1:?SYMBOL}"; shift
+  local ev="${1:?EVENT}"; shift
+  local side="${1:-}"; shift || true
+  local price="${1:-}"; shift || true
+  local qty="${1:-}"; shift || true
+  local lev="${1:-}"
+  local body='{"symbol":"'"${sym^^}"'","event":"'"${ev^^}"'"}'
+  [[ -n "$side"  ]] && body=$(jq -cn --argjson b "$body" --arg s "${side^^}"  '$b|fromjson|.side=$s|tojson')
+  [[ -n "$price" ]] && body=$(jq -cn --argjson b "$body" --arg p "$price"   '$b|fromjson|.price=($p|tonumber)|tojson')
+  [[ -n "$qty"   ]] && body=$(jq -cn --argjson b "$body" --arg q "$qty"     '$b|fromjson|.qty=($q|tonumber)|tojson')
+  [[ -n "$lev"   ]] && body=$(jq -cn --argjson b "$body" --arg l "$lev"     '$b|fromjson|.lev=($l|tonumber)|tojson')
+  body=$(echo "$body" | jq -r .)
+  curl -sS -X POST "$HOST/ops/trade-event" $(hdrs) --data-raw "$body" | jq -r .
+}
+
+help() {
+  cat <<'H'
+safe_ops.sh commands:
+
+  ticket SYMBOL SIDE [QTY] [LEV] [NOTE]   Create approval ticket
+  approve TICKET_ID                        Approve ticket (server will execute)
+  reject TICKET_ID                         Reject ticket
+  pending                                  List pending tickets (HTML)
+  manage_once SYMBOL [offset_bps]          Place BE SL + TP ladder for open pos
+  smoke [CSV_SYMBOLS]                      Run protective SL smoke-check
+  digest [HOURS]                           Send expired approvals digest
+  trade_event SYMBOL EVENT [SIDE] [PRICE] [QTY] [LEV]  Push a trade event
+
+ENV:
+  HOST (default http://127.0.0.1:10000)
+  API_BEARER_TOKEN (recommended)
+  API_SIGNING_SECRET (hex; optional, for anti-replay on /manage-once)
+
+Examples:
+  HOST=https://api.example.com API_BEARER_TOKEN=xxx ./safe_ops.sh ticket BTCUSDT BUY 0 20
+  ./safe_ops.sh pending
+  ./safe_ops.sh approve T_ab12cd34
+  ./safe_ops.sh manage_once ETHUSDT 5
+  ./safe_ops.sh smoke "BTCUSDT,ETHUSDT,SOLUSDT"
+  ./safe_ops.sh digest 12
+H
+}
+
 cmd="${1:-help}"; shift || true
-
 case "$cmd" in
-  help|-h|--help) usage ;;
-
-  manage-once-lite)
-    sym="${1:?need SYMBOL}"
-    body=$(printf '{"symbol":"%s","do":["be","tp_ladder"]}' "$sym")
-    sign_call "/position-ops/manage-once" "$body" ; echo
-    ;;
-
-  be)
-    sym="${1:?need SYMBOL}"; off="${2:-8}"
-    body=$(printf '{"symbol":"%s","offset_bps":%d}' "$sym" "$off")
-    sign_call "/position-ops/be" "$body" ; echo
-    ;;
-
-  trail)
-    sym="${1:?need SYMBOL}"; mode="${2:-auto}"; arg="${3:-}"
-    if [ "$mode" = "auto" ]; then
-      if [ -n "$arg" ]; then
-        body=$(printf '{"symbol":"%s","atr_mult":%s}' "$sym" "$arg")
-      else
-        body=$(printf '{"symbol":"%s","atr_mult":1.0}' "$sym")
-      fi
-    else
-      body=$(printf '{"symbol":"%s","callbackRate":%s}' "$sym" "$mode")
-    fi
-    sign_call "/position-ops/trail" "$body" ; echo
-    ;;
-
-  trail-off)
-    sym="${1:?need SYMBOL}"
-    body=$(printf '{"symbol":"%s"}' "$sym")
-    sign_call "/position-ops/trail/cancel" "$body" ; echo
-    ;;
-
-  tp-one)
-    sym="${1:?need SYMBOL}"; p="${2:?need pct:PCT or price:PX}"
-    case "$p" in
-      pct:*)   val="${p#pct:}"; body=$(printf '{"symbol":"%s","pct":%s}'   "$sym" "$val") ;;
-      price:*) val="${p#price:}"; body=$(printf '{"symbol":"%s","price":%s}' "$sym" "$val") ;;
-      *) echo "need pct:PCT or price:PX"; exit 2 ;;
-    esac
-    sign_call "/position-ops/tp/one" "$body" ; echo
-    ;;
-
-  tp-ladder)
-    sym="${1:?need SYMBOL}"; pcts="${2:-}"; splits="${3:-}"
-    if [ -n "${pcts:-}" ] && [ -n "${splits:-}" ]; then
-      body=$(printf '{"symbol":"%s","pcts":[%s],"splits":[%s]}' "$sym" "$pcts" "$splits")
-    else
-      body=$(printf '{"symbol":"%s"}' "$sym")
-    fi
-    sign_call "/position-ops/tp/ladder" "$body" ; echo
-    ;;
-
-  tp-cancel)
-    sym="${1:?need SYMBOL}"
-    body=$(printf '{"symbol":"%s"}' "$sym")
-    sign_call "/position-ops/tp/cancel" "$body" ; echo
-    ;;
-
-  sl-move)
-    sym="${1:?need SYMBOL}"; px="${2:?need PRICE}"
-    body=$(printf '{"symbol":"%s","price":%s}' "$sym" "$px")
-    sign_call "/position-ops/sl/move" "$body" ; echo
-    ;;
-
-  close)
-    sym="${1:?need SYMBOL}"; frac="${2:-1}"
-    body=$(printf '{"symbol":"%s","fraction":%s}' "$sym" "$frac")
-    sign_call "/position-ops/close" "$body" ; echo
-    ;;
-
-  status)
-    sym="${1:?need SYMBOL}"
-    # חתימה ל-GET: הגוף חייב להיות זהה בין הצדדים
-    body=$(printf '{"symbol":"%s"}' "$sym")
-    path=$(printf '/position-ops/status?symbol=%s' "$sym")
-    sign_call "$path" "$body" GET ; echo
-    ;;
-
-  auto-start)
-    # auto-start '["BTCUSDT","ETHUSDT"]' [EVERY_SEC] [STEPS] [ATR_MULT]
-    syms_json="${1:?need JSON array of symbols, e.g. [\"BTCUSDT\"]}"; shift || true
-    every="${1:-20}"; shift || true
-    steps="${1:-be,trail,tp_ladder}"; shift || true
-    atr="${1:-}" || true
-    if [ -n "$atr" ]; then
-      body=$(printf '{"symbols":%s,"every_sec":%s,"steps":["%s"],"atr_mult":%s}' "$syms_json" "$every" "${steps//,/\",\"}" "$atr")
-    else
-      body=$(printf '{"symbols":%s,"every_sec":%s,"steps":["%s"]}' "$syms_json" "$every" "${steps//,/\",\"}")
-    fi
-    sign_call "/position-ops/auto/start" "$body" ; echo
-    ;;
-
-  auto-stop)
-    sign_call "/position-ops/auto/stop" '{}' ; echo
-    ;;
-
-  open-top)
-    # יעבוד כשיתווסף ראוט השרת: /position-ops/auto/open-top
-    # שימוש: open-top SYMBOL NOTIONAL_USDT LEVERAGE GATE [--tp "..."] [--splits "..."] [--trail-atr X|--trail-cb Y]
-    sym="${1:?need SYMBOL}"; nto="${2:?need NOTIONAL_USDT}"; lev="${3:?need LEVERAGE}"; gate="${4:?need GATE}"; shift 4 || true
-    tp_csv=""; splits_csv=""; trail_atr=""; trail_cb=""
-    while [ $# -gt 0 ]; do
-      case "$1" in
-        --tp)        tp_csv="$2"; shift 2 ;;
-        --splits)    splits_csv="$2"; shift 2 ;;
-        --trail-atr) trail_atr="$2"; shift 2 ;;
-        --trail-cb)  trail_cb="$2"; shift 2 ;;
-        *) echo "unknown flag: $1" >&2; exit 2 ;;
-      esac
-    done
-    body=$(printf '{"symbol":"%s","notional":%s,"leverage":%s,"gate":"%s"' "$sym" "$nto" "$lev" "$gate")
-    if [ -n "$tp_csv" ];     then body="$body$(printf ',"pcts":[%s]' "$tp_csv")"; fi
-    if [ -n "$splits_csv" ]; then body="$body$(printf ',"splits":[%s]' "$splits_csv")"; fi
-    if [ -n "$trail_atr" ];  then body="$body$(printf ',"trail":{"mode":"atr","atr_mult":%s}' "$trail_atr")"; fi
-    if [ -n "$trail_cb" ];   then body="$body$(printf ',"trail":{"mode":"cb","callbackRate":%s}' "$trail_cb")"; fi
-    body="$body}"
-    # ניסיון ראשון לראוט החדש:
-    if ! out="$(sign_call "/position-ops/auto/open-top" "$body" 2>/dev/null)"; then
-      # נפילה אחורה לנתיב חלופי אם השרת מימש אחרת:
-      out="$(sign_call "/auto/open-top" "$body" 2>/dev/null || true)"
-    fi
-    printf '%s\n' "${out:-}"; echo
-    ;;
-
-  *)
-    usage; exit 2 ;;
+  ticket) ticket "$@" ;;
+  approve) approve "$@" ;;
+  reject) reject "$@" ;;
+  pending) pending "$@" ;;
+  manage_once) manage_once "$@" ;;
+  smoke) smoke "$@" ;;
+  digest) digest "$@" ;;
+  trade_event) trade_event "$@" ;;
+  help|--help|-h) help ;;
+  *) echo "unknown command: $cmd"; help; exit 1 ;;
 esac
+
 
 
 
