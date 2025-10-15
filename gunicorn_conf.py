@@ -20,12 +20,7 @@ _port = _env_int("PORT", 10000)
 bind = f"0.0.0.0:{_port}"
 
 # ========= Workers / Threads =========
-_workers = os.getenv("WEB_CONCURRENCY") or os.getenv("WORKERS") or "1"
-try:
-    workers = max(1, int(_workers))
-except Exception:
-    workers = 1
-
+workers = max(1, _env_int("WEB_CONCURRENCY", _env_int("WORKERS", 1)))
 threads = max(1, _env_int("GTHREADS", 1))
 
 # ========= Worker class =========
@@ -37,30 +32,21 @@ graceful_timeout = max(10, _env_int("GUNICORN_GRACEFUL_TIMEOUT", _env_int("GRACE
 keepalive = max(1, _env_int("GUNICORN_KEEPALIVE", _env_int("KEEPALIVE", 5)))
 
 # ========= Logging =========
-# שליטה נפרדת בלוג־גישה של גוניקורן: GUNICORN_ACCESS_LOG=1
-_guni_access = _env_bool("GUNICORN_ACCESS_LOG", "1")
+_guni_access = _env_bool("GUNICORN_ACCESS_LOG", "0")
 accesslog = "-" if _guni_access else None
 errorlog = "-"
 loglevel = (_env_str("LOG_LEVEL", "info") or "info").lower()
 access_log_format = '%(h)s %(l)s %(u)s "%(r)s" %(s)s %(b)s "%(f)s" "%(a)s"'
 
-# אם רוצים גם לוגי uvicorn דרך env (נורש ל־workers)
-raw_env = []
-for key in ("UVICORN_LOG_LEVEL", "UVICORN_ACCESS_LOG", "PYTHONASYNCIODEBUG"):
-    val = os.getenv(key)
-    if val is not None:
-        raw_env.append(f"{key}={val}")
-
 # ========= Resilience =========
-max_requests = max(200, _env_int("MAX_REQUESTS", 1000))
-max_requests_jitter = max(0, _env_int("MAX_REQUESTS_JITTER", 50))
+max_requests = max(200, _env_int("GUNICORN_MAX_REQUESTS", _env_int("MAX_REQUESTS", 1000)))
+max_requests_jitter = max(0, _env_int("GUNICORN_MAX_REQUESTS_JITTER", _env_int("MAX_REQUESTS_JITTER", 50)))
 
 # ========= Proxy / Forwarded headers =========
 forwarded_allow_ips = _env_str("FORWARDED_ALLOW_IPS", "*")
 proxy_allow_ips = "*"
 if _env_bool("PROXY_PROTOCOL", "0"):
     proxy_protocol = True
-# מאחורי פרוקסי/Cloudflare – ודא ש־X-Forwarded-Proto יתורגם ל־scheme=https
 secure_scheme_headers = {
     "X-FORWARDED-PROTO": "https",
     "X-FORWARDED-PROTOCOL": "https",
@@ -89,8 +75,8 @@ if _backlog:
     except Exception:
         pass
 
-# ========= process name =========
 proc_name = _env_str("PROC_NAME", "algogpt-gunicorn")
+
 
 
 
