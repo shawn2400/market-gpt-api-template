@@ -1,39 +1,23 @@
-cat > /app/status.sh <<'EOF'
+cat >/app/status.sh <<'BASH'
 #!/usr/bin/env bash
 set -euo pipefail
 : "${PUBLIC_HOST:?need PUBLIC_HOST}"
 : "${API_BEARER_TOKEN:?need API_BEARER_TOKEN}"
+: "${OPS_SIGN_SECRET:?need OPS_SIGN_SECRET}"
+SYMBOL="${1:?usage: status.sh SYMBOL}"
 
-sym="${1:-}"
-if [[ -z "$sym" ]]; then
-  echo "usage: status.sh SYMBOL"
-  exit 2
-fi
+ts=$(date +%s)
+nonce=$(cat /proc/sys/kernel/random/uuid)
+route="/position-ops/status?symbol=$SYMBOL"
+# אין גוף -> canon של מחרוזת ריקה
+canon=""
+hsh=$(printf "%s" "$canon" | openssl dgst -sha256 -r | awk '{print $1}')
+base="$ts.$nonce.$route.$hsh"
+sig=$(printf "%s" "$base" | openssl dgst -sha256 -hmac "$OPS_SIGN_SECRET" -r | awk '{print $1}')
 
-_hdr(){ printf 'Authorization: Bearer %s' "$API_BEARER_TOKEN"; }
-
-_fetch(){
-  local path="$1"
-  curl -sS -H "$(_hdr)" "${PUBLIC_HOST}${path}" || echo '{}'
-}
-
-pp(){ python3 - <<'PY' 2>/dev/null || cat
-import sys,json
-try: print(json.dumps(json.load(sys.stdin), indent=2, ensure_ascii=False))
-except: print(sys.stdin.read())
-PY
-}
-
-echo "# manager/health"
-_fetch "/ops/manager/health" | pp
-echo
-echo "# ui/orders?symbol=${sym}"
-_fetch "/ops/ui/orders?symbol=${sym}" | pp
-echo
-echo "# ui/ticket?symbol=${sym}"
-_fetch "/ops/ui/ticket?symbol=${sym}" | pp
-echo
-echo "# scan/public-now (סינון ידני בצד הלקוח)"
-_fetch "/scan/public-now" | pp
-EOF
+curl -sS -X GET "$PUBLIC_HOST$route" \
+  -H "Authorization: Bearer $API_BEARER_TOKEN" \
+  -H "X-Timestamp: $ts" -H "X-Nonce: $nonce" -H "X-Signature: $sig"
+BASH
 chmod +x /app/status.sh
+
