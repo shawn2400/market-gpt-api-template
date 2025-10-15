@@ -1,15 +1,14 @@
 # utils/position_sizing.py
 from __future__ import annotations
 
-import os, json, math
+import os, json
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_DOWN, getcontext
-from typing import Optional, Dict, Tuple
+from typing import Optional
 from contextlib import suppress
 
-# High precision for tick/step math
+# דיוק גבוה לחישובי tick/step
 getcontext().prec = 28
-
 D = Decimal
 
 # ---------- ENV helpers ----------
@@ -26,33 +25,21 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 # ---------- Quantization helpers (Decimal, step-aware) ----------
-def _as_dec(x: float | int | str | Decimal) -> Decimal:
-    if isinstance(x, Decimal):
-        return x
-    return D(str(x))
+def _as_dec(x) -> Decimal:
+    return x if isinstance(x, Decimal) else D(str(x))
 
 def _q_floor(value: Decimal, step: Decimal) -> Decimal:
-    """
-    Truncate down to the nearest multiple of `step` (LOT_SIZE style).
-    """
+    """חותך למטה למדרגת step (LOT_SIZE)."""
     if step <= 0:
         return value
-    # (value // step) * step — exact step truncation, no FP error
     return (value // step) * step
 
 def _q_ceil(value: Decimal, step: Decimal) -> Decimal:
-    """
-    Round up to the nearest multiple of `step` (used for min-notional bump).
-    """
+    """מעגל מעלה למדרגת step (לכיסוי minNotional)."""
     if step <= 0:
         return value
-    # ceil division for Decimal steps: ((value + step - eps) // step) * step
-    # but simpler: if divisible -> value, else floor + step
     floored = _q_floor(value, step)
     return floored if floored == value else (floored + step)
-
-def _clamp_positive(x: Decimal, minimum: Decimal) -> Decimal:
-    return x if x >= minimum else minimum
 
 # ---------- Filters ----------
 @dataclass(frozen=True)
@@ -69,13 +56,12 @@ def _from_env_defaults() -> SymbolFilters:
 
 def _apply_symbol_overrides(sym: str, f: SymbolFilters) -> SymbolFilters:
     s = sym.upper()
-    # Per-symbol overrides: QTY_STEP_OVERRIDE__BTCUSDT, PRICE_DP_OVERRIDE__BTCUSDT (as decimals), MIN_NOTIONAL_OVERRIDE__BTCUSDT
+    # QTY_STEP_OVERRIDE__BTCUSDT, PRICE_DP_OVERRIDE__BTCUSDT, MIN_NOTIONAL_OVERRIDE__BTCUSDT
     with suppress(Exception):
         q_override = os.getenv(f"QTY_STEP_OVERRIDE__{s}")
         if q_override:
             f = SymbolFilters(qty_step=_as_dec(q_override), price_tick=f.price_tick, min_notional=f.min_notional)
     with suppress(Exception):
-        # PRICE_DP_OVERRIDE maps decimal places; convert to tick like 10^-dp
         dp_override = os.getenv(f"PRICE_DP_OVERRIDE__{s}")
         if dp_override and str(dp_override).strip() != "":
             dp = int(dp_override)
@@ -89,8 +75,8 @@ def _apply_symbol_overrides(sym: str, f: SymbolFilters) -> SymbolFilters:
 
 def _symbol_filters_from_exchange(symbol: str) -> Optional[SymbolFilters]:
     """
-    Try utils.exchange_info.get_symbol_filters(symbol) -> dict with keys like:
-    stepSize/tickSize/minNotional (or snake_case)
+    מצפה ל־utils.exchange_info.get_symbol_filters(symbol) → dict עם:
+    stepSize/tickSize/minNotional (או snake_case).
     """
     with suppress(Exception):
         from utils.exchange_info import get_symbol_filters  # type: ignore
@@ -102,7 +88,6 @@ def _symbol_filters_from_exchange(symbol: str) -> Optional[SymbolFilters]:
         mn = f.get("minNotional") or f.get("min_notional")
         if step and tick and mn:
             return SymbolFilters(qty_step=_as_dec(step), price_tick=_as_dec(tick), min_notional=_as_dec(mn))
-        # Partial info: fill from env defaults
         base = _from_env_defaults()
         return SymbolFilters(
             qty_step=_as_dec(step) if step else base.qty_step,
@@ -117,9 +102,7 @@ def _symbol_filters(symbol: str) -> SymbolFilters:
 
 # ---------- Leverage cap ----------
 def _leverage_cap(symbol: str, req_leverage: int) -> int:
-    """
-    קובע מינוף סופי לפי קאפים גלובליים/לסימבול.
-    """
+    """קובע מינוף סופי לפי קאפים גלובליים/לסימבול + ADX-map (מקסימום ערכים)."""
     max_lev = _env_int("MAX_LEVERAGE", 20)
 
     sym_cap = None
@@ -148,15 +131,12 @@ def _leverage_cap(symbol: str, req_leverage: int) -> int:
     caps_to_apply = [int(req_leverage or 0), int(max_lev)]
     if sym_cap: caps_to_apply.append(int(sym_cap))
     if adx_cap: caps_to_apply.append(int(adx_cap))
-    # keep within [1, ...]
     vals = [x for x in caps_to_apply if x and x > 0]
     return max(1, min(vals)) if vals else 1
 
 # ---------- Public API ----------
 def _compute_qty_by_budget(price_dec: Decimal, lev: int, budget_usdt: Decimal) -> Decimal:
-    """
-    raw_qty = (budget * lev) / price
-    """
+    """raw_qty = (budget * lev) / price"""
     if price_dec <= 0 or lev <= 0 or budget_usdt <= 0:
         return D(0)
     return (budget_usdt * D(lev)) / price_dec
@@ -168,7 +148,7 @@ def auto_qty(symbol: str, symbol_price: float, leverage: int) -> Optional[float]
       AUTO_QTY_BUDGET_USDT=100
       AUTO_QTY_MARGIN_BUFFER_PCT=0.20
     ומכבד:
-      MAX_TRADE_BUDGET, DEFAULT_QTY_STEP, MIN_NOTIONAL_USDT
+      MAX_TRADE_BUDGET, DEFAULT_QTY_STEP, MIN_NOTIONAL_USDT (+ overrides / exchange filters)
     """
     if os.getenv("AUTO_QTY_ENABLE", "0") != "1":
         return None
@@ -188,10 +168,9 @@ def auto_qty(symbol: str, symbol_price: float, leverage: int) -> Optional[float]
 
     f = _symbol_filters(symbol)
     raw_qty = _compute_qty_by_budget(price, lev, effective)
-    # floor to step for exchange acceptance
     qty = _q_floor(raw_qty, f.qty_step)
 
-    # ensure min notional: ceil to step if needed
+    # אם לא עומד ב-minNotional – להקפיץ כלפי מעלה
     if qty * price < f.min_notional:
         needed = f.min_notional / price
         qty = _q_ceil(needed, f.qty_step)
@@ -201,14 +180,13 @@ def auto_qty(symbol: str, symbol_price: float, leverage: int) -> Optional[float]
 def ensure_final_qty(ticket: dict, symbol_price: float) -> dict:
     """
     קובע leverage סופי לפי קאפים; ואם qty חסר/0 – מחשב לפי AUTO_QTY_*.
-    Also enforces minNotional by bumping qty up to the next step if required.
+    גם אוכף minNotional על ידי הקפצה למדרגה הבאה אם צריך.
     """
     symbol = (ticket.get("symbol") or "").upper()
     req_lev = int(ticket.get("leverage") or ticket.get("lev") or _env_int("MIN_LEVERAGE", 5))
     final_lev = _leverage_cap(symbol, req_lev)
     ticket["leverage"] = final_lev
 
-    # Calculate or normalize qty
     q_raw = ticket.get("qty") or ticket.get("quantity")
     qf = float(q_raw) if q_raw is not None else 0.0
     price = _as_dec(symbol_price)
@@ -216,30 +194,24 @@ def ensure_final_qty(ticket: dict, symbol_price: float) -> dict:
 
     if q_raw is None or qf <= 0.0:
         q_calc = auto_qty(symbol, float(price), int(final_lev))
-        if q_calc and q_calc > 0:
-            qty = _as_dec(q_calc)
-        else:
-            qty = D(0)
+        qty = _as_dec(q_calc) if (q_calc and q_calc > 0) else D(0)
     else:
         qty = _as_dec(qf)
 
-    # Quantize to step
     qty = _q_floor(qty, f.qty_step)
 
-    # If still below minNotional, bump up to next step
     if qty > 0 and (qty * price) < f.min_notional:
         needed = f.min_notional / price
         qty = _q_ceil(needed, f.qty_step)
 
-    # Final guard: qty must be >= 1 step
     if qty > 0 and qty < f.qty_step:
         qty = f.qty_step
 
-    # Store back if positive
     if qty > 0:
         ticket["qty"] = float(qty)
 
     return ticket
+
 
 
 
