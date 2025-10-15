@@ -1,7 +1,7 @@
 # utils/idempotency.py
 from __future__ import annotations
 import os, time, json, hashlib, logging, inspect
-from typing import Optional, Dict, Any, Tuple, Awaitable, Union
+from typing import Optional, Dict, Any, Tuple
 
 try:
     from utils.redis_client import get_redis  # יציב: מחזיר קליינט סינכרוני או אסינכרוני
@@ -19,14 +19,12 @@ def _digest_key(parts: Tuple[Any, ...]) -> str:
     raw = json.dumps(parts, separators=(",", ":"), sort_keys=True, default=str)
     return "idem:wh:" + hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
 
-async def _redis_setnx_ex(
-    r: Any, key: str, value: str, ttl_sec: int
-) -> bool:
+async def _redis_setnx_ex(r: Any, key: str, value: str, ttl_sec: int) -> bool:
     """
-    מיישר קו בין קליינט אסינכרוני לסינכרוני:
-    - אם קיימת מתודה set עם פרמטרים (nx, ex) — נשתמש בה.
-    - אם קיימת setnx + expire — נשתמש בהן.
-    - מטפל גם במקרה שהמתודה מחזירה awaitable.
+    מאחד לוגיקה לקליינטים סינכרוניים/אסינכרוניים:
+    - אם יש r.set(..., nx=True, ex=ttl) — נשתמש בזה.
+    - אחרת ננסה setnx + expire.
+    - מתחשב במקרה שהקריאה מחזירה awaitable.
     """
     ttl = max(1, int(ttl_sec or 0))
 
@@ -45,7 +43,6 @@ async def _redis_setnx_ex(
             log.debug("idempotency.redis.set error: %s", e)
 
     # case 2: setnx + expire
-    ok = None
     if hasattr(r, "setnx"):
         try:
             res = r.setnx(key, value)
@@ -56,11 +53,11 @@ async def _redis_setnx_ex(
                 ex_res = r.expire(key, ttl)
                 if inspect.isawaitable(ex_res):
                     await ex_res
-            return bool(ok)
+            return ok
         except Exception as e:
             log.debug("idempotency.redis.setnx/expire error: %s", e)
 
-    # if we got here — נכשל Redis / לא נתמך
+    # לא נתמך/נכשל
     return False
 
 async def check_and_set(parts: Tuple[Any, ...], ttl_sec: int = DEFAULT_TTL_SEC) -> bool:
@@ -81,7 +78,7 @@ async def check_and_set(parts: Tuple[Any, ...], ttl_sec: int = DEFAULT_TTL_SEC) 
     if r is not None:
         try:
             ok = await _redis_setnx_ex(r, key, str(int(now)), ttl_sec)
-            if ok is True:
+            if ok:
                 return True
         except Exception as e:
             log.warning("idempotency.redis_error: %s", e)
@@ -91,6 +88,7 @@ async def check_and_set(parts: Tuple[Any, ...], ttl_sec: int = DEFAULT_TTL_SEC) 
     if now - ts < ttl_sec:
         return False
     _mem[key] = now
+
     # ניקוי עדין
     try:
         cutoff = max(2 * ttl_sec, 120)
