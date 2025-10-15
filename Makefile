@@ -30,7 +30,8 @@ SHELL := /bin/bash
 .PHONY: help venv install lint format test run stop logs sh build buildx push release clean health smoke \
         run-docker \
         ultra-readyz ultra-readyz-strict ultra-meta ultra-version ultra-metrics \
-        ultra-prefs ultra-reload ultra-sig ultra-ts ultra-health
+        ultra-prefs ultra-reload ultra-sig ultra-ts ultra-health \
+        public approve
 
 help:
 	echo "Targets:"
@@ -53,14 +54,17 @@ help:
 	echo "  clean          - remove dangling images"
 	echo "  --- Ultra ---"
 	echo "  ultra-readyz          - GET $(ULTRA_HOST)/ultra/readyz"
-	echo "  ultra-readyz-strict   - GET $(ULTRA_HOST)/ultra/readyz/strict"
+	echo "  ultra-readyz-strict   - GET $(ULTRA_HOST)/ultra/readyz/strict + הדפסת קוד"
 	echo "  ultra-meta            - GET $(ULTRA_HOST)/ultra/meta"
 	echo "  ultra-version         - GET $(ULTRA_HOST)/ultra/meta/version"
 	echo "  ultra-metrics         - GET $(ULTRA_HOST)/ultra/metrics (Authorization: Bearer)"
 	echo "  ultra-ts              - print epoch timestamp (sec)"
-	echo "  ultra-sig             - make HMAC for body (env BODY) with OPS_SIGN_SECRET"
-	echo "  ultra-prefs           - POST /ultra/ops/runtime/prefs with HMAC"
+	echo "  ultra-sig             - make HMAC for BODY (env) with OPS_SIGN_SECRET"
+	echo "  ultra-prefs           - POST /ultra/ops/runtime/prefs with HMAC (requires BODY)"
 	echo "  ultra-reload          - POST /ultra/ops/policy/reload with HMAC"
+	echo "  --- Convenience (if scripts exist) ---"
+	echo "  public                - scripts/hit_public_feed.sh (BASE_URL + optional bearer)"
+	echo "  approve               - scripts/approve_via_telegram.sh (vars via env)"
 
 # ====== Python local ======
 venv:
@@ -134,10 +138,11 @@ sh:
 	docker exec -it $(IMAGE) /bin/bash
 
 health:
-	curl -fsS "http://127.0.0.1:$(PORT)/health_full" | jq . || curl -fsS "http://127.0.0.1:$(PORT)/health" | jq .
+	curl -fsS "http://127.0.0.1:$(PORT)/health_full" | jq . \
+	|| curl -fsS "http://127.0.0.1:$(PORT)/health" | jq .
 
 smoke:
-	bash scripts/smoke.sh "http://127.0.0.1:$(PORT)" "$${API_BEARER_TOKEN:-dev_token}"
+	bash scripts/smoke.sh "http://127.0.0.1:$(PORT)" "$${API_BEARER_TOKEN:-}" "$${METRICS_BEARER:-}" "$${OPS_SIGN_SECRET:-}"
 
 clean:
 	docker image prune -f
@@ -147,7 +152,10 @@ ultra-readyz:
 	curl -fsS "$(ULTRA_HOST)/ultra/readyz" | jq .
 
 ultra-readyz-strict:
-	curl -fsS -o /dev/stderr -w "HTTP:%{http_code}\n" "$(ULTRA_HOST)/ultra/readyz/strict" | jq . || true
+	STATUS=$$(curl -s -o >(tee /tmp/_ultra_readyz_body >&2) -w "%{http_code}" "$(ULTRA_HOST)/ultra/readyz/strict"); \
+	echo "HTTP: $$STATUS"; \
+	cat /tmp/_ultra_readyz_body | jq . || true; \
+	rm -f /tmp/_ultra_readyz_body
 
 ultra-meta:
 	curl -fsS "$(ULTRA_HOST)/ultra/meta" | jq .
@@ -211,4 +219,15 @@ PY
 # Convenience alias to hit base /health on the Ultra app if exposed at /
 ultra-health:
 	curl -fsS "$(ULTRA_HOST)/health" | jq .
+
+# ====== Convenience targets if scripts are present ======
+public:
+	@if [ ! -f scripts/hit_public_feed.sh ]; then echo "scripts/hit_public_feed.sh not found"; exit 2; fi
+	bash scripts/hit_public_feed.sh "$(ULTRA_HOST)" "$${API_BEARER_TOKEN:-}"
+
+approve:
+	@if [ ! -f scripts/approve_via_telegram.sh ]; then echo "scripts/approve_via_telegram.sh not found"; exit 2; fi
+	@if [ -z "$${BASE_URL}" ] || [ -z "$${TICKET_ID}" ] || [ -z "$${WEBHOOK_HMAC_SECRET}" ]; then \
+	  echo "Usage: make approve BASE_URL=<url> TICKET_ID=<id> WEBHOOK_HMAC_SECRET=<secret> ACTION=approve|reject REASON='text'"; exit 2; fi
+	bash scripts/approve_via_telegram.sh "$${BASE_URL}" "$${TICKET_ID}" "$${ACTION:-approve}" "$${WEBHOOK_HMAC_SECRET}" "$${REASON:-Approved via Makefile}"
 
