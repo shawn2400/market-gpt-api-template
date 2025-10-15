@@ -1,4 +1,3 @@
-# utils/get_klines.py
 from __future__ import annotations
 import asyncio, random, os
 from typing import List, Dict, Any
@@ -10,7 +9,6 @@ from utils.http_client import safe_get
 BINANCE_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 BINANCE_SPOT = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").rstrip("/")
 
-# קונקרנסי נשלט ע"י http_client; כאן נוסיף jitter עדין כדי לפזר עומס
 _BASE_PAUSE_MS = int(os.getenv("KLINES_BASE_PAUSE_MS", "60"))
 _JITTER_MS_MIN = int(os.getenv("KLINES_JITTER_MS_MIN", "20"))
 _JITTER_MS_MAX = int(os.getenv("KLINES_JITTER_MS_MAX", "120"))
@@ -42,8 +40,8 @@ async def _sleep_jitter():
     await asyncio.sleep(ms / 1000.0)
 
 async def _rest_klines(symbol: str, interval: str, limit: int, market_type: str, start_time: int | None) -> pd.DataFrame:
-    params: Dict[str, Any] = {"symbol": normalize_symbol(symbol) if market_type == "futures" else symbol,
-                               "interval": interval, "limit": int(limit)}
+    norm_sym = normalize_symbol(symbol) if market_type == "futures" else symbol
+    params: Dict[str, Any] = {"symbol": norm_sym, "interval": interval, "limit": int(limit)}
     if start_time:
         params["startTime"] = int(start_time)
     await _sleep_jitter()
@@ -52,10 +50,10 @@ async def _rest_klines(symbol: str, interval: str, limit: int, market_type: str,
     return _to_dataframe(r.json())
 
 async def get_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> pd.DataFrame:
-    key = _cache_key(market_type, symbol, interval)
+    norm_key_sym = normalize_symbol(symbol) if market_type == "futures" else symbol
+    key = _cache_key(market_type, norm_key_sym, interval)
     since = _last_ts.get(key, 0)
 
-    # 1) Futures עם since (אינקרמנטלי), אם אין – פולפאץ'
     df = pd.DataFrame()
     try:
         df = await _rest_klines(symbol, interval, limit, "futures", since + 1 if since else None)
@@ -66,7 +64,6 @@ async def get_klines(symbol: str, interval: str, limit: int = 150, market_type: 
             df = await _rest_klines(symbol, interval, limit, "futures", None)
         except Exception:
             df = pd.DataFrame()
-    # 2) פולבאק ל־Spot
     if df.empty:
         try:
             df = await _rest_klines(symbol, interval, limit, "spot", None)
