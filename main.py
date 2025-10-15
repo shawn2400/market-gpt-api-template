@@ -178,13 +178,11 @@ def _port() -> int:
     except Exception:
         return 10000
 
-
 def get_internal_base() -> str:
     internal = (os.getenv("INTERNAL_BASE") or "").strip()
     if internal:
         return internal.rstrip("/")
     return f"http://127.0.0.1:{_port()}"
-
 
 PUBLIC_HOST = (os.getenv("PUBLIC_HOST") or os.getenv("WEBHOOK_HOST") or "").strip().rstrip("/")
 WATCHLIST = [s.strip().upper() for s in (os.getenv("WATCHLIST", "") or "").split(",") if s.strip()] or ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "NEARUSDT"]
@@ -230,7 +228,6 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
     key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text) == 64 else secret_hex_or_text.encode("utf-8")
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
-
 def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600, action: Optional[str] = None) -> str:
     if not HMAC_SECRET:
         route = "/ops/ui/ticket"
@@ -246,7 +243,6 @@ def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600,
     sep = "&" if "?" in path else "?"
     return f"{base}{path}{sep}ticket_id={ticket_id}&exp={exp}&sig={sig}"
 
-
 def _verify_signed_params(ticket_id: str, exp: str, sig: str, path: str) -> bool:
     if not (HMAC_SECRET and ticket_id and exp and sig):
         return False
@@ -258,7 +254,6 @@ def _verify_signed_params(ticket_id: str, exp: str, sig: str, path: str) -> bool
         return False
     expected = _sign_hex(HMAC_SECRET, f"{path}|{ticket_id}|{exp}|{NS}".encode("utf-8"))
     return hmac.compare_digest(expected, sig)
-
 
 # ==================== Simple ConfirmStore (in-memory fallback) ====================
 class ConfirmStore:
@@ -282,7 +277,6 @@ class ConfirmStore:
     @classmethod
     def remove(cls, ticket_id: str) -> None:
         cls._items.pop(str(ticket_id), None)
-
 
 # ==================== Shared HTTP and Redis ====================
 try:
@@ -309,7 +303,6 @@ def _get_shared_async_client() -> httpx.AsyncClient:
         app.state.shared_async_client = cli
         return cli
 
-
 async def _get_redis_cached():
     if not (aioredis and REDIS_URL):
         return None
@@ -319,7 +312,6 @@ async def _get_redis_cached():
     r = aioredis.from_url(REDIS_URL, decode_responses=True)
     app.state.redis = r
     return r
-
 
 # ==================== Security headers middleware ====================
 @app.middleware("http")
@@ -333,7 +325,6 @@ async def _security_headers(request: Request, call_next):
     if os.getenv("ENABLE_HSTS", "0").lower() in ("1", "true", "yes", "on"):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
     return resp
-
 
 # ==================== Public Rate Limit middleware ====================
 async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
@@ -365,7 +356,6 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
     rec["count"] += 1  # type: ignore[index]
     return rec["count"] > int(limit)  # type: ignore[index]
 
-
 @app.middleware("http")
 async def _public_rate_limit(request: Request, call_next):
     if not RATE_LIMIT_ENABLE:
@@ -387,7 +377,6 @@ async def _public_rate_limit(request: Request, call_next):
             break
     return await call_next(request)
 
-
 # ==================== Public Cache/Etag middleware ====================
 def _should_public_cache(path: str) -> bool:
     paths_cfg = (os.getenv("PUBLIC_CACHE_PATHS") or "").split(",") if os.getenv("PUBLIC_CACHE_PATHS") else []
@@ -398,7 +387,6 @@ def _should_public_cache(path: str) -> bool:
         if path.startswith(prefix):
             return True
     return False
-
 
 @app.middleware("http")
 async def _public_cache_etag(request: Request, call_next):
@@ -451,10 +439,9 @@ async def _public_cache_etag(request: Request, call_next):
 def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                               reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
-    # --- NEW: idempotency on Redis to avoid duplicate sends within IDEM_TTL_SEC ---
+    # --- idempotency on Redis to avoid duplicate sends within IDEM_TTL_SEC ---
     if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
         try:
             r = await _get_redis_cached()
@@ -516,7 +503,6 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
             await asyncio.sleep(0.6 * (attempt + 1))
     return {"ok": False, "error": "telegram_send_exhausted"}
 
-
 async def _ensure_telegram_webhook() -> None:
     if not TELEGRAM_AUTO_WEBHOOK:
         return
@@ -541,7 +527,6 @@ async def _ensure_telegram_webhook() -> None:
         logger.info("telegram.setWebhook: %s", "ok" if ok else f"bad_status={r.status_code}")
     except Exception as e:
         logger.info("telegram.setWebhook.failed: %s", e)
-
 
 # ==================== Price helpers ====================
 async def get_last_price_async(symbol: str) -> Optional[float]:
@@ -583,17 +568,14 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
                 return v
     return None
 
-
 # ==================== Misc helpers ====================
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
-
 
 def _parse_mode(note: Optional[str]) -> Optional[str]:
     if not note:
         return None
     m = _MODE_RX.search(str(note))
     return m.group(1).upper() if m else None
-
 
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
     try:
@@ -604,11 +586,9 @@ def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) 
         bad = {"tp_kind", "sl_kind", "entry_kind", "entry_offset", "tp_offset", "sl_offset"}
         return {k: v for k, v in kwargs.items() if k not in bad}
 
-
 def _is_code_4061(err: Union[Exception, str]) -> bool:
     s = str(err)
     return "code=-4061" in s or "position side does not match" in s.lower()
-
 
 def _align_position_mode(client) -> None:
     mode_override = (os.getenv("POSITION_MODE_OVERRIDE", "") or "").strip().lower()
@@ -618,18 +598,15 @@ def _align_position_mode(client) -> None:
         elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
 
-
 # ==================== Order ID helper ====================
 try:
     from utils.order_ids import build_client_order_id  # type: ignore
 except Exception:
-
     def _coid_fit_local(s: str, limit: int = 36) -> str:
         if len(s) <= limit:
             return s
         h = hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
         return f"{s[:limit - (len(h) + 1)]}_{h}"
-
     def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Optional[str] = None) -> str:
         prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
         sym = str(symbol).upper()
@@ -638,7 +615,6 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
-
 
 # ==================== Execute trade helpers ====================
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
@@ -694,7 +670,6 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
                     return {"ok": False, "error": "order_failed", "detail": str(e3), "first_error": str(e1), "second_error": str(e2)}
     except Exception as e:
         return {"ok": False, "error": "order_failed", "detail": str(e)}
-
 
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     execute_trade_live = None
@@ -753,85 +728,13 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
 
-
-# ==================== Smart manage etc. ====================
-
-def _anti_replay_required() -> bool:
-    return os.getenv("ANTI_REPLAY_ENABLE", "0").lower() in ("1", "true", "yes", "on") and \
-           os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "0").lower() in ("1", "true", "yes", "on")
-
-
-async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
-                            pcts: Optional[List[float]] = None, splits: Optional[List[float]] = None,
-                            atr_mult: Optional[float] = None) -> Dict[str, Any]:
-    base = get_internal_base()
-    token = API_BEARER_TOKEN
-    if not token:
-        return {"ok": False, "skipped": True, "reason": "missing token"}
-    body: Dict[str, Any] = {"symbol": symbol}
-    if offset_bps is not None:
-        body["offset_bps"] = offset_bps
-    if pcts is not None:
-        body["pcts"] = pcts
-    if splits is not None:
-        body["splits"] = splits
-    if atr_mult is not None:
-        body["callback_rate"] = None
-        body["atr_mult"] = atr_mult
-    body_str = json.dumps(body, ensure_ascii=False, separators=(",", ":"))
-    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
-    if _anti_replay_required():
-        ts = str(int(time.time()))
-        nonce = secrets.token_hex(8)
-        secret = (os.getenv("API_SIGNING_SECRET") or "").strip()
-        if not secret:
-            return {"ok": False, "error": "missing_signing_secret"}
-        payload = f"{ts}.{nonce}.{body_str}".encode("utf-8")
-        sig = _sign_hex(secret, payload)
-        headers.update({"X-Timestamp": ts, "X-Nonce": nonce, "X-Signature": sig})
-    cli = _get_shared_async_client()
-    for attempt in range(3):
-        try:
-            r = await cli.post(f"{base}/manage-once", headers=headers, content=body_str, timeout=httpx.Timeout(15.0))
-            if r.status_code < 400:
-                return {"ok": True, "status": r.status_code, "text": r.text}
-            if r.status_code in (401, 403) and _anti_replay_required() and attempt == 0:
-                continue
-            return {"ok": False, "status": r.status_code, "text": r.text}
-        except Exception as e:
-            if attempt == 2:
-                return {"ok": False, "error": str(e)}
-        await asyncio.sleep(0.6 * (attempt + 1))
-    return {"ok": False, "error": "smart_manage_exhausted"}
-
-
-def _smart_manage_env() -> Dict[str, Any]:
-    def _csvf(val: Optional[str]) -> Optional[List[float]]:
-        if not val:
-            return None
-        try:
-            return [float(x.strip()) for x in val.split(",") if x.strip()]
-        except Exception:
-            return None
-
-    return {
-        "enable": os.getenv("SMART_MANAGE_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on"),
-        "offset_bps": int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS", "5"))),
-        "pcts": _csvf(os.getenv("SMART_MANAGE_PCTS")) or [4.0, 8.0, 16.0],
-        "splits": _csvf(os.getenv("SMART_MANAGE_SPLITS")) or [0.30, 0.30, 0.40],
-        "atr_mult": float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None,
-    }
-
-
 # ======== AUTO QTY/LEV ========
-
 def _round_qty(q: float, dec: int) -> float:
     try:
         fmt = "{:0." + str(int(dec)) + "f}"
         return float(fmt.format(q))
     except Exception:
         return float(f"{q:.3f}")
-
 
 async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     symbol = (ticket.get("symbol") or "").upper()
@@ -889,11 +792,10 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket["position_side"] = ""
     return new_ticket
 
-
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
 
-# --------- NEW: Idempotent webhook route example (/webhook/whatever) ----------
+# --------- Idempotent webhook example (/webhook/whatever) ----------
 @router.post("/webhook/whatever")
 async def webhook_whatever(request: Request):
     body = await request.body()
@@ -905,10 +807,8 @@ async def webhook_whatever(request: Request):
         ok_first = True
     if not ok_first:
         return JSONResponse({"ok": True, "skipped": True, "reason": "idem_duplicate"}, status_code=200)
-    # --- One-time processing block (placeholder) ---
     # TODO: add your single-execution logic here.
     return JSONResponse({"ok": True, "handled_once": True}, status_code=200)
-# --------------------------------------------------------------------------------
 
 def _require_bearer(request: Request) -> None:
     if os.getenv("PROTECT_APPROVE_ROUTES", "1").lower() not in ("1", "true", "yes", "on"):
@@ -919,43 +819,22 @@ def _require_bearer(request: Request) -> None:
     if not (auth.startswith("Bearer ") and auth.split(" ", 1)[1].strip() == API_BEARER_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-
 def _rows_kv_html(t: Dict[str, Any]) -> str:
     def cv(k, default="—"):
         v = t.get(k, default)
         return default if v in (None, "", []) else _md_html(str(v))
-
     rows = []
     for k in (
-        "ticket_id",
-        "symbol",
-        "side",
-        "qty",
-        "leverage",
-        "position_side",
-        "budget",
-        "score",
-        "tp1",
-        "tp2",
-        "tp3",
-        "sl",
-        "eta_tp1_min",
-        "eta_tp2_min",
-        "eta_tp3_min",
-        "prob_overall_pct",
-        "prob_tp1_pct",
-        "prob_tp2_pct",
-        "prob_tp3_pct",
-        "tp_splits",
-        "expiry_ts",
-        "note",
+        "ticket_id","symbol","side","qty","leverage","position_side","budget","score",
+        "tp1","tp2","tp3","sl","eta_tp1_min","eta_tp2_min","eta_tp3_min",
+        "prob_overall_pct","prob_tp1_pct","prob_tp2_pct","prob_tp3_pct","tp_splits",
+        "expiry_ts","note",
     ):
         rows.append(
             f"<tr><th style='text-align:left;padding:.35rem .6rem;background:#fafafa'>{k}</th>"
             f"<td style='padding:.35rem .6rem'>{cv(k)}</td></tr>"
         )
     return "\n".join(rows)
-
 
 def _html(msg: str) -> HTMLResponse:
     return HTMLResponse(
@@ -965,7 +844,6 @@ def _html(msg: str) -> HTMLResponse:
         "<p style='color:#666'>אפשר לחזור חזרה לטלגרם.</p>"
         "</body>"
     )
-
 
 async def _load_ticket(ticket_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
     if aioredis and REDIS_URL:
@@ -985,7 +863,6 @@ async def _load_ticket(ticket_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
                 if str(it.get("ticket_id")) == str(ticket_id):
                     return dict(it.get("req") or it), "memory"
     return None, "none"
-
 
 async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[bool] = None) -> None:
     event: Dict[str, Any] = {
@@ -1034,6 +911,7 @@ async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[boo
                 await r.delete(f"{NS}:ticket:{ticket_id}")
     with suppress(Exception):
         ConfirmStore.remove(ticket_id)
+
 @router.post("/ops/ticket")
 async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = None):
     symbol = (payload.get("symbol") or "").upper().strip()
@@ -1051,7 +929,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         price_now = None
         with suppress(Exception):
             price_now = await get_last_price_async(symbol)
-
         def _smart(symbol: str, side: str, price_now: Optional[float], tps: List[Optional[float]]) -> Dict[str, Any]:
             if not price_now:
                 return {}
@@ -1062,7 +939,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
                     out[f"eta_tp{i}_min"] = max(1, int(dist_bps / max(1, ETA_VELOCITY_WINDOW)))
             out.setdefault("eta_open_min", out.get("eta_tp1_min", 2))
             return out
-
         etas = _smart(symbol, side, price_now, [payload.get("tp1"), payload.get("tp2"), payload.get("tp3")])
         payload.update(etas)
 
@@ -1161,13 +1037,11 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         "telegram_result": tg_resp,
     }
 
-
 def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
     mode = _parse_mode(ticket.get("note"))
     if mode in ("MARKET", "HYBRID", "AUTO"):
         return mode
     return "HYBRID" if os.getenv("TP_LADDER_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on") else "MARKET"
-
 
 def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLResponse:
     approve_url = _build_signed_link(base, "/ops/approve/signed", ticket_id, ttl_sec=900, action="approve")
@@ -1188,7 +1062,6 @@ def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLR
     )
     return HTMLResponse(body)
 
-
 @router.get("/ops/ui/ticket")
 async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     _require_bearer(request)
@@ -1204,7 +1077,6 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     return _render_ticket_html(ticket_id, rec, base)
 
-
 @router.get("/ops/ui/ticket/signed")
 async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
     if not _verify_signed_params(ticket_id, exp, sig, "/ops/ui/ticket/signed"):
@@ -1215,22 +1087,18 @@ async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), s
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     return _render_ticket_html(ticket_id, rec, base)
 
-
 def _maybe_protect_routes(request: Request) -> None:
     _require_bearer(request)
-
 
 @router.get("/ops/approve")
 async def approve(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
     _maybe_protect_routes(request)
     return await _approve_core(ticket_id)
 
-
 @router.get("/ops/reject")
 async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
     _maybe_protect_routes(request)
     return await _reject_core(ticket_id)
-
 
 @router.get("/ops/approve/signed")
 async def approve_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
@@ -1238,13 +1106,11 @@ async def approve_signed(ticket_id: str = Query(...), exp: str = Query(...), sig
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _approve_core(ticket_id)
 
-
 @router.get("/ops/reject/signed")
 async def reject_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
     if not _verify_signed_params(ticket_id, exp, sig, "/ops/reject/signed"):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _reject_core(ticket_id)
-
 
 async def _approve_core(ticket_id: str):
     ticket, source = await _load_ticket(ticket_id)
@@ -1273,7 +1139,13 @@ async def _approve_core(ticket_id: str):
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
     if ok:
         try:
-            sm = _smart_manage_env()
+            sm = {
+                "enable": os.getenv("SMART_MANAGE_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on"),
+                "offset_bps": int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", os.getenv("TP_BE_OFFSET_BPS", "5"))),
+                "pcts": [float(x) for x in (os.getenv("SMART_MANAGE_PCTS") or "4,8,16").split(",") if x.strip()],
+                "splits": [float(x) for x in (os.getenv("SMART_MANAGE_SPLITS") or "0.30,0.30,0.40").split(",") if x.strip()],
+                "atr_mult": float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None,
+            }
             if sm.get("enable", True):
                 await _smart_manage_now(
                     str(ticket.get("symbol", "")).upper(),
@@ -1299,7 +1171,6 @@ async def _approve_core(ticket_id: str):
     await _delete_ticket(ticket_id, source, final_status=ok)
     return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.") if ok else _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
 
-
 async def _reject_core(ticket_id: str):
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
@@ -1311,7 +1182,6 @@ async def _reject_core(ticket_id: str):
         )
     await _delete_ticket(ticket_id, source, final_status=False)
     return _html("⛔️ נדחה — הכרטיס הוסר.")
-
 
 # ==================== Digest/UI/etc. ====================
 @router.get("/ops/ui/pending")
@@ -1372,7 +1242,6 @@ async def ui_pending(request: Request = None):
     )
     return HTMLResponse(body)
 
-
 @router.post("/guard/smoke/run")
 async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
     _require_bearer(request)
@@ -1406,8 +1275,41 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
         await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>" + ",".join(emergencies) + "</code>")
     return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
 
+# ==================== Indicator & profile helpers (המשך בחלק 3) ====================
+@router.post("/guard/smoke/run")
+async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
+    _require_bearer(request)
+    try:
+        from utils.guard_stop import ensure_protective_stop  # type: ignore
+    except Exception:
+        raise HTTPException(status_code=501, detail="ensure_protective_stop() not available")
+    if isinstance(symbols, str) and symbols.strip():
+        sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    else:
+        sym_list = WATCHLIST[:]
+    if not sym_list:
+        raise HTTPException(status_code=400, detail="no symbols to check")
+    results: Dict[str, Any] = {}
+    emergencies: List[str] = []
+    for s in sym_list:
+        try:
+            res = ensure_protective_stop(s, prefer_mode="quantities")
+            results[s] = res
+            flag = False
+            try:
+                if isinstance(res, dict):
+                    flag = bool(res.get("emergency")) or bool(res.get("placed")) or (str(res.get("action", "")).lower() in ("emergency", "place"))
+            except Exception:
+                pass
+            if flag:
+                emergencies.append(s)
+        except Exception as e:
+            results[s] = {"ok": False, "error": str(e)}
+    if emergencies and not ONLY_TRADE_NOTIFICATIONS:
+        await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>" + ",".join(emergencies) + "</code>")
+    return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
 
-# ==================== Profiles (auto-select) ====================
+# ==================== Indicator & profile helpers ====================
 PROFILE_AUTO_SELECT = os.getenv("PROFILE_AUTO_SELECT", "1").lower() in ("1", "true", "yes", "on")
 
 PROFILE_BASE_BE_BPS = int(os.getenv("PROFILE_BASE_BE_BPS", "5"))
@@ -1423,7 +1325,6 @@ PROFILE_EXTREME_ATR_MULT = float(os.getenv("PROFILE_EXTREME_ATR_MULT", "1.6"))
 ADX_EXTREME_MIN = float(os.getenv("ADX_EXTREME_MIN", "28"))
 ATRPCT_EXTREME_MIN = float(os.getenv("ATRPCT_EXTREME_MIN", "0.007"))
 
-
 def _wilder_smooth(values: List[float], period: int) -> List[float]:
     if not values or period <= 0 or len(values) < period:
         return []
@@ -1431,7 +1332,6 @@ def _wilder_smooth(values: List[float], period: int) -> List[float]:
     for v in values[period:]:
         smoothed.append((smoothed[-1] * (period - 1) + v) / period)
     return smoothed
-
 
 def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -> Dict[str, float]:
     try:
@@ -1468,8 +1368,6 @@ def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -
     except Exception:
         return {"atr": 0.0, "adx": 0.0, "price": 0.0}
 
-
-# ---- tick rounding helpers ----
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
         return value
@@ -1482,7 +1380,6 @@ def _round_tick_dir(value: float, step: float, direction: str) -> float:
     if direction.lower().startswith("up"):
         return math.ceil(q) * step
     return math.floor(q) * step
-
 
 def _get_filters(client, symbol: str) -> Tuple[float, float]:
     tick = 0.1
@@ -1501,23 +1398,8 @@ def _get_filters(client, symbol: str) -> Tuple[float, float]:
         pass
     return tick, step
 
-
-def _pos_side_from_amt(side_text: str, pos_amt: float) -> str:
-    if side_text == "BUY":
-        return "LONG"
-    if side_text == "SELL":
-        return "SHORT"
-    return "LONG" if pos_amt >= 0 else "SHORT"
-
-
-# -------------- NEW: auto-select profile helper (inserted before /manage-once) --------------
+# ===== Profile select for /manage-once =====
 async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, float], str]:
-    """
-    בוחר פרופיל ניהול (BASE/EXTREME) לפי ADX/ATR% מהקליינים של בינאנס (1m),
-    עם אפשרות override מה-payload.
-    """
-    # 1) שליפת קליינים וחישוב אינדיקטורים
-    klines = []
     try:
         klines = client.futures_klines(symbol=symbol, interval="1m", limit=60)
     except Exception:
@@ -1528,57 +1410,30 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
     adx = float(indicators.get("adx") or 0.0)
     atr_pct = (atr / price) if price > 0 else 0.0
 
-    # 2) קביעת שם הפרופיל לפי ספים
-    use_extreme = PROFILE_AUTO_SELECT and (
-        (adx >= ADX_EXTREME_MIN) or (atr_pct >= ATRPCT_EXTREME_MIN)
-    )
+    use_extreme = PROFILE_AUTO_SELECT and ((adx >= ADX_EXTREME_MIN) or (atr_pct >= ATRPCT_EXTREME_MIN))
     profile_name = "EXTREME" if use_extreme else "BASE"
 
-    # 3) בסיס פרופיל מה־env
     if use_extreme:
-        prof = dict(
-            offset_bps=PROFILE_EXTREME_BE_BPS,
-            pcts=PROFILE_EXTREME_PCTS[:],
-            splits=PROFILE_EXTREME_SPLITS[:],
-            atr_mult=PROFILE_EXTREME_ATR_MULT,
-        )
+        prof = dict(offset_bps=PROFILE_EXTREME_BE_BPS, pcts=PROFILE_EXTREME_PCTS[:], splits=PROFILE_EXTREME_SPLITS[:], atr_mult=PROFILE_EXTREME_ATR_MULT)
     else:
-        prof = dict(
-            offset_bps=PROFILE_BASE_BE_BPS,
-            pcts=PROFILE_BASE_PCTS[:],
-            splits=PROFILE_BASE_SPLITS[:],
-            atr_mult=PROFILE_BASE_ATR_MULT,
-        )
+        prof = dict(offset_bps=PROFILE_BASE_BE_BPS, pcts=PROFILE_BASE_PCTS[:], splits=PROFILE_BASE_SPLITS[:], atr_mult=PROFILE_BASE_ATR_MULT)
 
-    # 4) אפשרות override דרך ה-payload (אם נשלח)
     if isinstance(payload.get("offset_bps"), int):
         prof["offset_bps"] = int(payload["offset_bps"])
     if payload.get("pcts"):
-        try:
+        with suppress(Exception):
             prof["pcts"] = [float(x) for x in payload["pcts"]]
-        except Exception:
-            pass
     if payload.get("splits"):
-        try:
+        with suppress(Exception):
             prof["splits"] = [float(x) for x in payload["splits"]]
-        except Exception:
-            pass
     if payload.get("atr_mult") is not None:
-        try:
-            v = float(payload["atr_mult"])
-            prof["atr_mult"] = v
-        except Exception:
-            pass
+        with suppress(Exception):
+            prof["atr_mult"] = float(payload["atr_mult"])
 
     return prof, {"price": price, "atr": atr, "adx": adx}, profile_name
-# ------------------------------------------------------------------------------------------------
 
-# --- NEW: pause-windows parser for trailing loop (UTC) ---
+# --- pause windows parser ---
 def _parse_pause_windows(spec: str) -> List[Tuple[int, int]]:
-    """
-    Parse "HH:MM-HH:MMZ,..." into list of (start_min, end_min) in UTC.
-    Supports overnight ranges (end < start).
-    """
     windows: List[Tuple[int, int]] = []
     for part in [p.strip() for p in (spec or "").split(",") if p.strip()]:
         p = part.rstrip("Zz")
@@ -1611,13 +1466,11 @@ def _in_pause_window_utc(now: Optional[time.struct_time] = None) -> bool:
                 if s <= cur < e:
                     return True
             else:
-                # overnight window, e.g., 22:00-02:00
                 if cur >= s or cur < e:
                     return True
     except Exception:
         return False
     return False
-
 
 @router.post("/manage-once")
 async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
@@ -1625,17 +1478,14 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     symbol = (payload.get("symbol") or "").upper().strip()
     if not symbol:
         raise HTTPException(status_code=422, detail="missing symbol")
-
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
         return {"ok": True, "delegated": False, "skipped": True, "reason": "binance_client_import_failed", "detail": str(e)}
-
     api_key = os.getenv("BINANCE_API_KEY", "").strip()
     api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
     if not api_key or not api_sec:
         return {"ok": True, "delegated": False, "skipped": True, "reason": "binance_keys_missing"}
-
     client = Client(api_key, api_sec)
     _align_position_mode(client)
 
@@ -1657,7 +1507,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     if not side_txt or not entry_price or abs(pos_amt) <= 0:
         return {"ok": True, "skipped": True, "reason": "no_open_position"}
 
-    # --- Get filters and price first (moved up) ---
     tick, step = _get_filters(client, symbol)
     price_now = None
     with suppress(Exception):
@@ -1666,7 +1515,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
             price_now = float(tick_data["price"])
     base_price = price_now or entry_price
 
-    # --- Profile selection ---
     prof, indicators, profile_name = await _select_profile_for_symbol(client, symbol, payload)
     offset_bps = int(prof["offset_bps"])
     pcts: List[float] = list(prof["pcts"])
@@ -1680,7 +1528,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     if any(x <= 0 for x in splits):
         raise HTTPException(status_code=422, detail="splits must be > 0")
 
-    # --- Correct BE stop computation with safe rounding ---
     if side_txt == "BUY":
         be_price = float(entry_price) * (1.0 - (offset_bps / 10_000.0))
         be_price = _round_tick_dir(be_price, tick, "down")
@@ -1688,7 +1535,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
         be_price = float(entry_price) * (1.0 + (offset_bps / 10_000.0))
         be_price = _round_tick_dir(be_price, tick, "up")
 
-    # Nudge to the safe side vs. current mark price to avoid immediate trigger
     if price_now:
         if side_txt == "BUY":
             if be_price >= price_now:
@@ -1697,7 +1543,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
             if be_price <= price_now:
                 be_price = _round_tick_dir(price_now + tick, tick, "up")
 
-    # --- Cancel existing protective stops/trails before placing ours ---
     try:
         open_orders = client.futures_get_open_orders(symbol=symbol)
         for o in open_orders or []:
@@ -1708,7 +1553,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     except Exception:
         pass
 
-    # --- Place BE protective stop ---
     try:
         sl_kwargs = dict(
             symbol=symbol,
@@ -1723,7 +1567,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     except Exception as e:
         logger.warning("place_be_stop_failed: %s", e)
 
-    # --- Build TP ladder from current/entry base price (directional rounding) ---
     tps: List[float] = []
     for pct in pcts:
         if side_txt == "BUY":
@@ -1802,7 +1645,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     }
     return result
 
-
 @router.get("/ops/digest/expired")
 async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = None):
     if os.getenv("PROTECT_DIGEST_ROUTES", "1").lower() in ("1", "true", "yes", "on"):
@@ -1854,84 +1696,33 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
 
-
-# ==================== Telegram webhook ====================
 async def _telegram_webhook_core(request: Request) -> Dict[str, Any]:
     secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
     TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
     if TELEGRAM_WEBHOOK_SECRET and secret != TELEGRAM_WEBHOOK_SECRET:
         raise HTTPException(status_code=401, detail="Bad secret")
-    _ = await request.body()  # consume
+    _ = await request.body()
     return {"ok": True}
-
 
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
     return await _telegram_webhook_core(request)
 
-
 @app.post("/telegram/hook")
 async def telegram_hook_alias(request: Request):
     return await _telegram_webhook_core(request)
 
-
-# ==================== Register routers (incl. missing/optional) ====================
-try:
-    from routes.manager import router as manager_router  # type: ignore
-    app.include_router(manager_router)
-except Exception as e:
-    logger.warning("manager router not loaded: %s", e)
-
-try:
-    from routes.price import router as price_router  # type: ignore
-    app.include_router(price_router)
-except Exception as e:
-    logger.warning("price router not loaded: %s", e)
-
-try:
-    from routes.scan import router as scan_router  # type: ignore
-    app.include_router(scan_router)
-except Exception as e:
-    logger.warning("scan router not loaded: %s", e)
-
-try:
-    from routes.scan_top_volume import router as scan2_router, public_router as scan2_public  # type: ignore
-    app.include_router(scan2_router)
-    app.include_router(scan2_public)
-except Exception as e:
-    logger.warning("scan_top_volume router not loaded: %s", e)
-
-try:
-    from routes.topk import router as topk_router  # type: ignore
-    app.include_router(topk_router)
-except Exception as e:
-    logger.warning("topk router not loaded: %s", e)
-
-try:
-    from routes.health import router as health_router  # type: ignore
-    app.include_router(health_router)
-except Exception as e:
-    logger.warning("health router not loaded: %s", e)
-
-try:
-    from routes.readyz import router as readyz_router  # type: ignore
-    app.include_router(readyz_router)
-except Exception as e:
-    logger.warning("readyz router not loaded: %s", e)
-
-try:
-    from routes.meta import router as meta_router  # type: ignore
-    app.include_router(meta_router, tags=["meta"])
-except Exception as e:
-    logger.warning("meta router not loaded: %s", e)
-
-try:
-    from routes.alerts import router as alerts_router  # type: ignore
-    app.include_router(alerts_router)
-except Exception as e:
-    logger.warning("alerts router not loaded: %s", e)
-
+# ==================== Optional routers include ====================
 for mod, tag in (
+    ("routes.manager", "manager"),
+    ("routes.price", "price"),
+    ("routes.scan", "scan"),
+    ("routes.scan_top_volume", "scan_top_volume"),
+    ("routes.topk", "topk"),
+    ("routes.health", "health"),
+    ("routes.readyz", "readyz"),
+    ("routes.meta", "meta"),
+    ("routes.alerts", "alerts"),
     ("routes.ops_ui", "ops-ui"),
     ("routes.ops_flags", "ops-flags"),
     ("routes.position_ops", "position-ops"),
@@ -1949,39 +1740,32 @@ for mod, tag in (
 
 app.include_router(router)
 
-
 # ==================== Meta & Fallbacks ====================
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
     name = os.getenv("APP_NAME", "algogpt")
     return f"{name} online"
 
-
 @app.head("/", response_class=PlainTextResponse, tags=["meta"])
 def root_head() -> str:
     return ""
-
 
 @app.get("/meta/version", tags=["meta"])
 def meta_version_fallback():
     return {"name": os.getenv("APP_NAME", "algogpt"), "version": os.getenv("ALGOGPT_VERSION", "dev"), "ts": int(time.time()), "ok": True}
 
-
 @app.head("/meta/version", tags=["meta"])
 def meta_version_head():
     return PlainTextResponse("", status_code=200)
-
 
 @app.get("/health", tags=["meta"])
 def health_fallback():
     boot = getattr(app.state, "boot_ts", None)
     return {"ok": True, "uptime_sec": int(time.time() - (boot or time.time()))}
 
-
 @app.head("/health", tags=["meta"])
 def health_head():
     return PlainTextResponse("", status_code=200)
-
 
 @app.get("/readyz/strict", tags=["meta"])
 async def readyz_strict():
@@ -1993,7 +1777,6 @@ async def readyz_strict():
         logger.warning("readyz.strict.redis_ping_failed: %s", e)
         return PlainTextResponse("redis_fail", status_code=503)
     return PlainTextResponse("ok", status_code=200)
-
 
 @app.get("/debug/env", tags=["debug"])
 def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
@@ -2007,11 +1790,9 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
         safe[k] = v
     return {"ok": True, "env": safe}
 
-
 @app.head("/debug/env", tags=["debug"])
 def debug_env_head():
     return PlainTextResponse("", status_code=200)
-
 
 # ==================== Global error handler ====================
 @app.exception_handler(Exception)
@@ -2023,35 +1804,6 @@ async def global_exception_handler(request: Request, exc: Exception):
     if show_detail:
         payload["detail"] = str(exc)
     return JSONResponse(status_code=500, content=payload)
-
-
-# ==================== Startup / Shutdown ====================
-
-def _collect_critical_env_warnings() -> List[str]:
-    warnings: List[str] = []
-    if REQUIRE_REDIS and not REDIS_URL:
-        warnings.append("REQUIRE_REDIS=1 but REDIS_URL is missing")
-    if os.getenv("PROTECT_APPROVE_ROUTES", "1").lower() in ("1", "true", "yes", "on") and not API_BEARER_TOKEN:
-        warnings.append("PROTECT_APPROVE_ROUTES=1 but API_BEARER_TOKEN is missing")
-    if STARTUP_NOTIFY_ENABLE or os.getenv("REQUIRE_TELEGRAM_APPROVAL", "0").lower() in ("1", "true", "yes", "on"):
-        if not TELEGRAM_BOT_TOKEN:
-            warnings.append("Telegram enabled but TELEGRAM_BOT_TOKEN is missing")
-        if not ADMIN_CHAT_ID:
-            warnings.append("Telegram enabled but TELEGRAM_CHAT_ID/ADMIN_CHAT_ID is missing")
-    if os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on") and not TELEGRAM_WEBHOOK_SECRET:
-        warnings.append("TELEGRAM_AUTO_WEBHOOK=1 but TELEGRAM_WEBHOOK_SECRET is missing")
-    if not HMAC_SECRET:
-        warnings.append("WEBHOOK_HMAC_SECRET/OPS_SIGN_SECRET missing — signed approve links will degrade to plain URLs")
-    if os.getenv("EXECUTE_TRADES", "0").lower() in ("1", "true", "yes", "on"):
-        if not os.getenv("BINANCE_API_KEY") or not os.getenv("BINANCE_API_SECRET"):
-            warnings.append("EXECUTE_TRADES=1 but BINANCE_API_KEY/SECRET are missing")
-    if os.getenv("ANTI_REPLAY_ENABLE", "0").lower() in ("1", "true", "yes", "on"):
-        if os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "0").lower() in ("1", "true", "yes", "on") and not os.getenv("API_SIGNING_SECRET"):
-            warnings.append("ANTI_REPLAY_REQUIRE_SIGNATURE=1 but API_SIGNING_SECRET is missing")
-    if USE_REDIS_IDEM and not REDIS_URL:
-        warnings.append("USE_REDIS_IDEM=1 but REDIS_URL is missing")
-    return warnings
-
 
 # -------- NEW: Background real-time trailing manager ----------
 async def _trail_rt_loop():
@@ -2193,7 +1945,20 @@ async def _trail_rt_loop():
             logger.debug("trail_rt.loop_error: %s", e)
         await asyncio.sleep(max(3, TRAIL_RT_INTERVAL_SEC))
 
+# --- אזהרות סטארטאפ (אופציונלי, לא חוסם) ---
+def _collect_critical_env_warnings() -> List[str]:
+    warns: List[str] = []
+    if not os.getenv("API_BEARER_TOKEN"):
+        warns.append("API_BEARER_TOKEN missing (protected routes might 401).")
+    if not os.getenv("BINANCE_API_KEY") or not os.getenv("BINANCE_API_SECRET"):
+        warns.append("BINANCE keys missing — trading/management disabled.")
+    if (os.getenv("PUBLIC_REQUIRE_BEARER", "0").lower() in ("1", "true", "yes", "on")) and not os.getenv("API_BEARER_TOKEN"):
+        warns.append("PUBLIC_REQUIRE_BEARER=1 but API_BEARER_TOKEN is empty.")
+    if REQUIRE_REDIS and not REDIS_URL:
+        warns.append("REQUIRE_REDIS=1 but REDIS_URL missing.")
+    return warns
 
+# ==================== Startup / Shutdown ====================
 @app.on_event("startup")
 async def _startup_tasks():
     if getattr(app.state, "bg_started", False):
@@ -2215,22 +1980,25 @@ async def _startup_tasks():
                 await asyncio.sleep(1.0)
                 await _ensure_telegram_webhook()
         if STARTUP_NOTIFY_ENABLE and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID:
-            try:
+            with suppress(Exception):
                 txt = f"🟢 <b>{_md_html(os.getenv('INSTANCE_ID','algogpt'))}</b> up · v{_md_html(APP_VERSION)}"
                 await _send_telegram_html(txt)
-            except Exception:
-                pass
 
     asyncio.create_task(_late_webhook())
 
     if TRAIL_RT_ENABLE:
         asyncio.create_task(_trail_rt_loop())
 
-
 @app.on_event("shutdown")
 async def _shutdown_tasks():
+    with suppress(Exception):
+        t: Optional[asyncio.Task] = getattr(app.state, "trail_task", None)
+        if t:
+            t.cancel()
+            with suppress(Exception):
+                await t
     cli: Optional[httpx.AsyncClient] = getattr(app.state, "shared_async_client", None)
-    if cli and not cli.is_closed:
+    if cli and not getattr(cli, "is_closed", False):
         with suppress(Exception):
             await cli.aclose()
     r = getattr(app.state, "redis", None)
@@ -2238,34 +2006,18 @@ async def _shutdown_tasks():
         with suppress(Exception):
             await r.close()
         with suppress(Exception):
-            await r.connection_pool.disconnect()
+            # לא כל דרייבר חשוף ל-connection_pool; אם יש — ננתק
+            pool = getattr(r, "connection_pool", None)
+            if pool:
+                await pool.disconnect()
     logger.info("Application shutdown complete.")
-
 
 if __name__ == "__main__":
     import uvicorn
-
     host = os.getenv("HOST", "0.0.0.0")
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
