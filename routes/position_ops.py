@@ -12,7 +12,7 @@ from contextlib import suppress
 
 from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 
-# Anti-Replay
+# Anti-Replay (אופציונלי)
 with suppress(Exception):
     from utils.anti_replay import verify_request  # type: ignore
 
@@ -37,13 +37,9 @@ def _err(reason: str, **data) -> Dict[str, Any]:
     return d
 
 # =========================
-# Telegram notify helpers (fire-and-forget גם מתוך threadpool)
+# Telegram notify helpers (fire-and-forget)
 # =========================
 def _notify_ops(symbol: str, action_name: str) -> None:
-    """
-    שולח הודעת טלגרם קצרה עם מקלדת אינליין
-    לא חוסם את שרשור הראוט. בטוח גם אם אין event loop קיים בת׳רד.
-    """
     if "TelegramNotifier" not in globals():
         return
     loop: Optional[asyncio.AbstractEventLoop] = None
@@ -70,7 +66,7 @@ def _maybe_notify(symbol: Optional[str], action_name: str, res: Dict[str, Any]) 
     _notify_ops(symbol, action_name)
 
 # =========================
-# Guard (אופציונלי, שקט אם חסר)
+# Guard (שקט אם חסר)
 # =========================
 GUARD_ENSURE_AFTER_OPS = (os.getenv("GUARD_ENSURE_AFTER_OPS", "1").lower() in ("1", "true", "yes", "on"))
 with suppress(Exception):
@@ -107,14 +103,6 @@ def _coid_fit(s: str, limit: int = 32) -> str:
     h = hashlib.md5(s.encode("utf-8")).hexdigest()[:7]
     return s[: limit - (1 + len(h))] + "_" + h
 
-def _build_client_order_id(symbol: str, side: str, role: str = "ENTRY") -> str:
-    prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
-    sym = str(symbol).upper()
-    side = str(side).upper()
-    role = str(role).upper()
-    ts = int(time.time())
-    return _coid_fit(f"{prefix}_{sym}_{side}_{ROLE_MAP.get(role, role)}_{ts}", 32)
-
 ROLE_MAP = {
     "ENTRY": "ENTRY",
     "BE": "BE",
@@ -125,7 +113,16 @@ ROLE_MAP = {
     "TP2": "TP2",
     "TP3": "TP3",
     "CLOSE": "CLOSE",
+    "SL@BE": "SL@BE",
 }
+
+def _build_client_order_id(symbol: str, side: str, role: str = "ENTRY") -> str:
+    prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
+    sym = str(symbol).upper()
+    side = str(side).upper()
+    role = str(role).upper()
+    ts = int(time.time())
+    return _coid_fit(f"{prefix}_{sym}_{side}_{ROLE_MAP.get(role, role)}_{ts}", 32)
 
 with suppress(Exception):
     from utils.order_ids import build_client_order_id  # type: ignore
@@ -237,7 +234,7 @@ with suppress(Exception):
     from utils.quantize import get_filters as _unused_gf  # type: ignore
 
 # =========================
-# Position & price helpers (עשויים לזרוק — נתפוס בראוטים)
+# Position & price helpers
 # =========================
 def _fetch_position_side_qty_entry(client, symbol: str) -> Tuple[str, float, float]:
     infos = client.futures_position_information(symbol=symbol) or []
@@ -258,10 +255,6 @@ def _last_price(client, symbol: str) -> float:
 def _cancel_open_conditional(client, symbol: str,
                              kinds=("STOP", "TAKE_PROFIT", "TRAILING_STOP_MARKET"),
                              *, strict: bool = False) -> int:
-    """
-    strict=False (ברירת מחדל) — ביטול רחב: טיפוסים ב-kinds או כל טיפוס שמכיל STOP/TAKE_PROFIT
-    strict=True  — ביטול טיפוסים בדיוק כפי שמופיעים ב-kinds בלבד (למשל ביטול TRAILING בלבד)
-    """
     n = 0
     for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
         typ = (o.get("type") or "").upper()
@@ -273,7 +266,7 @@ def _cancel_open_conditional(client, symbol: str,
     return n
 
 # =========================
-# Gates (TP1/min profit)
+# TP1 filled?
 # =========================
 def _tp1_filled(client, symbol: str) -> bool:
     tags = [t.strip().upper() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1").split(","))]
@@ -283,10 +276,7 @@ def _tp1_filled(client, symbol: str) -> bool:
             st = (o.get("status") or "").upper()
             cid = ((o.get("clientOrderId") or "") + " " + (o.get("origClientOrderId") or "")).upper()
             typ = (o.get("type") or "").upper()
-            # מזוהה כ-TP1 אם הוזמן TAKE_PROFIT כלשהו ומולא, או אם clientOrderId מכיל אחד מהתגיות
-            if st == "FILLED" and (
-                "TP1" in cid or any(t in cid for t in tags) or "TAKE_PROFIT" in typ
-            ):
+            if st == "FILLED" and ("TP1" in cid or any(t in cid for t in tags) or "TAKE_PROFIT" in typ):
                 return True
     except Exception:
         pass
@@ -334,10 +324,8 @@ def place_be(
 ) -> Dict[str, Any]:
     if not _auth_ok(authorization):
         raise HTTPException(status_code=401, detail="Unauthorized")
-
     if _anti_replay_required():
-        body = payload
-        ok, reason = verify_request(x_timestamp, x_nonce, x_signature, "/position-ops/be", body, require_signature=True)  # type: ignore
+        ok, reason = verify_request(x_timestamp, x_nonce, x_signature, "/position-ops/be", payload, require_signature=True)  # type: ignore
         if not ok:
             raise HTTPException(status_code=401, detail=f"bad_signature: {reason}")
 
@@ -358,17 +346,15 @@ def place_be(
             return _ok(skipped=True, reason="no_open_position")
         raise
 
-    # price & filters
     flt = _get_filters(client, symbol)
     be_price = float(entry) * (1.0 - offset_bps / 10_000.0) if side == "BUY" else float(entry) * (1.0 + offset_bps / 10_000.0)
     be_price = _quantize_price(symbol, be_price, flt)
 
-    # נבטל פקודות מגנות קודמות
     with suppress(Exception):
         _cancel_open_conditional(client, symbol, kinds=("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"), strict=False)
 
-    # נצמיד קצת מול המחיר האחרון כדי להימנע מטריגר מיידי
-    try:
+    # הצמדה למחיר אחרון כדי למנוע טריגר מיידי
+    with suppress(Exception):
         last = _last_price(client, symbol)
         tick = float(flt.get("price_tick", 0.0) or 0.0)
         if tick > 0:
@@ -376,10 +362,7 @@ def place_be(
                 be_price = _quantize_price(symbol, last - tick, flt)
             elif side == "SELL" and be_price <= last:
                 be_price = _quantize_price(symbol, last + tick, flt)
-    except Exception:
-        pass
 
-    # ניצור STOP_MARKET closePosition
     try:
         client.futures_create_order(
             symbol=symbol,
@@ -409,10 +392,8 @@ def place_trailing(
 ) -> Dict[str, Any]:
     if not _auth_ok(authorization):
         raise HTTPException(status_code=401, detail="Unauthorized")
-
     if _anti_replay_required():
-        body = payload
-        ok, reason = verify_request(x_timestamp, x_nonce, x_signature, "/position-ops/trail", body, require_signature=True)  # type: ignore
+        ok, reason = verify_request(x_timestamp, x_nonce, x_signature, "/position-ops/trail", payload, require_signature=True)  # type: ignore
         if not ok:
             raise HTTPException(status_code=401, detail=f"bad_signature: {reason}")
 
@@ -434,19 +415,18 @@ def place_trailing(
             return _ok(skipped=True, reason="no_open_position")
         raise
 
-    # בטל קודם trailing קיים
+    # בטל TRAILING קיים בלבד
     with suppress(Exception):
         _cancel_open_conditional(client, symbol, kinds=("TRAILING_STOP_MARKET",), strict=True)
 
-    # חשב callbackRate
+    # חשב callbackRate (0.1..5.0)
     def _calc_callback_rate() -> float:
-        if callback_rate:
+        if callback_rate is not None:
             try:
                 r = float(callback_rate)
                 return max(0.1, min(5.0, r))
             except Exception:
                 pass
-        # ATR-based
         if atr_mult is None:
             with suppress(Exception):
                 atr_mult_env = float(os.getenv("TRAIL_ATR_MULT", "1.6"))
@@ -475,11 +455,18 @@ def place_trailing(
 
     cb = round(float(_calc_callback_rate()), 1)
 
+    # כמות ל-TRAILING (חובה ב-Binance) + קוונטיזציה
+    flt = _get_filters(client, symbol)
+    qty_q = _quantize_qty(symbol, qty, flt)
+    if qty_q <= 0:
+        return _err("place_trailing_failed", detail="non_positive_quantity_after_quantize")
+
     try:
         client.futures_create_order(
             symbol=symbol,
             side="SELL" if side == "BUY" else "BUY",
             type="TRAILING_STOP_MARKET",
+            quantity=qty_q,
             callbackRate=cb,
             reduceOnly=True,
             workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
@@ -489,9 +476,321 @@ def place_trailing(
         return _err("place_trailing_failed", detail=str(e))
 
     _ensure_guard(symbol, prefer_mode="native")
-    res = _ok(symbol=symbol, side=side, qty=qty, callback_rate=cb)
+    res = _ok(symbol=symbol, side=side, qty=qty_q, callback_rate=cb)
     _maybe_notify(symbol, "trail", res)
     return res
+
+@router.post("/trail/cancel")
+def cancel_trailing(
+    payload: Dict[str, Any] = Body(..., example={"symbol": "BTCUSDT"}),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+    client, err = _get_client_soft()
+    if not client:
+        return _ok(skipped=True, reason=err or "no_client")
+    n = _cancel_open_conditional(client, symbol, kinds=("TRAILING_STOP_MARKET",), strict=True)
+    return _ok(symbol=symbol, cancelled=n)
+
+# =========================
+# TP ladder / one / cancel
+# =========================
+def _tp_price(side: str, entry: float, pct: float) -> float:
+    # pct באחוזים: BUY => למעלה, SELL => למטה
+    return (entry * (1 + pct / 100.0)) if side == "BUY" else (entry * (1 - pct / 100.0))
+
+@router.post("/tp/ladder")
+def place_tp_ladder(
+    payload: Dict[str, Any] = Body(..., example={"symbol":"BTCUSDT","pcts":[3,6,12],"splits":[0.25,0.25,0.5]}),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    pcts  = payload.get("pcts") or []
+    splits = payload.get("splits") or []
+    if not symbol or not isinstance(pcts, list) or not isinstance(splits, list) or len(pcts) != len(splits) or not pcts:
+        raise HTTPException(status_code=422, detail="bad pcts/splits")
+    client, err = _get_client_soft()
+    if not client:
+        return _ok(skipped=True, reason=err or "no_client")
+    _align_position_mode(client)
+    try:
+        side, qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    except HTTPException as e:
+        if e.status_code == 409:
+            return _ok(skipped=True, reason="no_open_position")
+        raise
+    flt = _get_filters(client, symbol)
+    tick = float(flt.get("price_tick", 0.0) or 0.0)
+    step = float(flt.get("qty_step", 0.0) or 0.0)
+
+    # בטל TP ישנים בלבד
+    with suppress(Exception):
+        _cancel_open_conditional(client, symbol, kinds=("TAKE_PROFIT", "TAKE_PROFIT_MARKET"), strict=True)
+
+    placed: List[Dict[str, Any]] = []
+    rem_qty = qty
+    for i, (pct, split) in enumerate(zip(pcts, splits), start=1):
+        try:
+            pct_f = float(pct)
+            sp = max(0.0, min(1.0, float(split)))
+        except Exception:
+            continue
+        raw_price = _tp_price(side, entry, pct_f)
+        price = _quantize_price(symbol, raw_price, flt)
+        part = _quantize_qty(symbol, qty * sp, flt)
+        # ודא שסכום לא חורג מהיתרה בגלל רצפה
+        if part <= 0 or rem_qty <= 0:
+            continue
+        if part > rem_qty:
+            part = _quantize_qty(symbol, rem_qty, flt)
+        rem_qty = max(0.0, rem_qty - part)
+
+        params = dict(
+            symbol=symbol,
+            side="SELL" if side == "BUY" else "BUY",
+            type="TAKE_PROFIT_MARKET",
+            stopPrice=price,
+            reduceOnly=True,
+            quantity=part,
+            workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+            newClientOrderId=_build_client_order_id(symbol, "SELL" if side == "BUY" else "BUY", role=f"TP{i}"),
+        )
+        # על מנת להימנע מטריגר מיידי: אם BUY ו-price<=last, דחוף tick; ואם SELL ו-price>=last, משוך tick
+        with suppress(Exception):
+            last = _last_price(client, symbol)
+            if tick > 0:
+                if side == "BUY" and price <= last:
+                    price = _quantize_price(symbol, last + tick, flt)
+                    params["stopPrice"] = price  # type: ignore
+                elif side == "SELL" and price >= last:
+                    price = _quantize_price(symbol, last - tick, flt)
+                    params["stopPrice"] = price  # type: ignore
+        try:
+            client.futures_create_order(**params)
+            placed.append({"i": i, "price": price, "qty": part})
+        except Exception as e:
+            logger.warning("tp_place_failed: %s", e)
+
+    if not placed:
+        return _err("tp_ladder_failed", detail="no_tp_placed")
+
+    _ensure_guard(symbol, prefer_mode="native")
+    res = _ok(symbol=symbol, side=side, qty=qty, tp=placed)
+    _maybe_notify(symbol, "tp_ladder", res)
+    return res
+
+@router.post("/tp/one")
+def place_tp_one(
+    payload: Dict[str, Any] = Body(..., example={"symbol":"BTCUSDT","pct":3.0,"fraction":0.25}),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    pct = float(payload.get("pct") or 3.0)
+    fraction = float(payload.get("fraction") or 0.25)
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+    client, err = _get_client_soft()
+    if not client:
+        return _ok(skipped=True, reason=err or "no_client")
+    _align_position_mode(client)
+    try:
+        side, qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    except HTTPException as e:
+        if e.status_code == 409:
+            return _ok(skipped=True, reason="no_open_position")
+        raise
+    flt = _get_filters(client, symbol)
+    price = _quantize_price(symbol, _tp_price(side, entry, pct), flt)
+    part = _quantize_qty(symbol, qty * max(0.0, min(1.0, fraction)), flt)
+    if part <= 0:
+        return _err("tp_one_failed", detail="fraction_rounds_to_zero")
+    try:
+        client.futures_create_order(
+            symbol=symbol,
+            side="SELL" if side == "BUY" else "BUY",
+            type="TAKE_PROFIT_MARKET",
+            stopPrice=price,
+            reduceOnly=True,
+            quantity=part,
+            workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+            newClientOrderId=_build_client_order_id(symbol, "SELL" if side == "BUY" else "BUY", role="TP1"),
+        )
+    except Exception as e:
+        return _err("tp_one_failed", detail=str(e))
+    res = _ok(symbol=symbol, side=side, qty=qty, price=price, part=part)
+    _maybe_notify(symbol, "tp_one", res)
+    return res
+
+@router.post("/tp/cancel")
+def cancel_tp(
+    payload: Dict[str, Any] = Body(..., example={"symbol":"BTCUSDT"}),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+    client, err = _get_client_soft()
+    if not client:
+        return _ok(skipped=True, reason=err or "no_client")
+    n = _cancel_open_conditional(client, symbol, kinds=("TAKE_PROFIT", "TAKE_PROFIT_MARKET"), strict=True)
+    return _ok(symbol=symbol, cancelled=n)
+
+# =========================
+# SL explicit move & Close fraction
+# =========================
+@router.post("/sl/move")
+def move_sl(
+    payload: Dict[str, Any] = Body(..., example={"symbol":"BTCUSDT","price":112500.0}),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    price = payload.get("price")
+    if not symbol or price is None:
+        raise HTTPException(status_code=422, detail="missing symbol/price")
+    client, err = _get_client_soft()
+    if not client:
+        return _ok(skipped=True, reason=err or "no_client")
+    _align_position_mode(client)
+    try:
+        side, qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    except HTTPException as e:
+        if e.status_code == 409:
+            return _ok(skipped=True, reason="no_open_position")
+        raise
+    flt = _get_filters(client, symbol)
+    p = _quantize_price(symbol, float(price), flt)
+    with suppress(Exception):
+        _cancel_open_conditional(client, symbol, kinds=("STOP", "STOP_MARKET"), strict=False)
+    try:
+        client.futures_create_order(
+            symbol=symbol,
+            side="SELL" if side == "BUY" else "BUY",
+            type="STOP_MARKET",
+            stopPrice=p,
+            closePosition=True,
+            workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+            newClientOrderId=_build_client_order_id(symbol, "SELL" if side == "BUY" else "BUY", role="SL"),
+        )
+    except Exception as e:
+        return _err("sl_move_failed", detail=str(e))
+    res = _ok(symbol=symbol, side=side, qty=qty, stopPrice=p)
+    _maybe_notify(symbol, "sl_move", res)
+    return res
+
+@router.post("/close")
+def close_fraction(
+    payload: Dict[str, Any] = Body(..., example={"symbol":"BTCUSDT","fraction":0.25}),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    fraction = float(payload.get("fraction") or 0.25)
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+    client, err = _get_client_soft()
+    if not client:
+        return _ok(skipped=True, reason=err or "no_client")
+    _align_position_mode(client)
+    try:
+        side, qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    except HTTPException as e:
+        if e.status_code == 409:
+            return _ok(skipped=True, reason="no_open_position")
+        raise
+    flt = _get_filters(client, symbol)
+    part = _quantize_qty(symbol, qty * max(0.0, min(1.0, fraction)), flt)
+    if part <= 0:
+        return _err("close_failed", detail="fraction_rounds_to_zero")
+    try:
+        client.futures_create_order(
+            symbol=symbol,
+            side="SELL" if side == "BUY" else "BUY",
+            type="MARKET",
+            reduceOnly=True,
+            quantity=part,
+            newClientOrderId=_build_client_order_id(symbol, "SELL" if side == "BUY" else "BUY", role="CLOSE"),
+        )
+    except Exception as e:
+        return _err("close_failed", detail=str(e))
+    res = _ok(symbol=symbol, side=side, closed_qty=part)
+    _maybe_notify(symbol, "close", res)
+    return res
+
+# =========================
+# “ניהול דינמי” פעם אחת: BE + TP Ladder (+ Trail אם atr_mult>0)
+# =========================
+@router.post("/manage-once")
+def manage_once(
+    payload: Dict[str, Any] = Body(..., example={
+        "symbol":"BTCUSDT",
+        "offset_bps":8,
+        "pcts":[3,6,12],
+        "splits":[0.25,0.30,0.45],
+        "atr_mult":1.6
+    }),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+    be_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS", "5") or 5)
+    pcts = payload.get("pcts") or [4.0, 8.0, 16.0]
+    splits = payload.get("splits") or [0.3, 0.3, 0.4]
+    atr_mult = payload.get("atr_mult")  # אם None/0 לא נפעיל Trail
+
+    # 1) BE
+    be_res = place_be(Request(scope={"type":"http"}), {"symbol": symbol, "offset_bps": be_bps}, authorization)  # type: ignore
+
+    # 2) TP Ladder
+    tp_res = place_tp_ladder({"symbol": symbol, "pcts": pcts, "splits": splits}, authorization)  # type: ignore
+
+    # 3) Trail (אופציונלי)
+    tr_res: Dict[str, Any] = {"ok": True, "skipped": True, "reason": "trail_disabled"}
+    if atr_mult:
+        tr_res = place_trailing(Request(scope={"type":"http"}), {"symbol": symbol, "atr_mult": atr_mult}, authorization)  # type: ignore
+
+    # אם TP1 התמלא — להזיז SL ל-BE+tick
+    client, err = _get_client_soft()
+    if client:
+        with suppress(Exception):
+            side, qty, entry = _fetch_position_side_qty_entry(client, symbol)
+            if _tp1_filled(client, symbol):
+                flt = _get_filters(client, symbol)
+                tick = float(flt.get("price_tick", 0.0) or 0.0)
+                be_price = float(entry) * (1.0 - be_bps / 10_000.0) if side == "BUY" else float(entry) * (1.0 + be_bps / 10_000.0)
+                be_price = _quantize_price(symbol, be_price, flt)
+                if tick > 0:
+                    be_price = be_price + tick if side == "BUY" else be_price - tick
+                with suppress(Exception):
+                    _cancel_open_conditional(client, symbol, kinds=("STOP", "STOP_MARKET"), strict=False)
+                with suppress(Exception):
+                    client.futures_create_order(
+                        symbol=symbol,
+                        side="SELL" if side == "BUY" else "BUY",
+                        type="STOP_MARKET",
+                        stopPrice=be_price,
+                        closePosition=True,
+                        workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+                        newClientOrderId=_build_client_order_id(symbol, "SELL" if side == "BUY" else "BUY", role="SL@BE"),
+                    )
+
+    return _ok(symbol=symbol, be=be_res, tp=tp_res, trail=tr_res)
+
 
 
 
