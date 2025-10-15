@@ -29,6 +29,14 @@ if "utils.anti_replay" not in sys.modules:
     sys.modules["utils.anti_replay"] = _m
 # ----------------------------------------------------------------------------------------
 
+# --- soft shim for utils.idempotency.idem_for_request (if missing keep permissive) ---
+try:
+    from utils.idempotency import idem_for_request  # type: ignore
+except Exception:
+    async def idem_for_request(body: bytes, headers: Dict[str, str], extra: Optional[Dict[str, Any]] = None) -> bool:  # type: ignore
+        return True
+# ----------------------------------------------------------------------------------------
+
 import httpx
 from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
@@ -439,8 +447,6 @@ async def _public_cache_etag(request: Request, call_next):
     except Exception:
         return resp
     return resp
-
-
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -887,6 +893,22 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
 
+# --------- NEW: Idempotent webhook route example (/webhook/whatever) ----------
+@router.post("/webhook/whatever")
+async def webhook_whatever(request: Request):
+    body = await request.body()
+    headers = dict(request.headers)
+    try:
+        ok_first = await idem_for_request(body, headers, extra={"route": "/webhook/whatever"})
+    except Exception as e:
+        logger.warning("idem_for_request failed (permissive allow): %s", e)
+        ok_first = True
+    if not ok_first:
+        return JSONResponse({"ok": True, "skipped": True, "reason": "idem_duplicate"}, status_code=200)
+    # --- One-time processing block (placeholder) ---
+    # TODO: add your single-execution logic here.
+    return JSONResponse({"ok": True, "handled_once": True}, status_code=200)
+# --------------------------------------------------------------------------------
 
 def _require_bearer(request: Request) -> None:
     if os.getenv("PROTECT_APPROVE_ROUTES", "1").lower() not in ("1", "true", "yes", "on"):
@@ -1012,8 +1034,6 @@ async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[boo
                 await r.delete(f"{NS}:ticket:{ticket_id}")
     with suppress(Exception):
         ConfirmStore.remove(ticket_id)
-
-
 @router.post("/ops/ticket")
 async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = None):
     symbol = (payload.get("symbol") or "").upper().strip()
@@ -2229,6 +2249,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
