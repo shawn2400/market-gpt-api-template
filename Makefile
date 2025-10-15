@@ -1,7 +1,7 @@
 
 ---
 
-# Makefile (ללא jq)
+# Makefile 
 
 ```make
 # ====== Config ======
