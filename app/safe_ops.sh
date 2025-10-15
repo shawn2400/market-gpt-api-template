@@ -1,4 +1,4 @@
-# === יצירה/דריסה של /app/safe_ops.sh (גרסה מעודכנת עם manage-once-lite, tp-ladder, trail-off, status, open-top) ===
+
 cat > /app/safe_ops.sh <<'BASH'
 #!/usr/bin/env bash
 set -euo pipefail
