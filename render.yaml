@@ -94,6 +94,8 @@ services:
       # ========================= CORS =========================
       - key: CORS_ALLOW_ORIGINS
         value: "https://algogpt-docker.onrender.com"
+      - key: CORS_ALLOW_ORIGINS_STRICT
+        value: ""
       - key: CORS_ALLOW_HEADERS
         value: "*"
       - key: CORS_ALLOW_METHODS
@@ -161,7 +163,7 @@ services:
       - key: PUBLIC_RL_NS
         value: "ops-supervisor-web:rl"
 
-      # ========================= Redis =========================
+      # ========================= Redis (incl. TLS) =========================
       - key: REQUIRE_REDIS
         value: "1"
       - key: CONFIRMSTORE_ENABLE
@@ -184,10 +186,12 @@ services:
         value: "0.6"
       - key: REDIS_CLIENT_NAME
         value: "algogpt"
-      - key: REDIS_SSL_NO_VERIFY
-        value: "0"
       - key: REDIS_RETRY_ON_TIMEOUT
         value: "1"
+      - key: REDIS_SSL_NO_VERIFY
+        value: "0"
+      - key: REDIS_SSL_CERT_REQS
+        value: "required"   # optional: required|optional|none
       - key: REDIS_SSL_CA_CERTS
         value: "/etc/ssl/certs/ca-certificates.crt"
       - key: REDIS_NAMESPACE
@@ -479,125 +483,25 @@ services:
       - key: AUTO_TRAIL_ATRPCT_MAX
         value: "0.015"
 
-      # ========================= Smart-Manage =========================
-      - key: SMART_MANAGE_ON_APPROVE
+      # ========================= Real-time Trailing (RT loop) =========================
+      - key: TRAIL_RT_ENABLE
         value: "1"
-      - key: SMART_MANAGE_BE_OFFSET_BPS
-        value: "12"
-      - key: SMART_MANAGE_PCTS
-        value: "3,6,12"
-      - key: SMART_MANAGE_SPLITS
-        value: "0.25,0.25,0.50"
-      - key: SMART_MANAGE_TRAIL_ATR_MULT
+      - key: TRAIL_RT_INTERVAL_SEC
+        value: "20"
+      - key: TRAIL_RT_ATR_MULT
         value: "1.6"
-      - key: SM_ULTRA_LOG
-        value: "1"
-      - key: SM_LOG_PREFIX
-        value: "smart_manage"
-
-      # ========================= Hedge & Auto-Flip =========================
-      - key: HEDGE_ENABLE
-        value: "1"
-      - key: ALLOW_OPPOSITE_SIDE
-        value: "1"
-      - key: AUTO_SIDE_SWITCH
-        value: "1"
-      - key: AUTO_REOPEN_ON_EXIT
-        value: "1"
-
-      # ========================= Auto-Tune (Score/ADX) =========================
-      - key: AUTO_TUNE_ENABLE
-        value: "1"
-      - key: AUTO_MIN_SCORE_BASE
-        value: "8.5"
-      - key: AUTO_MIN_SCORE_RANGE
-        value: "6.2,7.9"
-      - key: AUTO_ADX_MIN_BASE
-        value: "22"
-      - key: AUTO_ADX_RANGE
-        value: "20,35"
-      - key: TARGET_TRADES_PER_DAY_MIN
-        value: "4"
-      - key: TARGET_TRADES_PER_DAY_MAX
-        value: "10"
-      - key: AUTO_TUNE_LOOKBACK_MIN
-        value: "180"
-      - key: AUTO_BACKOFF_SEC
-        value: "900"
-
-      # ========================= Auto-Tune TP/SL (ADX) =========================
-      - key: AUTO_TP_ENABLE
-        value: "1"
-      - key: SL_ATR_MULT_BASE
-        value: "0.90"
-      - key: TP1_ATR_MULT_BASE
-        value: "1.60"
-      - key: TP2_ATR_MULT_BASE
-        value: "3.20"
-      - key: TP3_ATR_MULT_BASE
-        value: "5.20"
-      - key: ADX_TP_BOOST_THRESH
-        value: "28"
-      - key: ADX_TP_BOOST_PCT
-        value: "18"
-      - key: ADX_STRONG_SL_TIGHTEN_PCT
-        value: "14"
-      - key: ADX_LOW_SL_RELAX_PCT
-        value: "10"
-      - key: ADX_LOW_TP_SHRINK_PCT
-        value: "15"
-
-      # ========================= Dynamic Profile (manage-once) =========================
-      - key: DYN_TOOLBOX_ENABLE
-        value: "1"
-      - key: DYN_SCORE_BANDS
-        value: "conservative:<6.0;base:6.0-7.5;aggressive:7.5-8.5;extreme:>=8.5"
-      - key: DYN_PROFILE_AUTO_ENABLE
-        value: "1"
-      - key: DYN_PROFILE_AUTO_SOURCE
-        value: "score,adx"
-      - key: DYN_PROFILE_SWITCH_HYSTERESIS
+      - key: TRAIL_RT_MIN_CALLBACK
+        value: "0.1"
+      - key: TRAIL_RT_MAX_CALLBACK
+        value: "5.0"
+      - key: TRAIL_RT_PRICE_SRC
+        value: "MARK_PRICE"
+      - key: TRAIL_RT_MAX_SYMBOLS
+        value: "30"
+      - key: TRAIL_RT_ADJUST_THRESHOLD
         value: "0.2"
-      - key: DYN_PROFILE_MIN_DWELL_SEC
-        value: "120"
-      - key: DYN_PROFILE_NOTIFY_ENABLE
-        value: "1"
-      - key: DYN_PROFILE_NOTIFY_CHANNELS
-        value: "telegram,logs"
-      - key: DYN_PROFILE_NOTIFY_MIN_DWELL_SEC
-        value: "60"
-      - key: DYN_PROFILE_NOTIFY_COOLDOWN_SEC
-        value: "45"
-      - key: DYN_PROFILE_NOTIFY_INCLUDE_STATE
-        value: "1"
-      - key: DYN_PROFILE_NOTIFY_PARSE_MODE
-        value: "HTML"
-      - key: DYN_PROFILE_NOTIFY_TEMPLATE
-        value: "<b>Profile Switch</b> — <code>{symbol}</code>\n<b>{old}</b> ➜ <b>{new}</b>\nScore: <b>{score:.2f}</b> | ADX: <b>{adx:.0f}</b>\nLev: <b>{lev}</b> | Budget: <b>{budget}</b>\nTP: <b>{tp_pcts}</b> / Splits: <b>{splits}</b>\nTrail ATR: <b>{trail_atr}</b> | BE: <b>{be_pct}%</b>\n⏱ {ts} (UTC)"
-
-      # ----- NEW: Profile/env for manage-once -----
-      - key: PROFILE_AUTO_SELECT
-        value: "1"
-      - key: PROFILE_BASE_BE_BPS
-        value: "5"
-      - key: PROFILE_BASE_PCTS
-        value: "4,8,16"
-      - key: PROFILE_BASE_SPLITS
-        value: "0.30,0.30,0.40"
-      - key: PROFILE_BASE_ATR_MULT
-        value: "0"
-      - key: PROFILE_EXTREME_BE_BPS
-        value: "2"
-      - key: PROFILE_EXTREME_PCTS
-        value: "2,4,8"
-      - key: PROFILE_EXTREME_SPLITS
-        value: "0.25,0.35,0.40"
-      - key: PROFILE_EXTREME_ATR_MULT
-        value: "1.6"
-      - key: ADX_EXTREME_MIN
-        value: "28"
-      - key: ATRPCT_EXTREME_MIN
-        value: "0.007"
+      - key: TRAIL_RT_WATCHLIST
+        value: ""
 
       # ========================= Health / Digest =========================
       - key: HEALTH_PRICE_MAX_AGE
@@ -673,7 +577,7 @@ services:
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
-      # ======== Auto Manager defaults ========
+      # ======== Auto Manager defaults (this service) ========
       - key: AUTO_BE_BPS
         value: "8"
       - key: AUTO_ATR_MULT
