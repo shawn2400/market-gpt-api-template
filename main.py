@@ -1,5 +1,3 @@
-
-
 # main.py
 from __future__ import annotations
 
@@ -97,6 +95,14 @@ app = FastAPI(
     redoc_url=REDOC_URL,
     openapi_url=OPENAPI_URL,
 )
+
+# ===== UltraTop integration (mount under /ultra without affecting existing routes) =====
+try:
+    from main_ultratop import setup_ultratop  # type: ignore
+    setup_ultratop(app, prefix="/ultra")
+    logger.info("UltraTop mounted at /ultra")
+except Exception as e:
+    logger.warning("UltraTop not mounted: %s", e)
 
 # ---------- Safe HEAD & /readyz (first middleware) ----------
 @app.middleware("http")
@@ -1958,6 +1964,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
