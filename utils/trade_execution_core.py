@@ -1,4 +1,3 @@
-# utils/trade_execution_core.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, math, time, logging, json, hashlib
@@ -64,7 +63,8 @@ LEV_HARD_CAP              = int(float(os.getenv("LEV_HARD_CAP", "50")))
 try:
     LEV_ADX_MAP_JSON      = json.loads(os.getenv("LEV_ADX_MAP_JSON", '{"30":15,"25":12,"20":9,"0":7}'))
 except Exception:
-    LEV_ADX_MAP_JSON      = {"BTCUSDT": 15} if False else {"30":15,"25":12,"20":9,"0":7}
+    # ברירת מחדל הגיונית (ללא dead code)
+    LEV_ADX_MAP_JSON      = {"30":15,"25":12,"20":9,"0":7}
 
 # Backfill ENV defaults
 DEFAULT_QTY_STEP      = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
@@ -226,6 +226,7 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         closes = [float(r[4]) for r in kl]
         vols   = [float(r[5]) for r in kl]
         if len(closes) < 30:
+            # מעט מדי נתונים → נשתמש בברירת-מחדל בלבד
             return {"enter_ok": (QUALITY_DEFAULT >= MIN_QUALITY_SCORE), "score": QUALITY_DEFAULT, "reasons": ["insufficient_data"], "metrics": {}}
 
         ema21 = _ema(closes, 21)[-1]
@@ -245,7 +246,7 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         score += 3.0 if mom_ok else 0.0
         score += 2.0 if atr_ok else 0.0
         score += 1.0 if vol_ok else 0.0
-        score = max(score, MIN_QUALITY_FALLBACK, QUALITY_DEFAULT)
+        # ⬅️ ללא max(...) עם ברירות-מחדל — כדי לא לנפח ציון תקין
 
         reasons=[]
         if not trend_ok: reasons.append("trend_mismatch")
@@ -257,6 +258,7 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
                 "metrics": {"ema21": ema21, "ema50": ema50, "atr_pct": atr_pct, "mom_pct": mom, "vol1m": vols[-1]}}
     except Exception as e:
         log.warning("quality gate failed: %s", e)
+        # רק במקרה כשל — להשתמש בברירת-מחדל
         return {"enter_ok": (QUALITY_DEFAULT >= MIN_QUALITY_SCORE), "score": QUALITY_DEFAULT, "reasons": ["gate_error"], "metrics": {}}
 
 # ─────────── Budget & Leverage helpers ───────────
@@ -283,7 +285,10 @@ def _balance_usdt() -> float:
         log.warning("balance fetch failed: %s", e)
     return 0.0
 
-def _choose_budget_dynamic(get_budget_usdt, quality: Optional[float], price: float) -> float:
+def _choose_budget_dynamic(get_budget_usdt, quality: Optional[float], price: float, symbol: Optional[str]=None) -> float:
+    """
+    בחירת תקציב דינמי — כולל minNotional לפי הסימבול (אחורה-תואם אם לא נשלח symbol).
+    """
     if not BUDGET_DYNAMIC_ENABLE:
         return get_budget_usdt(quality=quality, price=price)
     pcts = _parse_pct_csv(BUDGET_DYNAMIC_RISK_PCTS) or [1.5, 3.0, 5.0]
@@ -299,7 +304,7 @@ def _choose_budget_dynamic(get_budget_usdt, quality: Optional[float], price: flo
         if bal <= 0:
             return get_budget_usdt(quality=quality, price=price)
         alloc = bal * (pct / 100.0)
-        mn = _min_notional("BTCUSDT")
+        mn = _min_notional((symbol or "BTCUSDT"))
         return max(alloc, mn)
     return get_budget_usdt(quality=quality, price=price)
 
@@ -396,6 +401,7 @@ def _build_ladders(sym: str, side: str, qty: float,
                    sl_targets: Optional[List[float]], sl_splits: Optional[List[float]]) -> Dict[str, Any]:
     plan: Dict[str, Any] = {"tp_orders": [], "sl_orders": []}
     tp_kind_market = (LADDER_TP_KIND == "TAKE_PROFIT_MARKET")
+    pos_side = _effective_position_side(_pos_side_for_entry(side))
 
     def _prep(kind: str, targets, splits=None):
         if not targets: return
@@ -410,13 +416,14 @@ def _build_ladders(sym: str, side: str, qty: float,
             remain = max(0.0, remain - qalloc)
             _, stop_p = _q_price(sym, float(t))
 
+            base = {"symbol": sym, "qty": qalloc, "positionSide": pos_side, "timeInForce": "GTC"}
             if kind == "TP":
                 if tp_kind_market:
-                    plan["tp_orders"].append({"type": "TAKE_PROFIT_MARKET","stopPrice": stop_p,"qty": qalloc})
+                    plan["tp_orders"].append({**base, "type": "TAKE_PROFIT_MARKET", "stopPrice": stop_p, "reduceOnly": True})
                 else:
-                    plan["tp_orders"].append({"type": "TAKE_PROFIT","stopPrice": stop_p,"price": stop_p,"qty": qalloc})
+                    plan["tp_orders"].append({**base, "type": "TAKE_PROFIT", "stopPrice": stop_p, "price": stop_p, "reduceOnly": True})
             else:
-                plan["sl_orders"].append({"type": "STOP_MARKET","stopPrice": stop_p,"qty": qalloc})
+                plan["sl_orders"].append({**base, "type": "STOP_MARKET", "stopPrice": stop_p, "reduceOnly": True})
 
     if tp_targets: _prep("TP", tp_targets, tp_splits)
     if sl_targets: _prep("SL", sl_targets, sl_splits)
