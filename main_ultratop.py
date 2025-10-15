@@ -1,7 +1,6 @@
 # main_ultratop.py — AlgoGPT UltraTop (WS-only), plug & play:
 # - Standalone: set ULTRATOP_MODE=standalone  and  APP_MODULE=main_ultratop:app
-# - Default (recommended): mounts into main.py app under /ultra
-#   (APP_MODULE=main_ultratop:app; it imports main.app and attaches the router)
+# - Recommended: run main:app and call setup_ultratop(app, prefix="/ultra") from main.py
 from __future__ import annotations
 
 import os, time, hmac, hashlib, json, logging, threading
@@ -50,7 +49,6 @@ try:
     PROCESS_COLLECTOR.register(registry)
     PLATFORM_COLLECTOR.register(registry)
 except Exception:
-    # older prometheus_client versions may behave differently; ignore
     pass
 
 APP_UPTIME = Gauge("app_uptime_seconds", "Application uptime seconds", registry=registry)
@@ -128,7 +126,7 @@ class PolicyManager:
         self.path = path
         self.schema_path = schema_path
         self.policy: Dict[str, Any] = {}
-        self.schema: Optional[Dict[str, Any]] = None
+               self.schema: Optional[Dict[str, Any]] = None
         self.mtime: float = 0.0
 
     def load(self) -> Dict[str, Any]:
@@ -293,13 +291,17 @@ def _attach_lifecycle(app: FastAPI):
 # ---------- Public helpers ----------
 def setup_ultratop(app: FastAPI, prefix: str = "") -> None:
     """
-    חבר את UltraTop ל-App קיים.
-    - prefix="" ישתמש בנתיבים כפי שהם (כמו סטנדאלון)
-    - prefix="/ultra" ימקם את הכל תחת /ultra
+    Mount UltraTop on an existing FastAPI app.
+    - prefix="" exposes the routes as-is (like standalone)
+    - prefix="/ultra" nests everything under /ultra
     """
+    # Guard: prevent double include
+    if getattr(app.state, "_ultra_router_attached", False):
+        return
     _attach_middleware(app)
     _attach_lifecycle(app)
     app.include_router(router, prefix=prefix)
+    app.state._ultra_router_attached = True
 
 def create_ultratop_app(prefix: str = "") -> FastAPI:
     app = FastAPI(title=APP_TITLE, version=APP_VERSION)
@@ -307,18 +309,23 @@ def create_ultratop_app(prefix: str = "") -> FastAPI:
     return app
 
 # ---------- App export ----------
-# ברירת המחדל: "mount" — משתמש ב-main.app ומתקין UltraTop תחת /ultra,
-# כדי לשמר את כל ה־routes של main.py (סופר חשוב בפרודקשן).
-_MODE = os.getenv("ULTRATOP_MODE", "mount").lower()
+# Default is "noop" to avoid auto-mount on import. main.py will call setup_ultratop(...).
+_MODE = os.getenv("ULTRATOP_MODE", "noop").lower()
 _PREFIX = os.getenv("ULTRATOP_PREFIX", "/ultra")
 
-if _MODE in ("mount", "embed", "attach", ""):
-    from main import app as _base_app  # main.py שלך
+if _MODE in ("mount", "embed", "attach"):
+    from main import app as _base_app  # use main.py app and attach here
     setup_ultratop(_base_app, prefix=_PREFIX)
     app = _base_app
-else:
-    # standalone
+elif _MODE == "standalone":
     app = create_ultratop_app(prefix=os.getenv("ULTRATOP_PREFIX", ""))
+else:
+    # noop (or unknown): do not auto-attach the router; provide a minimal app for safety
+    app = FastAPI(title=APP_TITLE, version=APP_VERSION)
+
+    @app.get("/health", response_class=PlainTextResponse)
+    def _noop_health():
+        return "ok"
 
 
 
