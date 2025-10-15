@@ -1,3 +1,6 @@
+הנה הגרסה המתוקנת (הוספתי `ULTRATOP_MODE: "noop"` ומדיניות ציבורית גם עבור `/ultra/health`):
+
+```yaml
 services:
   - type: web
     name: algogpt-prod
@@ -38,6 +41,8 @@ services:
         value: "10000"
       - key: APP_MODULE
         value: "main:app"   # ← חוזר לרוץ דרך main.py; UltraTop יותקן כתת-אפליקציה ב-/ultra
+      - key: ULTRATOP_MODE
+        value: "noop"       # ← מונע auto-mount מה-import של main_ultratop.py
       - key: PYTHONPATH
         value: "/app"
       - key: WEB_CONCURRENCY
@@ -107,7 +112,7 @@ services:
       - key: ENABLE_HSTS
         value: "1"
       - key: SECURITY_PUBLIC_PATHS
-        value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/debug/env,/ultra/readyz,/ultra/readyz/strict,/ultra/metrics,/ultra/meta/version"
+        value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/debug/env,/ultra/readyz,/ultra/readyz/strict,/ultra/metrics,/ultra/meta/version,/ultra/health"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
 
@@ -718,6 +723,8 @@ services:
         fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
         fromSecret: BINANCE_API_SECRET
+```
+
 
 
 
