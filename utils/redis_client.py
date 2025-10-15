@@ -33,15 +33,18 @@ CLIENT_NAME          = os.getenv("REDIS_CLIENT_NAME", "algogpt")
 SSL_NO_VERIFY_ENV    = _env_bool("REDIS_SSL_NO_VERIFY", "0")
 PING_RETRIES         = int(os.getenv("REDIS_PING_RETRIES", "2"))
 PING_BACKOFF_SEC     = float(os.getenv("REDIS_PING_RETRY_BACKOFF_SEC", "0.3"))
+RETRY_ON_TIMEOUT     = _env_bool("REDIS_RETRY_ON_TIMEOUT", "1")
+SSL_CA_CERTS_PATH    = os.getenv("REDIS_SSL_CA_CERTS", "").strip()  # אופציונלי
 
 # -------------------- Helpers --------------------
 def _mask_url(url: str) -> str:
     try:
         p = urlparse(url)
-        netloc = (p.hostname or "")
+        host = p.hostname or ""
+        # IPv6 netloc needs brackets if we ever displayed it, but לשם לוג זה מספיק.
+        netloc = host
         if p.port:
             netloc += f":{p.port}"
-        # שומרים scheme/path/query, בלי קרדנציאלס
         return urlunsplit((p.scheme, netloc, p.path, p.query, p.fragment))
     except Exception:
         return "<unparseable>"
@@ -80,6 +83,7 @@ def make_client(*, decode: bool = True) -> "redis.Redis":
         client_name=CLIENT_NAME,
         max_connections=POOL_MAX_CONNECTIONS,
         socket_keepalive=True,
+        retry_on_timeout=RETRY_ON_TIMEOUT,
     )
 
     scheme = (parsed.scheme or "").lower()
@@ -98,6 +102,10 @@ def make_client(*, decode: bool = True) -> "redis.Redis":
             connection_class=SSLConnection,
             ssl_cert_reqs=cert_req,
         )
+
+        # אם סופק CA ייעודי — נעביר
+        if SSL_CA_CERTS_PATH:
+            kwargs["ssl_ca_certs"] = SSL_CA_CERTS_PATH
     else:
         from redis.connection import Connection
         kwargs.update(connection_class=Connection)
@@ -114,26 +122,32 @@ def _init_singleton() -> Optional["redis.Redis"]:
     url = get_redis_url()
     if not url:
         _LOG.info({"event": "redis.disabled", "reason": "REDIS_URL missing"})
+        _redis_singleton = None
         return None
     try:
         cli = make_client()
         # Ping עם ריטריים קלים בזמן עלייה
         last_err = None
+        ok = False
         for i in range(PING_RETRIES + 1):
             try:
                 if cli.ping():
-                    _LOG.info({"event": "redis.connected", "url": _mask_url(url)})
-                    _redis_singleton = cli
-                    return cli
+                    ok = True
+                    break
             except Exception as e:
                 last_err = e
                 if i < PING_RETRIES:
                     time.sleep(PING_BACKOFF_SEC)
-        # אם נכשל אחרי ריטריים — נלוג ונשאיר None (האפליקציה יכולה לרוץ גם בלעדיו)
-        _LOG.warning({"event": "redis.ping_failed", "error": str(last_err)})
-        return cli  # מחזירים בכל זאת את האובייקט — יתכן שמאוחר יותר יצליח
+        if ok:
+            _LOG.info({"event": "redis.connected", "url": _mask_url(url)})
+        else:
+            _LOG.warning({"event": "redis.ping_failed", "error": str(last_err)})
+        # גם אם ה-PING נכשל — נשמור את האובייקט; ייתכן שאח"כ יצליח
+        _redis_singleton = cli
+        return cli
     except Exception as e:
         _LOG.warning({"event": "redis.unavailable", "error": str(e), "url": _mask_url(url)})
+        _redis_singleton = None
         return None
 
 def get_redis() -> Optional["redis.Redis"]:
@@ -163,6 +177,8 @@ def ping_safe() -> bool:
         return False
 
 __all__ = ["make_client", "get_redis", "redis_client", "ping_safe"]
+
+
 
 
 
