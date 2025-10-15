@@ -1,4 +1,3 @@
-
 # main.py
 from __future__ import annotations
 
@@ -81,6 +80,17 @@ AUTO_LEV_MIN = int(os.getenv("AUTO_LEV_MIN", "15") or 15)
 AUTO_LEV_MAX = int(os.getenv("AUTO_LEV_MAX", "25") or 25)
 AUTO_BUDGET_MIN = float(os.getenv("AUTO_BUDGET_MIN", "100") or 100.0)
 AUTO_BUDGET_MAX = float(os.getenv("AUTO_BUDGET_MAX", "200") or 200.0)
+
+# ========= Real-time trailing manager (new) =========
+TRAIL_RT_ENABLE = os.getenv("TRAIL_RT_ENABLE", "1").lower() in ("1", "true", "yes", "on")
+TRAIL_RT_INTERVAL_SEC = int(os.getenv("TRAIL_RT_INTERVAL_SEC", "20") or 20)
+TRAIL_RT_ATR_MULT = float(os.getenv("TRAIL_RT_ATR_MULT", "1.6") or 1.6)
+TRAIL_RT_MIN_CALLBACK = float(os.getenv("TRAIL_RT_MIN_CALLBACK", "0.1") or 0.1)   # %
+TRAIL_RT_MAX_CALLBACK = float(os.getenv("TRAIL_RT_MAX_CALLBACK", "5.0") or 5.0)   # %
+TRAIL_RT_PRICE_SRC = os.getenv("TRAIL_RT_PRICE_SRC", "MARK_PRICE").upper()       # MARK_PRICE / CONTRACT_PRICE / LAST_PRICE
+TRAIL_RT_MAX_SYMBOLS = int(os.getenv("TRAIL_RT_MAX_SYMBOLS", "30") or 30)
+TRAIL_RT_ADJUST_THRESHOLD = float(os.getenv("TRAIL_RT_ADJUST_THRESHOLD", "0.2") or 0.2)  # % diff required to re-place
+TRAIL_RT_WATCH = [s.strip().upper() for s in (os.getenv("TRAIL_RT_WATCHLIST", "") or "").split(",") if s.strip()]
 
 # ==================== App & CORS ====================
 APP_TITLE = os.getenv("APP_TITLE", "AlgoGPT API")
@@ -1690,7 +1700,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
                 trs.append(tr)
             atr = sum(trs[-14:]) / float(min(14, len(trs))) if trs else 0.0
             px = base_price
-            callback_rate = max(0.1, min(5.0, (atr * float(atr_mult) / px) * 100.0 if px > 0 else 0.5))
+            callback_rate = max(TRAIL_RT_MIN_CALLBACK, min(TRAIL_RT_MAX_CALLBACK, (atr * float(atr_mult) / px) * 100.0 if px > 0 else 0.5))
             trail_kwargs = dict(
                 symbol=symbol,
                 side="SELL" if side_txt == "BUY" else "BUY",
@@ -1982,6 +1992,143 @@ def _collect_critical_env_warnings() -> List[str]:
     return warnings
 
 
+# -------- NEW: Background real-time trailing manager ----------
+async def _trail_rt_loop():
+    """
+    לולאת Trailing בזמן אמת (Best-effort):
+    • מאתרת פוזיציות פתוחות (או לפי TRAIL_RT_WATCH).
+    • מחשבת ATR(1m) ומציבה/מכוונת TRIALING_STOP_MARKET עם reduceOnly.
+    • אם כבר קיים טריילינג דומה — לא מבטלת כדי לחסוך ריצודים.
+    """
+    if not TRAIL_RT_ENABLE:
+        return
+    try:
+        from binance.client import Client  # type: ignore
+    except Exception as e:
+        logger.warning("trail_rt: binance client missing: %s", e)
+        return
+    api_key = os.getenv("BINANCE_API_KEY", "").strip()
+    api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not (api_key and api_sec):
+        logger.warning("trail_rt: missing binance keys")
+        return
+
+    client = Client(api_key, api_sec)
+    _align_position_mode(client)
+
+    def _symbols_to_check() -> List[str]:
+        if TRAIL_RT_WATCH:
+            return TRAIL_RT_WATCH[:TRAIL_RT_MAX_SYMBOLS]
+        # derive from positions
+        out: List[str] = []
+        with suppress(Exception):
+            infos = client.futures_account()['positions']
+            for p in infos:
+                try:
+                    amt = float(p.get("positionAmt") or 0.0)
+                    if abs(amt) > 0:
+                        out.append(str(p.get("symbol")))
+                except Exception:
+                    continue
+        if not out:
+            return WATCHLIST[:TRAIL_RT_MAX_SYMBOLS]
+        # keep uniqueness and cap
+        uniq: List[str] = []
+        for s in out:
+            if s and s not in uniq:
+                uniq.append(s)
+        return uniq[:TRAIL_RT_MAX_SYMBOLS]
+
+    while True:
+        try:
+            syms = _symbols_to_check()
+            for sym in syms:
+                # position?
+                pos_amt = 0.0
+                side_txt = None
+                entry_price = 0.0
+                with suppress(Exception):
+                    infos = client.futures_position_information(symbol=sym)
+                    for p in infos:
+                        amt = float(p.get("positionAmt") or 0.0)
+                        if abs(amt) > 0:
+                            pos_amt = amt
+                            entry_price = float(p.get("entryPrice") or 0.0)
+                            side_txt = "BUY" if amt > 0 else "SELL"
+                            break
+                if not side_txt:
+                    continue
+
+                # last price
+                px_now = entry_price
+                with suppress(Exception):
+                    t = client.futures_symbol_ticker(symbol=sym)
+                    if t and "price" in t:
+                        px_now = float(t["price"]) or px_now
+                if px_now <= 0:
+                    continue
+
+                # quick ATR
+                atr = 0.0
+                with suppress(Exception):
+                    kl = client.futures_klines(symbol=sym, interval="1m", limit=50)
+                    highs = [float(k[2]) for k in kl]
+                    lows = [float(k[3]) for k in kl]
+                    closes = [float(k[4]) for k in kl]
+                    trs = []
+                    for i in range(1, len(kl)):
+                        h, l, pc = highs[i], lows[i], closes[i - 1]
+                        trs.append(max(h - l, abs(h - pc), abs(l - pc)))
+                    atr = sum(trs[-14:]) / float(min(14, len(trs))) if trs else 0.0
+
+                cb = (atr * TRAIL_RT_ATR_MULT / px_now) * 100.0 if px_now > 0 else 0.5
+                cb = max(TRAIL_RT_MIN_CALLBACK, min(TRAIL_RT_MAX_CALLBACK, cb))
+                cb = round(cb, 1)
+
+                # inspect open trail orders
+                existing = None
+                with suppress(Exception):
+                    oo = client.futures_get_open_orders(symbol=sym)
+                    for o in oo or []:
+                        if o.get("type") == "TRAILING_STOP_MARKET":
+                            existing = o
+                            break
+
+                # decide if adjust needed
+                need_place = False
+                need_adjust = False
+                if not existing:
+                    need_place = True
+                else:
+                    # if current callbackRate differs meaningfully -> adjust
+                    ex_cb = None
+                    with suppress(Exception):
+                        ex_cb = float(existing.get("callbackRate"))
+                    if ex_cb is None or abs(ex_cb - cb) >= TRAIL_RT_ADJUST_THRESHOLD:
+                        need_adjust = True
+
+                if need_adjust:
+                    with suppress(Exception):
+                        client.futures_cancel_order(symbol=sym, orderId=existing.get("orderId"))  # type: ignore[arg-type]
+                    need_place = True
+
+                if need_place:
+                    kwargs = dict(
+                        symbol=sym,
+                        side=("SELL" if side_txt == "BUY" else "BUY"),
+                        type="TRAILING_STOP_MARKET",
+                        callbackRate=cb,
+                        reduceOnly=True,
+                        workingType=TRAIL_RT_PRICE_SRC,
+                        newClientOrderId=build_client_order_id(sym, ("SELL" if side_txt == "BUY" else "BUY"), role="TRAIL@RT"),
+                    )
+                    with suppress(Exception):
+                        client.futures_create_order(**kwargs)
+        except Exception as e:
+            logger.debug("trail_rt.loop_error: %s", e)
+        await asyncio.sleep(max(3, TRAIL_RT_INTERVAL_SEC))
+
+
 @app.on_event("startup")
 async def _startup_tasks():
     if getattr(app.state, "bg_started", False):
@@ -2013,6 +2160,10 @@ async def _startup_tasks():
 
     asyncio.create_task(_late_webhook())
 
+    # --- NEW: spawn real-time trailing manager
+    if TRAIL_RT_ENABLE:
+        asyncio.create_task(_trail_rt_loop())
+
 
 @app.on_event("shutdown")
 async def _shutdown_tasks():
@@ -2036,6 +2187,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
