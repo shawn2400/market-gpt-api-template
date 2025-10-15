@@ -1,158 +1,265 @@
-cat >/app/safe_ops.sh <<'BASH'
+# === יצירה/דריסה של /app/safe_ops.sh (גרסה מעודכנת עם manage-once-lite, tp-ladder, trail-off, status, open-top) ===
+cat > /app/safe_ops.sh <<'BASH'
 #!/usr/bin/env bash
 set -euo pipefail
 
-BASE="${PUBLIC_HOST:-http://localhost:10000}"
-AUTH="Authorization: Bearer ${API_BEARER_TOKEN:-}"
-SIGN_SECRET="${API_SIGNING_SECRET:-}"
+: "${PUBLIC_HOST:?need PUBLIC_HOST}"
+: "${API_BEARER_TOKEN:?need API_BEARER_TOKEN}"
+: "${OPS_SIGN_SECRET:?need OPS_SIGN_SECRET}"
 
-red()   { printf "\033[31m%s\033[0m\n" "$*"; }
-green() { printf "\033[32m%s\033[0m\n" "$*"; }
-die()   { red "ERR: $*"; exit 1; }
+CURL_BIN="${CURL_BIN:-curl}"
+OPENSSL_BIN="${OPENSSL_BIN:-openssl}"
+MAX_TIME="${MAX_TIME:-10}"
+UA="safe_ops.sh/1.2"
 
-need_auth() {
-  if [ -z "${API_BEARER_TOKEN:-}" ]; then
-    die "API_BEARER_TOKEN is not set"
+BUCKET="${BUCKET_FILE:-/tmp/anti1003_bucket.ops}"
+CAP=${BUCKET_CAP:-30}
+WINDOW=${BUCKET_WIN_SEC:-60}
+WEIGHT=${BUCKET_WEIGHT:-1}
+
+now_s(){ date +%s; }
+uuid(){ cat /proc/sys/kernel/random/uuid 2>/dev/null || ${OPENSSL_BIN} rand -hex 16; }
+
+bucket_refill(){
+  local cut=$(( $(now_s) - WINDOW ))
+  if [[ -f "$BUCKET" ]]; then
+    awk -v c="$cut" '$1>=c{print $1}' "$BUCKET" > "${BUCKET}.tmp" || true
+    mv "${BUCKET}.tmp" "$BUCKET" 2>/dev/null || true
+  fi
+}
+bucket_take(){
+  bucket_refill
+  local cnt=0
+  [[ -f "$BUCKET" ]] && cnt=$(wc -l < "$BUCKET" || echo 0)
+  if (( cnt + WEIGHT > CAP )); then
+    echo "rate_limited: too many ops ($cnt/$CAP)" >&2
+    return 1
+  fi
+  for _ in $(seq 1 "$WEIGHT"); do echo "$(now_s)"; done >> "$BUCKET"
+}
+
+hmac_sha256(){
+  ${OPENSSL_BIN} dgst -sha256 -hmac "$OPS_SIGN_SECRET" -r | awk '{print $1}'
+}
+
+signed_curl(){
+  local method="$1" path="$2" body="${3:-}"
+  local ts nonce payload sig url auth
+  ts="$(now_s)"
+  nonce="$(uuid)"
+  payload="${method}"$'\n'"${path}"$'\n'"${body}"$'\n'"${ts}"$'\n'"${nonce}"
+  sig="$(printf '%s' "$payload" | hmac_sha256)"
+  url="${PUBLIC_HOST}${path}"
+  auth="Authorization: Bearer ${API_BEARER_TOKEN}"
+
+  if [[ "$method" == "GET" ]]; then
+    ${CURL_BIN} -sS -m "${MAX_TIME}" -A "$UA" \
+      -H "$auth" -H "X-Timestamp: ${ts}" -H "X-TS: ${ts}" \
+      -H "X-Nonce: ${nonce}" -H "X-Signature: ${sig}" \
+      "${url}"
+  else
+    ${CURL_BIN} -sS -m "${MAX_TIME}" -A "$UA" -X "$method" \
+      -H "$auth" -H "Content-Type: application/json" \
+      -H "X-Timestamp: ${ts}" -H "X-TS: ${ts}" \
+      -H "X-Nonce: ${nonce}" -H "X-Signature: ${sig}" \
+      --data-binary "${body}" \
+      "${url}"
   fi
 }
 
-need_sign() {
-  if [ -z "${SIGN_SECRET:-}" ]; then
-    die "API_SIGNING_SECRET/OPS_SIGN_SECRET is not set"
-  fi
-}
-
-# returns: TS NONCE SIG
-sign_body() {
-  local body="$1"
-  python3 - <<PY
-import os,sys,time,secrets,hashlib,hmac
-secret = os.environ.get("SIGN_SECRET","").strip()
-if not secret:
-    print("")
-    sys.exit(0)
-ts = str(int(time.time()))
-nonce = secrets.token_hex(8)
-payload = f"{ts}.{nonce}.{body}".encode("utf-8")
-key = bytes.fromhex(secret) if len(secret)==64 else secret.encode("utf-8")
-sig = hmac.new(key, payload, hashlib.sha256).hexdigest()
-print(ts, nonce, sig)
-PY
-}
-
-post_signed() {
-  need_auth
-  need_sign
-  local path="$1"; shift
-  local body_json="$1"; shift
-  read TS NONCE SIG < <(SIGN_SECRET="$SIGN_SECRET" sign_body "$body_json")
-  [ -z "${TS:-}" ] && die "signing failed"
-  curl -sS -X POST "${BASE}${path}" \
-    -H "Content-Type: application/json" \
-    -H "${AUTH}" \
-    -H "X-Timestamp: ${TS}" \
-    -H "X-Nonce: ${NONCE}" \
-    -H "X-Signature: ${SIG}" \
-    --data-binary "${body_json}"
-  echo
-}
-
-post_plain() {
-  local path="$1"; shift
-  local body_json="$1"; shift
-  local args=(-sS -X POST "${BASE}${path}" -H "Content-Type: application/json" --data-binary "${body_json}")
-  if [ -n "${API_BEARER_TOKEN:-}" ]; then
-    args+=(-H "${AUTH}")
-  fi
-  curl "${args[@]}"
-  echo
-}
-
-usage() {
-  cat <<'US'
-safe_ops.sh – helper for AlgoGPT (no jq)
-
-Examples:
-  safe_ops.sh manage-once-lite BTCUSDT
-
-  safe_ops.sh manage-once   BTCUSDT
-  safe_ops.sh be            BTCUSDT 12
-  safe_ops.sh trail         BTCUSDT 1.6
-  safe_ops.sh tp-one        BTCUSDT 3.2 1.0
-  safe_ops.sh tp-ladder     BTCUSDT "3,6,12" "0.25,0.25,0.5"
-  safe_ops.sh tp-cancel     BTCUSDT
-  safe_ops.sh sl-move       BTCUSDT 0.8
-  safe_ops.sh close         BTCUSDT
-  safe_ops.sh status        BTCUSDT
-  safe_ops.sh auto-start    BTCUSDT
-  safe_ops.sh auto-stop     BTCUSDT
-US
+usage(){
+  cat <<'U'
+Usage:
+  safe_ops.sh manage-once SYMBOL
+  safe_ops.sh manage-once-lite SYMBOL               # רק BE + TP ladder
+  safe_ops.sh be SYMBOL [OFFSET_BPS]
+  safe_ops.sh trail SYMBOL [CALLBACK_PCT|'auto'] [ATR_MULT]
+  safe_ops.sh trail-off SYMBOL                      # מבטל רק Trailing STOP (ראוט ייעודי)
+  safe_ops.sh tp-one SYMBOL PRICE|pct:PCT
+  safe_ops.sh tp-ladder SYMBOL "p1,p2,..." "s1,s2,..."
+  safe_ops.sh tp-cancel SYMBOL
+  safe_ops.sh sl-move SYMBOL PRICE
+  safe_ops.sh close SYMBOL FRACTION(0..1)
+  safe_ops.sh close-pct SYMBOL PCT(0..100)
+  safe_ops.sh status SYMBOL                         # GET חתום (גוף {"symbol":"..."})
+  safe_ops.sh open-top NOTIONAL LEV [long|short|auto_up|auto_down] [BUY|SELL]
+U
 }
 
 cmd="${1:-}"; shift || true
-case "${cmd}" in
-  help|-h|--help|"") usage; exit 0 ;;
-  manage-once-lite)
-    sym="${1:-}"; [ -z "$sym" ] && die "missing symbol"
-    post_plain "/manage-once-lite" "{\"symbol\":\"${sym}\"}"
-    ;;
+
+case "$cmd" in
   manage-once)
-    sym="${1:-}"; [ -z "$sym" ] && die "missing symbol"
-    post_signed "/manage-once" "{\"symbol\":\"${sym}\"}"
+    [[ $# -ge 1 ]] || { usage; exit 1; }
+    symbol="${1^^}"
+    bucket_take || exit 2
+    signed_curl POST "/position-ops/manage-once" "$(printf '{"symbol":"%s"}' "$symbol")"
+    ;;
+  manage-once-lite)
+    [[ $# -ge 1 ]] || { usage; exit 1; }
+    symbol="${1^^}"
+    bucket_take || exit 2
+    signed_curl POST "/position-ops/manage-once" "$(printf '{"symbol":"%s","do":["be","tp_ladder"]}' "$symbol")"
     ;;
   be)
-    sym="${1:-}"; bps="${2:-12}"
-    [ -z "$sym" ] && die "missing symbol"; [ -z "$bps" ] && die "missing offset_bps"
-    post_signed "/position-ops/be" "{\"symbol\":\"${sym}\",\"offset_bps\":${bps}}"
+    [[ $# -ge 1 ]] || { usage; exit 1; }
+    symbol="${1^^}"; offset="${2:-${TP_BE_OFFSET_BPS:-8}}"
+    bucket_take || exit 2
+    signed_curl POST "/position-ops/be" "$(printf '{"symbol":"%s","offset_bps":%d}' "$symbol" "$offset")"
     ;;
   trail)
-    sym="${1:-}"; atr="${2:-1.6}"
-    [ -z "$sym" ] && die "missing symbol"
-    post_signed "/position-ops/trail" "{\"symbol\":\"${sym}\",\"atr_mult\":${atr}}"
+    [[ $# -ge 1 ]] || { usage; exit 1; }
+    symbol="${1^^}"; cb="${2:-auto}"; atr="${3:-}"
+    bucket_take || exit 2
+    if [[ "$cb" == "auto" ]]; then
+      body=$(printf '{"symbol":"%s","atr_mult":%s}' "$symbol" "${atr:-"1.0"}")
+    else
+      body=$(printf '{"symbol":"%s","callbackRate":%s}' "$symbol" "$cb")
+    fi
+    signed_curl POST "/position-ops/trail" "$body"
+    ;;
+  trail-off)
+    [[ $# -ge 1 ]] || { usage; exit 1; }
+    symbol="${1^^}"
+    bucket_take || exit 2
+    signed_curl POST "/position-ops/trail/cancel" "$(printf '{"symbol":"%s"}' "$symbol")"
     ;;
   tp-one)
-    sym="${1:-}"; pct="${2:-3.0}"; split="${3:-1.0}"
-    [ -z "$sym" ] && die "missing symbol"
-    post_signed "/position-ops/tp/one" "{\"symbol\":\"${sym}\",\"pcts\":[${pct}],\"splits\":[${split}]}"
+    [[ $# -ge 2 ]] || { usage; exit 1; }
+    symbol="${1^^}"; val="$2"
+    bucket_take || exit 2
+    if [[ "$val" == pct:* ]]; then
+      pct="${val#pct:}"
+      body=$(printf '{"symbol":"%s","pct":%s}' "$symbol" "$pct")
+    else
+      body=$(printf '{"symbol":"%s","price":%s}' "$symbol" "$val")
+    fi
+    signed_curl POST "/position-ops/tp/one" "$body"
     ;;
   tp-ladder)
-    sym="${1:-}"; pcts="${2:-3,6,12}"; splits="${3:-0.25,0.25,0.5}"
-    [ -z "$sym" ] && die "missing symbol"
-    pjson=$(printf '%s' "$pcts" | awk -F, '{printf("[" ); for(i=1;i<=NF;i++){ if(i>1) printf(","); printf("%s",$i)}; print "]"}')
-    sjson=$(printf '%s' "$splits"| awk -F, '{printf("[" ); for(i=1;i<=NF;i++){ if(i>1) printf(","); printf("%s",$i)}; print "]"}')
-    post_signed "/position-ops/tp/ladder" "{\"symbol\":\"${sym}\",\"pcts\":${pjson},\"splits\":${sjson}}"
+    [[ $# -ge 3 ]] || { usage; exit 1; }
+    symbol="${1^^}"; pcts="$2"; splits="$3"
+    bucket_take || exit 2
+    body=$(printf '{"symbol":"%s","pcts":[%s],"splits":[%s]}' "$symbol" "$pcts" "$splits")
+    signed_curl POST "/position-ops/tp/ladder" "$body"
     ;;
   tp-cancel)
-    sym="${1:-}"; [ -z "$sym" ] && die "missing symbol"
-    post_signed "/position-ops/tp/cancel" "{\"symbol\":\"${sym}\"}"
+    [[ $# -ge 1 ]] || { usage; exit 1; }
+    symbol="${1^^}"
+    bucket_take || exit 2
+    signed_curl POST "/position-ops/tp/cancel" "$(printf '{"symbol":"%s"}' "$symbol")"
     ;;
   sl-move)
-    sym="${1:-}"; pct="${2:-0.8}"
-    [ -z "$sym" ] && die "missing symbol"
-    post_signed "/position-ops/sl/move" "{\"symbol\":\"${sym}\",\"atr_mult\":${pct}}"
+    [[ $# -ge 2 ]] || { usage; exit 1; }
+    symbol="${1^^}"; price="$2"
+    bucket_take || exit 2
+    signed_curl POST "/position-ops/sl/move" "$(printf '{"symbol":"%s","price":%s}' "$symbol" "$price")"
     ;;
   close)
-    sym="${1:-}"; [ -z "$sym" ] && die "missing symbol"
-    post_signed "/position-ops/close" "{\"symbol\":\"${sym}\"}"
+    [[ $# -ge 2 ]] || { usage; exit 1; }
+    symbol="${1^^}"; frac="$2"
+    bucket_take || exit 2
+    signed_curl POST "/position-ops/close" "$(printf '{"symbol":"%s","fraction":%s}' "$symbol" "$frac")"
+    ;;
+  close-pct)
+    [[ $# -ge 2 ]] || { usage; exit 1; }
+    symbol="${1^^}"; pct="$2"
+    bucket_take || exit 2
+    signed_curl POST "/position-ops/close-percent" "$(printf '{"symbol":"%s","pct":%s}' "$symbol" "$pct")"
     ;;
   status)
-    sym="${1:-}"; [ -z "$sym" ] && die "missing symbol"
-    post_signed "/position-ops/status" "{\"symbol\":\"${sym}\"}"
+    [[ $# -ge 1 ]] || { usage; exit 1; }
+    symbol="${1^^}"
+    bucket_take || true
+    signed_curl GET "/position-ops/status?symbol=${symbol}" "$(printf '{"symbol":"%s"}' "$symbol")"
     ;;
-  auto-start)
-    sym="${1:-}"; [ -z "$sym" ] && die "missing symbol"
-    post_signed "/position-ops/auto/start" "{\"symbol\":\"${sym}\"}"
+  open-top)
+    [[ $# -ge 2 ]] || { usage; exit 1; }
+    notional="$1"; lev="$2"; gate="${3:-long}"; side="${4:-}"
+    bucket_take || exit 2
+    if [[ -n "$side" ]]; then
+      body=$(printf '{"notional":%s,"leverage":%s,"gate":"%s","side":"%s"}' "$notional" "$lev" "$gate" "$side")
+    else
+      body=$(printf '{"notional":%s,"leverage":%s,"gate":"%s"}' "$notional" "$lev" "$gate")
+    fi
+    signed_curl POST "/position-ops/auto/open-top" "$body"
     ;;
-  auto-stop)
-    sym="${1:-}"; [ -z "$sym" ] && die "missing symbol"
-    post_signed "/position-ops/auto/stop" "{\"symbol\":\"${sym}\"}"
-    ;;
-  *)
-    usage; die "unknown command: ${cmd}"
-    ;;
+  *) usage; exit 1;;
 esac
 BASH
 
-chmod +x /app/safe_ops.sh
+# === יצירה/דריסה של /app/status.sh (פורמט טבלאי) ===
+cat > /app/status.sh <<'BASH'
+#!/usr/bin/env bash
+set -euo pipefail
+: "${PUBLIC_HOST:?need PUBLIC_HOST}"
+: "${API_BEARER_TOKEN:?need API_BEARER_TOKEN}"
+: "${OPS_SIGN_SECRET:?need OPS_SIGN_SECRET}"
+PY="${PYTHON_BIN:-python3}"
+
+symbol="${1:-}"
+[[ -n "$symbol" ]] || { echo "Usage: /app/status.sh SYMBOL" >&2; exit 1; }
+
+out="$(bash /app/safe_ops.sh status "$symbol" 2>/dev/null || true)"
+
+"$PY" - "$symbol" <<'PY'
+import sys, json
+sym = sys.argv[1]
+try:
+    data = json.loads(sys.stdin.read() or "{}")
+except Exception as e:
+    print(f"[{sym}] invalid JSON: {e}"); sys.exit(0)
+
+if not isinstance(data, dict):
+    print(f"[{sym}] unexpected response"); sys.exit(0)
+
+if not data.get("ok", False):
+    print(f"[{sym}] ERROR: {data.get('reason','?')} {data.get('detail','')}")
+    sys.exit(0)
+
+def f(v):
+    if isinstance(v, float): return f"{v:.8g}"
+    return str(v)
+
+print("="*68)
+print(f" Symbol: {sym}")
+print("-"*68)
+print(f" Has Position : {data.get('has_position')}")
+if data.get("has_position"):
+    print(f" Side        : {data.get('side')}")
+    print(f" Qty         : {f(data.get('qty'))}")
+    print(f" Entry       : {f(data.get('entry'))}")
+    print(f" Last        : {f(data.get('last'))}")
+print("-"*68)
+orders = data.get("orders") or []
+if not orders:
+    print(" Open Conditional Orders: (none)")
+else:
+    print(" Open Conditional Orders:")
+    print("  #  type                      side   qty         stop/trigger   reduceOnly id")
+    for i,o in enumerate(orders,1):
+        typ = (o.get("type") or "")[:24].ljust(24)
+        side = (o.get("side") or "")[:5].ljust(5)
+        qty = f(float(o.get("origQty") or o.get("quantity") or 0)).ljust(10)
+        stop = f(float(o.get("stopPrice") or o.get("price") or 0)).ljust(13)
+        ro = str(o.get("reduceOnly", False)).ljust(10)
+        oid = str(o.get("orderId") or o.get("clientOrderId") or "")
+        print(f"  {str(i).rjust(2)}  {typ}  {side}  {qty}  {stop}  {ro} {oid}")
+print("="*68)
+PY
+BASH
+
+# הרשאות + ניקוי CRLF
+chmod +x /app/safe_ops.sh /app/status.sh || true
+sed -i 's/\r$//' /app/safe_ops.sh /app/status.sh 2>/dev/null || true
+
+# אם במקרה המונט noexec — נריץ תמיד דרך bash:
+alias safeops='bash /app/safe_ops.sh'
+alias status='bash /app/status.sh'
+
+# וידוא:
+ls -l /app/safe_ops.sh /app/status.sh
+file -b /app/safe_ops.sh /app/status.sh
+
 
 
