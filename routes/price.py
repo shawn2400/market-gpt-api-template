@@ -5,11 +5,10 @@ import asyncio
 import time
 import logging
 import os
-from typing import Optional, Tuple
+from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, Path, HTTPException, Query
-from pydantic import BaseModel
-import httpx
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 # ws_fallback (optional)
 try:
@@ -22,160 +21,97 @@ except Exception:
 
 # sync futures_mark_price (optional)
 try:
-    from utils.binance_client import futures_mark_price  # type: ignore
+    from utils.binance_client import futures_mark_price, futures_index_price  # type: ignore
 except Exception:
-    futures_mark_price = None  # type: ignore
-
-# Redis (optional)
-try:
-    from utils.redis_client import redis_client  # type: ignore
-except Exception:
-    redis_client = None  # type: ignore
-
-logger = logging.getLogger("algogpt.price")
-router = APIRouter(prefix="/price", tags=["Price"])
-
-BIN_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
-BIN_SPOT = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").rstrip("/")
-
-class PriceResponse(BaseModel):
-    ok: bool
-    symbol: Optional[str] = None
-    price: Optional[float] = None
-    source: Optional[str] = None
-    ts: Optional[float] = None
-    error: Optional[str] = None
-
-@router.get("/", response_model=PriceResponse, summary="Hint")
-async def get_price_hint() -> PriceResponse:
-    return PriceResponse(ok=True, error='Use /price/{symbol} (e.g., /price/BTCUSDT)')
-
-async def _redis_get(key: str) -> Optional[float]:
-    if not redis_client:
+    def futures_mark_price(symbol: str) -> Optional[float]:  # type: ignore
         return None
-    try:
-        import inspect
-        if inspect.iscoroutinefunction(getattr(redis_client, "get", None)):
-            val = await redis_client.get(key)  # type: ignore
-        else:
-            val = redis_client.get(key)       # type: ignore
-        return float(val) if val is not None else None
-    except Exception as e:
-        logger.warning(f"[PRICE] Redis get failed: {e}")
+    def futures_index_price(symbol: str) -> Optional[float]:  # type: ignore
         return None
 
-async def _redis_set(key: str, value: float, ex: int = 30) -> None:
-    if not redis_client:
-        return
-    try:
-        import inspect
-        if inspect.iscoroutinefunction(getattr(redis_client, "set", None)):
-            await redis_client.set(key, value, ex=ex)  # type: ignore
-        else:
-            redis_client.set(key, value, ex=ex)        # type: ignore
-    except Exception as e:
-        logger.warning(f"[PRICE] Redis set failed: {e}")
+LOG = logging.getLogger("algogpt.price")
+router = APIRouter(prefix="/price", tags=["price"])
 
-async def _binance_fapi_mark(symbol: str) -> Optional[float]:
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.get(f"{BIN_FAPI}/fapi/v1/premiumIndex", params={"symbol": symbol})
-            if r.status_code != 200:
-                return None
-            data = r.json()
-            if isinstance(data, list) and data:
-                data = data[0]
-            return float(data.get("markPrice", 0) or 0) or None
-    except Exception as e:
-        logger.warning(f"[PRICE] FAPI premiumIndex failed for {symbol}: {e}")
+CACHE_TTL = float(os.getenv("PRICE_API_CACHE_TTL", "0.5"))  # seconds
+_last: Dict[str, Dict[str, Any]] = {}  # sym -> {"ts": float, "val": float}
+
+def _now() -> float:
+    return time.time()
+
+def _cache_get(sym: str) -> Optional[float]:
+    rec = _last.get(sym.upper())
+    if not rec:
         return None
-
-async def _binance_fapi_ticker(symbol: str) -> Optional[float]:
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.get(f"{BIN_FAPI}/fapi/v1/ticker/price", params={"symbol": symbol})
-            if r.status_code != 200:
-                return None
-            data = r.json()
-            return float(data.get("price", 0) or 0) or None
-    except Exception as e:
-        logger.warning(f"[PRICE] FAPI ticker/price failed for {symbol}: {e}")
-        return None
-
-async def _binance_spot_price(symbol: str) -> Optional[float]:
-    try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            r = await client.get(f"{BIN_SPOT}/api/v3/ticker/price", params={"symbol": symbol})
-            if r.status_code != 200:
-                return None
-            data = r.json()
-            return float(data.get("price", 0) or 0) or None
-    except Exception as e:
-        logger.warning(f"[PRICE] SPOT ticker failed for {symbol}: {e}")
-        return None
-
-async def _resolve_price(sym: str) -> Optional[Tuple[float, str]]:
-    # Redis
-    val = await _redis_get(f"price:{sym}")
-    if val is not None:
-        return float(val), "redis"
-    # cache
-    local = get_cached_price(sym)
-    if local is not None:
-        return float(local), "cache"
-    # client (sync)
-    if futures_mark_price:
-        try:
-            px = await asyncio.to_thread(futures_mark_price, sym)  # type: ignore
-            if px and px > 0:
-                await _redis_set(f"price:{sym}", px, ex=30)
-                return float(px), "binance_futures_client"
-        except Exception as e:
-            logger.warning(f"[PRICE] futures_mark_price failed for {sym}: {e}")
-    # fapi mark
-    mark = await _binance_fapi_mark(sym)
-    if mark and mark > 0:
-        await _redis_set(f"price:{sym}", mark, ex=30)
-        return float(mark), "binance_fapi"
-    # fapi last
-    last = await _binance_fapi_ticker(sym)
-    if last and last > 0:
-        await _redis_set(f"price:{sym}", last, ex=30)
-        return float(last), "binance_fapi_ticker"
-    # spot
-    spot = await _binance_spot_price(sym)
-    if spot and spot > 0:
-        await _redis_set(f"price:{sym}", spot, ex=30)
-        return float(spot), "binance_spot"
+    if (_now() - rec.get("ts", 0.0)) <= CACHE_TTL:
+        return float(rec.get("val"))
     return None
 
-# ---------- חשוב: נתיבים סטטיים לפני הדינמי ----------
+def _cache_put(sym: str, val: float) -> None:
+    _last[sym.upper()] = {"ts": _now(), "val": float(val)}
 
-@router.get("/last", response_model=PriceResponse, summary="[compat] /price/last?symbol=BTCUSDT")
-async def get_price_last(symbol: str = Query(..., min_length=3)) -> PriceResponse:
-    sym = symbol.upper().strip()
-    res = await _resolve_price(sym)
-    if not res:
-        raise HTTPException(status_code=502, detail="Unable to fetch price for symbol")
-    price, source = res
-    update_price(sym, price)
-    return PriceResponse(ok=True, symbol=sym, price=price, source=source, ts=time.time())
+def _best_price(sym: str) -> Optional[float]:
+    # 1) fresh WS
+    try:
+        v = get_cached_price(sym)
+        if v is not None:
+            return float(v)
+    except Exception:
+        pass
+    # 2) mark price REST
+    try:
+        v = futures_mark_price(sym)
+        if v is not None:
+            # feed WS fallback cache (best effort)
+            try:
+                update_price(sym, float(v))
+            except Exception:
+                pass
+            return float(v)
+    except Exception:
+        pass
+    # 3) index price as last resort
+    try:
+        v = futures_index_price(sym)
+        if v is not None:
+            try:
+                update_price(sym, float(v))
+            except Exception:
+                pass
+            return float(v)
+    except Exception:
+        pass
+    return None
 
-@router.get("/stream_status", summary="[compat] price stream status")
-async def price_stream_status():
-    enabled = os.getenv("USE_WS", "1").lower() in ("1", "true", "yes", "on")
-    return {"ok": True, "enabled": enabled, "interval_sec": int(os.getenv("PRICE_SCAN_INTERVAL", "30") or 30)}
+@router.get("/{symbol}", response_class=JSONResponse, summary="Latest price (coalesced WS/REST)")
+def price_one(symbol: str = Path(..., description="e.g. BTCUSDT"),
+              source: Optional[str] = Query(None, description="force source: ws|mark|index")):
+    sym = symbol.strip().upper()
+    if not sym:
+        raise HTTPException(status_code=400, detail="symbol required")
 
-# הדינמי בסוף – כדי לא לבלוע /last ו-/stream_status
-@router.get("/{symbol}", response_model=PriceResponse, summary="Latest price by symbol")
-async def get_price_symbol(symbol: str = Path(..., min_length=3, example="BTCUSDT")) -> PriceResponse:
-    sym = symbol.upper().strip()
-    res = await _resolve_price(sym)
-    if not res:
-        raise HTTPException(status_code=502, detail="Unable to fetch price for symbol")
-    price, source = res
-    update_price(sym, price)
-    return PriceResponse(ok=True, symbol=sym, price=price, source=source, ts=time.time())
+    # tiny local cache
+    v = _cache_get(sym)
+    if v is None:
+        if (source or "").lower() == "ws":
+            v = get_cached_price(sym)
+        elif (source or "").lower() == "mark":
+            v = futures_mark_price(sym)
+        elif (source or "").lower() == "index":
+            v = futures_index_price(sym)
+        else:
+            v = _best_price(sym)
+        if v is None:
+            raise HTTPException(status_code=503, detail="price_unavailable")
+        _cache_put(sym, float(v))
+
+    return {"ok": True, "symbol": sym, "price": float(v)}
+
+@router.get("/{symbol}/plain", response_class=PlainTextResponse, summary="Plain price for quick probes")
+def price_plain(symbol: str = Path(..., description="e.g. BTCUSDT")):
+    sym = symbol.strip().upper()
+    v = _cache_get(sym) or _best_price(sym)
+    if v is None:
+        raise HTTPException(status_code=503, detail="price_unavailable")
+    return f"{v:.8f}"
 
 
 
