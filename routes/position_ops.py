@@ -12,11 +12,11 @@ from contextlib import suppress
 
 from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 
-# Anti-Replay (אופציונלי)
+# Anti-Replay (optional)
 with suppress(Exception):
     from utils.anti_replay import verify_request  # type: ignore
 
-# Telegram notifier (כפתורי אינליין אחרי פעולות)
+# Telegram notifier (fire-and-forget)
 with suppress(Exception):
     from utils.telegram_notifier import TelegramNotifier  # type: ignore
 
@@ -66,7 +66,7 @@ def _maybe_notify(symbol: Optional[str], action_name: str, res: Dict[str, Any]) 
     _notify_ops(symbol, action_name)
 
 # =========================
-# Guard (שקט אם חסר)
+# Guard (silent if missing)
 # =========================
 GUARD_ENSURE_AFTER_OPS = (os.getenv("GUARD_ENSURE_AFTER_OPS", "1").lower() in ("1", "true", "yes", "on"))
 with suppress(Exception):
@@ -79,7 +79,7 @@ def _ensure_guard(symbol: str, *, prefer_mode: str = "native") -> None:
         ensure_protective_stop(symbol, prefer_mode=prefer_mode)  # type: ignore
 
 # =========================
-# Helpers: auth (Bearer) — רכה
+# Auth (Bearer) — soft
 # =========================
 API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
 
@@ -126,7 +126,7 @@ def _build_client_order_id(symbol: str, side: str, role: str = "ENTRY") -> str:
 
 with suppress(Exception):
     from utils.order_ids import build_client_order_id  # type: ignore
-    _build_client_order_id = build_client_order_id  # override אם קיים
+    _build_client_order_id = build_client_order_id  # override if exists
 
 # =========================
 # Quantize
@@ -230,9 +230,6 @@ def _get_filters(client, symbol: str) -> Dict[str, Any]:
         pass
     return _fallback_filters()
 
-with suppress(Exception):
-    from utils.quantize import get_filters as _unused_gf  # type: ignore
-
 # =========================
 # Position & price helpers
 # =========================
@@ -265,9 +262,18 @@ def _cancel_open_conditional(client, symbol: str,
                 n += 1
     return n
 
-# =========================
-# TP1 filled?
-# =========================
+def _cancel_open_tp_limits(client, symbol: str) -> int:
+    n = 0
+    for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
+        typ = (o.get("type") or "").upper()
+        coid = ((o.get("clientOrderId") or "") + " " + (o.get("origClientOrderId") or "")).upper()
+        reduce_only = str(o.get("reduceOnly", "false")).lower() == "true"
+        if typ == "LIMIT" and reduce_only and any(tag in coid for tag in ("TP", "TP1", "TP2", "TP3")):
+            with suppress(Exception):
+                client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
+                n += 1
+    return n
+
 def _tp1_filled(client, symbol: str) -> bool:
     tags = [t.strip().upper() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1").split(","))]
     try:
@@ -283,7 +289,64 @@ def _tp1_filled(client, symbol: str) -> bool:
     return False
 
 # =========================
-# Public endpoints
+# Approval gating (Telegram/Redis)
+# =========================
+REQUIRE_TG_APPROVAL = (os.getenv("REQUIRE_TELEGRAM_APPROVAL", "1").lower() in ("1", "true", "yes", "on"))
+
+_approved_mem: Dict[str, float] = {}  # last-approval ts (fallback if no redis)
+
+def _get_redis_soft():
+    url = (os.getenv("ALGOGPT_REDIS_URL") or os.getenv("REDIS_URL") or "").strip()
+    if not url:
+        return None
+    try:
+        from redis import Redis  # type: ignore
+        return Redis.from_url(url, decode_responses=True, socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT", "8.0") or 8.0))
+    except Exception as e:
+        logger.warning("redis_unavailable: %s", e)
+        return None
+
+def _is_approved(symbol: str) -> bool:
+    if not REQUIRE_TG_APPROVAL:
+        return True
+    sym = symbol.upper()
+    # 1) Redis candidates (support several key shapes)
+    r = _get_redis_soft()
+    if r:
+        keys = [
+            f"ops:approved:{sym}",
+            f"ops:approval:last_ok:{sym}",
+            f"approval:last_ok:{sym}",
+            f"approve:ok:{sym}",
+        ]
+        for k in keys:
+            try:
+                if r.exists(k):
+                    return True
+            except Exception:
+                pass
+    # 2) in-memory fallback (for tests)
+    ts = _approved_mem.get(sym)
+    if ts and (time.time() - ts) < float(os.getenv("CONFIRM_TTL_SEC", "120") or 120):
+        return True
+    return False
+
+# (optional) local approve endpoint for tests / CI, protected by Bearer
+@router.post("/auto/mock-approve")
+def auto_mock_approve(
+    payload: Dict[str, Any] = Body(..., example={"symbol": "BTCUSDT"}),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+    _approved_mem[symbol] = time.time()
+    return _ok(symbol=symbol, approved=True, via="memory")
+
+# =========================
+# Public endpoints: status / be / trail / tp...
 # =========================
 @router.get("/status")
 def status(symbol: str = Query(..., description="Symbol, e.g. BTCUSDT"),
@@ -353,7 +416,6 @@ def place_be(
     with suppress(Exception):
         _cancel_open_conditional(client, symbol, kinds=("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"), strict=False)
 
-    # הצמדה למחיר אחרון כדי למנוע טריגר מיידי
     with suppress(Exception):
         last = _last_price(client, symbol)
         tick = float(flt.get("price_tick", 0.0) or 0.0)
@@ -415,11 +477,9 @@ def place_trailing(
             return _ok(skipped=True, reason="no_open_position")
         raise
 
-    # בטל TRAILING קיים בלבד
     with suppress(Exception):
         _cancel_open_conditional(client, symbol, kinds=("TRAILING_STOP_MARKET",), strict=True)
 
-    # חשב callbackRate (0.1..5.0)
     def _calc_callback_rate() -> float:
         if callback_rate is not None:
             try:
@@ -455,7 +515,6 @@ def place_trailing(
 
     cb = round(float(_calc_callback_rate()), 1)
 
-    # כמות ל-TRAILING (חובה ב-Binance) + קוונטיזציה
     flt = _get_filters(client, symbol)
     qty_q = _quantize_qty(symbol, qty, flt)
     if qty_q <= 0:
@@ -500,7 +559,6 @@ def cancel_trailing(
 # TP ladder / one / cancel
 # =========================
 def _tp_price(side: str, entry: float, pct: float) -> float:
-    # pct באחוזים: BUY => למעלה, SELL => למטה
     return (entry * (1 + pct / 100.0)) if side == "BUY" else (entry * (1 - pct / 100.0))
 
 @router.post("/tp/ladder")
@@ -526,53 +584,38 @@ def place_tp_ladder(
             return _ok(skipped=True, reason="no_open_position")
         raise
     flt = _get_filters(client, symbol)
-    tick = float(flt.get("price_tick", 0.0) or 0.0)
-    step = float(flt.get("qty_step", 0.0) or 0.0)
 
-    # בטל TP ישנים בלבד
     with suppress(Exception):
         _cancel_open_conditional(client, symbol, kinds=("TAKE_PROFIT", "TAKE_PROFIT_MARKET"), strict=True)
 
     placed: List[Dict[str, Any]] = []
     rem_qty = qty
+    role_tags = ["TP1", "TP2", "TP3", "TP4", "TP5"]
+
     for i, (pct, split) in enumerate(zip(pcts, splits), start=1):
         try:
             pct_f = float(pct)
             sp = max(0.0, min(1.0, float(split)))
         except Exception:
             continue
-        raw_price = _tp_price(side, entry, pct_f)
-        price = _quantize_price(symbol, raw_price, flt)
+        price = _quantize_price(symbol, _tp_price(side, entry, pct_f), flt)
         part = _quantize_qty(symbol, qty * sp, flt)
-        # ודא שסכום לא חורג מהיתרה בגלל רצפה
         if part <= 0 or rem_qty <= 0:
             continue
         if part > rem_qty:
             part = _quantize_qty(symbol, rem_qty, flt)
         rem_qty = max(0.0, rem_qty - part)
-
-        params = dict(
-            symbol=symbol,
-            side="SELL" if side == "BUY" else "BUY",
-            type="TAKE_PROFIT_MARKET",
-            stopPrice=price,
-            reduceOnly=True,
-            quantity=part,
-            workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
-            newClientOrderId=_build_client_order_id(symbol, "SELL" if side == "BUY" else "BUY", role=f"TP{i}"),
-        )
-        # על מנת להימנע מטריגר מיידי: אם BUY ו-price<=last, דחוף tick; ואם SELL ו-price>=last, משוך tick
-        with suppress(Exception):
-            last = _last_price(client, symbol)
-            if tick > 0:
-                if side == "BUY" and price <= last:
-                    price = _quantize_price(symbol, last + tick, flt)
-                    params["stopPrice"] = price  # type: ignore
-                elif side == "SELL" and price >= last:
-                    price = _quantize_price(symbol, last - tick, flt)
-                    params["stopPrice"] = price  # type: ignore
         try:
-            client.futures_create_order(**params)
+            client.futures_create_order(
+                symbol=symbol,
+                side="SELL" if side == "BUY" else "BUY",
+                type="TAKE_PROFIT_MARKET",
+                stopPrice=price,
+                reduceOnly=True,
+                quantity=part,
+                workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+                newClientOrderId=_build_client_order_id(symbol, "SELL" if side == "BUY" else "BUY", role=role_tags[i-1] if i-1 < len(role_tags) else "TP"),
+            )
             placed.append({"i": i, "price": price, "qty": part})
         except Exception as e:
             logger.warning("tp_place_failed: %s", e)
@@ -730,7 +773,228 @@ def close_fraction(
     return res
 
 # =========================
-# “ניהול דינמי” פעם אחת: BE + TP Ladder (+ Trail אם atr_mult>0)
+# INTERNAL: TP ladder as LIMIT reduceOnly (alt impl)
+# =========================
+def _place_tp_ladder_limits(client, symbol: str, side: str, qty: float, entry: float,
+                            pcts: List[float], splits: List[float]) -> Dict[str, Any]:
+    if len(pcts) != len(splits):
+        return _err("tp_ladder_bad_args", detail="pcts and splits length mismatch")
+    if abs(sum(splits) - 1.0) > 1e-6:
+        s = sum(splits)
+        if s <= 0:
+            return _err("tp_ladder_bad_args", detail="splits sum <= 0")
+        splits = [w / s for w in splits]
+
+    flt = _get_filters(client, symbol)
+    with suppress(Exception):
+        _cancel_open_tp_limits(client, symbol)
+
+    role_tags = ["TP1", "TP2", "TP3", "TP4", "TP5"]
+    created = []
+    for i, (pct, w) in enumerate(zip(pcts, splits)):
+        q = _quantize_qty(symbol, qty * float(w), flt)
+        if q <= 0:
+            continue
+        if side == "BUY":
+            price = entry * (1.0 + float(pct) / 100.0)
+            out_side = "SELL"
+        else:
+            price = entry * (1.0 - float(pct) / 100.0)
+            out_side = "BUY"
+        price = _quantize_price(symbol, price, flt)
+
+        try:
+            o = client.futures_create_order(
+                symbol=symbol,
+                side=out_side,
+                type="LIMIT",
+                price=str(price),
+                quantity=str(q),
+                timeInForce="GTC",
+                reduceOnly=True,
+                newClientOrderId=_build_client_order_id(symbol, out_side, role=role_tags[i] if i < len(role_tags) else "TP"),
+            ) or {}
+            created.append({"i": i + 1, "qty": q, "price": price, "orderId": o.get("orderId")})
+        except Exception as e:
+            logger.warning("tp_ladder_create_failed: %s", e)
+
+    if not created:
+        return _err("tp_ladder_create_none")
+    return _ok(symbol=symbol, created=created)
+
+# =========================
+# AUTO MANAGER (async, in-memory) — GATED BY TELEGRAM APPROVAL
+# =========================
+class _AutoParams:
+    def __init__(
+        self,
+        symbol: str,
+        offset_bps: int = None,
+        atr_mult: float = None,
+        pcts: Optional[List[float]] = None,
+        splits: Optional[List[float]] = None,
+        poll_sec: float = None,
+    ):
+        self.symbol = symbol.upper()
+        self.offset_bps = int(offset_bps if offset_bps is not None else int(os.getenv("AUTO_BE_BPS", os.getenv("TP_BE_OFFSET_BPS", "8"))))
+        self.atr_mult = float(atr_mult if atr_mult is not None else float(os.getenv("AUTO_ATR_MULT", os.getenv("TRAIL_ATR_MULT", "1.6"))))
+        self.pcts = list(pcts if pcts is not None else [float(x) for x in (os.getenv("AUTO_TP_PCTS", "3,6,12").split(","))])
+        self.splits = list(splits if splits is not None else [float(x) for x in (os.getenv("AUTO_TP_SPLITS", "0.278,0.333,0.389").split(","))])
+        self.poll_sec = float(poll_sec if poll_sec is not None else float(os.getenv("AUTO_POLL_SEC", "8")))
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "symbol": self.symbol,
+            "offset_bps": self.offset_bps,
+            "atr_mult": self.atr_mult,
+            "pcts": self.pcts,
+            "splits": self.splits,
+            "poll_sec": self.poll_sec,
+        }
+
+_AUTO: Dict[str, Dict[str, Any]] = {}  # symbol -> {"task": Task, "params": _AutoParams, "started_at": ts}
+
+async def _auto_loop(params: _AutoParams):
+    symbol = params.symbol
+    logger.info("auto_manager_start: %s %s", symbol, params.as_dict())
+    try:
+        while True:
+            # Gate: require Telegram approval
+            if REQUIRE_TG_APPROVAL and not _is_approved(symbol):
+                logger.debug("auto_gate_waiting_approval: %s", symbol)
+                await asyncio.sleep(params.poll_sec)
+                continue
+
+            client, err = _get_client_soft()
+            if not client:
+                logger.warning("auto_manager_no_client: %s", err)
+                await asyncio.sleep(params.poll_sec)
+                continue
+            _align_position_mode(client)
+
+            try:
+                side, qty, entry = _fetch_position_side_qty_entry(client, symbol)
+
+                # 1) BE
+                try:
+                    place_be(
+                        request=None,
+                        payload={"symbol": symbol, "offset_bps": params.offset_bps},
+                        authorization=f"Bearer {API_BEARER_TOKEN}",
+                        x_timestamp=None, x_nonce=None, x_signature=None,
+                    )
+                except Exception as e:
+                    logger.debug("auto_be_skip: %s", e)
+
+                # 2) TP ladder (market TP)
+                with suppress(Exception):
+                    place_tp_ladder({"symbol": symbol, "pcts": params.pcts, "splits": params.splits}, f"Bearer {API_BEARER_TOKEN}")  # type: ignore
+
+                # 3) Trailing
+                with suppress(Exception):
+                    place_trailing(
+                        request=None,
+                        payload={"symbol": symbol, "atr_mult": params.atr_mult},
+                        authorization=f"Bearer {API_BEARER_TOKEN}",
+                        x_timestamp=None, x_nonce=None, x_signature=None,
+                    )
+
+                _ensure_guard(symbol, prefer_mode="native")
+
+            except HTTPException as e:
+                if e.status_code != 409:
+                    logger.debug("auto_status_http: %s", e.detail)
+            except Exception as e:
+                logger.warning("auto_manager_cycle_error: %s", e)
+
+            await asyncio.sleep(params.poll_sec)
+    except asyncio.CancelledError:
+        logger.info("auto_manager_cancelled: %s", symbol)
+        raise
+    except Exception as e:
+        logger.error("auto_manager_crashed: %s %s", symbol, e)
+
+# =========================
+# AUTO endpoints (start/stop/status)
+# =========================
+def _verify_sig_if_needed(path: str, payload: Dict[str, Any],
+                          x_timestamp: Optional[str], x_nonce: Optional[str], x_signature: Optional[str]) -> None:
+    if not _anti_replay_required():
+        return
+    ok, reason = verify_request(x_timestamp, x_nonce, x_signature, path, payload, require_signature=True)  # type: ignore
+    if not ok:
+        raise HTTPException(status_code=401, detail=f"bad_signature: {reason}")
+
+@router.get("/auto/status")
+def auto_status(authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    items = []
+    for sym, d in _AUTO.items():
+        p: _AutoParams = d["params"]
+        items.append({"symbol": sym, "running": not d["task"].done(), "params": p.as_dict(), "approval_ok": _is_approved(sym)})
+    return _ok(running=items)
+
+@router.post("/auto/start")
+def auto_start(
+    request: Request,
+    payload: Dict[str, Any] = Body(..., example={"symbol": "BTCUSDT", "offset_bps": 8, "atr_mult": 1.6,
+                                                  "pcts": [3,6,12], "splits": [0.278,0.333,0.389], "poll_sec": 8}),
+    authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    _verify_sig_if_needed("/position-ops/auto/start", payload, x_timestamp, x_nonce, x_signature)
+
+    symbol = (payload.get("symbol") or "").upper().strip()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+
+    params = _AutoParams(
+        symbol=symbol,
+        offset_bps=payload.get("offset_bps"),
+        atr_mult=payload.get("atr_mult"),
+        pcts=payload.get("pcts"),
+        splits=payload.get("splits"),
+        poll_sec=payload.get("poll_sec"),
+    )
+
+    # restart if exists (to refresh params)
+    if symbol in _AUTO:
+        with suppress(Exception):
+            _AUTO[symbol]["task"].cancel()
+    task = asyncio.create_task(_auto_loop(params))
+    _AUTO[symbol] = {"task": task, "params": params, "started_at": time.time()}
+    return _ok(started=True, symbol=symbol, params=params.as_dict(), require_telegram_approval=REQUIRE_TG_APPROVAL)
+
+@router.post("/auto/stop")
+def auto_stop(
+    request: Request,
+    payload: Dict[str, Any] = Body(..., example={"symbol": "BTCUSDT"}),
+    authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    _verify_sig_if_needed("/position-ops/auto/stop", payload, x_timestamp, x_nonce, x_signature)
+
+    symbol = (payload.get("symbol") or "").upper().strip()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+    if symbol not in _AUTO:
+        return _ok(stopped=False, reason="not_running", symbol=symbol)
+    with suppress(Exception):
+        _AUTO[symbol]["task"].cancel()
+    del _AUTO[symbol]
+    return _ok(stopped=True, symbol=symbol)
+
+# =========================
+# “ניהול דינמי פעם אחת” — גם כאן נעצור אם אין אישור
 # =========================
 @router.post("/manage-once")
 def manage_once(
@@ -738,33 +1002,33 @@ def manage_once(
         "symbol":"BTCUSDT",
         "offset_bps":8,
         "pcts":[3,6,12],
-        "splits":[0.25,0.30,0.45],
+        "splits":[0.278,0.333,0.389],
         "atr_mult":1.6
     }),
     authorization: Optional[str] = Header(None),
 ) -> Dict[str, Any]:
     if not _auth_ok(authorization):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
     symbol = (payload.get("symbol") or "").upper().strip()
     if not symbol:
         raise HTTPException(status_code=422, detail="missing symbol")
+
+    if REQUIRE_TG_APPROVAL and not _is_approved(symbol):
+        return _ok(symbol=symbol, skipped=True, reason="awaiting_telegram_approval")
+
     be_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS", "5") or 5)
     pcts = payload.get("pcts") or [4.0, 8.0, 16.0]
     splits = payload.get("splits") or [0.3, 0.3, 0.4]
-    atr_mult = payload.get("atr_mult")  # אם None/0 לא נפעיל Trail
+    atr_mult = payload.get("atr_mult")
 
-    # 1) BE
     be_res = place_be(Request(scope={"type":"http"}), {"symbol": symbol, "offset_bps": be_bps}, authorization)  # type: ignore
-
-    # 2) TP Ladder
     tp_res = place_tp_ladder({"symbol": symbol, "pcts": pcts, "splits": splits}, authorization)  # type: ignore
 
-    # 3) Trail (אופציונלי)
     tr_res: Dict[str, Any] = {"ok": True, "skipped": True, "reason": "trail_disabled"}
     if atr_mult:
         tr_res = place_trailing(Request(scope={"type":"http"}), {"symbol": symbol, "atr_mult": atr_mult}, authorization)  # type: ignore
 
-    # אם TP1 התמלא — להזיז SL ל-BE+tick
     client, err = _get_client_soft()
     if client:
         with suppress(Exception):
@@ -790,6 +1054,54 @@ def manage_once(
                     )
 
     return _ok(symbol=symbol, be=be_res, tp=tp_res, trail=tr_res)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
