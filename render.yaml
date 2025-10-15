@@ -168,6 +168,8 @@ services:
         value: "0"
       - key: USE_REDIS_IDEM
         value: "1"
+      - key: IDEM_TTL_SEC
+        value: "90"
       - key: SETEX_STRICT
         value: "1"
       - key: REDIS_CONNECT_TIMEOUT
@@ -466,6 +468,12 @@ services:
         value: "1"
       - key: MANAGER_REISSUE_POLICY
         value: "cancel_replace"
+      - key: TRAIL_PAUSE_WINDOWS
+        value: "22:00-02:00Z,11:30-12:00Z"
+      - key: AUTO_TRAIL_ADX_MIN
+        value: "14"
+      - key: AUTO_TRAIL_ATRPCT_MAX
+        value: "0.015"
 
       # ========================= Smart-Manage =========================
       - key: SMART_MANAGE_ON_APPROVE
@@ -720,6 +728,7 @@ services:
         fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
         fromSecret: BINANCE_API_SECRET
+
 
 
 
