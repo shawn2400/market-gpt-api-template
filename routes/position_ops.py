@@ -517,13 +517,13 @@ def trail(
     _maybe_notify(symbol, "Trail", out)
     return out
 
-# חדש: ביטול *רק* Trailing Stop
-@router.post("/trail/cancel", summary="Cancel only trailing stop orders (TRAILING_STOP_MARKET)")
+# === NEW: cancel only trailing stop ===
+@router.post("/trail/cancel", summary="Cancel trailing-only orders (TRAILING_STOP_MARKET) for symbol")
 def trail_cancel(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
-    x_ts: Optional[str] = Header(None, alias="X-TS"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
@@ -533,19 +533,21 @@ def trail_cancel(
     ar = _ar_check("/position-ops/trail/cancel", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
         return ar
+
     symbol = (payload.get("symbol") or "").upper().strip()
     if not symbol:
         return _err("invalid_input", detail="symbol required")
     client, cerr = _get_client_soft()
     if not client:
         return _err(cerr or "binance_client_error")
+    _align_position_mode(client)
     try:
         n = _cancel_open_conditional(client, symbol, kinds=("TRAILING_STOP_MARKET",))
         out = _ok(symbol=symbol, cancelled=n)
     except Exception as e:
         out = _err("exception", detail=str(e))
     _ensure_guard(symbol, prefer_mode="native")
-    _maybe_notify(symbol, "Trail Off", out)
+    _maybe_notify(symbol, "Trail Cancel", out)
     return out
 
 @router.post("/sl/move", summary="Move SL to a specific price (STOP_MARKET closePosition)")
@@ -1018,17 +1020,19 @@ async def auto_stop(
     return _ok(status="stopped")
 
 # =========================
-# Compatibility aliases
+# Compatibility aliases (כפי שהאינטגרציה של הטלגרם מצפה)
 # =========================
+
 @router.post("/cancel-tps", summary="[ALIAS] Cancel all TP orders (alias of /tp/cancel)")
 def cancel_tps_alias(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
-    x_ts: Optional[str] = Header(None, alias="X-TS"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
+    # נשתמש בלוגיקת tp_cancel כדי לשמור על מקור אמת יחיד
     ts_val = x_timestamp or x_ts
     return tp_cancel(payload=payload, Authorization=Authorization,
                      x_timestamp=ts_val, x_ts=None, x_nonce=x_nonce, x_signature=x_signature)
@@ -1038,12 +1042,13 @@ def close_percent_alias(
     payload: Dict[str, Any] = Body(...),
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
-    x_ts: Optional[str] = Header(None, alias="X-TS"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
     if not _auth_ok(Authorization):
         return _err("unauthorized")
+    # בדיקת Anti-Replay למסלול האליאס
     ts_val = x_timestamp or x_ts
     ar = _ar_check("/position-ops/close-percent", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
     if ar:
@@ -1066,14 +1071,14 @@ def close_percent_alias(
     return _close_impl(client, symbol=symbol, fraction=fraction)
 
 # =========================
-# Status route
+# Status route (חדש)
 # =========================
 @router.get("/status", summary="Position & open conditional orders status")
 def status(
     symbol: str,
     Authorization: Optional[str] = Header(None),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
-    x_ts: Optional[str] = Header(None, alias="X-TS"),
+    x_ts: Optional[str] = Header(None, alias="X-TS"),               # alias
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
@@ -1101,149 +1106,6 @@ def status(
     cond = [o for o in orders if "STOP" in (o.get("type","").upper()) or "TAKE_PROFIT" in (o.get("type","").upper())]
     return _ok(symbol=symbol, has_position=True, side=side, qty=abs_qty, entry=entry, last=last, orders=cond)
 
-# =========================
-# פתיחה ידנית (Danger): notional+lev
-# =========================
-@router.post("/open", summary="(Danger) Open market position by notional & leverage")
-def open_market(
-    payload: Dict[str, Any] = Body(...),
-    Authorization: Optional[str] = Header(None),
-    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
-    x_ts: Optional[str] = Header(None, alias="X-TS"),
-    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
-    x_signature: Optional[str] = Header(None, alias="X-Signature"),
-):
-    if not _auth_ok(Authorization):
-        return _err("unauthorized")
-    ts_val = x_timestamp or x_ts
-    ar = _ar_check("/position-ops/open", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
-    if ar:
-        return ar
-    symbol = (payload.get("symbol") or "").upper().strip()
-    side = (payload.get("side") or "").upper().strip()  # BUY/SELL
-    notional = float(payload.get("notional") or 0)
-    lev = int(payload.get("leverage") or 20)
-    margin = (payload.get("margin") or "ISOLATED").upper()
-    if not symbol or side not in ("BUY","SELL") or notional <= 0 or lev < 1:
-        return _err("invalid_input", detail="symbol, side, notional>0, leverage required")
-    client, cerr = _get_client_soft()
-    if not client:
-        return _err(cerr or "binance_client_error")
-    try:
-        if margin in ("ISOLATED","CROSSED"):
-            with suppress(Exception):
-                client.futures_change_margin_type(symbol=symbol, marginType=margin)
-        with suppress(Exception):
-            client.futures_change_leverage(symbol=symbol, leverage=lev)
-        price = _last_price(client, symbol)
-        flt = _get_filters(client, symbol)
-        # notional הוא תקציב ב-USDT ב-1x; הכמות נקבעת לפי notional/price. המינוף משפיע על דרישות מרווח, לא על הכמות בפועל כאן.
-        qty = _quantize_qty(symbol, notional / price, flt)
-        if qty <= 0:
-            return _err("qty_rounds_to_zero")
-        order = client.futures_create_order(symbol=symbol, side=side, type="MARKET", quantity=qty)
-        return _ok(symbol=symbol, side=side, qty=qty, price=price, orderId=order.get("orderId"), leverage=lev, margin=margin)
-    except Exception as e:
-        return _err("exception", detail=str(e))
-
-# =========================
-# אוטומציה: בחר טופ־סקור ופתח
-# =========================
-@router.post("/auto/open-top", summary="Pick top-scored symbol from scanner, open position, then manage-once")
-def auto_open_top(
-    payload: Dict[str, Any] = Body(...),
-    Authorization: Optional[str] = Header(None),
-    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
-    x_ts: Optional[str] = Header(None, alias="X-TS"),
-    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
-    x_signature: Optional[str] = Header(None, alias="X-Signature"),
-):
-    """
-    קלט:
-      notional: 100..200  (USDT)
-      leverage: 20..35
-      side: "BUY"/"SELL"  (אופציונלי; אם לא קיים נשתמש ב-gate)
-      gate:  "long"|"short"|"auto_up"|"auto_down"  (ברירת מחדל "long")
-      topk_url: אופציונלי; ברירת מחדל http://127.0.0.1:10000/scan/public-topk
-    """
-    if not _auth_ok(Authorization):
-        return _err("unauthorized")
-    ts_val = x_timestamp or x_ts
-    ar = _ar_check("/position-ops/auto/open-top", payload, ts=ts_val, nonce=x_nonce, sig=x_signature)
-    if ar:
-        return ar
-
-    try:
-        notional = float(payload.get("notional") or 0)
-        leverage = int(payload.get("leverage") or 20)
-    except Exception:
-        return _err("invalid_input", detail="numeric notional & leverage required")
-    if not (notional > 0 and 1 <= leverage <= 125):
-        return _err("invalid_input", detail="notional>0 and 1<=leverage<=125 required")
-
-    forced_side = (payload.get("side") or "").upper().strip()
-    gate = (payload.get("gate") or os.getenv("OPEN_GATE") or "long").lower().strip()
-    topk_url = (payload.get("topk_url") or os.getenv("SCAN_TOPK_URL") or "http://127.0.0.1:10000/scan/public-topk").strip()
-
-    # משוך את הטופ־סקור מהסקאנר המקומי
-    symbol = None
-    direction_hint = None
-    with suppress(Exception):
-        import httpx
-        headers = {}
-        if API_BEARER_TOKEN:
-            headers["Authorization"] = f"Bearer {API_BEARER_TOKEN}"
-        r = httpx.get(topk_url, headers=headers, timeout=3.0)
-        r.raise_for_status()
-        data = r.json()
-        item = (data[0] if isinstance(data, list) and data else (data.get("items", [{}])[0] if isinstance(data, dict) else {}))
-        symbol = (item or {}).get("symbol") or (item or {}).get("sym") or "BTCUSDT"
-        direction_hint = ((item or {}).get("dir") or (item or {}).get("side") or "").upper()  # BUY/SELL אם קיים
-
-    if not symbol:
-        symbol = "BTCUSDT"
-
-    # קבע צד
-    if forced_side in ("BUY","SELL"):
-        side = forced_side
-    else:
-        if direction_hint in ("BUY","SELL"):
-            side = direction_hint
-        else:
-            if gate in ("short","auto_down"):
-                side = "SELL"
-            else:
-                side = "BUY"
-
-    # פתח ואז נהל
-    client, cerr = _get_client_soft()
-    if not client:
-        return _err(cerr or "binance_client_error")
-    try:
-        with suppress(Exception):
-            client.futures_change_leverage(symbol=symbol, leverage=leverage)
-        price = _last_price(client, symbol)
-        flt = _get_filters(client, symbol)
-        qty = _quantize_qty(symbol, notional / price, flt)
-        if qty <= 0:
-            return _err("qty_rounds_to_zero")
-        order = client.futures_create_order(symbol=symbol, side=side, type="MARKET", quantity=qty)
-        manage_res = manage_once(
-            payload={"symbol": symbol},
-            Authorization=f"Bearer {API_BEARER_TOKEN}" if API_BEARER_TOKEN else None,
-            x_timestamp=str(int(time.time())),
-            x_ts=None, x_nonce="internal", x_signature="internal",
-        )
-        out = _ok(
-            symbol=symbol, side=side, qty=qty, price=price,
-            leverage=leverage, notional=notional,
-            orderId=(order or {}).get("orderId"),
-            manage=manage_res,
-        )
-        _maybe_notify(symbol, "Auto Open Top", out)
-        return out
-    except Exception as e:
-        return _err("exception", detail=str(e))
 
 
 
