@@ -31,7 +31,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONOPTIMIZE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/app \
-    APP_MODULE=main_ultratop:app \
+    APP_MODULE=main:app \
     WEB_CONCURRENCY=1 \
     GUNICORN_TIMEOUT=120 \
     MPLCONFIGDIR=/app/.cache/matplotlib \
@@ -91,6 +91,7 @@ CMD ["/bin/sh","-lc","/app/prestart.sh 2>/dev/null || true; \
     --max-requests ${GUNICORN_MAX_REQUESTS:-500} \
     --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-50} \
     --worker-class uvicorn.workers.UvicornWorker"]
+
 
 
 
