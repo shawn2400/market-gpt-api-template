@@ -2,6 +2,7 @@
 # Core Web
 # =========================
 fastapi==0.111.0
+starlette==0.37.2
 uvicorn==0.30.6
 gunicorn==22.0.0
 
