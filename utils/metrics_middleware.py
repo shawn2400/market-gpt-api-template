@@ -1,4 +1,3 @@
-# utils/metrics_middleware.py
 from __future__ import annotations
 import time
 import logging
@@ -6,7 +5,14 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import Response
 
-from . import metrics_exporter  # אותו מודול שבראשו המטריקות
+# נסיון לייבא את מודול המטריקות; אם חסר – ניצור shim שלא מפיל את האפליקציה
+try:
+    from . import metrics_exporter  # type: ignore
+except Exception:
+    class _NoopMetricsExporter:
+        def record_api_request(self, *args, **kwargs):
+            pass
+    metrics_exporter = _NoopMetricsExporter()  # type: ignore
 
 log = logging.getLogger("algogpt.metrics_mw")
 
@@ -66,4 +72,5 @@ class MetricsMiddleware(BaseHTTPMiddleware):
             except Exception as e:
                 log.debug("metrics(record_api_request on exception) failed: %r", e)
             raise
+
 
