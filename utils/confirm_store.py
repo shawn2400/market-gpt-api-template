@@ -1,3 +1,6 @@
+הנה גרסה מלאה ומתוקנת 1-ל-1 של `utils/confirm_store.py` (תיקנתי את שורת הסיום ששברה קומפילציה, שמרתי על ה־API שלך, והוספתי שמירה על TTL בעת עדכון ברדיס + דה־דופליקציה בתוצאות):
+
+```python
 # utils/confirm_store.py
 from __future__ import annotations
 import os, time, secrets, json
@@ -86,7 +89,16 @@ class ConfirmStore:
                 return cls._mem_decide(ticket_id, approved)
             obj = json.loads(raw)
             obj["approved"] = bool(approved)
-            await r.set(key, json.dumps(obj, ensure_ascii=False, separators=(",", ":")))
+            # preserve TTL if possible
+            try:
+                await r.set(key, json.dumps(obj, ensure_ascii=False, separators=(",", ":")), keepttl=True)
+            except TypeError:
+                # fallback: fetch remaining TTL and setex
+                ttl = await r.ttl(key)
+                if ttl and ttl > 0:
+                    await r.setex(key, ttl, json.dumps(obj, ensure_ascii=False, separators=(",", ":")))
+                else:
+                    await r.set(key, json.dumps(obj, ensure_ascii=False, separators=(",", ":")))
             with suppress(Exception):
                 await r.srem(f"{NS}:confirm:index", ticket_id)
             return obj
@@ -99,7 +111,7 @@ class ConfirmStore:
             tids: List[str] = []
             with suppress(Exception):
                 tids = list(await r.smembers(f"{NS}:confirm:index")) or []
-            out: List[Dict[str, Any]] = []
+            out: Dict[str, Dict[str, Any]] = {}
             for tid in tids:
                 raw = await r.get(f"{NS}:confirm:{tid}")
                 if not raw:
@@ -109,11 +121,13 @@ class ConfirmStore:
                 except Exception:
                     continue
                 if obj.get("approved") is None:
-                    out.append(obj)
+                    out[obj.get("ticket_id") or tid] = obj
             # also include mem pending (dev/local)
-            out.extend(cls._mem_pending())
+            for it in cls._mem_pending():
+                if isinstance(it, dict) and it.get("approved") is None:
+                    out[it.get("ticket_id")] = it  # type: ignore[index]
             # normalize: return list of dicts with keys {ticket_id, req, ts, approved}
-            return [x for x in out if isinstance(x, dict)]
+            return list(out.values())
         return cls._mem_pending()
 
     @classmethod
@@ -125,3 +139,5 @@ class ConfirmStore:
             with suppress(Exception):
                 await r.srem(f"{NS}:confirm:index", ticket_id)
         cls._mem_remove(ticket_id)
+```
+
