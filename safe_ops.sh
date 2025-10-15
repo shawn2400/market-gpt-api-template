@@ -1,4 +1,7 @@
-cat >/app/safe_ops.sh <<'EOF'
+cd /app
+rm -f safe_ops.sh
+
+cat > safe_ops.sh <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 
@@ -8,8 +11,9 @@ set -euo pipefail
 
 # ===== Anti-1003: token-bucket עדין =====
 BUCKET_FILE="/tmp/anti1003.bucket"
-BUCKET_CAP=${BUCKET_CAP:-6}      # burst
+BUCKET_CAP=${BUCKET_CAP:-6}      # burst tokens
 REFILL_RPS=${REFILL_RPS:-3}      # tokens/sec
+
 _now_ms(){ date +%s%3N; }
 _bucket_take(){
   local now cap tokens last tdelta add
@@ -28,7 +32,7 @@ _bucket_take(){
   printf "%s %s\n" "$last" "$tokens" > "$BUCKET_FILE"
 }
 
-# ===== nonce / hmac עם fallback =====
+# ===== nonce/hmac עם fallbacks (בלי uuidgen/xxd) =====
 _nonce(){
   if command -v uuidgen >/dev/null 2>&1; then uuidgen
   elif [[ -r /proc/sys/kernel/random/uuid ]]; then cat /proc/sys/kernel/random/uuid
@@ -41,56 +45,45 @@ _hmac_sha256_hex(){
     openssl dgst -sha256 -hmac "$API_SIGNING_SECRET" -binary | od -An -tx1 | tr -d ' \n'
   fi
 }
-_sign(){
-  local method="$1" path="$2" body="$3" ts="$4" nonce="$5"
-  printf "%s\n%s\n%s\n%s\n%s" "$method" "$path" "$body" "$ts" "$nonce" | _hmac_sha256_hex
+_sign(){ # METHOD PATH BODY TS NONCE
+  printf "%s\n%s\n%s\n%s\n%s" "$1" "$2" "$3" "$4" "$5" | _hmac_sha256_hex
 }
 
-_do_signed(){
-  local method="$1" path="$2" body="${3:-}"
+_do_signed(){ # METHOD PATH [BODY]
   _bucket_take
-  local ts nonce sig
+  local method="$1" path="$2" body="${3:-}" ts nonce sig
   ts=$(_now_ms); nonce=$(_nonce)
   sig=$(_sign "$method" "$path" "$body" "$ts" "$nonce")
   curl -sS -X "$method" "${PUBLIC_HOST}${path}" \
     -H "Authorization: Bearer ${API_BEARER_TOKEN}" \
     -H "Content-Type: application/json" \
-    -H "X-TS: ${ts}" \
-    -H "X-Nonce: ${nonce}" \
-    -H "X-Signature: ${sig}" \
-    ${body:+ -d "$body"}
+    -H "X-TS: ${ts}" -H "X-Nonce: ${nonce}" -H "X-Signature: ${sig}" \
+    ${body:+ --data-binary "$body"}
 }
-_do_plain(){
-  local method="$1" path="$2" body="${3:-}"
+_do_plain(){ # METHOD PATH [BODY]
   _bucket_take
-  curl -sS -X "$method" "${PUBLIC_HOST}${path}" \
+  curl -sS -X "$1" "${PUBLIC_HOST}${2}" \
     -H "Authorization: Bearer ${API_BEARER_TOKEN}" \
     -H "Content-Type: application/json" \
-    ${body:+ -d "$body"}
+    ${3:+ --data-binary "$3"}
 }
 
 usage(){
 cat <<'USAGE'
-safe_ops.sh — כלי בטוח ל-/position-ops/* עם חתימה + anti-1003
+safe_ops.sh — /position-ops/* עם חתימה + anti-1003
 
 ENV חובה:
   PUBLIC_HOST, API_BEARER_TOKEN, API_SIGNING_SECRET
 
 פקודות:
-  manage-once [SYMBOL]              — POST /manage-once (ללא חתימה)
-  tp-one SYMBOL PRICE QTY           — POST /position-ops/tp/one (reduceOnly)
-  tp-ladder SYMBOL P1 P2 P3 Q1 Q2 Q3 — POST /position-ops/tp/ladder (עד 3 רמות)
-  be SYMBOL [OFFSET_BPS=12]         — POST /position-ops/be/set
-  move-sl SYMBOL PRICE              — POST /position-ops/sl/move
-  trail-off SYMBOL                  — POST /position-ops/trail/off
-  tp-cancel SYMBOL                  — POST /position-ops/tp/cancel
-  help                              — עזרה
-
-דוגמאות:
-  SYMBOL=BTCUSDT ./safe_ops.sh manage-once
-  ./safe_ops.sh tp-one BTCUSDT 117663.3 0.01
-  ./safe_ops.sh be BTCUSDT 12
-  ./safe_ops.sh move-sl BTCUSDT 112519.8
+  manage-once [SYMBOL]                   — POST /manage-once (ללא חתימה)
+  tp-one SYMBOL PRICE QTY                — POST /position-ops/tp/one (reduceOnly)
+  tp-ladder SYMBOL P1 P2 P3 Q1 Q2 Q3     — POST /position-ops/tp/ladder (עד 3 רמות)
+  be SYMBOL [OFFSET_BPS=12]              — POST /position-ops/be/set
+  move-sl SYMBOL PRICE                   — POST /position-ops/sl/move
+  trail-off SYMBOL                       — POST /position-ops/trail/off
+  tp-cancel SYMBOL                       — POST /position-ops/tp/cancel
+  help                                   — עזרה
 USAGE
 }
 
@@ -144,5 +137,6 @@ case "$cmd" in
 esac
 EOF
 
-chmod +x /app/safe_ops.sh
+chmod +x safe_ops.sh
+
 
