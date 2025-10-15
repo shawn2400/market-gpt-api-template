@@ -41,7 +41,6 @@ def _mask_url(url: str) -> str:
     try:
         p = urlparse(url)
         host = p.hostname or ""
-        # IPv6 netloc needs brackets if we ever displayed it, but לשם לוג זה מספיק.
         netloc = host
         if p.port:
             netloc += f":{p.port}"
@@ -177,6 +176,7 @@ def ping_safe() -> bool:
         return False
 
 __all__ = ["make_client", "get_redis", "redis_client", "ping_safe"]
+
 
 
 
