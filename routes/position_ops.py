@@ -10,11 +10,11 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import suppress
 
-from fastapi import APIRouter, Body, Header
-from fastapi import HTTPException  # רק לצורך סוג החריגה, לא נזרוק בראוטים
+from fastapi import APIRouter, Body, Header, HTTPException, Query, Request
 
 # Anti-Replay
-from utils.anti_replay import verify_request
+with suppress(Exception):
+    from utils.anti_replay import verify_request  # type: ignore
 
 # Telegram notifier (כפתורי אינליין אחרי פעולות)
 with suppress(Exception):
@@ -44,6 +44,8 @@ def _notify_ops(symbol: str, action_name: str) -> None:
     שולח הודעת טלגרם קצרה עם מקלדת אינליין
     לא חוסם את שרשור הראוט. בטוח גם אם אין event loop קיים בת׳רד.
     """
+    if "TelegramNotifier" not in globals():
+        return
     loop: Optional[asyncio.AbstractEventLoop] = None
     try:
         loop = asyncio.get_running_loop()
@@ -73,6 +75,7 @@ def _maybe_notify(symbol: Optional[str], action_name: str, res: Dict[str, Any]) 
 GUARD_ENSURE_AFTER_OPS = (os.getenv("GUARD_ENSURE_AFTER_OPS", "1").lower() in ("1", "true", "yes", "on"))
 with suppress(Exception):
     from utils.guard_stop import ensure_protective_stop  # type: ignore
+
 def _ensure_guard(symbol: str, *, prefer_mode: str = "native") -> None:
     if not GUARD_ENSURE_AFTER_OPS:
         return
@@ -90,6 +93,10 @@ def _auth_ok(auth_header: Optional[str]) -> bool:
     if not auth_header or not auth_header.startswith("Bearer "):
         return False
     return (auth_header.split(" ", 1)[1].strip() == API_BEARER_TOKEN)
+
+def _anti_replay_required() -> bool:
+    return os.getenv("ANTI_REPLAY_ENABLE", "0").lower() in ("1", "true", "yes", "on") and \
+           os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "0").lower() in ("1", "true", "yes", "on")
 
 # =========================
 # Order IDs
@@ -275,8 +282,216 @@ def _tp1_filled(client, symbol: str) -> bool:
         for o in orders:
             st = (o.get("status") or "").upper()
             cid = ((o.get("clientOrderId") or "") + " " + (o.get("origClientOrderId") or "")).upper()
-            typ = (o.get("type") or "").
+            typ = (o.get("type") or "").upper()
+            # מזוהה כ-TP1 אם הוזמן TAKE_PROFIT כלשהו ומולא, או אם clientOrderId מכיל אחד מהתגיות
+            if st == "FILLED" and (
+                "TP1" in cid or any(t in cid for t in tags) or "TAKE_PROFIT" in typ
+            ):
+                return True
+    except Exception:
+        pass
+    return False
 
+# =========================
+# Public endpoints
+# =========================
+@router.get("/status")
+def status(symbol: str = Query(..., description="Symbol, e.g. BTCUSDT"),
+           authorization: Optional[str] = Header(None)) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    client, err = _get_client_soft()
+    if not client:
+        return _ok(skipped=True, reason=err or "no_client")
+    _align_position_mode(client)
+    try:
+        side, qty, entry = _fetch_position_side_qty_entry(client, symbol)
+        last = 0.0
+        with suppress(Exception):
+            last = _last_price(client, symbol)
+        be_bps = int(os.getenv("TP_BE_OFFSET_BPS", "5") or 5)
+        be_price = float(entry) * (1.0 - be_bps / 10_000.0) if side == "BUY" else float(entry) * (1.0 + be_bps / 10_000.0)
+        flt = _get_filters(client, symbol)
+        be_price = _quantize_price(symbol, be_price, flt)
+        tp1_hit = _tp1_filled(client, symbol)
+        return _ok(symbol=symbol.upper(), has_position=True, side=side, qty=qty, entry=entry,
+                   last=last, be_candidate=be_price, tp1_filled=tp1_hit)
+    except HTTPException as e:
+        if e.status_code == 409:
+            return _ok(symbol=symbol.upper(), has_position=False, reason="no_open_position")
+        raise
+    except Exception as e:
+        return _err("status_failed", detail=str(e))
+
+@router.post("/be")
+def place_be(
+    request: Request,
+    payload: Dict[str, Any] = Body(..., example={"symbol": "BTCUSDT", "offset_bps": 12}),
+    authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if _anti_replay_required():
+        body = payload
+        ok, reason = verify_request(x_timestamp, x_nonce, x_signature, "/position-ops/be", body, require_signature=True)  # type: ignore
+        if not ok:
+            raise HTTPException(status_code=401, detail=f"bad_signature: {reason}")
+
+    symbol = (payload.get("symbol") or "").upper().strip()
+    offset_bps = int(payload.get("offset_bps") or os.getenv("TP_BE_OFFSET_BPS", "5") or 5)
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+
+    client, err = _get_client_soft()
+    if not client:
+        return _ok(skipped=True, reason=err or "no_client")
+    _align_position_mode(client)
+
+    try:
+        side, qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    except HTTPException as e:
+        if e.status_code == 409:
+            return _ok(skipped=True, reason="no_open_position")
+        raise
+
+    # price & filters
+    flt = _get_filters(client, symbol)
+    be_price = float(entry) * (1.0 - offset_bps / 10_000.0) if side == "BUY" else float(entry) * (1.0 + offset_bps / 10_000.0)
+    be_price = _quantize_price(symbol, be_price, flt)
+
+    # נבטל פקודות מגנות קודמות
+    with suppress(Exception):
+        _cancel_open_conditional(client, symbol, kinds=("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"), strict=False)
+
+    # נצמיד קצת מול המחיר האחרון כדי להימנע מטריגר מיידי
+    try:
+        last = _last_price(client, symbol)
+        tick = float(flt.get("price_tick", 0.0) or 0.0)
+        if tick > 0:
+            if side == "BUY" and be_price >= last:
+                be_price = _quantize_price(symbol, last - tick, flt)
+            elif side == "SELL" and be_price <= last:
+                be_price = _quantize_price(symbol, last + tick, flt)
+    except Exception:
+        pass
+
+    # ניצור STOP_MARKET closePosition
+    try:
+        client.futures_create_order(
+            symbol=symbol,
+            side="SELL" if side == "BUY" else "BUY",
+            type="STOP_MARKET",
+            stopPrice=be_price,
+            closePosition=True,
+            workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+            newClientOrderId=_build_client_order_id(symbol, "SELL" if side == "BUY" else "BUY", role="SL@BE"),
+        )
+    except Exception as e:
+        return _err("place_be_failed", detail=str(e))
+
+    _ensure_guard(symbol, prefer_mode="native")
+    res = _ok(symbol=symbol, side=side, qty=qty, be_stop_price=be_price, offset_bps=offset_bps)
+    _maybe_notify(symbol, "be", res)
+    return res
+
+@router.post("/trail")
+def place_trailing(
+    request: Request,
+    payload: Dict[str, Any] = Body(..., example={"symbol": "BTCUSDT", "atr_mult": 1.6}),
+    authorization: Optional[str] = Header(None),
+    x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
+    x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
+    x_signature: Optional[str] = Header(None, alias="X-Signature"),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    if _anti_replay_required():
+        body = payload
+        ok, reason = verify_request(x_timestamp, x_nonce, x_signature, "/position-ops/trail", body, require_signature=True)  # type: ignore
+        if not ok:
+            raise HTTPException(status_code=401, detail=f"bad_signature: {reason}")
+
+    symbol = (payload.get("symbol") or "").upper().strip()
+    atr_mult = payload.get("atr_mult")
+    callback_rate = payload.get("callback_rate")
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+
+    client, err = _get_client_soft()
+    if not client:
+        return _ok(skipped=True, reason=err or "no_client")
+    _align_position_mode(client)
+
+    try:
+        side, qty, entry = _fetch_position_side_qty_entry(client, symbol)
+    except HTTPException as e:
+        if e.status_code == 409:
+            return _ok(skipped=True, reason="no_open_position")
+        raise
+
+    # בטל קודם trailing קיים
+    with suppress(Exception):
+        _cancel_open_conditional(client, symbol, kinds=("TRAILING_STOP_MARKET",), strict=True)
+
+    # חשב callbackRate
+    def _calc_callback_rate() -> float:
+        if callback_rate:
+            try:
+                r = float(callback_rate)
+                return max(0.1, min(5.0, r))
+            except Exception:
+                pass
+        # ATR-based
+        if atr_mult is None:
+            with suppress(Exception):
+                atr_mult_env = float(os.getenv("TRAIL_ATR_MULT", "1.6"))
+                return max(0.1, min(5.0, atr_mult_env))
+            return 1.6
+        try:
+            am = float(atr_mult)
+        except Exception:
+            am = 1.6
+        try:
+            kl = client.futures_klines(symbol=symbol, interval="1m", limit=50)
+            highs = [float(k[2]) for k in kl]
+            lows = [float(k[3]) for k in kl]
+            closes = [float(k[4]) for k in kl]
+            trs: List[float] = []
+            for i in range(1, len(kl)):
+                h, l, pc = highs[i], lows[i], closes[i - 1]
+                tr = max(h - l, abs(h - pc), abs(l - pc))
+                trs.append(tr)
+            atr = (sum(trs[-14:]) / float(min(14, len(trs)))) if trs else 0.0
+            px = _last_price(client, symbol)
+            rate = (atr * am / px) * 100.0 if px > 0 else 0.5
+            return max(0.1, min(5.0, rate))
+        except Exception:
+            return 1.6
+
+    cb = round(float(_calc_callback_rate()), 1)
+
+    try:
+        client.futures_create_order(
+            symbol=symbol,
+            side="SELL" if side == "BUY" else "BUY",
+            type="TRAILING_STOP_MARKET",
+            callbackRate=cb,
+            reduceOnly=True,
+            workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+            newClientOrderId=_build_client_order_id(symbol, "SELL" if side == "BUY" else "BUY", role="TRAIL"),
+        )
+    except Exception as e:
+        return _err("place_trailing_failed", detail=str(e))
+
+    _ensure_guard(symbol, prefer_mode="native")
+    res = _ok(symbol=symbol, side=side, qty=qty, callback_rate=cb)
+    _maybe_notify(symbol, "trail", res)
+    return res
 
 
 
