@@ -1,4 +1,3 @@
-# utils/binance_client.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, time, math, logging, threading
@@ -6,7 +5,6 @@ from typing import Any, Dict, List, Optional, Tuple, cast
 
 logger = logging.getLogger("algogpt.binance")
 
-# ===== Optional import (don't crash on import) =====
 try:
     from binance.client import Client  # type: ignore
     from binance.exceptions import BinanceAPIException  # type: ignore
@@ -18,7 +16,6 @@ except Exception as _e:
     _BINANCE_AVAILABLE = False
     logger.warning("[binance_client] python-binance not installed (%s) — running in stub mode", _e)
 
-# ===== ENV =====
 API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
 API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
 if not API_KEY or not API_SECRET:
@@ -39,35 +36,26 @@ DEFAULT_QTY_STEP_STR = os.getenv("DEFAULT_QTY_STEP", "0.001")
 DEFAULT_PRICE_TICK_STR = os.getenv("DEFAULT_PRICE_TICK", "0.01")
 DEFAULT_MIN_NOTIONAL = float(os.getenv("MIN_NOTIONAL_USDT", "5"))
 
-# Percent-Guard
 PERCENT_GUARD_ENABLE = os.getenv("PERCENT_GUARD_ENABLE", "1").lower() in ("1","true","yes","on")
 PERCENT_GUARD_BPS = int(os.getenv("PERCENT_PRICE_GUARD_BPS", os.getenv("PERCENT_GUARD_BPS", "50")))
 
-# Idempotency
 IDEMP_TTL_SEC = int(os.getenv("IDEMP_TTL_SEC", "900"))
-
-# Price coalescing
 PRICE_CACHE_TTL_MS = int(os.getenv("PRICE_CACHE_TTL_MS", "250"))
 
-# ===== Account/Positions cache =====
 ACCOUNT_TTL_SEC = int(os.getenv("ACCOUNT_TTL_SEC", "2"))
 ACCOUNT_ON_BAN_BACKOFF = int(os.getenv("ACCOUNT_ON_BAN_BACKOFF_SEC", "60"))
 
-# ===== Hedge/One-Way detection =====
 HEDGE_MODE_OVERRIDE = os.getenv("HEDGE_MODE", "").strip().lower()
 HEDGE_MODE_TTL_SEC = int(os.getenv("HEDGE_MODE_TTL_SEC", "30"))
 _HEDGE_MODE_CACHE: Dict[str, Any] = {"ts": 0.0, "val": None}
 
-# ===== Order ID / Cancel policy =====
 ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "").strip()
 CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0").lower() in ("1","true","yes","on")
 CANCEL_PREFIX_OVERRIDE = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
-# ===== Utils =====
 def _now() -> float: return time.time()
 def _ms() -> int: return int(time.time() * 1000)
 
-# ===== Optional WS fallback =====
 try:
     from utils.ws_fallback import (
         get_price as ws_get_price,
@@ -79,7 +67,6 @@ except Exception:
     ws_is_fresh = None   # type: ignore
     ws_update_price = None  # type: ignore
 
-# ===== Caches =====
 _exinfo_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
 _account_cache: Dict[str, Any] = {"ts": 0.0, "data": None, "ban_until": 0.0}
 
@@ -89,7 +76,6 @@ _index_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, index)
 _idem_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _idem_lock = threading.RLock()
 
-# ===== Lazy Binance Client =====
 _BINANCE_HTTP_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 _client_lock = threading.RLock()
 _CLIENT: Optional[Client] = None
@@ -113,7 +99,6 @@ def _init_client() -> Optional[Client]:
         c = Client(API_KEY, API_SECRET, requests_params={"timeout": HTTP_TIMEOUT})
         c.API_URL = _BINANCE_HTTP_BASE
 
-        # Sync time (best-effort)
         try:
             try:
                 server_time = c.futures_time().get("serverTime")  # type: ignore
@@ -164,7 +149,6 @@ client: Client | _ClientProxy = _ClientProxy()
 def get_futures_client():
     return _get_client() or client  # proxy is acceptable
 
-# ===== ExchangeInfo / ping =====
 def futures_exchange_info_safe(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
     ts = _now()
     if not force_refresh and _exinfo_cache["data"] and (ts - _exinfo_cache["ts"] < EXINFO_TTL):
@@ -185,7 +169,6 @@ def fapi_ping() -> bool:
         logger.warning("Futures ping failed: %s", e)
         return False
 
-# ===== Filters & Rounding =====
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     info = futures_exchange_info_safe() or {}
     su = symbol.upper()
@@ -271,7 +254,6 @@ def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
     need = mn / max(price, 1e-12)
     return _quantize_qty(symbol, need)
 
-# ===== Mark / Index price with coalescing =====
 def _cache_get(cache: Dict[str, Tuple[float, float]], symbol: str) -> Optional[float]:
     ts_ms, val = cache.get(symbol.upper(), (0.0, 0.0))
     if _ms() - ts_ms <= PRICE_CACHE_TTL_MS:
@@ -339,17 +321,14 @@ def futures_index_price(symbol: str) -> Optional[float]:
     return None
 
 def get_price(symbol: str) -> Optional[float]:
-    # WS fresh?
     try:
         if ws_get_price and ws_is_fresh and ws_is_fresh(symbol):
             v = ws_get_price(symbol)
             if v: return float(v)
     except Exception:
         pass
-    # Fallback to mark price
     return futures_mark_price(symbol)
 
-# ===== Account & Positions =====
 def futures_balance() -> List[Dict[str, Any]]:
     try:
         data = client.futures_account()
@@ -380,7 +359,6 @@ def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
         return p
     return None
 
-# ===== Open orders / history =====
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         if symbol: return cast(List[Dict[str, Any]], client.futures_get_open_orders(symbol=symbol.upper()) or [])
@@ -399,7 +377,6 @@ def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, An
     except Exception as e:
         logger.error("get_all_orders error: %s", e); return []
 
-# ===== Percent guard (soft) =====
 def _percent_guard_ok(symbol: str, price: Optional[float]) -> bool:
     if not PERCENT_GUARD_ENABLE or price is None:
         return True
@@ -424,7 +401,6 @@ def _percent_guard_ok(symbol: str, price: Optional[float]) -> bool:
     except Exception:
         return True
 
-# ===== Rate limiting buckets =====
 _bucket_reset_at = 0.0; _bucket_used = 0
 _dyn_qps = max(1, ORD_QPS_BUCKET)
 _dyn_backoff_base = max(BACKOFF_BASE_MS, BACKOFF_BASE_MS)
@@ -452,7 +428,6 @@ def _backoff_sleep(attempt: int) -> None:
     delay_ms = min(BACKOFF_MAX_MS, _dyn_backoff_base * (2 ** max(0, attempt - 1)))
     time.sleep(delay_ms / 1000.0)
 
-# ===== Core order ops =====
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     try:
         leverage = max(1, min(int(leverage), 125))
@@ -462,14 +437,6 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 def futures_create_order(**kwargs) -> Dict[str, Any]:
-    """
-    Creates futures order with:
-      - quantization (price/qty)
-      - percent guard for price-bearing orders
-      - idempotent clientOrderId prefixing
-      - retries/backoff
-      - positionSide validation with hedge/one-way alignment
-    """
     sym = str(kwargs.get("symbol") or "").upper()
     if not sym:
         raise ValueError("symbol required")
@@ -478,9 +445,7 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     price = kwargs.get("price")
     stop = kwargs.get("stopPrice")
     activation = kwargs.get("activationPrice")
-    ro = kwargs.get("reduceOnly", None)
 
-    # Quantize qty/price/stop/activation
     if qty is not None:
         kwargs["quantity"] = _quantize_qty(sym, float(qty))
     if price is not None:
@@ -495,23 +460,19 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
         a_str = _quantize_price(sym, float(activation))
         kwargs["activationPrice"] = a_str
 
-    # Working type
     if "workingType" not in kwargs:
         kwargs["workingType"] = WORKING_TYPE
 
-    # clientOrderId prefix
     coid = str(kwargs.get("newClientOrderId") or "")
     if coid:
         if ORDER_ID_PREFIX and not coid.startswith(ORDER_ID_PREFIX):
             coid = f"{ORDER_ID_PREFIX}_{coid}"
-        # sanitize length
         if len(coid) > 36:
             coid = coid[:36]
         kwargs["newClientOrderId"] = coid
     elif ORDER_ID_PREFIX:
         kwargs["newClientOrderId"] = f"{ORDER_ID_PREFIX}_{int(_ms()%10**9)}"
 
-    # Hedge vs one-way: if one-way, remove positionSide
     try:
         if HEDGE_MODE_OVERRIDE in ("0","false","no","off","oneway"):
             kwargs.pop("positionSide", None)
@@ -519,7 +480,6 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
         pass
 
     last: Optional[Exception] = None
-    # Rate bucket
     for attempt in range(1, max(1, BINANCE_MAX_RETRIES) + 1):
         if not _rate_allow():
             _backoff_sleep(attempt)
@@ -530,7 +490,6 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
             s = str(e); code = getattr(e, "code", None); status = getattr(e, "status_code", None)
             if status == 429 or code in (-1003,):
                 _note_rate_limit_hit(); _backoff_sleep(attempt); continue
-            # ReduceOnly fallback for -1106
             if code in (-1106,) or "reduceOnly" in s.lower():
                 if "reduceOnly" in kwargs:
                     kw2 = dict(kwargs); kw2.pop("reduceOnly", None)
@@ -553,7 +512,6 @@ def futures_cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
         logger.warning("cancel_order failed %s/%s: %s", symbol, order_id, e)
         return {"ok": False, "error": str(e)}
 
-# ===== Convenience =====
 def get_price_coalesced(symbol: str) -> Optional[float]:
     v = get_price(symbol)
     if v is not None: return float(v)
