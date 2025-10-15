@@ -615,7 +615,6 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
-
 # ==================== Execute trade helpers ====================
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     with suppress(Exception):
@@ -1275,40 +1274,6 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
         await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>" + ",".join(emergencies) + "</code>")
     return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
 
-# ==================== Indicator & profile helpers (המשך בחלק 3) ====================
-@router.post("/guard/smoke/run")
-async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
-    _require_bearer(request)
-    try:
-        from utils.guard_stop import ensure_protective_stop  # type: ignore
-    except Exception:
-        raise HTTPException(status_code=501, detail="ensure_protective_stop() not available")
-    if isinstance(symbols, str) and symbols.strip():
-        sym_list = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    else:
-        sym_list = WATCHLIST[:]
-    if not sym_list:
-        raise HTTPException(status_code=400, detail="no symbols to check")
-    results: Dict[str, Any] = {}
-    emergencies: List[str] = []
-    for s in sym_list:
-        try:
-            res = ensure_protective_stop(s, prefer_mode="quantities")
-            results[s] = res
-            flag = False
-            try:
-                if isinstance(res, dict):
-                    flag = bool(res.get("emergency")) or bool(res.get("placed")) or (str(res.get("action", "")).lower() in ("emergency", "place"))
-            except Exception:
-                pass
-            if flag:
-                emergencies.append(s)
-        except Exception as e:
-            results[s] = {"ok": False, "error": str(e)}
-    if emergencies and not ONLY_TRADE_NOTIFICATIONS:
-        await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>" + ",".join(emergencies) + "</code>")
-    return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
-
 # ==================== Indicator & profile helpers ====================
 PROFILE_AUTO_SELECT = os.getenv("PROFILE_AUTO_SELECT", "1").lower() in ("1", "true", "yes", "on")
 
@@ -1367,7 +1332,6 @@ def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -
         return {"atr": float(atr), "adx": float(adx), "price": float(closes[-1])}
     except Exception:
         return {"atr": 0.0, "adx": 0.0, "price": 0.0}
-
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
         return value
@@ -1806,6 +1770,17 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content=payload)
 
 # -------- NEW: Background real-time trailing manager ----------
+async def _smart_manage_now(symbol: str, offset_bps: Optional[int], pcts: Optional[List[float]],
+                            splits: Optional[List[float]], atr_mult: Optional[float]):
+    """
+    Placeholder for a deferred smart-manage hook.
+    If your project defines a richer manager, this shim allows triggering it.
+    """
+    with suppress(Exception):
+        from routes.manager import smart_manage_now  # type: ignore
+        return await smart_manage_now(symbol=symbol, offset_bps=offset_bps, pcts=pcts, splits=splits, atr_mult=atr_mult)
+    return None
+
 async def _trail_rt_loop():
     """
     לולאת Trailing בזמן אמת (Best-effort):
@@ -1987,7 +1962,8 @@ async def _startup_tasks():
     asyncio.create_task(_late_webhook())
 
     if TRAIL_RT_ENABLE:
-        asyncio.create_task(_trail_rt_loop())
+        # שומר את המשימה ב-state כדי לבטל אותה ב-shutdown
+        app.state.trail_task = asyncio.create_task(_trail_rt_loop())
 
 @app.on_event("shutdown")
 async def _shutdown_tasks():
@@ -2018,10 +1994,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
-
-
-
 
 
 
