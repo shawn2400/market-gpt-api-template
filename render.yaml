@@ -37,9 +37,9 @@ services:
       - key: PORT
         value: "10000"
       - key: APP_MODULE
-        value: "main:app"   # ← חוזר לרוץ דרך main.py; UltraTop יותקן כתת-אפליקציה ב-/ultra
+        value: "main:app"
       - key: ULTRATOP_MODE
-        value: "noop"       # ← מונע auto-mount מה-import של main_ultratop.py
+        value: "noop"
       - key: PYTHONPATH
         value: "/app"
       - key: WEB_CONCURRENCY
@@ -186,6 +186,10 @@ services:
         value: "algogpt"
       - key: REDIS_SSL_NO_VERIFY
         value: "0"
+      - key: REDIS_RETRY_ON_TIMEOUT
+        value: "1"
+      - key: REDIS_SSL_CA_CERTS
+        value: "/etc/ssl/certs/ca-certificates.crt"
       - key: REDIS_NAMESPACE
         value: "ops-supervisor-web"
       - key: REDIS_URL
@@ -405,7 +409,7 @@ services:
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
         value: "0.20"
 
-      # (אופציונלי) טווחי AUTO ל־LEV/BUDGET — יתיישרו עם main.py החדש
+      # (אופציונלי) טווחי AUTO ל־LEV/BUDGET
       - key: AUTO_LEV_MIN
         value: "15"
       - key: AUTO_LEV_MAX
@@ -571,7 +575,7 @@ services:
       - key: DYN_PROFILE_NOTIFY_TEMPLATE
         value: "<b>Profile Switch</b> — <code>{symbol}</code>\n<b>{old}</b> ➜ <b>{new}</b>\nScore: <b>{score:.2f}</b> | ADX: <b>{adx:.0f}</b>\nLev: <b>{lev}</b> | Budget: <b>{budget}</b>\nTP: <b>{tp_pcts}</b> / Splits: <b>{splits}</b>\nTrail ATR: <b>{trail_atr}</b> | BE: <b>{be_pct}%</b>\n⏱ {ts} (UTC)"
 
-      # ----- NEW: Profile/env for manage-once (תואם ל-main.py) -----
+      # ----- NEW: Profile/env for manage-once -----
       - key: PROFILE_AUTO_SELECT
         value: "1"
       - key: PROFILE_BASE_BE_BPS
@@ -669,7 +673,7 @@ services:
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
-      # ======== Auto Manager defaults (this service) ========
+      # ======== Auto Manager defaults ========
       - key: AUTO_BE_BPS
         value: "8"
       - key: AUTO_ATR_MULT
