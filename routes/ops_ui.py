@@ -1,4 +1,3 @@
-
 # routes/ops_ui.py
 from __future__ import annotations
 from typing import Optional, List, Callable, Any, Tuple
@@ -22,7 +21,7 @@ HTML_PAGE = """<!doctype html>
 <meta charset="utf-8">
 <title>Ops Ticket UI</title>
 <style>
-  :root{--bg:#0b1020;--card:#121a34;--txt:#e8ecff;--muted:#9fb0ff;--pri:#4c7dff;--pri2:#31c48d;--warn:#ffae42}
+  :root{--bg:#0b1020;--card:#121a34;--txt:#e8ecff;--muted:#9fb0ff;--pri:#4c7dff;--pri2:#31c48ד;--warn:#ffae42}
   *{box-sizing:border-box}
   body{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
        background:linear-gradient(180deg,#0b1020 0%,#0e1530 100%);color:var(--txt);margin:0}
@@ -155,7 +154,7 @@ function parseStepFromExchangeInfo(symbol, exInfo){
     if (Array.isArray(exInfo.symbols)) {
       const s = exInfo.symbols.find(x => (x.symbol||'').toUpperCase() === symbol.toUpperCase());
       const f = s && Array.isArray(s.filters) ? s.filters.find(ff => (ff.filterType||'')==='LOT_SIZE') : null;
-      const step = f && (f.stepSize || f.step_size);
+      const step = f && (f.stepSize או f.step_size);
       return step ? Number(step) : null;
     }
     const s = exInfo[symbol] || exInfo[symbol.toUpperCase()];
@@ -178,9 +177,9 @@ async function fetchQtyStep(symbol){
   try{
     const data1 = await fetchJSON(base + '/market/info/' + encodeURIComponent(sym));
     if (data1) {
-      if (data1.stepSize || data1.step_size) step = Number(data1.stepSize || data1.step_size);
+      if (data1.stepSize || data1.step_size) step = Number(data1.stepSize או data1.step_size);
       else if (data1.filters && data1.filters.LOT_SIZE && (data1.filters.LOT_SIZE.stepSize||data1.filters.LOT_SIZE.step_size)) {
-        step = Number(data1.filters.LOT_SIZE.stepSize || data1.filters.LOT_SIZE.step_size);
+        step = Number(data1.filters.LOT_SIZE.stepSize או data1.filters.LOT_SIZE.step_size);
       } else { step = parseStepFromExchangeInfo(sym, data1); }
     }
   }catch(e){}
@@ -205,7 +204,7 @@ async function updateBudgetHint(){
   if(!sym || lev<=0){ hintEl.textContent=''; return; }
   const [price, step] = await Promise.all([(LAST_PRICE==null ? fetchPrice(sym) : Promise.resolve(LAST_PRICE)), fetchQtyStep(sym),]);
   if(!price || !step){ hintEl.textContent=''; return; }
-  const minNotional = price * step; const minBudget = minNotional / lev; const suggested = (bud>0) ? roundQty((bud*lev)/price, step) : 0;
+  const minNotional = price * step; const minBudget = minNotional / lev; const suggested = (bud>0) ? roundQty((בud*lev)/price, step) : 0;
   const parts = [`Price≈ ${price.toFixed(2)} | step=${step}`, `Min budget≈ ${minBudget.toFixed(2)} USDT`, (bud>0 ? `Suggested qty≈ ${suggested}` : '')].filter(Boolean);
   hintEl.textContent = parts.join(' · ');
   if(bud>0 && suggested>0){ suggBtn.style.display = 'inline-block'; suggBtn.onclick = ()=>{ document.getElementById('qty').value = suggested; }; }
@@ -236,10 +235,10 @@ async function send(mode){
     note: `[mode: ${mode}] ` + (el('note').value||'')
   };
   await autoFillQtyIfNeeded(payload);
-  if(!payload.symbol || !payload.side || !(payload.leverage>0)){ show({ok:false, error:"Missing required fields (symbol/side/leverage)."}); return; }
+  if(!payload.symbol או !payload.side או !(payload.leverage>0)){ show({ok:false, error:"Missing required fields (symbol/side/leverage)."}); return; }
   if(!(payload.qty>0) && !(payload.budget>0)){ show({ok:false, error:"Provide qty or budget (or let auto-qty compute)."}); return; }
   try{
-    const base = (window.API_BASE || '%API_BASE%').replace(/\\/$,'');
+    const base = (window.API_BASE או '%API_BASE%').replace(/\\/$,'');
     const url  = base ? (base + '/ops/ticket') : '/ops/ui/ticket';
     const headers = { 'content-type': 'application/json', ...(window.API_KEY ? {'x-api-key': window.API_KEY} : {}) };
     const res  = await fetch(url, { method: 'POST', headers, body: JSON.stringify(payload) });
@@ -278,7 +277,12 @@ async def ui_proxy(payload: dict = Body(...)):
         headers["x-api-key"] = API_KEY
       async with httpx.AsyncClient(timeout=12.0) as cli:
         r = await cli.post(url, headers=headers, content=json.dumps(payload))
-        return JSONResponse(status_code=r.status_code, content=r.json())
+        # הגנה: אם לא JSON, נחזיר טקסט גולמי
+        try:
+          content = r.json()
+        except Exception:
+          content = {"ok": (r.status_code < 400), "status": r.status_code, "text": r.text}
+        return JSONResponse(status_code=r.status_code, content=content)
     else:
       from .ops_approve import create_ticket  # type: ignore
       return await create_ticket(payload)
@@ -532,8 +536,8 @@ async def ops_ui_orders(
       f"<td>{esc(o.get('symbol'))}</td>"
       f"<td>{esc(o.get('side'))}</td>"
       f"<td>{esc(o.get('type'))}</td>"
-      f"<td>{esc(o.get('origQty') or o.get('orig_quantity') or o.get('quantity'))}</td>"
-      f"<td>{esc(o.get('price') or o.get('avgPrice'))}</td>"
+      f"<td>{esc(o.get('origQty') או o.get('orig_quantity') או o.get('quantity'))}</td>"
+      f"<td>{esc(o.get('price') או o.get('avgPrice'))}</td>"
       f"<td>{esc(o.get('reduceOnly'))}</td>"
       f"<td>{esc(o.get('status'))}</td>"
       "</tr>"
