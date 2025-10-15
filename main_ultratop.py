@@ -1,8 +1,11 @@
-
+# main_ultratop.py — AlgoGPT UltraTop (WS-only), plug & play:
+# - Standalone: set ULTRATOP_MODE=standalone  and  APP_MODULE=main_ultratop:app
+# - Default (recommended): mounts into main.py app under /ultra
+#   (APP_MODULE=main_ultratop:app; it imports main.app and attaches the router)
 from __future__ import annotations
 
 import os, time, hmac, hashlib, json, logging, threading
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any
 
 from fastapi import FastAPI, Request, HTTPException, Depends, APIRouter
 from fastapi.responses import PlainTextResponse, JSONResponse, Response
@@ -14,7 +17,7 @@ try:
 except Exception:
     jsonschema = None
 try:
-    import yaml  # required
+    import yaml  # required for policy DSL
 except Exception as e:
     raise RuntimeError("PyYAML is required. pip install pyyaml") from e
 
@@ -31,7 +34,7 @@ APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
 START_TS = time.time()
 
 # ---------- Logging ----------
-logger = logging.getLogger("algogpt")
+logger = logging.getLogger("algogpt.ultratop")
 if not logger.handlers:
     handler = logging.StreamHandler()
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
@@ -41,10 +44,14 @@ logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 # ---------- Prometheus registry & metrics ----------
 registry = CollectorRegistry()
 # detach global default registries to avoid duplicate metrics when embedded
-PROCESS_COLLECTOR.registries = set()
-PLATFORM_COLLECTOR.registries = set()
-PROCESS_COLLECTOR.register(registry)
-PLATFORM_COLLECTOR.register(registry)
+try:
+    PROCESS_COLLECTOR.registries = set()
+    PLATFORM_COLLECTOR.registries = set()
+    PROCESS_COLLECTOR.register(registry)
+    PLATFORM_COLLECTOR.register(registry)
+except Exception:
+    # older prometheus_client versions may behave differently; ignore
+    pass
 
 APP_UPTIME = Gauge("app_uptime_seconds", "Application uptime seconds", registry=registry)
 READY_WS_OK = Gauge("ready_ws_ok", "WebSocket manager up", registry=registry)
@@ -91,13 +98,13 @@ class RuntimePrefsStore:
 
     def _coerce(self, v: str):
         vl = v.lower()
-        if vl in ("true", "false"):  # bool-like
-            return 1 if vl == "true" else 0
+        if vl in ("true", "false", "1", "0", "yes", "no", "on", "off"):
+            return 1 if vl in ("true", "1", "yes", "on") else 0
         try:
             if "." in v:
                 return float(v)
             return int(v)
-        except:
+        except Exception:
             return v
 
     def _from_env(self) -> RuntimePrefs:
@@ -139,7 +146,7 @@ class PolicyManager:
             try:
                 jsonschema.validate(doc, self.schema)  # type: ignore
             except Exception as e:
-                raise HTTPException(status_code=400, detail=f"policy schema validation failed: %s" % e)
+                raise HTTPException(status_code=400, detail=f"policy schema validation failed: {e}")
 
         self.policy = doc
         self.mtime = time.time()
@@ -178,7 +185,7 @@ def ws_loop():
         READY_WS_OK.set(0.0)
         logger.info("WS loop stopped")
 
-# ---------- Router (so we can include into any app) ----------
+# ---------- Router (can be attached to any app) ----------
 router = APIRouter()
 
 @router.get("/health", response_class=PlainTextResponse)
@@ -243,30 +250,23 @@ async def policy_reload(req: Request):
 # ---------- Middleware (attachable) ----------
 async def _metrics_middleware(request: Request, call_next):
     start = time.time()
-    try:
-        resp = await call_next(request)
-        status = getattr(resp, "status_code", 500)
-    except Exception:
-        status = 500
-        raise
-    finally:
-        dur = time.time() - start
-        path = request.url.path
-        method = request.method
-        HTTP_REQS.labels(method=method, path=path, status=str(status)).inc()
-        bucket_path = path if path in ("/health", "/readyz", "/readyz/strict", "/meta", "/meta/version", "/metrics") else "/other"
-        HTTP_LATENCY.labels(method=method, path=bucket_path).observe(dur)
+    resp = await call_next(request)
+    status = getattr(resp, "status_code", 500)
+    dur = time.time() - start
+    path = request.url.path
+    method = request.method
+    HTTP_REQS.labels(method=method, path=path, status=str(status)).inc()
+    bucket_path = path if path in ("/health", "/readyz", "/readyz/strict", "/meta", "/meta/version", "/metrics") else "/other"
+    HTTP_LATENCY.labels(method=method, path=bucket_path).observe(dur)
     return resp
 
 def _attach_middleware(app: FastAPI):
-    # avoid duplicate attachment when embedded twice
     if getattr(app.state, "_ultra_mw_attached", False):
         return
     app.middleware("http")(_metrics_middleware)
     app.state._ultra_mw_attached = True
 
 def _attach_lifecycle(app: FastAPI):
-    # avoid duplicate handlers
     if getattr(app.state, "_ultra_lc_attached", False):
         return
 
@@ -306,7 +306,19 @@ def create_ultratop_app(prefix: str = "") -> FastAPI:
     setup_ultratop(app, prefix=prefix)
     return app
 
-# ---------- Standalone app (when used as APP_MODULE) ----------
-app = create_ultratop_app()
+# ---------- App export ----------
+# ברירת המחדל: "mount" — משתמש ב-main.app ומתקין UltraTop תחת /ultra,
+# כדי לשמר את כל ה־routes של main.py (סופר חשוב בפרודקשן).
+_MODE = os.getenv("ULTRATOP_MODE", "mount").lower()
+_PREFIX = os.getenv("ULTRATOP_PREFIX", "/ultra")
+
+if _MODE in ("mount", "embed", "attach", ""):
+    from main import app as _base_app  # main.py שלך
+    setup_ultratop(_base_app, prefix=_PREFIX)
+    app = _base_app
+else:
+    # standalone
+    app = create_ultratop_app(prefix=os.getenv("ULTRATOP_PREFIX", ""))
+
 
 
