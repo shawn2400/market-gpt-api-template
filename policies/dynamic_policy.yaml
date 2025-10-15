@@ -1,25 +1,24 @@
 # AlgoGPT Dynamic Policy — runtime hot-reload (SIGNED)
-# שמור חתום; נטען דרך /ops/policy/reload (HMAC)
 # גרסה: v1
 
 breakeven:
   enable: true
   only_after_tp1: true
-  offset_bps: 8           # SL עובר ל-BE + 8 bps
-  guard_every_sec: 30     # כל כמה שניות לאכוף/לבדוק
-  arm_pct: 1.6            # דרישת תזוזה באחוזים כדי לדרוך BE
+  offset_bps: 8
+  guard_every_sec: 30
+  arm_pct: 1.6
 
 trailing:
   enable: true
-  atr_mult: 1.5           # טרייל לפי ATR
-  callback_min_pct: 0.1   # מינימום pullback לאפשר טריגר
-  callback_max_pct: 4.9   # מקסימום pullback
+  atr_mult: 1.5
+  callback_min_pct: 0.1
+  callback_max_pct: 4.9
   freeze_on_pullback: true
 
 ladder:
   tp:
     enable: true
-    splits: [0.40, 0.35, 0.25]    # סך הכל 100%
+    splits: [0.40, 0.35, 0.25]
     targets_pct: [1.8, 3.2, 5.5]
     place_native: true
   sl:
@@ -27,7 +26,6 @@ ladder:
     atr_mult: 1.2
     place_native: true
 
-# בלוקים נוספים (אופציונליים) — תואם לסכימה
 thresholds:
   entry_conf_min: 0.65
   vwap_max_sigma: 1.5
