@@ -74,8 +74,8 @@ def make_callback(action: str, trade_id: Optional[str] = None, symbol: Optional[
 
 def verify_callback_data(data: str) -> Dict[str, Any]:
     """
-    מחזיר dict עם action / trade_id / symbol / pct
-    תומך גם ב-callback לא חתום (בסביבה ללא SECRET), וגם חתום עם ts+sig.
+    מאמת ומפרק callback_data. כאשר מוגדר סוד חתימה — חובה צמד ts+sig.
+    מחזיר dict עם action / trade_id / symbol / pct.
     """
     parts = (data or "").split(":")
     if len(parts) < 3:
@@ -86,7 +86,10 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
         trade_id = parts[2]
         if action not in ("APPROVE","REJECT"):
             raise ValueError("bad_action")
-        if _SIGN_SECRET and len(parts) >= 5:
+        # אם יש סוד — חייבים ts+sig
+        if _SIGN_SECRET:
+            if len(parts) < 5:
+                raise ValueError("unsigned_callback")
             ts  = int(float(parts[-2]))
             sig = parts[-1]
             raw = ":".join(parts[:-1])
@@ -100,24 +103,30 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
     if parts[0] == "POS":
         action = parts[1].upper()
         symbol = parts[2]
-        pct    = None
+        pct: Optional[float] = None
         tail = parts[3:]
         ts = None; sig = None
         if tail:
+            # נסה לחלץ ts+sig מהסוף
             if len(tail) >= 2:
                 try:
                     maybe_ts = int(float(tail[-2]))
-                    ts  = maybe_ts
+                    ts = maybe_ts
                     sig = tail[-1]
                     tail = tail[:-2]
                 except Exception:
-                    ts = None; sig = None
+                    ts = None
+                    sig = None
+            # אם נשאר פרמטר אחד ב-tail הוא עשוי להיות pct
             if tail:
                 try:
                     pct = float(tail[0])
                 except Exception:
                     pct = None
-        if _SIGN_SECRET and ts is not None and sig is not None:
+        # אם יש סוד — חובה ts+sig
+        if _SIGN_SECRET:
+            if ts is None or sig is None:
+                raise ValueError("unsigned_callback")
             raw = ":".join(parts[:-1])
             if sig != _hmac(raw):
                 raise ValueError("bad_sig")
@@ -181,10 +190,8 @@ class TelegramNotifier:
             return
         kb: Dict[str,Any] = new_kb or {}
         if disable_all and not new_kb:
-            kb = {"inline_keyboard":[
-                [{"text":"✅ Approved","callback_data":"DISABLED"},
-                 {"text":"❌ Rejected","callback_data":"DISABLED"}]
-            ]}
+            # מומלץ להסיר לגמרי את המקשים כדי למנוע קליקים מיותרים
+            kb = {"inline_keyboard": []}
         import httpx
         async with httpx.AsyncClient(timeout=8.0) as cli:
             await cli.post(f"{API_BASE}/editMessageReplyMarkup", json={
