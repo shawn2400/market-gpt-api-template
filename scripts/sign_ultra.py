@@ -14,7 +14,7 @@ sign_ultra.py — כלי חתימת HMAC לבקשות /ultra/ops/*
   --base <URL>        בסיס השרת (ברירת מחדל: http://127.0.0.1:10000)
   --reload            לשלוח POST /ultra/ops/policy/reload (ללא גוף)
   --prefs '<JSON>'    לשלוח POST /ultra/ops/runtime/prefs עם גוף JSON
-  --print-sig         הדפסת חתימה בלבד (ללא שליחה)
+  --print-sig         הדפסת חתימה בלבד (ללא שליחה)   ← FIXED
   --ts <EPOCH>        לציין טיימסטמפ ידני; אחרת נלקח מהשעה הנוכחית
 ENV:
   OPS_SIGN_SECRET     (חובה לשליחה/חתימה)
@@ -42,6 +42,11 @@ def make_sig(secret: str, ts: str, body: bytes) -> str:
     return hmac.new(secret.encode("utf-8"), ts.encode("utf-8") + b"." + body, hashlib.sha256).hexdigest()
 
 
+def _norm_base(url: str) -> str:
+    # מנקה רווחים וסלאשים מיותרים בסוף
+    return (url or "").strip().rstrip("/")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="AlgoGPT UltraTop HMAC signer / client")
     ap.add_argument("--base", default=os.environ.get("BASE_URL", "http://127.0.0.1:10000"))
@@ -56,10 +61,14 @@ def main() -> int:
         print("OPS_SIGN_SECRET is required (export it)", file=sys.stderr)
         return 2
 
+    base = _norm_base(args.base or os.environ.get("BASE_URL", "http://127.0.0.1:10000"))
+    if not base:
+        print("Base URL is empty after normalization", file=sys.stderr)
+        return 2
+
     # decide body
-    body_str: Optional[str] = None
     if args.prefs is not None:
-        body_str = args.prefs
+        body_str: str = args.prefs
     else:
         env_body = os.environ.get("BODY")
         body_str = env_body if env_body is not None else ""
@@ -79,9 +88,14 @@ def main() -> int:
         print("python-requests is required for HTTP send. pip install requests", file=sys.stderr)
         return 3
 
+    # --- /policy/reload ---
     if args.reload:
-        url = f"{args.base.rstrip('/')}/ultra/ops/policy/reload"
-        resp = requests.post(url, headers={"X-Timestamp": ts, "X-Signature": sig}, timeout=20)
+        url = f"{base}/ultra/ops/policy/reload"
+        try:
+            resp = requests.post(url, headers={"X-Timestamp": ts, "X-Signature": sig}, timeout=20)
+        except Exception as e:
+            print(f"request failed: {e}", file=sys.stderr)
+            return 1
         print(resp.status_code)
         try:
             print(json.dumps(resp.json(), indent=2, ensure_ascii=False))
@@ -89,10 +103,15 @@ def main() -> int:
             print(resp.text)
         return 0 if resp.ok else 1
 
+    # --- /runtime/prefs ---
     if args.prefs is not None or os.environ.get("BODY") is not None:
-        url = f"{args.base.rstrip('/')}/ultra/ops/runtime/prefs"
+        url = f"{base}/ultra/ops/runtime/prefs"
         headers = {"X-Timestamp": ts, "X-Signature": sig, "Content-Type": "application/json"}
-        resp = requests.post(url, headers=headers, data=body_bytes, timeout=25)
+        try:
+            resp = requests.post(url, headers=headers, data=body_bytes, timeout=25)
+        except Exception as e:
+            print(f"request failed: {e}", file=sys.stderr)
+            return 1
         print(resp.status_code)
         try:
             print(json.dumps(resp.json(), indent=2, ensure_ascii=False))
@@ -106,4 +125,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
