@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os, math, time, logging, json, hashlib
 from typing import Optional, Dict, Any, List, Tuple
-from contextlib import suppress  # ← נדרש כי משתמשים בו בהמשך
+from contextlib import suppress
 
 from utils.binance_client import (
     get_price, futures_mark_price, set_leverage, futures_create_order,
@@ -63,7 +63,6 @@ LEV_HARD_CAP              = int(float(os.getenv("LEV_HARD_CAP", "50")))
 try:
     LEV_ADX_MAP_JSON      = json.loads(os.getenv("LEV_ADX_MAP_JSON", '{"30":15,"25":12,"20":9,"0":7}'))
 except Exception:
-    # ברירת מחדל הגיונית (ללא dead code)
     LEV_ADX_MAP_JSON      = {"30":15,"25":12,"20":9,"0":7}
 
 # Backfill ENV defaults
@@ -226,7 +225,6 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         closes = [float(r[4]) for r in kl]
         vols   = [float(r[5]) for r in kl]
         if len(closes) < 30:
-            # מעט מדי נתונים → נשתמש בברירת-מחדל בלבד
             return {"enter_ok": (QUALITY_DEFAULT >= MIN_QUALITY_SCORE), "score": QUALITY_DEFAULT, "reasons": ["insufficient_data"], "metrics": {}}
 
         ema21 = _ema(closes, 21)[-1]
@@ -246,7 +244,6 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         score += 3.0 if mom_ok else 0.0
         score += 2.0 if atr_ok else 0.0
         score += 1.0 if vol_ok else 0.0
-        # ⬅️ ללא max(...) עם ברירות-מחדל — כדי לא לנפח ציון תקין
 
         reasons=[]
         if not trend_ok: reasons.append("trend_mismatch")
@@ -258,7 +255,6 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
                 "metrics": {"ema21": ema21, "ema50": ema50, "atr_pct": atr_pct, "mom_pct": mom, "vol1m": vols[-1]}}
     except Exception as e:
         log.warning("quality gate failed: %s", e)
-        # רק במקרה כשל — להשתמש בברירת-מחדל
         return {"enter_ok": (QUALITY_DEFAULT >= MIN_QUALITY_SCORE), "score": QUALITY_DEFAULT, "reasons": ["gate_error"], "metrics": {}}
 
 # ─────────── Budget & Leverage helpers ───────────
@@ -286,9 +282,7 @@ def _balance_usdt() -> float:
     return 0.0
 
 def _choose_budget_dynamic(get_budget_usdt, quality: Optional[float], price: float, symbol: Optional[str]=None) -> float:
-    """
-    בחירת תקציב דינמי — כולל minNotional לפי הסימבול (אחורה-תואם אם לא נשלח symbol).
-    """
+    """בחירת תקציב דינמי—כולל minNotional לפי הסימבול (אחורה-תואם אם symbol=None)."""
     if not BUDGET_DYNAMIC_ENABLE:
         return get_budget_usdt(quality=quality, price=price)
     pcts = _parse_pct_csv(BUDGET_DYNAMIC_RISK_PCTS) or [1.5, 3.0, 5.0]
