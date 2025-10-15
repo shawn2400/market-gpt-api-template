@@ -3,7 +3,13 @@
 # - Recommended: run main:app and call setup_ultratop(app, prefix="/ultra") from main.py
 from __future__ import annotations
 
-import os, time, hmac, hashlib, json, logging, threading
+import os
+import time
+import hmac
+import hashlib
+import json
+import logging
+import threading
 from typing import Optional, Dict, Any
 
 from fastapi import FastAPI, Request, HTTPException, Depends, APIRouter
@@ -15,6 +21,7 @@ try:
     import jsonschema  # optional validation
 except Exception:
     jsonschema = None
+
 try:
     import yaml  # required for policy DSL
 except Exception as e:
@@ -22,9 +29,14 @@ except Exception as e:
 
 # Prometheus
 from prometheus_client import (
-    Counter, Gauge, Histogram, generate_latest,
-    CONTENT_TYPE_LATEST, CollectorRegistry,
-    PROCESS_COLLECTOR, PLATFORM_COLLECTOR
+    Counter,
+    Gauge,
+    Histogram,
+    generate_latest,
+    CONTENT_TYPE_LATEST,
+    CollectorRegistry,
+    ProcessCollector,
+    PlatformCollector,
 )
 
 APP_NAME = os.getenv("APP_NAME", "algogpt")
@@ -42,12 +54,10 @@ logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
 # ---------- Prometheus registry & metrics ----------
 registry = CollectorRegistry()
-# detach global default registries to avoid duplicate metrics when embedded
+# attach process/platform collectors to our private registry (avoid double-registration)
 try:
-    PROCESS_COLLECTOR.registries = set()
-    PLATFORM_COLLECTOR.registries = set()
-    PROCESS_COLLECTOR.register(registry)
-    PLATFORM_COLLECTOR.register(registry)
+    ProcessCollector(registry=registry)
+    PlatformCollector(registry=registry)
 except Exception:
     pass
 
@@ -58,6 +68,7 @@ ATTACH_SLTP_P95 = Gauge("attach_sltp_p95_ms", "Target SLO placeholder for attach
 BUILD_INFO = Gauge("build_info", "Build information", ["app", "version"], registry=registry)
 HTTP_REQS = Counter("http_requests_total", "HTTP requests total", ["method", "path", "status"], registry=registry)
 HTTP_LATENCY = Histogram("http_request_latency_seconds", "HTTP request latency seconds", ["method", "path"], registry=registry)
+
 BUILD_INFO.labels(app=APP_NAME, version=APP_VERSION).inc(0)
 ATTACH_SLTP_P95.set(300)  # default SLO placeholder
 
@@ -78,6 +89,7 @@ class RuntimePrefs(BaseModel):
 
     class Config:
         extra = "allow"
+
 
 class RuntimePrefsStore:
     _instance: Optional["RuntimePrefsStore"] = None
@@ -120,16 +132,18 @@ class RuntimePrefsStore:
             self._prefs = RuntimePrefs(**merged)
             return self._prefs
 
+
 # ---------- Policy Manager ----------
 class PolicyManager:
     def __init__(self, path: str, schema_path: Optional[str] = None):
         self.path = path
         self.schema_path = schema_path
         self.policy: Dict[str, Any] = {}
-               self.schema: Optional[Dict[str, Any]] = None
+        self.schema: Optional[Dict[str, Any]] = None
         self.mtime: float = 0.0
 
     def load(self) -> Dict[str, Any]:
+        # Load schema if present
         if self.schema_path and jsonschema:
             try:
                 with open(self.schema_path, "r", encoding="utf-8") as f:
@@ -137,9 +151,11 @@ class PolicyManager:
             except Exception as e:
                 logger.warning(f"Schema load failed: {e}")
 
+        # Load YAML policy
         with open(self.path, "r", encoding="utf-8") as f:
             doc = yaml.safe_load(f) or {}
 
+        # Validate against schema if both available
         if self.schema and jsonschema:
             try:
                 jsonschema.validate(doc, self.schema)  # type: ignore
@@ -151,15 +167,17 @@ class PolicyManager:
         logger.info("Policy loaded from %s", self.path)
         return self.policy
 
+
 # ---------- HMAC helpers ----------
 def verify_hmac(headers: Dict[str, str], body: bytes, secret: str) -> None:
     sig = headers.get("X-Signature", "")
-    ts  = headers.get("X-Timestamp", "")
+    ts = headers.get("X-Timestamp", "")
     if not sig or not ts:
         raise HTTPException(status_code=401, detail="missing signature headers")
-    mac = hmac.new(secret.encode("utf-8"), ts.encode("utf-8")+b"."+body, hashlib.sha256).hexdigest()
+    mac = hmac.new(secret.encode("utf-8"), ts.encode("utf-8") + b"." + body, hashlib.sha256).hexdigest()
     if not hmac.compare_digest(mac, sig):
         raise HTTPException(status_code=403, detail="invalid signature")
+
 
 # ---------- Global singletons ----------
 prefs_store = RuntimePrefsStore.instance()
@@ -168,6 +186,7 @@ policy_path = os.getenv("POLICY_DSL_PATH", "policies/dynamic_policy.yaml")
 policy_schema_path = os.getenv("POLICY_SCHEMA_PATH", "config/policy_schema.json")
 policy_mgr = PolicyManager(policy_path, policy_schema_path)
 _stop = threading.Event()
+
 
 # ---------- WS manager (placeholder; plug real WS here) ----------
 def ws_loop():
@@ -183,17 +202,21 @@ def ws_loop():
         READY_WS_OK.set(0.0)
         logger.info("WS loop stopped")
 
+
 # ---------- Router (can be attached to any app) ----------
 router = APIRouter()
+
 
 @router.get("/health", response_class=PlainTextResponse)
 def health():
     return "ok"
 
+
 @router.get("/readyz", response_class=JSONResponse)
 def readyz():
     ok = bool(state["ws_ok"] and state["policy_loaded"])
     return {"ok": ok, "ws_ok": state["ws_ok"], "policy_loaded": state["policy_loaded"]}
+
 
 @router.get("/readyz/strict", response_class=JSONResponse)
 def readyz_strict():
@@ -201,17 +224,22 @@ def readyz_strict():
     status = 200 if ok else 503
     return JSONResponse({"ok": ok, "ws_ok": state["ws_ok"], "policy_loaded": state["policy_loaded"]}, status_code=status)
 
+
 @router.get("/meta/version", response_class=JSONResponse)
 def meta_version():
     return {"name": APP_NAME, "title": APP_TITLE, "version": APP_VERSION}
 
+
 @router.get("/meta", response_class=JSONResponse)
 def meta_all(prefs: RuntimePrefs = Depends(lambda: prefs_store.get())):
     return {
-        "name": APP_NAME, "title": APP_TITLE, "version": APP_VERSION,
+        "name": APP_NAME,
+        "title": APP_TITLE,
+        "version": APP_VERSION,
         "uptime_sec": round(time.time() - START_TS, 2),
-        "flags": prefs.dict()
+        "flags": prefs.dict(),
     }
+
 
 @router.get("/metrics")
 def metrics():
@@ -219,8 +247,10 @@ def metrics():
     blob = generate_latest(registry)
     return Response(content=blob, media_type=CONTENT_TYPE_LATEST)
 
+
 class PrefsPatch(BaseModel):
     patch: Dict[str, Any]
+
 
 @router.post("/ops/runtime/prefs")
 async def patch_prefs(req: Request, payload: PrefsPatch):
@@ -232,6 +262,7 @@ async def patch_prefs(req: Request, payload: PrefsPatch):
     updated = prefs_store.update(payload.patch)
     logger.info("runtime prefs updated")
     return {"ok": True, "prefs": updated.dict()}
+
 
 @router.post("/ops/policy/reload")
 async def policy_reload(req: Request):
@@ -245,6 +276,7 @@ async def policy_reload(req: Request):
     READY_POLICY.set(1.0)
     return {"ok": True, "policy_mtime": policy_mgr.mtime}
 
+
 # ---------- Middleware (attachable) ----------
 async def _metrics_middleware(request: Request, call_next):
     start = time.time()
@@ -253,16 +285,25 @@ async def _metrics_middleware(request: Request, call_next):
     dur = time.time() - start
     path = request.url.path
     method = request.method
-    HTTP_REQS.labels(method=method, path=path, status=str(status)).inc()
-    bucket_path = path if path in ("/health", "/readyz", "/readyz/strict", "/meta", "/meta/version", "/metrics") else "/other"
-    HTTP_LATENCY.labels(method=method, path=bucket_path).observe(dur)
+    try:
+        HTTP_REQS.labels(method=method, path=path, status=str(status)).inc()
+        bucket_path = (
+            path
+            if path in ("/health", "/readyz", "/readyz/strict", "/meta", "/meta/version", "/metrics")
+            else "/other"
+        )
+        HTTP_LATENCY.labels(method=method, path=bucket_path).observe(dur)
+    except Exception:
+        pass
     return resp
+
 
 def _attach_middleware(app: FastAPI):
     if getattr(app.state, "_ultra_mw_attached", False):
         return
     app.middleware("http")(_metrics_middleware)
     app.state._ultra_mw_attached = True
+
 
 def _attach_lifecycle(app: FastAPI):
     if getattr(app.state, "_ultra_lc_attached", False):
@@ -288,6 +329,7 @@ def _attach_lifecycle(app: FastAPI):
 
     app.state._ultra_lc_attached = True
 
+
 # ---------- Public helpers ----------
 def setup_ultratop(app: FastAPI, prefix: str = "") -> None:
     """
@@ -295,7 +337,6 @@ def setup_ultratop(app: FastAPI, prefix: str = "") -> None:
     - prefix="" exposes the routes as-is (like standalone)
     - prefix="/ultra" nests everything under /ultra
     """
-    # Guard: prevent double include
     if getattr(app.state, "_ultra_router_attached", False):
         return
     _attach_middleware(app)
@@ -303,10 +344,12 @@ def setup_ultratop(app: FastAPI, prefix: str = "") -> None:
     app.include_router(router, prefix=prefix)
     app.state._ultra_router_attached = True
 
+
 def create_ultratop_app(prefix: str = "") -> FastAPI:
     app = FastAPI(title=APP_TITLE, version=APP_VERSION)
     setup_ultratop(app, prefix=prefix)
     return app
+
 
 # ---------- App export ----------
 # Default is "noop" to avoid auto-mount on import. main.py will call setup_ultratop(...).
@@ -320,12 +363,13 @@ if _MODE in ("mount", "embed", "attach"):
 elif _MODE == "standalone":
     app = create_ultratop_app(prefix=os.getenv("ULTRATOP_PREFIX", ""))
 else:
-    # noop (or unknown): do not auto-attach the router; provide a minimal app for safety
+    # noop (or unknown): provide a minimal app for safety
     app = FastAPI(title=APP_TITLE, version=APP_VERSION)
 
     @app.get("/health", response_class=PlainTextResponse)
     def _noop_health():
         return "ok"
+
 
 
 
