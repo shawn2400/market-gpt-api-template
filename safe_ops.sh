@@ -6,18 +6,15 @@ set -euo pipefail
 : "${API_BEARER_TOKEN:?need API_BEARER_TOKEN}"
 SIGN_SECRET="${OPS_SIGN_SECRET:-${API_SIGNING_SECRET:-}}"
 
-# ===== anti-1003 bucket (קליל) =====
+# ===== anti-1003 mini bucket =====
 bucket="/tmp/anti1003_bucket.ops"
-cap=${BUCKET_CAP:-30}
-int=60
-w=${WEIGHT:-1}
-
+cap=${BUCKET_CAP:-30}; int=60; w=${WEIGHT:-1}
 now(){ date +%s; }
 refill(){
   local n; n=$(now)
   if [[ -f "$bucket" ]]; then
     awk -v c=$((n-int)) '$1>=c{print $1}' "$bucket" > "$bucket.tmp" || true
-    mv "$bucket.tmp" "$bucket" 2>/dev/null || : 
+    mv "$bucket.tmp" "$bucket" 2>/dev/null || :
   else
     : > "$bucket"
   fi
@@ -25,22 +22,22 @@ refill(){
 take(){
   local used=0
   [[ -f "$bucket" ]] && used=$(wc -l < "$bucket" || echo 0)
-  if (( used + w > cap )); then
-    sleep 1
-  fi
+  if (( used + w > cap )); then sleep 1; fi
   echo "$(now)" >> "$bucket"
 }
 
-signed_post(){ # method path body
-  local m="$1" p="$2" b="$3" ts nonce payload sig
-  ts=$(date +%s%3N)
+# ===== signing helper (server expects "{ts}.{nonce}.{route}.{sha256(canon_json)}") =====
+sign_and_post(){ # method route body_json_minified_sorted
+  local m="$1" p="$2" b="$3" ts nonce hsh base sig
+  ts=$(date +%s)                              # seconds (NOT ms)
   nonce=$(cat /proc/sys/kernel/random/uuid)
-  payload="$m"$'\n'"$p"$'\n'"$b"$'\n'"$ts"$'\n'"$nonce"
-  sig=$(printf "%s" "$payload" | openssl dgst -sha256 -hmac "$SIGN_SECRET" -r | awk '{print $1}')
+  hsh=$(printf "%s" "$b" | openssl dgst -sha256 -r | awk '{print $1}')
+  base="$ts.$nonce.$p.$hsh"
+  sig=$(printf "%s" "$base" | openssl dgst -sha256 -hmac "$SIGN_SECRET" -r | awk '{print $1}')
   curl -sS -X "$m" "$PUBLIC_HOST$p" \
     -H "Authorization: Bearer $API_BEARER_TOKEN" \
     -H "Content-Type: application/json" \
-    -H "X-TS: $ts" -H "X-Nonce: $nonce" -H "X-Signature: $sig" \
+    -H "X-Timestamp: $ts" -H "X-Nonce: $nonce" -H "X-Signature: $sig" \
     --data-binary "$b"
 }
 
@@ -58,19 +55,23 @@ case "$cmd" in
       --data-binary '{"symbol":"'"$s"'","force":true}'
     ;;
   tp-one)
+    # Usage: tp-one [SYMBOL] [PRICE] [QTY]
     [[ -n "${1:-}" ]] && SYMBOL="$1" && shift || true
     [[ -n "${1:-}" ]] && PRICE="$1" && shift || true
     [[ -n "${1:-}" ]] && QTY="$1" && shift || true
     s=$(need_sym); : "${PRICE:?need PRICE}"; : "${QTY:?need QTY}"
-    signed_post POST "/position-ops/tp/one" '{"symbol":"'"$s"'","price":'"$PRICE"',"qty":'"$QTY"',"side":"SELL","reduceOnly":true}'
+    # keys alpha-sorted to match server canon:
+    sign_and_post POST "/position-ops/tp/one" \
+      '{"price":'"$PRICE"',"qty":'"$QTY"',"reduceOnly":true,"side":"SELL","symbol":"'"$s"'"}'
     ;;
   tp-cancel)
     s=$(need_sym "${1:-}")
-    signed_post POST "/position-ops/tp/cancel" '{"symbol":"'"$s"'"}'
+    sign_and_post POST "/position-ops/tp/cancel" '{"symbol":"'"$s"'"}'
     ;;
   trail)
     s=$(need_sym "${1:-}")
-    signed_post POST "/position-ops/trail" '{"symbol":"'"$s"'","enable":true}'
+    # enable=true must come before symbol for canon sort
+    sign_and_post POST "/position-ops/trail" '{"enable":true,"symbol":"'"$s"'"}'
     ;;
   *)
     echo "Unknown command: ${cmd:-<empty>} (use: manage-once|tp-one|tp-cancel|trail)" >&2
@@ -78,6 +79,7 @@ case "$cmd" in
 esac
 BASH
 chmod +x /app/safe_ops.sh
+
 
 
 
