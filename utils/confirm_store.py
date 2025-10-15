@@ -137,5 +137,5 @@ class ConfirmStore:
             with suppress(Exception):
                 await r.srem(f"{NS}:confirm:index", ticket_id)
         cls._mem_remove(ticket_id)
-```
+
 
