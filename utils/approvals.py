@@ -1,3 +1,4 @@
+# utils/approvals.py
 from __future__ import annotations
 
 import os, time, hashlib, json, asyncio, logging
@@ -72,7 +73,7 @@ def _recent_set(k: str, ts: float, ttl: int) -> None:
 
 def _purge_recent(now: float) -> None:
     if _r:
-        return  # Redis מתנקה בעצמו לפי TTL
+        return  # Redis מנקה ע"פ TTL
     cut = now - max(60, APPROVAL_DUP_COOLDOWN_SEC)
     for k, ts in list(_recent.items()):
         if ts < cut:
@@ -103,10 +104,6 @@ def _rr(entry: float, sl: float, tp1: float, side: str) -> Optional[float]:
         return None
 
 def _pct(a: float, b: float, ref: Optional[float] = None) -> float:
-    """
-    אחוז מרחק בין a ל-b ביחס ל-ref (ברירת מחדל: a).
-    שימושי לבדיקות entry↔sl ו-entry↔tp1 כיחס ל-entry.
-    """
     try:
         r = float(a if ref is None else ref)
         if r == 0:
@@ -124,14 +121,12 @@ def _in_watchlist(sym: str) -> bool:
 def _fresh_price_ok(symbol: str) -> Tuple[bool, Optional[float]]:
     if not APPROVAL_REQUIRE_FRESH_PRICE:
         return (True, None)
-    # מועדף: price feed חי אם קיים
     try:
         from utils.ws_fallback import is_price_fresh, get_price  # type: ignore
         ok = is_price_fresh(symbol, max_age_sec=PRICE_MAX_AGE_SEC)
         px = float(get_price(symbol) or 0.0)
         return (bool(ok), px if px > 0 else None)
     except Exception:
-        # נפילה ל־HTTP
         try:
             from utils.binance_client import get_price as http_price  # type: ignore
             px = float(http_price(symbol) or 0.0)
@@ -146,14 +141,8 @@ def _aligned(val: float, step: float, tol: float = 1e-10) -> bool:
     return abs(k * step - val) <= max(tol, step * 1e-8)
 
 def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[str]:
-    """
-    מוודא ש־entry/sl/tp1 מיושרים ל־tickSize של הסימבול (אם ידוע).
-    נופל ל־get_symbol_filters אם get_symbol_info לא זמין.
-    """
     out: List[str] = []
     tick: Optional[float] = None
-
-    # ניסיון 1: get_symbol_info
     try:
         from utils.binance_client import get_symbol_info  # type: ignore
         info = get_symbol_info(symbol)
@@ -164,8 +153,6 @@ def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[
                     break
     except Exception:
         pass
-
-    # ניסיון 2: get_symbol_filters
     if tick is None:
         try:
             from utils.binance_client import get_symbol_filters  # type: ignore
@@ -174,7 +161,6 @@ def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[
             tick = float(ts) if ts is not None else None
         except Exception:
             tick = None
-
     if tick:
         for name, val in (("entry", entry), ("sl", sl), ("tp1", tp1)):
             try:
@@ -220,7 +206,6 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
     if not fp_ok:
         out_warns.append("stale_or_missing_price")
 
-    # אחוזי מרחק ביחס ל-entry
     min_pct = float(MIN_TP_SL_DIFF_PCT)
     if _pct(entry, sl, ref=entry)  < min_pct:
         out_errors.append(f"entry_sl_too_close(<{min_pct:.3f}%)")
@@ -278,6 +263,7 @@ def can_auto_forward(tp: Dict[str, Any]) -> bool:
     return bool(res.get("ok", False))
 
 # ========================= ConfirmStore =========================
+from typing import Callable, Awaitable
 Handler = Callable[[], Awaitable[Dict[str, Any]]]
 
 class ConfirmStore:
@@ -411,6 +397,7 @@ __all__ = [
     "preflight_proposal","can_auto_forward","ConfirmStore",
     "send_confirm_request","require_approval",
 ]
+
 
 
 
