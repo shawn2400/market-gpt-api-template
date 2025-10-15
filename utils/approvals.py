@@ -1,4 +1,3 @@
-# utils/approvals.py
 from __future__ import annotations
 
 import os, time, hashlib, json, asyncio, logging
@@ -40,9 +39,40 @@ TICKET_TTL_SEC = _as_int(os.getenv("CONFIRM_TTL_SEC","180"), 180)
 AUTO_DECIDE_EXPIRED = _as_bool(os.getenv("APPROVAL_AUTO_REJECT_EXPIRED","1"), True)
 
 # -------- recent map for preflight dup ----------
+APPROVAL_RECENT_BACKEND = (os.getenv("APPROVAL_RECENT_BACKEND","memory").strip().lower())
+RECENT_KEY_PREFIX = os.getenv("APPROVAL_RECENT_KEY_PREFIX","approvals:recent:")
+
 _recent: Dict[str, float] = {}
+_r = None
+if APPROVAL_RECENT_BACKEND == "redis":
+    try:
+        import redis  # type: ignore
+        _r = redis.Redis.from_url(os.getenv("REDIS_URL",""), decode_responses=True)
+    except Exception as e:
+        log.warning("Redis not available for approvals recent: %s — falling back to memory", e)
+        _r = None
+
+def _recent_get(k: str) -> float:
+    if _r:
+        try:
+            ts = _r.get(f"{RECENT_KEY_PREFIX}{k}")
+            return float(ts or 0.0)
+        except Exception:
+            return 0.0
+    return _recent.get(k, 0.0)
+
+def _recent_set(k: str, ts: float, ttl: int) -> None:
+    if _r:
+        try:
+            _r.setex(f"{RECENT_KEY_PREFIX}{k}", ttl, str(ts))
+            return
+        except Exception:
+            pass
+    _recent[k] = ts
 
 def _purge_recent(now: float) -> None:
+    if _r:
+        return  # Redis מתנקה בעצמו לפי TTL
     cut = now - max(60, APPROVAL_DUP_COOLDOWN_SEC)
     for k, ts in list(_recent.items()):
         if ts < cut:
@@ -190,7 +220,7 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
     if not fp_ok:
         out_warns.append("stale_or_missing_price")
 
-    # אחוזי מרחק ביחס ל-entry (הגיוני יותר)
+    # אחוזי מרחק ביחס ל-entry
     min_pct = float(MIN_TP_SL_DIFF_PCT)
     if _pct(entry, sl, ref=entry)  < min_pct:
         out_errors.append(f"entry_sl_too_close(<{min_pct:.3f}%)")
@@ -232,13 +262,13 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
 
     now = time.time()
     key = _key_for(tp)
-    last = _recent.get(key)
+    last = _recent_get(key)
     if last and (now - last < APPROVAL_DUP_COOLDOWN_SEC):
         out_errors.append("duplicate_recent")
     if mutate_state:
         _purge_recent(now)
         if not last or (now - last >= APPROVAL_DUP_COOLDOWN_SEC):
-            _recent[key] = now
+            _recent_set(key, now, APPROVAL_DUP_COOLDOWN_SEC)
 
     ok = (len(out_errors) == 0)
     return {"ok": ok, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
@@ -248,12 +278,11 @@ def can_auto_forward(tp: Dict[str, Any]) -> bool:
     return bool(res.get("ok", False))
 
 # ========================= ConfirmStore =========================
-# שומר כרטיסי אישור + handler לביצוע בפועל
 Handler = Callable[[], Awaitable[Dict[str, Any]]]
 
 class ConfirmStore:
-    _P: Dict[str, Dict[str, Any]] = {}         # idem -> record
-    _RUN: Dict[str, Handler] = {}              # idem -> async handler
+    _P: Dict[str, Dict[str, Any]] = {}
+    _RUN: Dict[str, Handler] = {}
     _L = asyncio.Lock()
 
     @classmethod
@@ -262,10 +291,6 @@ class ConfirmStore:
 
     @classmethod
     def create(cls, payload: Dict[str, Any], handler: Optional[Handler] = None) -> str:
-        """
-        payload MUST include: symbol, side, leverage/budget/qty (לוגית), ttl_sec (optional)
-        returns idem (ticket id)
-        """
         idem = str(payload.get("ticket_id") or payload.get("idem") or f"{int(time.time()*1000)}_{hashlib.md5(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]}")
         rec = dict(payload)
         rec["idem"] = idem
@@ -306,15 +331,11 @@ class ConfirmStore:
         it["rejected_ts"] = int(time.time())
         if approver:
             it["rejected_by"] = str(approver)
-        # אין צורך לשמור handler לאחר דחייה
         cls._RUN.pop(idem, None)
         return {"ok": True, "idem": idem}
 
     @classmethod
     async def run(cls, idem: str) -> Dict[str, Any]:
-        """
-        מריץ את ה-handler אם הסטטוס 'approved'. מחזיר תוצאה/שגיאה.
-        """
         it = cls._P.get(idem)
         if not it:
             return {"ok": False, "error": "not_found"}
@@ -343,14 +364,10 @@ class ConfirmStore:
         cls._P.clear()
         cls._RUN.clear()
 
-    # aliases
     flush = reset = flush_all
 
 # ========================= Notifier bridge =========================
 async def send_confirm_request(ticket_id: str, plan: Dict[str, Any]) -> None:
-    """
-    Back-compat shim: שולח הודעת אישור לטלגרם.
-    """
     try:
         from utils.telegram_notifier import send_trade_approval  # type: ignore
         await send_trade_approval(ticket_id, plan)
@@ -359,22 +376,13 @@ async def send_confirm_request(ticket_id: str, plan: Dict[str, Any]) -> None:
 
 # ========================= Approval orchestrator =========================
 async def require_approval(chat_id: int, plan: Dict[str, Any], handler: Optional[Handler] = None) -> Dict[str, Any]:
-    """
-    יוצר כרטיס אישור ומחזיר:
-      - {"status":"approved"} אם auto-approve מופעל ומותר
-      - {"status":"pending","idem":...,"ttl_sec":...} אם מחכה לאישור ידני
-      - {"status":"rejected", ...} אם נדחה אוטומטית/פג תוקף
-    אם handler סופק — יירשם, והרצה תתבצע ע"י ConfirmStore.run(idem) לאחר אישור.
-    """
     ttl = int(plan.get("ttl_sec") or TICKET_TTL_SEC)
     idem = ConfirmStore.create({**plan, "ttl_sec": ttl, "ticket_id": plan.get("idem") or None}, handler=handler)
 
-    # attach idem to plan for links
     plan = dict(plan)
     plan["idem"] = idem
     plan["ttl_sec"] = ttl
 
-    # auto-approve policy
     auto = False
     try:
         from utils.telegram_notifier_core import should_auto_approve_trade  # type: ignore
@@ -386,7 +394,6 @@ async def require_approval(chat_id: int, plan: Dict[str, Any], handler: Optional
         ConfirmStore.approve(idem, approver="auto")
         return {"status": "approved", "idem": idem, "ttl_sec": ttl}
 
-    # send telegram approval with inline keyboard
     try:
         from utils.telegram_notifier import send_trade_approval  # type: ignore
         await send_trade_approval(idem, plan, chat_id=chat_id if chat_id else None)
