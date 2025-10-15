@@ -1,152 +1,114 @@
+cat >/app/safe_ops.sh <<'BASH'
 #!/usr/bin/env bash
-# safe_ops.sh — tiny helper for AlgoGPT ops
-# Usage examples at bottom.
+# minimal + safe, no 'set -e' to avoid hard exits.
 
-set -euo pipefail
+_need(){ [ -n "$1" ] || { echo "missing env: $2" >&2; return 1; }; }
 
-# ===== Config via env =====
-HOST="${HOST:-http://127.0.0.1:10000}"
-TOKEN="${API_BEARER_TOKEN:-}"
-SIGN_SECRET="${API_SIGNING_SECRET:-}"   # optional (for /manage-once when anti-replay enabled)
-
-# ===== Internals =====
-hdrs() {
-  local extra=()
-  [[ -n "$TOKEN" ]] && extra+=(-H "Authorization: Bearer $TOKEN")
-  extra+=(-H "Content-Type: application/json")
-  printf '%s\0' "${extra[@]}" | xargs -0 echo
+_ok_env(){
+  _need "$PUBLIC_HOST" "PUBLIC_HOST" || return 1
+  _need "$API_BEARER_TOKEN" "API_BEARER_TOKEN" || return 1
+  _need "$OPS_SIGN_SECRET" "OPS_SIGN_SECRET" || return 1
+  command -v curl >/dev/null || { echo "curl not found" >&2; return 1; }
+  command -v openssl >/dev/null || { echo "openssl not found" >&2; return 1; }
+  return 0
 }
-sign_headers() {
-  # Creates X-Timestamp / X-Nonce / X-Signature headers for anti-replay.
-  # Signature = HMAC-SHA256(secret, f"{ts}.{nonce}.{body}")
-  local body="${1:-""}"
-  if [[ -z "$SIGN_SECRET" ]]; then
-    echo ""
-    return 0
-  fi
-  local ts nonce sig
+
+# Build HMAC (hex) over "METHOD\nPATH\nBODY\nTS\nNONCE"
+_sig_hex(){ # $1=payload
+  printf '%s' "$1" | openssl dgst -sha256 -hmac "$OPS_SIGN_SECRET" -r | awk '{print $1}'
+}
+
+# Signed POST
+sp(){ # $1=path  $2=json_body
+  _ok_env || return 1
+  local path="$1" body="${2:-{}}"
+  local ts nonce payload sig
   ts="$(date +%s)"
-  nonce="$(openssl rand -hex 8)"
-  sig="$(printf '%s.%s.%s' "$ts" "$nonce" "$body" | openssl dgst -sha256 -mac HMAC -macopt "hexkey:${SIGN_SECRET}" -r | awk '{print $1}')"
-  echo -H "X-Timestamp: ${ts}" -H "X-Nonce: ${nonce}" -H "X-Signature: ${sig}"
+  nonce="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo $$.$RANDOM)"
+  payload="$(printf '%s\n%s\n%s\n%s\n%s' 'POST' "$path" "$body" "$ts" "$nonce")"
+  sig="$(_sig_hex "$payload")"
+  curl -fsS -X POST "$PUBLIC_HOST$path" \
+    -H "Authorization: Bearer $API_BEARER_TOKEN" \
+    -H "Content-Type: application/json" \
+    -H "X-Timestamp: $ts" -H "X-Nonce: $nonce" -H "X-Signature: $sig" \
+    --data-binary "$body"
 }
 
-# ===== Commands =====
-ticket() {
-  # ticket SYMBOL SIDE [QTY] [LEV] [NOTE]
-  local sym="${1:?SYMBOL}"; shift
-  local side="${1:?SIDE}"; shift
-  local qty="${1:-0}"; shift || true
-  local lev="${1:-0}"; shift || true
-  local note="${1:-"[mode: HYBRID]"}"
-
-  local body
-  body=$(cat <<JSON
-{"symbol":"${sym^^}","side":"${side^^}","qty":${qty},"leverage":${lev},"note":"${note}"}
-JSON
-)
-  curl -sS -X POST "$HOST/ops/ticket" $(hdrs) --data-raw "$body" | jq -r .
+# Signed GET (body is empty in signature)
+sg(){ # $1=path (may include ?query)
+  _ok_env || return 1
+  local path="$1"
+  local ts nonce payload sig
+  ts="$(date +%s)"
+  nonce="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || echo $$.$RANDOM)"
+  payload="$(printf '%s\n%s\n%s\n%s\n%s' 'GET' "$path" "" "$ts" "$nonce")"
+  sig="$(_sig_hex "$payload")"
+  curl -fsS "$PUBLIC_HOST$path" \
+    -H "Authorization: Bearer $API_BEARER_TOKEN" \
+    -H "X-Timestamp: $ts" -H "X-Nonce: $nonce" -H "X-Signature: $sig"
 }
 
-approve() { # approve TICKET_ID
-  local tid="${1:?ticket_id}"
-  curl -sS "$HOST/ops/approve?ticket_id=$tid" $(hdrs)
+# ===== Convenience wrappers (לא נופלים על 404) =====
+be(){        sp "/position-ops/be"           "{\"symbol\":\"$1\",\"offset_bps\":${2:-8}}" || true; }
+trail_on(){  sp "/position-ops/trail"        "{\"symbol\":\"$1\",\"atr_mult\":${2:-1.2}}" || true; }
+trail_off(){ sp "/position-ops/trail/cancel" "{\"symbol\":\"$1\"}" || true; }
+tp_one(){    sp "/position-ops/tp/one"       "{\"symbol\":\"$1\",\"pct\":${2:-2.5}}" || true; }
+tp_ladder(){ sp "/position-ops/tp/ladder"    "{\"symbol\":\"$1\",\"pcts\":[${2:-3,6,12}],\"splits\":[${3:-0.25,0.25,0.5}]}" || true; }
+tp_cancel(){ sp "/position-ops/tp/cancel"    "{\"symbol\":\"$1\"}" || true; }
+sl_move(){   sp "/position-ops/sl/move"      "{\"symbol\":\"$1\",\"price\":$2}" || true; }
+close_p(){   sp "/position-ops/close"        "{\"symbol\":\"$1\",\"fraction\":${2:-0.25}}" || true; }
+pos_status(){ sg "/position-ops/status?symbol=$1" || true; }
+
+# manage-once (הנתיב קיים ב-main.py)
+manage_once(){ # $1=symbol [be_bps] [atr_mult] [pcts_csv] [splits_csv]
+  local sym="$1" bebps="${2:-}" atr="${3:-}" pcts="${4:-}" splits="${5:-}"
+  local body="{\"symbol\":\"$sym\""
+  [ -n "$bebps" ] && body="$body,\"offset_bps\":$bebps"
+  [ -n "$atr" ]   && body="$body,\"atr_mult\":$atr"
+  [ -n "$pcts" ]  && body="$body,\"pcts\":[${pcts}]"
+  [ -n "$splits" ]&& body="$body,\"splits\":[${splits}]"
+  body="$body}"
+  curl -fsS -X POST "$PUBLIC_HOST/manage-once" \
+    -H "Authorization: Bearer $API_BEARER_TOKEN" \
+    -H "Content-Type: application/json" \
+    --data-binary "$body"
 }
 
-reject() { # reject TICKET_ID
-  local tid="${1:?ticket_id}"
-  curl -sS "$HOST/ops/reject?ticket_id=$tid" $(hdrs)
-}
-
-pending() {
-  curl -sS "$HOST/ops/ui/pending" $(hdrs)
-}
-
-manage_once() { # manage_once SYMBOL [offset_bps]  (auto profile if none)
-  local sym="${1:?SYMBOL}"
-  local offset="${2:-}"
-  local body
-  if [[ -n "$offset" ]]; then
-    body='{"symbol":"'"${sym^^}"'","offset_bps":'"$offset"'}'
+# guard smoke (עם/בלי רשימת סמלים)
+guard_smoke(){ # guard_smoke ["SYM1,SYM2"]
+  if [ -n "$1" ]; then
+    curl -fsS -X POST "$PUBLIC_HOST/guard/smoke/run" \
+      -H "Authorization: Bearer $API_BEARER_TOKEN" \
+      -H "Content-Type: application/json" \
+      --data-binary "\"$1\""
   else
-    body='{"symbol":"'"${sym^^}"'"}'
+    curl -fsS -X POST "$PUBLIC_HOST/guard/smoke/run" \
+      -H "Authorization: Bearer $API_BEARER_TOKEN" \
+      -H "Content-Type: application/json" \
+      --data-binary null
   fi
-  curl -sS -X POST "$HOST/manage-once" $(hdrs) $(sign_headers "$body") --data-raw "$body" | jq -r .
 }
 
-smoke() { # smoke [CSV_SYMBOLS]
-  local syms="${1:-}"
-  local body
-  if [[ -n "$syms" ]]; then
-    body='"'"$syms"'"'
-  else
-    body='null'
-  fi
-  curl -sS -X POST "$HOST/guard/smoke/run" $(hdrs) --data-raw "$body" | jq -r .
+# create + approve ticket (בלי jq)
+ticket_buy_now(){ # $1=symbol $2=side(BUY/SELL) $3=lev $4=qty
+  local sym="$1" side="$2" lev="${3:-20}" qty="${4:-0}"
+  local resp tid
+  resp="$(curl -fsS -X POST "$PUBLIC_HOST/ops/ticket" \
+      -H "Authorization: Bearer $API_BEARER_TOKEN" \
+      -H "Content-Type: application/json" \
+      --data-binary "{\"symbol\":\"$sym\",\"side\":\"$side\",\"qty\":$qty,\"leverage\":$lev}")" || { echo "ticket failed"; return 1; }
+  tid="$(printf '%s' "$resp" | sed -n 's/.*"ticket_id":"\([^"]*\)".*/\1/p')"
+  [ -n "$tid" ] || { echo "no ticket_id in response"; printf '%s\n' "$resp"; return 1; }
+  curl -fsS "$PUBLIC_HOST/ops/approve?ticket_id=$tid" -H "Authorization: Bearer $API_BEARER_TOKEN"
 }
 
-digest() { # digest [HOURS]
-  local hrs="${1:-6}"
-  curl -sS "$HOST/ops/digest/expired?hours=$hrs" $(hdrs) | jq -r .
-}
+# health / UI / digest
+healthz(){ curl -fsS "$PUBLIC_HOST/readyz" && echo OK; curl -fsS "$PUBLIC_HOST/health"; }
+pending(){ curl -fsS -H "Authorization: Bearer $API_BEARER_TOKEN" "$PUBLIC_HOST/ops/ui/pending"; }
+digest(){  curl -fsS -H "Authorization: Bearer $API_BEARER_TOKEN" "$PUBLIC_HOST/ops/digest/expired?hours=${1:-6}"; }
+BASH
+chmod 755 /app/safe_ops.sh
 
-trade_event() { # trade_event SYMBOL EVENT [SIDE] [PRICE] [QTY] [LEV]
-  local sym="${1:?SYMBOL}"; shift
-  local ev="${1:?EVENT}"; shift
-  local side="${1:-}"; shift || true
-  local price="${1:-}"; shift || true
-  local qty="${1:-}"; shift || true
-  local lev="${1:-}"
-  local body='{"symbol":"'"${sym^^}"'","event":"'"${ev^^}"'"}'
-  [[ -n "$side"  ]] && body=$(jq -cn --argjson b "$body" --arg s "${side^^}"  '$b|fromjson|.side=$s|tojson')
-  [[ -n "$price" ]] && body=$(jq -cn --argjson b "$body" --arg p "$price"   '$b|fromjson|.price=($p|tonumber)|tojson')
-  [[ -n "$qty"   ]] && body=$(jq -cn --argjson b "$body" --arg q "$qty"     '$b|fromjson|.qty=($q|tonumber)|tojson')
-  [[ -n "$lev"   ]] && body=$(jq -cn --argjson b "$body" --arg l "$lev"     '$b|fromjson|.lev=($l|tonumber)|tojson')
-  body=$(echo "$body" | jq -r .)
-  curl -sS -X POST "$HOST/ops/trade-event" $(hdrs) --data-raw "$body" | jq -r .
-}
-
-help() {
-  cat <<'H'
-safe_ops.sh commands:
-
-  ticket SYMBOL SIDE [QTY] [LEV] [NOTE]   Create approval ticket
-  approve TICKET_ID                        Approve ticket (server will execute)
-  reject TICKET_ID                         Reject ticket
-  pending                                  List pending tickets (HTML)
-  manage_once SYMBOL [offset_bps]          Place BE SL + TP ladder for open pos
-  smoke [CSV_SYMBOLS]                      Run protective SL smoke-check
-  digest [HOURS]                           Send expired approvals digest
-  trade_event SYMBOL EVENT [SIDE] [PRICE] [QTY] [LEV]  Push a trade event
-
-ENV:
-  HOST (default http://127.0.0.1:10000)
-  API_BEARER_TOKEN (recommended)
-  API_SIGNING_SECRET (hex; optional, for anti-replay on /manage-once)
-
-Examples:
-  HOST=https://api.example.com API_BEARER_TOKEN=xxx ./safe_ops.sh ticket BTCUSDT BUY 0 20
-  ./safe_ops.sh pending
-  ./safe_ops.sh approve T_ab12cd34
-  ./safe_ops.sh manage_once ETHUSDT 5
-  ./safe_ops.sh smoke "BTCUSDT,ETHUSDT,SOLUSDT"
-  ./safe_ops.sh digest 12
-H
-}
-
-cmd="${1:-help}"; shift || true
-case "$cmd" in
-  ticket) ticket "$@" ;;
-  approve) approve "$@" ;;
-  reject) reject "$@" ;;
-  pending) pending "$@" ;;
-  manage_once) manage_once "$@" ;;
-  smoke) smoke "$@" ;;
-  digest) digest "$@" ;;
-  trade_event) trade_event "$@" ;;
-  help|--help|-h) help ;;
-  *) echo "unknown command: $cmd"; help; exit 1 ;;
-esac
 
 
 
