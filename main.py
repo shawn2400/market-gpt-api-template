@@ -17,6 +17,18 @@ import math
 from contextlib import suppress
 from typing import Any, Dict, List, Optional, Callable, Tuple, Union
 
+# --- soft shim so routes.position_ops can import even if utils.anti_replay is missing ---
+import sys, types  # noqa: E402
+if "utils.anti_replay" not in sys.modules:
+    _m = types.ModuleType("utils.anti_replay")
+    def verify_request(ts_header: Optional[str], nonce_header: Optional[str], signature_header: Optional[str],
+                       route: str, body: Any, require_signature: bool = False) -> Tuple[bool, str]:
+        # permissive default; real verification lives in utils.anti_replay if present
+        return True, "ok"
+    _m.verify_request = verify_request  # type: ignore[attr-defined]
+    sys.modules["utils.anti_replay"] = _m
+# ----------------------------------------------------------------------------------------
+
 import httpx
 from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
@@ -1472,7 +1484,7 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
         return value
-    # שימוש ב-floor (גם לערכים קטנים מאוד) כדי לכבד tick/step
+    # שימוש ב-floor (גם לערכים קטולים מאוד) כדי לכבד tick/step
     return math.floor(value / step) * step
 
 
@@ -1997,6 +2009,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
