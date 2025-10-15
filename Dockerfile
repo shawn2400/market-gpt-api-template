@@ -31,7 +31,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONOPTIMIZE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/app \
-    APP_MODULE=main:app \
+    APP_MODULE=main_ultratop:app \
     WEB_CONCURRENCY=1 \
     GUNICORN_TIMEOUT=120 \
     MPLCONFIGDIR=/app/.cache/matplotlib \
@@ -80,15 +80,18 @@ EXPOSE 10000
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# הערה: כל משתני הסביבה (INSTANCE/MODE וכו') מגיעים מ-Render, לא כאן.
+# הערה: כל משתני הסביבה מגיעים מ-Render, לא כאן.
 CMD ["/bin/sh","-lc","/app/prestart.sh 2>/dev/null || true; \
   gunicorn ${APP_MODULE} -c gunicorn_conf.py \
     --workers ${WEB_CONCURRENCY:-1} \
     --bind 0.0.0.0:${PORT:-10000} \
     --timeout ${GUNICORN_TIMEOUT:-120} \
-    --graceful-timeout 30 \
-    --keep-alive 5 \
+    --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-30} \
+    --keep-alive ${GUNICORN_KEEPALIVE:-5} \
+    --max-requests ${GUNICORN_MAX_REQUESTS:-500} \
+    --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-50} \
     --worker-class uvicorn.workers.UvicornWorker"]
+
 
 
 
