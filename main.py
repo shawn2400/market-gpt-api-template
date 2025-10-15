@@ -435,6 +435,7 @@ async def _public_cache_etag(request: Request, call_next):
     except Exception:
         return resp
     return resp
+
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -615,6 +616,7 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
+
 # ==================== Execute trade helpers ====================
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     with suppress(Exception):
@@ -634,7 +636,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         symbol = str(ticket.get("symbol", "")).upper()
         side = str(ticket.get("side", "")).upper()
         qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
-        leverage = int(ticket.get("leverage") or 1)
+        leverage = int(ticket.get("leverage") or ticket.get("lev") or 1)
         if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
         with suppress(Exception):
@@ -1241,6 +1243,7 @@ async def ui_pending(request: Request = None):
     )
     return HTMLResponse(body)
 
+# =========== Guard Smoke (SINGLE DEFINITION — duplicate removed) ===========
 @router.post("/guard/smoke/run")
 async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
     _require_bearer(request)
@@ -1332,6 +1335,7 @@ def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -
         return {"atr": float(atr), "adx": float(adx), "price": float(closes[-1])}
     except Exception:
         return {"atr": 0.0, "adx": 0.0, "price": 0.0}
+
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
         return value
@@ -1676,6 +1680,11 @@ async def telegram_webhook(request: Request):
 async def telegram_hook_alias(request: Request):
     return await _telegram_webhook_core(request)
 
+# ---- small ping route (listed in SECURITY_PUBLIC_PATHS) ----
+@app.get("/telegram/ping", tags=["meta"])
+async def telegram_ping():
+    return {"ok": True, "ts": int(time.time())}
+
 # ==================== Optional routers include ====================
 for mod, tag in (
     ("routes.manager", "manager"),
@@ -1704,7 +1713,7 @@ for mod, tag in (
 
 app.include_router(router)
 
-# ==================== Meta & Fallbacks ====================
+# ==================== Meta & Diagnostics ====================
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
     name = os.getenv("APP_NAME", "algogpt")
@@ -1758,6 +1767,199 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
 def debug_env_head():
     return PlainTextResponse("", status_code=200)
 
+# ---- NEW: /meta/routes (diagnostics) ----
+@app.get("/meta/routes", tags=["meta"])
+async def meta_routes(request: Request):
+    # מוגן עם Bearer אם PROTECT_APPROVE_ROUTES=1
+    with suppress(Exception):
+        _require_bearer(request)
+    routes = []
+    for r in app.routes:
+        methods = []
+        try:
+            methods = sorted(list(r.methods)) if getattr(r, "methods", None) else []
+        except Exception:
+            methods = []
+        routes.append({
+            "path": getattr(r, "path", None),
+            "name": getattr(r, "name", None),
+            "methods": methods,
+        })
+    return {"ok": True, "count": len(routes), "routes": routes}
+
+# ---- NEW: /meta/telegram (diagnostics: info/dry/set/send [+ticket links]) ----
+@app.get("/meta/telegram", tags=["meta"])
+async def meta_telegram(
+    request: Request,
+    mode: str = Query("info", regex="^(info|dry|set|send)$"),
+    text: Optional[str] = Query("🔎 Diagnostics: test message"),
+    chat_id: Optional[str] = Query(None, description="אם לא ניתן — ישתמש ב-ADMIN_CHAT_ID/TELEGRAM_CHAT_ID"),
+    ticket_id: Optional[str] = Query(None, description="אופציונלי: אם קיים — נצרף קישורים חתומים approve/reject/preview"),
+):
+    """
+    /meta/telegram?mode=info  -> מצב webhook + getMe
+    /meta/telegram?mode=dry   -> dry-run: בונה payload בלבד (לא שולח)
+    /meta/telegram?mode=set   -> setWebhook לפי ה-env
+    /meta/telegram?mode=send  -> שולח הודעת בדיקה אמיתית (עם idem קל ב-Redis אם קיים)
+    """
+    with suppress(Exception):
+        _require_bearer(request)
+
+    token = TELEGRAM_BOT_TOKEN
+    if not token:
+        return {"ok": False, "error": "telegram_token_missing"}
+
+    cli = _get_shared_async_client()
+
+    async def tg_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        try:
+            r = await cli.get(f"https://api.telegram.org/bot{token}/{path}", params=params, timeout=httpx.Timeout(10.0))
+            j = {}
+            with suppress(Exception):
+                j = r.json()
+            return {"status": r.status_code, "data": j}
+        except Exception as e:
+            return {"status": 0, "error": str(e)}
+
+    def _maybe_links() -> Dict[str, Optional[str]]:
+        if not ticket_id:
+            return {"preview_url": None, "approve_url": None, "reject_url": None}
+        base = PUBLIC_HOST or get_internal_base()
+        return {
+            "preview_url": _build_signed_link(base, "/ops/ui/ticket/signed", ticket_id, ttl_sec=900, action="preview"),
+            "approve_url": _build_signed_link(base, "/ops/approve/signed", ticket_id, ttl_sec=900, action="approve"),
+            "reject_url": _build_signed_link(base, "/ops/reject/signed", ticket_id, ttl_sec=900, action="reject"),
+        }
+
+    if mode == "info":
+        info = await tg_get("getWebhookInfo")
+        me = await tg_get("getMe")
+        return {
+            "ok": True,
+            "webhook": info,
+            "me": me,
+            "configured_host": PUBLIC_HOST,
+            "auto_webhook": TELEGRAM_AUTO_WEBHOOK,
+        }
+
+    if mode == "dry":
+        try:
+            default_chat = ADMIN_CHAT_ID if ADMIN_CHAT_ID else None
+            cid: Any = chat_id or default_chat
+            if cid and str(cid).isdigit():
+                cid = int(cid)
+            payload = {
+                "chat_id": cid,
+                "text": text or "🔎 Diagnostics: dry-run",
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            }
+            payload.update({k: v for k, v in _maybe_links().items() if v})
+            return {
+                "ok": True,
+                "dry_run": True,
+                "note": "No message was sent. This is only a dry-run preview.",
+                "payload_preview": payload,
+                "has_chat_id": bool(cid),
+                "hints": [
+                    "Set TELEGRAM_CHAT_ID/ADMIN_CHAT_ID בסביבה או העבר ?chat_id=<id> בבקשה.",
+                ],
+            }
+        except Exception as e:
+            return {"ok": False, "error": f"dry_run_failed: {e}"}
+
+    if mode == "set":
+        host = PUBLIC_HOST
+        secret = TELEGRAM_WEBHOOK_SECRET
+        if not (host and secret):
+            return {"ok": False, "error": "missing_host_or_secret", "need": {"PUBLIC_HOST": bool(host), "TELEGRAM_WEBHOOK_SECRET": bool(secret)}}
+        try:
+            r = await cli.post(
+                f"https://api.telegram.org/bot{token}/setWebhook",
+                json={
+                    "url": f"{host}/telegram/webhook",
+                    "secret_token": secret,
+                    "drop_pending_updates": True,
+                    "max_connections": 40,
+                },
+                timeout=httpx.Timeout(15.0),
+            )
+            data = {}
+            with suppress(Exception):
+                data = r.json()
+            return {"ok": (r.status_code == 200 and data.get("ok") is True), "status": r.status_code, "result": data}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+
+    # mode == "send"
+    try:
+        msg_text = text or "🔎 Diagnostics: test message"
+        links = _maybe_links()
+        if chat_id:
+            try:
+                cid: Any = int(chat_id) if str(chat_id).isdigit() else chat_id
+            except Exception:
+                cid = chat_id
+
+            # idem עדין על Redis, אם זמין
+            if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
+                try:
+                    r = await _get_redis_cached()
+                    if r:
+                        key_payload = json.dumps({"t": msg_text, "cid": cid, "links": links}, ensure_ascii=False, separators=(",", ":"))
+                        idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
+                        ok = await r.setnx(idem_key, "1")
+                        if not ok:
+                            return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
+                        with suppress(Exception):
+                            await r.expire(idem_key, int(IDEM_TTL_SEC))
+                except Exception as e:
+                    logger.debug("telegram_idem_warning(send): %s", e)
+
+            payload = {
+                "chat_id": cid,
+                "text": msg_text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            }
+            # אם יש קישורים — נוסיף inline keyboard
+            kb = []
+            if links.get("preview_url"):
+                kb.append({"text": "👁 Preview", "url": links["preview_url"]})
+            if links.get("approve_url"):
+                kb.append({"text": "✅ Approve", "url": links["approve_url"]})
+            if links.get("reject_url"):
+                kb.append({"text": "❌ Reject", "url": links["reject_url"]})
+            if kb:
+                payload["reply_markup"] = {"inline_keyboard": [kb]}
+
+            r = await cli.post(
+                f"https://api.telegram.org/bot{token}/sendMessage",
+                json=payload,
+                timeout=httpx.Timeout(10.0),
+            )
+            data = {}
+            with suppress(Exception):
+                data = r.json()
+            return {
+                "ok": (r.status_code == 200 and data.get("ok") is True),
+                "status": r.status_code,
+                "result": data,
+                "used_chat_id": cid,
+                "links": links,
+            }
+        else:
+            # שימוש ב-helper כדי להרוויח idem+fallbacks קיימים (ADMIN_CHAT_ID)
+            res = await _send_telegram_html(
+                msg_text,
+                approve_url=links.get("approve_url"),
+                reject_url=links.get("reject_url"),
+                preview_url=links.get("preview_url"),
+            )
+            return {"ok": bool(res.get("ok")), "result": res, "used_chat_id": ADMIN_CHAT_ID, "links": links}
+    except Exception as e:
+        return {"ok": False, "error": f"send_failed: {e}"}
+
 # ==================== Global error handler ====================
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
@@ -1770,24 +1972,9 @@ async def global_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content=payload)
 
 # -------- NEW: Background real-time trailing manager ----------
-async def _smart_manage_now(symbol: str, offset_bps: Optional[int], pcts: Optional[List[float]],
-                            splits: Optional[List[float]], atr_mult: Optional[float]):
-    """
-    Placeholder for a deferred smart-manage hook.
-    If your project defines a richer manager, this shim allows triggering it.
-    """
-    with suppress(Exception):
-        from routes.manager import smart_manage_now  # type: ignore
-        return await smart_manage_now(symbol=symbol, offset_bps=offset_bps, pcts=pcts, splits=splits, atr_mult=atr_mult)
-    return None
-
 async def _trail_rt_loop():
     """
-    לולאת Trailing בזמן אמת (Best-effort):
-    • מאתרת פוזיציות פתוחות (או לפי TRAIL_RT_WATCH).
-    • מחשבת ATR/ADX (1m) ומציבה/מכוונת TRIALING_STOP_MARKET עם reduceOnly.
-    • מכבדת חלונות השהיה (TRAIL_PAUSE_WINDOWS) ב־UTC.
-    • מסננת לפי AUTO_TRAIL_ADX_MIN / AUTO_TRAIL_ATRPCT_MAX.
+    לולאת Trailing בזמן אמת (Best-effort)
     """
     if not TRAIL_RT_ENABLE:
         return
@@ -1962,8 +2149,7 @@ async def _startup_tasks():
     asyncio.create_task(_late_webhook())
 
     if TRAIL_RT_ENABLE:
-        # שומר את המשימה ב-state כדי לבטל אותה ב-shutdown
-        app.state.trail_task = asyncio.create_task(_trail_rt_loop())
+        asyncio.create_task(_trail_rt_loop())
 
 @app.on_event("shutdown")
 async def _shutdown_tasks():
@@ -1982,7 +2168,6 @@ async def _shutdown_tasks():
         with suppress(Exception):
             await r.close()
         with suppress(Exception):
-            # לא כל דרייבר חשוף ל-connection_pool; אם יש — ננתק
             pool = getattr(r, "connection_pool", None)
             if pool:
                 await pool.disconnect()
@@ -1994,6 +2179,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
