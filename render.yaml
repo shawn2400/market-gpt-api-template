@@ -33,7 +33,7 @@ services:
         value: "algogpt-prod"
 
       - key: MODE
-        value: "run"                     # ← ריצה מלאה (לא approve)
+        value: "run"
       - key: PORT
         value: "10000"
       - key: APP_MODULE
@@ -107,7 +107,7 @@ services:
       - key: ENABLE_HSTS
         value: "1"
       - key: SECURITY_PUBLIC_PATHS
-        value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/scan/public-now,/scan/public-topk,/scan/public-stream,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/debug/env"
+        value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/debug/env"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
 
@@ -117,13 +117,13 @@ services:
       - key: ANTI_REPLAY_WINDOW_SEC
         value: "60"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
-        value: "1"                 # ← /position-ops/* דורש חתימה
+        value: "1"
       - key: SIGNED_TS_MAX_SKEW_SEC
         value: "60"
       - key: SIGNED_NONCE_TTL_SEC
         value: "120"
 
-      # ========================= Rate Limit =========================
+      # ========================= Rate Limit (coarse) =========================
       - key: RATE_LIMIT_ENABLE
         value: "1"
       - key: RL_FAIL_OPEN
@@ -142,6 +142,34 @@ services:
         value: "20"
       - key: PUBLIC_CACHE_PATHS
         value: "/scan/public-topk,/scan/public-now,/topk"
+
+      # ===== Extra RL knobs for routes/public.py =====
+      - key: PUBLIC_WEB_RPS
+        value: "2"
+      - key: PUBLIC_WEB_BURST
+        value: "6"
+      - key: PUBLIC_REST_RPS
+        value: "5"
+      - key: PUBLIC_REST_BURST
+        value: "15"
+      - key: PUBLIC_SSE_MAX_CONNS
+        value: "80"
+      - key: PUBLIC_SSE_MAX_CONNS_PER_IP
+        value: "4"
+      - key: PUBLIC_RL_NS
+        value: "ops-supervisor-web:rl"
+
+      # (אופציונלי) Token-Bucket אמיתי (אם תוסיף utils/rate_limit_tb.py)
+      # - key: TB_ENABLE
+      #   value: "1"
+      # - key: TB_NAMESPACE
+      #   value: "tb"
+      # - key: TB_DEFAULT_RATE
+      #   value: "5"
+      # - key: TB_DEFAULT_BURST
+      #   value: "15"
+      # - key: TB_DEFAULT_PERIOD_SEC
+      #   value: "1"
 
       # ========================= Redis =========================
       - key: REQUIRE_REDIS
@@ -193,7 +221,7 @@ services:
       - key: BINANCE_HTTP_TIMEOUT
         value: "10.0"
       - key: BINANCE_MAX_RETRIES
-        value: "0"                 # ↓ נמנע מספייקי weight
+        value: "0"
       - key: BINANCE_RECV_WINDOW
         value: "45000"
       - key: LISTENKEY_KEEPALIVE_SEC
@@ -225,9 +253,9 @@ services:
       - key: SCAN_MAX_LIMIT
         value: "0"
       - key: SCAN_CONCURRENCY
-        value: "2"                 # ↓ פחות מקביליות
+        value: "2"
       - key: TOP_SYMBOLS
-        value: "80"                # ↓ פחות סמבולים
+        value: "80"
       - key: SUGGEST_FUTURES
         value: "1"
       - key: SUGGEST_INTERVAL_SEC
@@ -403,11 +431,11 @@ services:
       - key: STOP_BAND_BPS
         value: "20"
       - key: TP_BE_ONLY_AFTER_TP1
-        value: "0"                  # BE+ לא מחכה ל-TP1
+        value: "0"
       - key: STREAM_TP_BE
         value: "1"
       - key: TP_LADDER_ON_APPROVE
-        value: "0"                  # ריענון גם לפוז’ חיות
+        value: "0"
       - key: LADDER_TP_ENABLE
         value: "1"
       - key: LADDER_SL_ENABLE
@@ -423,7 +451,7 @@ services:
       - key: ATR_MIN_DELTA
         value: "0.02"
       - key: BE_ARM_PCT
-        value: "0.6"                # חימוש BE מהיר
+        value: "0.6"
       - key: BE_GUARD_ENABLE
         value: "1"
       - key: BE_GUARD_EVERY_SEC
@@ -431,9 +459,9 @@ services:
       - key: TP_BE_OFFSET_BPS
         value: "12"
       - key: TRAIL_IN_CHOP
-        value: "1"                  # Trail גם ב-ADX נמוך
+        value: "1"
       - key: TP_SL_REFRESH_SEC
-        value: "420"                # רענון סולמות ~7 דק'
+        value: "420"
       - key: MANAGER_REISSUE_ENABLE
         value: "1"
       - key: MANAGER_REISSUE_POLICY
@@ -597,7 +625,7 @@ services:
       - key: PRICE_WS_FRESH_TTL
         value: "60"
       - key: PRICE_SCAN_INTERVAL
-        value: "45"                # ↓ נשען על WS
+        value: "45"
 
       # ========================= Managers =========================
       - key: MANAGER_ENABLE
@@ -605,7 +633,7 @@ services:
       - key: TRADE_MANAGER_ENABLE
         value: "1"
       - key: MANAGER_INTERVAL_SEC
-        value: "15"               # ↓ ריווח טיקים = פחות עומס
+        value: "15"
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
@@ -656,6 +684,7 @@ services:
         fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
         fromSecret: BINANCE_API_SECRET
+
 
 
 
