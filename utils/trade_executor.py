@@ -716,7 +716,7 @@ async def execute_trade_live(
         qty_str, _ = _q_qty(sym, float(qty))
 
         if plan["trail"]["callback_rate_pct"] is None:
-            # calc on live mark if לא חושב קודם
+            # calc on live mark אם לא חושב קודם
             mark_now = float(get_price(sym) or futures_mark_price(sym) or base_price)
             with suppress(Exception):
                 kl = _fetch_klines_raw(sym, "1m", 60)
