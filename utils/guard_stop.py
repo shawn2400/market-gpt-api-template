@@ -1,9 +1,10 @@
-# /app/utils/guard_stop.py
 from __future__ import annotations
 
 import os, time, math, re
 from contextlib import suppress
 from typing import Any, Dict, List, Tuple, Optional
+from functools import lru_cache
+import time as _t
 
 # =========================
 # Env / Flags
@@ -22,6 +23,17 @@ ORDER_ROUND_TO_TICK    = (os.getenv("ORDER_ROUND_TO_TICK","1").lower() in ("1","
 USE_EXCHANGE_FILTERS   = (os.getenv("USE_EXCHANGE_FILTERS","1").lower() in ("1","true","yes","on"))
 ENFORCE_QTY_BOUNDS     = (os.getenv("ENFORCE_QTY_BOUNDS","1").lower() in ("1","true","yes","on"))
 ORD_ATOMIC_UPDATE      = (os.getenv("ORD_ATOMIC_UPDATE","1").lower() in ("1","true","yes","on"))
+
+FILTERS_CACHE_TTL_SEC  = int(os.getenv("FILTERS_CACHE_TTL_SEC","900"))
+
+# זיהוי מצב דו-צדדי לפי override (פשוט ומהיר)
+_MODE_OVERRIDE = (os.getenv("POSITION_MODE_OVERRIDE","") or os.getenv("HEDGE_MODE","")).strip().lower()
+_DUAL_SIDE_ENABLED = _MODE_OVERRIDE in ("hedge","dual","dual_side","dual_side_position","dualposition","1","true","yes","on")
+
+def _effective_position_side(entry_side: str) -> str:
+    if not _DUAL_SIDE_ENABLED:
+        return "BOTH"
+    return "LONG" if (entry_side or "").upper() == "BUY" else "SHORT"
 
 # =========================
 # Binance client & helpers
@@ -64,6 +76,9 @@ def _fallback_filters():
     return {"price_tick": float(os.getenv("DEFAULT_PRICE_TICK","0.01")),
             "qty_step":   float(os.getenv("DEFAULT_QTY_STEP","0.001"))}
 
+# TTL cache לפילטרים (ללא תלות ב-LRU בלבד)
+_filters_cache: Dict[str, Tuple[float, Dict[str,Any]]] = {}
+
 def _round_step(v: float, step: float) -> float:
     if step <= 0: return v
     return math.floor(v/step + 1e-12) * step
@@ -76,18 +91,30 @@ def _qqty(symbol: str, qty: float, flt: Dict[str,Any]) -> float:
     step = float(flt.get("qty_step") or 0.0)
     return round(_round_step(qty, step), 8) if (ORDER_ROUND_TO_TICK and step>0) else round(qty, 8)
 
+def _get_filters_uncached(cli, symbol: str) -> Dict[str,Any]:
+    ex = cli.futures_exchange_info() or {}
+    for s in ex.get("symbols", []):
+        if (s.get("symbol") or "").upper() == symbol.upper():
+            price_tick = qty_step = 0.0
+            for f in s.get("filters", []):
+                t = f.get("filterType")
+                if t=="PRICE_FILTER": price_tick = float(f.get("tickSize") or 0.0)
+                if t=="LOT_SIZE":     qty_step  = float(f.get("stepSize") or 0.0)
+            return {"price_tick": price_tick, "qty_step": qty_step} or _fallback_filters()
+    return _fallback_filters()
+
 def _get_filters(cli, symbol: str) -> Dict[str,Any]:
-    if not USE_EXCHANGE_FILTERS: return _fallback_filters()
+    if not USE_EXCHANGE_FILTERS:
+        return _fallback_filters()
+    now = _t.time()
+    k = symbol.upper()
+    ts, cached = _filters_cache.get(k, (0.0, {}))
+    if cached and (now - ts) < FILTERS_CACHE_TTL_SEC:
+        return cached
     with suppress(Exception):
-        ex = cli.futures_exchange_info() or {}
-        for s in ex.get("symbols", []):
-            if (s.get("symbol") or "").upper() == symbol.upper():
-                price_tick = qty_step = 0.0
-                for f in s.get("filters", []):
-                    t = f.get("filterType")
-                    if t=="PRICE_FILTER": price_tick = float(f.get("tickSize") or 0.0)
-                    if t=="LOT_SIZE":     qty_step  = float(f.get("stepSize") or 0.0)
-                return {"price_tick": price_tick, "qty_step": qty_step} or _fallback_filters()
+        data = _get_filters_uncached(cli, symbol)
+        _filters_cache[k] = (now, data)
+        return data
     return _fallback_filters()
 
 with suppress(Exception):
@@ -105,7 +132,6 @@ with suppress(Exception):
 try:
     from utils.order_ids import build_client_order_id as _builder  # type: ignore
 except Exception:
-    # fallback מקומי (36 תווים, סניטיזציה)
     _SAFE = re.compile(r'[^A-Za-z0-9._:/-]')
     def _sanitize(s: str, maxlen: int = 36) -> str:
         return _SAFE.sub("_", str(s))[:maxlen]
@@ -122,7 +148,6 @@ except Exception:
         return _coid_fit(f"{pref}-{symbol}-{side}-{role}-{ts}", 36)
 
 def _build_client_order_id(symbol: str, side: str, role: str) -> str:
-    # role עובר ניקוי כאן כדי למנוע '@'
     return _builder(symbol, side, str(role or "").replace("@","_"))
 
 # =========================
@@ -187,23 +212,29 @@ def _atr_1m(cli, symbol: str, lookback: int = 16) -> float:
 # =========================
 # Placers / cancels for both modes
 # =========================
-def _place_stop_quantities(cli, symbol: str, side: str, qty: float, stop_px: float) -> Dict[str,Any]:
-    return cli.futures_create_order(
+def _place_stop_quantities(cli, symbol: str, side: str, qty: float, stop_px: float, position_side: Optional[str]) -> Dict[str,Any]:
+    payload = dict(
         symbol=symbol, side=side, type="STOP_MARKET",
         stopPrice=stop_px, quantity=qty, reduceOnly=True,
         workingType=STOP_WORKING_TYPE, timeInForce="GTC",
         newClientOrderId=_build_client_order_id(symbol, side, "SL_ALGOGPT"),
     )
+    if position_side:
+        payload["positionSide"] = position_side
+    return cli.futures_create_order(**payload)
 
-def _place_stop_native(cli, symbol: str, side: str, stop_px: float) -> Dict[str,Any]:
-    return cli.futures_create_order(
+def _place_stop_native(cli, symbol: str, side: str, stop_px: float, position_side: Optional[str]) -> Dict[str,Any]:
+    payload = dict(
         symbol=symbol, side=side, type="STOP_MARKET",
         stopPrice=stop_px, closePosition=True,
         workingType=STOP_WORKING_TYPE, timeInForce="GTC",
         newClientOrderId=_build_client_order_id(symbol, side, "SL_ALGOGPT"),
     )
+    if position_side:
+        payload["positionSide"] = position_side
+    return cli.futures_create_order(**payload)
 
-def _cancel_stops(cli, symbol: str, keep_order_id: Optional[int], kinds=("STOP","TAKE_PROFIT")) -> int:
+def _cancel_stops(cli, symbol: str, keep_order_id: Optional[int], kinds=("STOP","TAKE_PROFIT","TRAILING_STOP")) -> int:
     n=0
     for o in _active_orders(cli, symbol):
         typ=(o.get("type") or "").upper()
@@ -298,6 +329,7 @@ def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Di
         return {"ok": False, "symbol": symbol, "reason":"no_position", "error": str(e)}
 
     opp = "SELL" if side=="BUY" else "BUY"
+    pos_side = _effective_position_side(side)  # positionSide עבור פקודת סגירה
     last = 0.0
     with suppress(Exception): last = _last_price(cli, symbol)
     flt = _get_filters(cli, symbol)
@@ -316,13 +348,13 @@ def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Di
 
     if current_sl_px is not None:
         tick = float(flt.get("price_tick") or 0.0)
-        if tick and abs(target_px - current_sl_px) < (1.5*tick):
+        if tick and abs(target_px - current_sl_px) < (1.0 * tick):
             return {"ok": True, "symbol": symbol, "mode": mode, "actions":[{"skip":"already_protected","current_sl": current_sl_px}]}
 
     if mode=="native":
-        new_ord = _place_stop_native(cli, symbol, opp, target_px)
+        new_ord = _place_stop_native(cli, symbol, opp, target_px, pos_side)
     else:
-        new_ord = _place_stop_quantities(cli, symbol, opp, qty_cover, target_px)
+        new_ord = _place_stop_quantities(cli, symbol, opp, qty_cover, target_px, pos_side)
 
     time.sleep(min(0.8, float(os.getenv("ORD_VERIFY_TIMEOUT_MS","800"))/1000.0))
     after = _active_orders(cli, symbol)
@@ -334,10 +366,11 @@ def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Di
     return {
         "ok": True, "symbol": symbol, "mode": mode,
         "actions": [
-            {"placed_new_stop": {"orderId": new_ord.get("orderId"), "stopPrice": target_px, "qty": (qty_cover if mode=='quantities' else None), "reason": reason}},
+            {"placed_new_stop": {"orderId": new_ord.get("orderId"), "stopPrice": target_px, "qty": (qty_cover if mode=='quantities' else None), "reason": reason, "positionSide": pos_side}},
             {"cancelled_old_stops": cancelled},
         ]
     }
+
 
 
 
