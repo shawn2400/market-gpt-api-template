@@ -45,6 +45,7 @@ aiohttp==3.9.5
 
 # Tests
 pytest==8.2.2
+jsonschema==4.23.0
 
 
 
