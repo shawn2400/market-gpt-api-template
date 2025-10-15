@@ -1,3 +1,4 @@
+# gunicorn_conf.py
 import os
 
 # =========================
@@ -35,7 +36,7 @@ max_requests_jitter = int(os.getenv("GUNICORN_MAX_REQUESTS_JITTER", "50"))
 # =========================
 # Logging
 # =========================
-# ברירת המחדל: STDOUT/STDERR. לכבות accesslog ע"י ACCESSLOG="".
+# ברירת המחדל: STDOUT/STDERR. לכבות accesslog ע"י ACCESSLOG="". 
 accesslog = os.getenv("ACCESSLOG", "-")
 errorlog = os.getenv("ERRORLOG", "-")
 loglevel = os.getenv("LOG_LEVEL", os.getenv("LOGLEVEL", "info")).lower()
@@ -56,6 +57,7 @@ reuse_port = os.getenv("GUNICORN_REUSE_PORT", "0").lower() in {"1", "true", "on"
 
 # הגנה מרעשים ב־worker tmp (בעיקר בקונטיינרים)
 worker_tmp_dir = os.getenv("GUNICORN_WORKER_TMP_DIR", "/dev/shm")
+
 
 
 
