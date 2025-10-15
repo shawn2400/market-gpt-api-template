@@ -1,3 +1,9 @@
+
+---
+
+# Makefile (ללא jq)
+
+```make
 # ====== Config ======
 REG        ?= ghcr.io/your-org
 IMAGE      ?= algogpt
@@ -49,7 +55,7 @@ help:
 	echo "  push           - docker push $(REG)/$(IMAGE):$(TAG)"
 	echo "  release        - buildx + push (tag)"
 	echo "  run-docker     - run container locally with minimal env"
-	echo "  health         - curl /health_full (fallback /health)"
+	echo "  health         - curl /health_full (fallback /health) — ללא jq"
 	echo "  smoke          - scripts/smoke.sh (מומלץ אחרי דפלוי)"
 	echo "  clean          - remove dangling images"
 	echo "  --- Ultra ---"
@@ -137,9 +143,16 @@ logs:
 sh:
 	docker exec -it $(IMAGE) /bin/bash
 
+# ====== No-jq health checks ======
 health:
-	curl -fsS "http://127.0.0.1:$(PORT)/health_full" | jq . \
-	|| curl -fsS "http://127.0.0.1:$(PORT)/health" | jq .
+	# מנסה /health_full, ואם נכשל — נופל ל-/health, ללא jq
+	if curl -fsS "http://127.0.0.1:$(PORT)/health_full" >/dev/null 2>&1; then \
+	  echo "[health] /health_full OK"; \
+	  curl -fsS "http://127.0.0.1:$(PORT)/health_full" || true; \
+	else \
+	  echo "[health] /health_full not available; trying /health"; \
+	  curl -fsS "http://127.0.0.1:$(PORT)/health" || true; \
+	fi
 
 smoke:
 	bash scripts/smoke.sh "http://127.0.0.1:$(PORT)" "$${API_BEARER_TOKEN:-}" "$${METRICS_BEARER:-}" "$${OPS_SIGN_SECRET:-}"
@@ -147,25 +160,35 @@ smoke:
 clean:
 	docker image prune -f
 
-# ====== Ultra helpers ======
+# ====== Ultra helpers (No jq) ======
 ultra-readyz:
-	curl -fsS "$(ULTRA_HOST)/ultra/readyz" | jq .
+	echo "[GET] $(ULTRA_HOST)/ultra/readyz"
+	curl -fsS "$(ULTRA_HOST)/ultra/readyz" || true
+	echo
 
 ultra-readyz-strict:
-	STATUS=$$(curl -s -o >(tee /tmp/_ultra_readyz_body >&2) -w "%{http_code}" "$(ULTRA_HOST)/ultra/readyz/strict"); \
+	echo "[GET] $(ULTRA_HOST)/ultra/readyz/strict"
+	STATUS=$$(curl -s -o /tmp/_ultra_readyz_body -w "%{http_code}" "$(ULTRA_HOST)/ultra/readyz/strict"); \
 	echo "HTTP: $$STATUS"; \
-	cat /tmp/_ultra_readyz_body | jq . || true; \
+	cat /tmp/_ultra_readyz_body || true; \
+	echo; \
 	rm -f /tmp/_ultra_readyz_body
 
 ultra-meta:
-	curl -fsS "$(ULTRA_HOST)/ultra/meta" | jq .
+	echo "[GET] $(ULTRA_HOST)/ultra/meta"
+	curl -fsS "$(ULTRA_HOST)/ultra/meta" || true
+	echo
 
 ultra-version:
-	curl -fsS "$(ULTRA_HOST)/ultra/meta/version" | jq .
+	echo "[GET] $(ULTRA_HOST)/ultra/meta/version"
+	curl -fsS "$(ULTRA_HOST)/ultra/meta/version" || true
+	echo
 
 ultra-metrics:
 	test -n "$(METRICS_BEARER)" || { echo "METRICS_BEARER is empty"; exit 2; }
-	curl -fsS -H "Authorization: Bearer $(METRICS_BEARER)" "$(ULTRA_HOST)/ultra/metrics" | head -n 20
+	echo "[GET] $(ULTRA_HOST)/ultra/metrics (Bearer)"
+	curl -fsS -H "Authorization: Bearer $(METRICS_BEARER)" "$(ULTRA_HOST)/ultra/metrics" | head -n 20 || true
+	echo
 
 ultra-ts:
 	date +%s
@@ -196,11 +219,15 @@ sec=os.environ["OPS_SIGN_SECRET"]; ts=os.environ["TS"]; body=os.environ["BODY"].
 print(hmac.new(sec.encode("utf-8"), (ts.encode("utf-8")+b"."+body), hashlib.sha256).hexdigest())
 PY
 ); \
+	echo "[POST] $(ULTRA_HOST)/ultra/ops/runtime/prefs"; \
+	echo "X-Timestamp: $$TS"; \
+	echo "X-Signature: $$SIG"; \
 	curl -fsS -X POST "$(ULTRA_HOST)/ultra/ops/runtime/prefs" \
 	  -H "Content-Type: application/json" \
 	  -H "X-Timestamp: $$TS" \
 	  -H "X-Signature: $$SIG" \
-	  -d '$(BODY)' | jq .
+	  -d '$(BODY)' || true
+	echo
 
 # No body => sign ts+'.' only
 ultra-reload:
@@ -212,13 +239,19 @@ sec=os.environ["OPS_SIGN_SECRET"]; ts=os.environ["TS"]
 print(hmac.new(sec.encode("utf-8"), (ts.encode("utf-8")+b"."), hashlib.sha256).hexdigest())
 PY
 ); \
+	echo "[POST] $(ULTRA_HOST)/ultra/ops/policy/reload"; \
+	echo "X-Timestamp: $$TS"; \
+	echo "X-Signature: $$SIG"; \
 	curl -fsS -X POST "$(ULTRA_HOST)/ultra/ops/policy/reload" \
 	  -H "X-Timestamp: $$TS" \
-	  -H "X-Signature: $$SIG" | jq .
+	  -H "X-Signature: $$SIG" || true
+	echo
 
 # Convenience alias to hit base /health on the Ultra app if exposed at /
 ultra-health:
-	curl -fsS "$(ULTRA_HOST)/health" | jq .
+	echo "[GET] $(ULTRA_HOST)/health"
+	curl -fsS "$(ULTRA_HOST)/health" || true
+	echo
 
 # ====== Convenience targets if scripts are present ======
 public:
