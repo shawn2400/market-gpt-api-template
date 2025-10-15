@@ -1,5 +1,16 @@
 # -*- coding: utf-8 -*-
+"""Core helpers for trade execution (quantization, indicators, budgets, leverage, idempotency, ladders).
+
+מודול זה מספק פונקציות עזר נקיות ללא תלות ב־pandas:
+• המרת כמויות/מחירים לפי פילטרים של Binance (tick/step/minNotional)
+• אינדיקטורים בסיסיים (EMA/ATR/ADX) מחישוב ידני על klines
+• שערי איכות/מגבלות סיכון מתוך ENV
+• ניהול מינוף/תקציב דינמיים
+• מחסן אידמפוטנטיות (Redis/זיכרון)
+• בניית סולמות TP/SL ותמיכה במצבי Hedge/One-Way
+"""
 from __future__ import annotations
+
 import os, math, time, logging, json, hashlib
 from typing import Optional, Dict, Any, List, Tuple
 from contextlib import suppress
@@ -96,38 +107,59 @@ except Exception:
 
 # ─────────── Quantize & math helpers ───────────
 def _decimals(step_str: str) -> int:
-    if "." not in step_str: return 0
+    """Return number of decimal places for a tick/step string."""
+    if "." not in step_str:
+        return 0
     frac = step_str.split(".")[1].rstrip("0")
     return len(frac)
 
 def _filters(symbol: str) -> Dict[str, Any]:
-    try: return get_symbol_filters(symbol) or {}
-    except Exception: return {}
+    """Fetch cached symbol filters; empty dict on failure."""
+    try:
+        return get_symbol_filters(symbol) or {}
+    except Exception:
+        return {}
 
 def _q_price(symbol: str, price: float) -> Tuple[str, float]:
-    f = _filters(symbol); tick = float(f.get("tickSize") or DEFAULT_TICK) or DEFAULT_TICK
+    """Quantize price to tick size; returns (formatted_str, float)."""
+    f = _filters(symbol)
+    tick = float(f.get("tickSize") or DEFAULT_TICK) or DEFAULT_TICK
     decs = _decimals(str(f.get("tickSize") or DEFAULT_TICK))
-    steps = round(price / tick); p = steps * tick
-    s = f"{p:.{decs}f}"; return s, float(s)
+    steps = round(price / tick)
+    p = steps * tick
+    s = f"{p:.{decs}f}"
+    return s, float(s)
 
 def _q_qty(symbol: str, qty: float) -> Tuple[str, float]:
-    f = _filters(symbol); step = float(f.get("stepSize") or DEFAULT_QTY_STEP) or DEFAULT_QTY_STEP
+    """Quantize quantity to step size; returns (formatted_str, float)."""
+    f = _filters(symbol)
+    step = float(f.get("stepSize") or DEFAULT_QTY_STEP) or DEFAULT_QTY_STEP
     decs = _decimals(str(f.get("stepSize") or DEFAULT_QTY_STEP))
-    steps = math.floor(max(0.0, qty) / step); q = max(step, steps * step)
-    s = f"{q:.{decs}f}"; return s, float(s)
+    steps = math.floor(max(0.0, qty) / step)
+    q = max(step, steps * step)
+    s = f"{q:.{decs}f}"
+    return s, float(s)
 
 def _min_notional(symbol: str) -> float:
-    f = _filters(symbol); mn = f.get("minNotional")
-    try: return float(mn) if mn is not None else DEFAULT_MIN_NOT
-    except Exception: return DEFAULT_MIN_NOT
+    """Return minNotional for symbol; falls back to DEFAULT_MIN_NOT."""
+    f = _filters(symbol)
+    mn = f.get("minNotional")
+    try:
+        return float(mn) if mn is not None else DEFAULT_MIN_NOT
+    except Exception:
+        return DEFAULT_MIN_NOT
 
 def _ensure_min_notional(symbol: str, price: float, qty: float) -> float:
+    """Ensure price*qty ≥ minNotional by bumping qty to the minimal valid value."""
     mn = _min_notional(symbol)
-    if price * qty >= mn: return qty
+    if price * qty >= mn:
+        return qty
     need = mn / max(price, 1e-9)
-    _, q2 = _q_qty(symbol, need); return q2
+    _, q2 = _q_qty(symbol, need)
+    return q2
 
 def _calc_qty(symbol: str, price: float, budget: Optional[float], leverage: int, quantity: Optional[float]) -> float:
+    """Calculate executable quantity from (budget×leverage)/price or fixed quantity; respect minNotional and step."""
     if quantity and quantity > 0:
         q = float(quantity)
     else:
@@ -136,9 +168,11 @@ def _calc_qty(symbol: str, price: float, budget: Optional[float], leverage: int,
         usd = float(budget) * float(leverage)
         q = usd / price
     q = _ensure_min_notional(symbol, price, q)
-    _, q = _q_qty(symbol, q); return q
+    _, q = _q_qty(symbol, q)
+    return q
 
 def _offset_bps(base: float, bps: float, sign: int) -> float:
+    """Shift base price by ±bps (basis points)."""
     return base * (1.0 + sign * (bps / 10000.0))
 
 # ─────────── Hedge / One-Way detection ───────────
@@ -146,10 +180,14 @@ _HEDGE_MODE_OVERRIDE = os.getenv("HEDGE_MODE", "").strip().lower()
 _HEDGE_MODE_CACHE: Optional[bool] = None
 
 def _is_hedge_mode_runtime() -> bool:
+    """Detect current position mode (hedge/one-way), with ENV override and runtime cache."""
     global _HEDGE_MODE_CACHE
-    if _HEDGE_MODE_OVERRIDE in ("1","true","yes","on","hedge"): return True
-    if _HEDGE_MODE_OVERRIDE in ("0","false","no","off","oneway"): return False
-    if _HEDGE_MODE_CACHE is not None: return _HEDGE_MODE_CACHE
+    if _HEDGE_MODE_OVERRIDE in ("1","true","yes","on","hedge"):
+        return True
+    if _HEDGE_MODE_OVERRIDE in ("0","false","no","off","oneway"):
+        return False
+    if _HEDGE_MODE_CACHE is not None:
+        return _HEDGE_MODE_CACHE
     try:
         data = get_futures_client().futures_account()
         _HEDGE_MODE_CACHE = bool(data.get("dualSidePosition"))
@@ -158,33 +196,47 @@ def _is_hedge_mode_runtime() -> bool:
     return _HEDGE_MODE_CACHE
 
 def _effective_position_side(desired: str) -> str:
+    """Normalize desired positionSide under current position mode."""
     desired = (desired or "BOTH").upper()
-    if not _is_hedge_mode_runtime(): return "BOTH"
+    if not _is_hedge_mode_runtime():
+        return "BOTH"
     return desired if desired in {"LONG","SHORT"} else "BOTH"
 
 # ─────────── Indicators (ללא pandas) ───────────
 def _ema(vals: List[float], period: int) -> List[float]:
-    k = 2 / (period + 1); ema=[]; s=None
+    """Exponential Moving Average (EMA) series."""
+    k = 2 / (period + 1)
+    ema: List[float] = []
+    s: Optional[float] = None
     for v in vals:
-        s = v if s is None else (v*k + s*(1-k)); ema.append(s)
+        s = v if s is None else (v * k + s * (1 - k))
+        ema.append(s)
     return ema
 
 def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
-    trs=[]; prev=None
+    """Approximate ATR using EMA-like smoothing over True Range."""
+    trs: List[float] = []
+    prev: Optional[float] = None
     for r in kl:
-        h=float(r[2]); l=float(r[3]); c=float(r[4])
-        tr = (h-l) if prev is None else max(h-l, abs(h-prev), abs(l-prev))
-        trs.append(tr); prev=c
-    if len(trs) < period: return trs[-1] if trs else 0.0
-    alpha = 1.0/period; s=None
+        h = float(r[2]); l = float(r[3]); c = float(r[4])
+        tr = (h - l) if prev is None else max(h - l, abs(h - prev), abs(l - prev))
+        trs.append(tr); prev = c
+    if len(trs) < period:
+        return trs[-1] if trs else 0.0
+    alpha = 1.0 / period
+    s: Optional[float] = None
     for v in trs:
-        s = v if s is None else (alpha*v+(1-alpha)*s)
+        s = v if s is None else (alpha * v + (1 - alpha) * s)
     return float(s or 0.0)
 
 def _adx_from_klines(kl: List[List[float]], period: int = 14) -> float:
-    if len(kl) < period + 2: return 0.0
-    plus_dm, minus_dm, tr_list = [], [], []
-    prev_h, prev_l, prev_c = None, None, None
+    """Wilder-style ADX approximation from klines."""
+    if len(kl) < period + 2:
+        return 0.0
+    plus_dm: List[float] = []
+    minus_dm: List[float] = []
+    tr_list: List[float] = []
+    prev_h = prev_l = prev_c = None
     for r in kl:
         h, l, c = float(r[2]), float(r[3]), float(r[4])
         if prev_h is None:
@@ -198,28 +250,39 @@ def _adx_from_klines(kl: List[List[float]], period: int = 14) -> float:
         plus_dm.append(pdm); minus_dm.append(mdm); tr_list.append(tr)
 
     def rma(xs: List[float], p: int) -> List[float]:
-        alpha = 1/p; out=[]; s=None
+        alpha = 1 / p
+        out: List[float] = []
+        s: Optional[float] = None
         for x in xs:
-            s = x if s is None else (alpha*x + (1-alpha)*s); out.append(s)
+            s = x if s is None else (alpha * x + (1 - alpha) * s)
+            out.append(s)
         return out
 
-    if len(tr_list) < period: return 0.0
+    if len(tr_list) < period:
+        return 0.0
     tr_rma = rma(tr_list, period); pdm_rma = rma(plus_dm, period); mdm_rma = rma(minus_dm, period)
-    dx=[]
+    dx: List[float] = []
     for t, p, m in zip(tr_rma, pdm_rma, mdm_rma):
-        if t <= 0: di_p, di_m = 0.0, 0.0
+        if t <= 0:
+            di_p, di_m = 0.0, 0.0
         else:
-            di_p = (p / t) * 100.0; di_m = (m / t) * 100.0
-        denom = (di_p + di_m); dx.append(0.0 if denom == 0 else abs(di_p - di_m) / denom * 100.0)
-    if not dx: return 0.0
-    adx = rma(dx, period)[-1]; return float(adx or 0.0)
+            di_p = (p / t) * 100.0
+            di_m = (m / t) * 100.0
+        denom = (di_p + di_m)
+        dx.append(0.0 if denom == 0 else abs(di_p - di_m) / denom * 100.0)
+    if not dx:
+        return 0.0
+    adx = rma(dx, period)[-1]
+    return float(adx or 0.0)
 
 def _fetch_klines_raw(symbol: str, interval: str = "1m", limit: int = 60) -> List[List[float]]:
+    """Fetch recent futures klines as raw lists; safe limits."""
     cli = get_futures_client()
     data = cli.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(1000, max(50, limit)))
     return data or []
 
 def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
+    """Lightweight quality gate based on trend (EMA21/EMA50), momentum, ATR%, and last volume."""
     try:
         kl = _fetch_klines_raw(symbol, "1m", 60)
         closes = [float(r[4]) for r in kl]
@@ -245,7 +308,7 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
         score += 2.0 if atr_ok else 0.0
         score += 1.0 if vol_ok else 0.0
 
-        reasons=[]
+        reasons: List[str] = []
         if not trend_ok: reasons.append("trend_mismatch")
         if not mom_ok:   reasons.append("weak_momentum")
         if not atr_ok:   reasons.append("atr_too_high")
@@ -259,18 +322,24 @@ def _quality_gate(symbol: str, side: str) -> Dict[str, Any]:
 
 # ─────────── Budget & Leverage helpers ───────────
 def _parse_csv_floats(s: str) -> List[float]:
+    """Parse comma-separated floats; ignore invalid tokens."""
     out: List[float] = []
     for x in (s or "").split(","):
         x = x.strip()
-        if not x: continue
-        try: out.append(float(x))
-        except Exception: continue
+        if not x:
+            continue
+        try:
+            out.append(float(x))
+        except Exception:
+            continue
     return out
 
 def _parse_pct_csv(s: str) -> List[float]:
+    """Alias for _parse_csv_floats for semantic clarity."""
     return _parse_csv_floats(s)
 
 def _balance_usdt() -> float:
+    """Fetch available USDT futures balance; 0.0 on failure."""
     try:
         bal = futures_balance()
         for r in bal or []:
@@ -282,7 +351,7 @@ def _balance_usdt() -> float:
     return 0.0
 
 def _choose_budget_dynamic(get_budget_usdt, quality: Optional[float], price: float, symbol: Optional[str]=None) -> float:
-    """בחירת תקציב דינמי—כולל minNotional לפי הסימבול (אחורה-תואם אם symbol=None)."""
+    """בחירת תקציב דינמי; בהיעדר יתרה/העדפה—חוזר לפונקציית התקציב הבסיסית. מכבד minNotional לפי הסימבול."""
     if not BUDGET_DYNAMIC_ENABLE:
         return get_budget_usdt(quality=quality, price=price)
     pcts = _parse_pct_csv(BUDGET_DYNAMIC_RISK_PCTS) or [1.5, 3.0, 5.0]
@@ -303,6 +372,7 @@ def _choose_budget_dynamic(get_budget_usdt, quality: Optional[float], price: flo
     return get_budget_usdt(quality=quality, price=price)
 
 def _choose_leverage(symbol: str, adx: float, requested: int) -> int:
+    """Select leverage based on ADX thresholds and per-symbol caps."""
     lev = int(requested)
     if not DYN_LEVERAGE_ENABLE:
         return max(MIN_LEVERAGE, min(LEV_HARD_CAP, lev))
@@ -312,13 +382,15 @@ def _choose_leverage(symbol: str, adx: float, requested: int) -> int:
         pairs = [(0.0, 7), (20.0, 9), (25.0, 12), (30.0, 15)]
     dyn = MIN_LEVERAGE
     for thr, l in pairs:
-        if adx >= thr: dyn = max(dyn, l)
+        if adx >= thr:
+            dyn = max(dyn, l)
     cap_by_symbol = int(LEVERAGE_SYMBOL_CAPS.get(symbol.upper(), LEV_HARD_CAP))
     dyn = max(MIN_LEVERAGE, min(dyn, cap_by_symbol, LEV_HARD_CAP))
     return max(MIN_LEVERAGE, min(max(lev, dyn), cap_by_symbol, LEV_HARD_CAP))
 
 # ─────────── Idempotency (Redis/memory) ───────────
 class _Idem:
+    """Simple cross-process idempotency using Redis when available, memory otherwise."""
     _mem: Dict[str, float] = {}
     _r = None
     try:
@@ -329,12 +401,14 @@ class _Idem:
 
     @classmethod
     def _key(cls, payload: Dict[str, Any]) -> str:
+        """Derive stable idempotency key from JSON-sorted payload."""
         raw = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
         return f"idem:trade:{digest}"
 
     @classmethod
     def check_and_set(cls, payload: Dict[str, Any], ttl: int = IDEMPOTENCY_TTL_SEC) -> bool:
+        """Return True if first-seen; store key with TTL. False when duplicate inside window."""
         k = cls._key(payload); now = time.time()
         if cls._r:
             try:
@@ -353,6 +427,12 @@ class _Idem:
 
 # ─────────── Cancel old closing orders (TP/SL) ───────────
 def _cancel_old_closing_orders(symbol: str) -> int:
+    """Cancel existing OPEN TP/SL/TRAIL orders for symbol; returns number of canceled orders.
+
+    מכבד:
+      • CANCEL_ONLY_PREFIXED_ORDERS=1 → יבטל רק הזמנות עם prefix תואם
+      • CANCEL_PREFIX_OVERRIDE / ORDER_ID_PREFIX לבחירת ה־prefix
+    """
     try:
         orders = get_all_orders(symbol, limit=50) or []
         tps = ("TAKE_PROFIT", "TAKE_PROFIT_MARKET")
@@ -390,23 +470,34 @@ def _cancel_old_closing_orders(symbol: str) -> int:
         return 0
 
 # ─────────── Ladder builders ───────────
-def _build_ladders(sym: str, side: str, qty: float,
-                   tp_targets: Optional[List[float]], tp_splits: Optional[List[float]],
-                   sl_targets: Optional[List[float]], sl_splits: Optional[List[float]]) -> Dict[str, Any]:
+def _build_ladders(
+    sym: str,
+    side: str,
+    qty: float,
+    tp_targets: Optional[List[float]],
+    tp_splits: Optional[List[float]],
+    sl_targets: Optional[List[float]],
+    sl_splits: Optional[List[float]],
+) -> Dict[str, Any]:
+    """Build TP/SL ladder orders dict for later placement (reduceOnly)."""
     plan: Dict[str, Any] = {"tp_orders": [], "sl_orders": []}
     tp_kind_market = (LADDER_TP_KIND == "TAKE_PROFIT_MARKET")
     pos_side = _effective_position_side(_pos_side_for_entry(side))
 
     def _prep(kind: str, targets, splits=None):
-        if not targets: return
-        L = len(targets); w = list(splits) if splits else []
-        if not w or len(w) != L: w = [1.0 / L] * L
+        if not targets:
+            return
+        L = len(targets)
+        w = list(splits) if splits else []
+        if not w or len(w) != L:
+            w = [1.0 / L] * L
         tot = sum(max(0.0, float(x)) for x in w) or 1.0
         remain = qty
         for i, (t, wi) in enumerate(zip(targets, w), start=1):
             alloc = qty * (wi / tot) if i < L else remain
             _, qalloc = _q_qty(sym, max(0.0, alloc))
-            if qalloc <= 0: continue
+            if qalloc <= 0:
+                continue
             remain = max(0.0, remain - qalloc)
             _, stop_p = _q_price(sym, float(t))
 
@@ -419,27 +510,40 @@ def _build_ladders(sym: str, side: str, qty: float,
             else:
                 plan["sl_orders"].append({**base, "type": "STOP_MARKET", "stopPrice": stop_p, "reduceOnly": True})
 
-    if tp_targets: _prep("TP", tp_targets, tp_splits)
-    if sl_targets: _prep("SL", sl_targets, sl_splits)
+    if tp_targets:
+        _prep("TP", tp_targets, tp_splits)
+    if sl_targets:
+        _prep("SL", sl_targets, sl_splits)
     return plan
 
 def _normalize_position_side(ps: Optional[str]) -> str:
+    """Normalize a positionSide value to {'BOTH','LONG','SHORT'}; default BOTH."""
     ps = (ps or "BOTH").upper().strip()
     return ps if ps in {"BOTH", "LONG", "SHORT"} else "BOTH"
 
 def _close_side_for(entry_side: str) -> str:
+    """Return the closing side for an entry side."""
     return "SELL" if entry_side.upper() == "BUY" else "BUY"
 
 def _pos_side_for_entry(side: str) -> str:
+    """Return positionSide for an entry side (BUY→LONG / SELL→SHORT)."""
     return "LONG" if side.upper() == "BUY" else "SHORT"
 
 def _normalize_entry_side(side: str) -> str:
+    """Normalize entry side to {'BUY','SELL'}; raise on invalid input."""
     s = (side or "").upper().strip()
-    if s in ("BUY","LONG"):  return "BUY"
-    if s in ("SELL","SHORT"): return "SELL"
+    if s in ("BUY","LONG"):
+        return "BUY"
+    if s in ("SELL","SHORT"):
+        return "SELL"
     raise ValueError("side must be BUY/SELL or LONG/SHORT")
 
-def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[float]]]) -> Tuple[Optional[List[float]], Optional[List[float]], Optional[List[float]]]:
+def _compute_tp_sl_targets(
+    side: str,
+    anchor: float,
+    kl: Optional[List[List[float]]],
+) -> Tuple[Optional[List[float]], Optional[List[float]], Optional[List[float]]]:
+    """Derive default TP/SL ladders around an anchor price, with optional ATR-based SL."""
     tp_targets: Optional[List[float]] = None
     tp_splits : Optional[List[float]] = None
     sl_targets: Optional[List[float]] = None
@@ -447,14 +551,14 @@ def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[floa
     if LADDER_TP_ENABLE:
         with suppress(Exception):
             tps = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_PCTS)]
-            sign = +1 if side=="BUY" else -1
-            tp_targets = [anchor * (1.0 + sign * p/100.0) for p in tps]
+            sign = +1 if side == "BUY" else -1
+            tp_targets = [anchor * (1.0 + sign * p / 100.0) for p in tps]
             tp_splits = [float(x) for x in _parse_csv_floats(LADDER_TP_DEFAULT_SPLITS)] or None
 
     if SL_DYNAMIC_ENABLE and kl:
         with suppress(Exception):
             atr = _atr_from_klines(kl, 14)
-            sign = -1 if side=="BUY" else +1
+            sign = -1 if side == "BUY" else +1
             sl_p = anchor * (1.0 + sign * ((atr / max(anchor, 1e-9)) * SL_ATR_MULT * 100.0) / 100.0)
             sl_targets = [sl_p]
 
@@ -462,19 +566,22 @@ def _compute_tp_sl_targets(side: str, anchor: float, kl: Optional[List[List[floa
         with suppress(Exception):
             src = LADDER_SL_DEFAULT_PCTS if LADDER_SL_DEFAULT_PCTS else "0.8"
             slps = [float(x) for x in _parse_csv_floats(src)]
-            sign = -1 if side=="BUY" else +1
-            sl_targets = [anchor * (1.0 + sign * p/100.0) for p in slps]
+            sign = -1 if side == "BUY" else +1
+            sl_targets = [anchor * (1.0 + sign * p / 100.0) for p in slps]
 
     return tp_targets, tp_splits, sl_targets
 
 def _compute_trailing_callback_pct(anchor_price: float, atr: Optional[float], mult: float) -> Optional[float]:
+    """Compute a Binance-compliant trailing stop callback rate (%), clamped to exchange limits."""
     if not (atr and anchor_price > 0 and mult > 0):
         return None
     raw_pct = (atr * mult) / anchor_price * 100.0
     clamped = max(TRAIL_CALLBACK_MIN_PCT, min(TRAIL_CALLBACK_MAX_PCT, raw_pct))
     if abs(clamped - raw_pct) > 1e-9:
-        log.info("trail.callbackRate clamped: raw=%.4f%% -> used=%.4f%% (limits %.2f–%.2f%%)",
-                 raw_pct, clamped, TRAIL_CALLBACK_MIN_PCT, TRAIL_CALLBACK_MAX_PCT)
+        log.info(
+            "trail.callbackRate clamped: raw=%.4f%% -> used=%.4f%% (limits %.2f–%.2f%%)",
+            raw_pct, clamped, TRAIL_CALLBACK_MIN_PCT, TRAIL_CALLBACK_MAX_PCT
+        )
     return clamped
 
 __all__ = [
