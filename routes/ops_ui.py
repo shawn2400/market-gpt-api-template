@@ -1,15 +1,15 @@
 # routes/ops_ui.py
 from __future__ import annotations
-from typing import Optional, List
-from fastapi import APIRouter, Body, Query
+from typing import Optional, List, Callable, Any, Tuple
+from fastapi import APIRouter, Body, Query, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, JSONResponse
 import os, json, httpx
 
-# import shared helpers (no duplication)
+# shared helpers
 from .orders_utils import (
-    _csv_list, _norm_upper, _apply_sort, _filter_by_side, _filter_by_status,
-    _filter_client_order_id, _filter_price_range, _filter_qty_range, _filter_time_range,
-    _fetch_orders_multi,
+    csv_list, norm_upper, as_float, as_int, filter_by_status, filter_by_side,
+    fetch_orders_multi, sort_key_factory, apply_sort, filter_price_range,
+    filter_qty_range, filter_time_range, filter_client_order_id, token_ok
 )
 
 router = APIRouter(tags=["ops-ui"])
@@ -23,6 +23,12 @@ API_KEY  = (
 )
 
 DEFAULT_QTY_STEP = os.getenv("DEFAULT_QTY_STEP", "0.001")
+OPS_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "") or os.getenv("API_TOKEN", "")
+
+def _require_ops_bearer(request: Request):
+    # Optional protection: if env token set, require it.
+    if not token_ok(request.headers.get("Authorization"), OPS_BEARER_TOKEN):
+        raise HTTPException(status_code=401, detail="unauthorized")
 
 HTML_PAGE = """<!doctype html>
 <meta charset="utf-8">
@@ -268,12 +274,12 @@ async def ops_ui():
   )
   return HTMLResponse(html)
 
-@router.post("/ops/ui/ticket")
+@router.post("/ops/ui/ticket", dependencies=[Depends(_require_ops_bearer)])
 async def ui_proxy(payload: dict = Body(...)):
   """
-  פרוקסי צד-שרת: אם יש API_BASE נקרא לשירות הראשי.
-  אחרת נייבא את יוצר הטיקט המקומי (routes.ops_approve.create_ticket).
-  תמיד שולחים x-api-key אם מוגדר.
+  Server-side proxy: if API_BASE set, forward to main service.
+  Otherwise, call local ticket creator (routes.ops_approve.create_ticket).
+  Always forward x-api-key if configured.
   """
   base = API_BASE or ""
   try:
@@ -284,7 +290,6 @@ async def ui_proxy(payload: dict = Body(...)):
         headers["x-api-key"] = API_KEY
       async with httpx.AsyncClient(timeout=12.0) as cli:
         r = await cli.post(url, headers=headers, content=json.dumps(payload))
-        # הגנה: אם לא JSON, נחזיר טקסט גולמי
         try:
           content = r.json()
         except Exception:
@@ -296,8 +301,13 @@ async def ui_proxy(payload: dict = Body(...)):
   except Exception as e:
     return JSONResponse(status_code=502, content={"ok": False, "error": "proxy_failed", "detail": str(e)})
 
-# ====== HTML (סינון בסיסי: symbol/symbols, status, side) ======
-@router.get("/ops/ui/orders", response_class=HTMLResponse, summary="List open futures orders (HTML)")
+# ====== HTML (basic filters) ======
+@router.get(
+  "/ops/ui/orders",
+  response_class=HTMLResponse,
+  summary="List open futures orders (HTML)",
+  dependencies=[Depends(_require_ops_bearer)],
+)
 async def ops_ui_orders(
   symbol: Optional[str] = Query(None, description="e.g. BTCUSDT (single)"),
   symbols: Optional[List[str]] = Query(None, description="repeatable ?symbols=BTCUSDT&symbols=ETHUSDT or CSV"),
@@ -312,32 +322,30 @@ async def ops_ui_orders(
       f"<h2>Open Orders</h2><p style='color:#b91c1c'>binance_client unavailable: {e}</p></body>"
     )
 
-  # symbols list
   sym_list: List[str] = []
   if symbols:
     for item in symbols:
-      sym_list.extend(_csv_list(item))
+      sym_list.extend(csv_list(item))
   elif symbol:
-    sym_list = [_norm_upper(symbol)]
+    sym_list = [norm_upper(symbol)]
 
   try:
-    orders = _fetch_orders_multi(sym_list)
+    orders = fetch_orders_multi(sym_list)
   except Exception as e:
     return HTMLResponse(
       f"<!doctype html><meta charset='utf-8'><body style='font-family:sans-serif;margin:2rem'>"
       f"<h2>Open Orders</h2><p style='color:#b91c1c'>Error fetching orders: {str(e)}</p></body>"
     )
 
-  # filters
   status_list: List[str] = []
   if status:
-    for item in status: status_list.extend(_csv_list(item))
+    for item in status: status_list.extend(csv_list(item))
   side_list: List[str] = []
   if side:
-    for item in side: side_list.extend(_csv_list(item))
+    for item in side: side_list.extend(csv_list(item))
 
-  orders = _filter_by_status(orders, status_list)
-  orders = _filter_by_side(orders, side_list)
+  orders = filter_by_status(orders, status_list)
+  orders = filter_by_side(orders, side_list)
 
   def esc(v):
     return ("" if v is None else str(v)).replace("<", "&lt;").replace(">", "&gt;")
@@ -395,11 +403,12 @@ async def ops_ui_orders(
   )
   return HTMLResponse(html)
 
-# ====== JSON (סינונים, מיון ופאג'ינציה) ======
+# ====== JSON (filters, sort, pagination) ======
 @router.get(
-    "/ops/ui/orders.json",
-    response_class=JSONResponse,
-    summary="List open futures orders (JSON)",
+  "/ops/ui/orders.json",
+  response_class=JSONResponse,
+  summary="List open futures orders (JSON)",
+  dependencies=[Depends(_require_ops_bearer)],
 )
 async def ops_ui_orders_json(
   symbol: Optional[str] = Query(None, description="e.g. BTCUSDT (single)"),
@@ -425,47 +434,43 @@ async def ops_ui_orders_json(
   page: Optional[int] = Query(None, ge=1, description="1-based page number (alias)"),
   per_page: Optional[int] = Query(None, ge=1, le=1000, description="items per page (alias)"),
 ):
-  # symbols list
   sym_list: List[str] = []
   if symbols:
     for item in symbols:
-      sym_list.extend(_csv_list(item))
+      sym_list.extend(csv_list(item))
   elif symbol:
-    sym_list = [_norm_upper(symbol)]
+    sym_list = [norm_upper(symbol)]
 
   try:
-    orders = _fetch_orders_multi(sym_list)
+    orders = fetch_orders_multi(sym_list)
   except Exception as e:
     return JSONResponse(
       status_code=503,
       content={"ok": False, "error": "binance_client_unavailable_or_fetch_failed", "detail": str(e)},
     )
 
-  # filters
   status_list: List[str] = []
   if status:
-    for item in status: status_list.extend(_csv_list(item))
+    for item in status: status_list.extend(csv_list(item))
   side_list: List[str] = []
   if side:
-    for item in side: side_list.extend(_csv_list(item))
+    for item in side: side_list.extend(csv_list(item))
 
-  orders = _filter_by_status(orders, status_list)
-  orders = _filter_by_side(orders, side_list)
-  orders = _filter_price_range(orders, min_price, max_price)
-  orders = _filter_qty_range(orders, min_qty, max_qty)
-  orders = _filter_time_range(orders, since_ts, until_ts)
-  orders = _filter_client_order_id(orders, client_order_id, client_order_like)
+  orders = filter_by_status(orders, status_list)
+  orders = filter_by_side(orders, side_list)
+  orders = filter_price_range(orders, min_price, max_price)
+  orders = filter_qty_range(orders, min_qty, max_qty)
+  orders = filter_time_range(orders, since_ts, until_ts)
+  orders = filter_client_order_id(orders, client_order_id, client_order_like)
 
-  # sorting
   sort_fields: List[str] = []
   if sort_by:
     for item in sort_by:
-      sort_fields.extend(_csv_list(item))
-  orders = _apply_sort(orders, sort_fields, (order or "desc"))
+      sort_fields.extend(csv_list(item))
+  orders = apply_sort(orders, sort_fields, (order or "desc"))
 
   total = len(orders)
 
-  # pagination
   eff_per_page = int(per_page or limit or 100)
   eff_page = int(page) if page is not None else None
   if eff_page is not None:
