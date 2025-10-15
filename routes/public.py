@@ -21,17 +21,16 @@ SSE_HEARTBEAT_SEC = int(os.getenv("PUBLIC_SSE_HEARTBEAT_SEC", "20") or "20")
 SSE_MAX_IDLE_SEC  = int(os.getenv("PUBLIC_SSE_MAX_IDLE_SEC",  "300") or "300")
 SSE_GZIP          = os.getenv("PUBLIC_SSE_GZIP", "0").lower() in ("1","true","yes","on")
 
-# --- New: light rate-limit knobs (safe defaults) ---
-# HTML pages (web views) – per-IP sliding 1s window
-PUBLIC_WEB_RPS        = int(os.getenv("PUBLIC_WEB_RPS", "2") or "2")      # 2 req/sec
-PUBLIC_WEB_BURST      = int(os.getenv("PUBLIC_WEB_BURST", "6") or "6")    # burst allowance
-# REST (JSON) – per-IP sliding 1s window (very mild; most הגנה ב-CDN/Render)
+# --- Light rate-limit knobs (safe defaults) ---
+PUBLIC_WEB_RPS        = int(os.getenv("PUBLIC_WEB_RPS", "2") or "2")
+PUBLIC_WEB_BURST      = int(os.getenv("PUBLIC_WEB_BURST", "6") or "6")
 PUBLIC_REST_RPS       = int(os.getenv("PUBLIC_REST_RPS", "5") or "5")
 PUBLIC_REST_BURST     = int(os.getenv("PUBLIC_REST_BURST", "15") or "15")
-# SSE connection caps
-PUBLIC_SSE_MAX_CONNS          = int(os.getenv("PUBLIC_SSE_MAX_CONNS", "80") or "80")         # global cap
-PUBLIC_SSE_MAX_CONNS_PER_IP   = int(os.getenv("PUBLIC_SSE_MAX_CONNS_PER_IP", "4") or "4")    # per-IP cap
+PUBLIC_SSE_MAX_CONNS        = int(os.getenv("PUBLIC_SSE_MAX_CONNS", "80") or "80")
+PUBLIC_SSE_MAX_CONNS_PER_IP = int(os.getenv("PUBLIC_SSE_MAX_CONNS_PER_IP", "4") or "4")
 PUBLIC_RL_NS          = os.getenv("PUBLIC_RL_NS", f"{NS}:rl").strip()
+
+PUBSUB_CHANNEL = f"{NS}:public:events"
 
 # ticket signing secret (fallbacks)
 TICKET_SECRET = (
@@ -43,7 +42,13 @@ TICKET_DEFAULT_TTL = 600  # 10 דקות
 TICKET_MAX_TTL     = 900  # 15 דקות hard cap
 TICKET_AUD         = "sse"
 
-PUBSUB_CHANNEL = f"{NS}:public:events"
+# === Optional Token-Bucket (drop-in) ===
+_tb_allow = None
+try:
+    # אם קיים utils/rate_limit_tb.py עם tb_allow (TB_ENABLE=1) — נשתמש בו במקום ה-RL הקל
+    from utils.rate_limit_tb import tb_allow as _tb_allow  # type: ignore
+except Exception:
+    _tb_allow = None
 
 # === Redis (async) ===
 _aioredis = None
@@ -172,31 +177,36 @@ def _extract_any_token(
 def _deny():
     raise HTTPException(status_code=401, detail="Unauthorized")
 
-# === RL helpers (Redis-based, ultra-lightweight) ===
+# === RL helpers (Redis-based) ===
 def _client_ip(request: Request) -> str:
-    # trust uvicorn's client; if behind proxy, consider X-Forwarded-For at your ingress
     return (request.client.host if request.client else "0.0.0.0") or "0.0.0.0"
 
 async def _rate_limit(request: Request, scope: str, rps: int, burst: int) -> bool:
     """
-    Sliding-second coarse limiter per ip+scope using Redis INCR with 1s TTL.
-    Returns True if allowed, False if over limit.
+    אם קיים Token-Bucket אמיתי (utils.rate_limit_tb + TB_ENABLE=1) — נשתמש בו.
+    אחרת: Sliding-second לימיטר קליל (per ip+scope, 1s key).
     """
+    ip = _client_ip(request)
+    # עדיפות לטוקן־באקט אם קיים
+    if _tb_allow is not None:
+        try:
+            allowed, _ = await _tb_allow(ip, request.url.path, sse_hint=False)
+            return bool(allowed)
+        except Exception:
+            pass
+
     if rps <= 0 or burst <= 0:
         return True
     r = await _get_redis()
     if not r:
-        # if no redis, fail-open but log (Render health should still shield)
         logger.debug("public: RL skip (no redis)")
         return True
-    ip = _client_ip(request)
     now = int(time.time())
     key = f"{PUBLIC_RL_NS}:{scope}:{ip}:{now}"
     try:
         n = await r.incr(key)
         if n == 1:
-            await r.expire(key, 2)  # keep a second + epsilon
-        # allow up to max(rps, burst) within the second window
+            await r.expire(key, 2)
         limit = max(rps, burst)
         allowed = n <= limit
         if not allowed:
@@ -204,7 +214,7 @@ async def _rate_limit(request: Request, scope: str, rps: int, burst: int) -> boo
         return allowed
     except Exception as e:
         logger.debug("public: RL error %s", e)
-        return True  # fail-open
+        return True
 
 async def _sse_try_register(request: Request) -> Tuple[bool, Optional[str], Optional[str]]:
     """
@@ -213,12 +223,11 @@ async def _sse_try_register(request: Request) -> Tuple[bool, Optional[str], Opti
     """
     r = await _get_redis()
     if not r:
-        return True, None, None  # fail-open
+        return True, None, None
     ip = _client_ip(request)
     key_g = f"{PUBLIC_RL_NS}:sse:conn:global"
     key_i = f"{PUBLIC_RL_NS}:sse:conn:ip:{ip}"
     try:
-        # small pipeline
         pipe = r.pipeline()
         pipe.incr(key_g)
         pipe.expire(key_g, 120)
@@ -227,7 +236,6 @@ async def _sse_try_register(request: Request) -> Tuple[bool, Optional[str], Opti
         g_val, _, i_val, _ = await pipe.execute()
         if (PUBLIC_SSE_MAX_CONNS > 0 and int(g_val) > PUBLIC_SSE_MAX_CONNS) \
            or (PUBLIC_SSE_MAX_CONNS_PER_IP > 0 and int(i_val) > PUBLIC_SSE_MAX_CONNS_PER_IP):
-            # roll back (best-effort)
             with contextlib.suppress(Exception):
                 await r.decr(key_g)
                 await r.decr(key_i)
@@ -236,6 +244,20 @@ async def _sse_try_register(request: Request) -> Tuple[bool, Optional[str], Opti
     except Exception as e:
         logger.debug("public: sse register error %s", e)
         return True, None, None
+
+async def _sse_touch(keys: Tuple[Optional[str], Optional[str]]) -> None:
+    """מרענן TTL כך שמונה חיבורים לא יפוג במהלך חיבור ארוך."""
+    r = await _get_redis()
+    if not r:
+        return
+    key_g, key_i = keys
+    try:
+        pipe = r.pipeline()
+        if key_g: pipe.expire(key_g, 120)
+        if key_i: pipe.expire(key_i, 120)
+        await pipe.execute()
+    except Exception:
+        pass
 
 async def _sse_unregister(keys: Tuple[Optional[str], Optional[str]]) -> None:
     r = await _get_redis()
@@ -253,10 +275,10 @@ async def _sse_unregister(keys: Tuple[Optional[str], Optional[str]]) -> None:
 # === Security headers for HTML/Streams ===
 def _secure_html_response(html: str) -> HTMLResponse:
     resp = HTMLResponse(html)
-    # CSP: allow self; inline styles are used -> 'unsafe-inline' for style only
+    # חשוב: script-src עם 'unsafe-inline' כי הדפים משתמשים ב-inline JS
     resp.headers.setdefault("Content-Security-Policy",
         "default-src 'self'; "
-        "script-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
         "style-src 'self' 'unsafe-inline'; "
         "connect-src 'self' https: wss:; "
         "img-src 'self' data:; "
@@ -270,7 +292,6 @@ def _secure_html_response(html: str) -> HTMLResponse:
 def _attach_security_headers(resp: Response) -> Response:
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")
     resp.headers.setdefault("X-Frame-Options", "DENY")
-    # CSP for streams (no html); keep connect-src open to same-origin
     resp.headers.setdefault("Content-Security-Policy",
         "default-src 'self'; connect-src 'self' https: wss:; object-src 'none'")
     return resp
@@ -338,7 +359,6 @@ def _filter_now(items: List[Dict[str, Any]], symbols_set: Optional[set]) -> List
     return out
 
 def _json_response(payload: Dict[str, Any], etag: Optional[str], request: Request) -> Response:
-    # If-None-Match -> 304
     inm = request.headers.get("if-none-match") or request.headers.get("If-None-Match")
     if etag and inm and etag in inm:
         return Response(status_code=status.HTTP_304_NOT_MODIFIED)
@@ -359,7 +379,6 @@ async def public_now(
     auth: Optional[str] = Cookie(None),
     sse_token: Optional[str] = Cookie(None),
 ):
-    # RL for REST
     if not await _rate_limit(request, "rest_now", PUBLIC_REST_RPS, PUBLIC_REST_BURST):
         raise HTTPException(status_code=429, detail="rate_limited")
 
@@ -380,7 +399,7 @@ async def public_topk(
     request: Request,
     k: int = Query(5, ge=1, le=50),
     min_score: Optional[float] = Query(None, ge=0.0),
-    side: Optional[str] = Query(None, pattern="^(?i)(buy|sell)$"),
+    side: Optional[str] = Query(None, pattern="(?i)^(buy|sell)$"),
     symbols: Optional[str] = Query(None, description="comma-separated symbols filter"),
     authorization: Optional[str] = Header(None, alias="Authorization"),
     t: Optional[str] = Query(None, description="ticket or bearer token"),
@@ -475,7 +494,6 @@ async def _sse_chunks(last_event_id: Optional[str], accept_gzip: bool, sse_keys:
         pass
 
     if not r:
-        # אין Redis — heartbeats בלבד עד ניתוק עדין
         while True:
             await asyncio.sleep(SSE_HEARTBEAT_SEC)
             if time.time() - last_sent > SSE_MAX_IDLE_SEC:
@@ -483,7 +501,6 @@ async def _sse_chunks(last_event_id: Optional[str], accept_gzip: bool, sse_keys:
             yield emit(b": keep-alive\n\n")
         if compressor:
             yield compressor.flush()
-        # unregister counters
         await _sse_unregister(sse_keys)
         return
 
@@ -497,7 +514,9 @@ async def _sse_chunks(last_event_id: Optional[str], accept_gzip: bool, sse_keys:
                 msg = None
 
             now = time.time()
+            # heartbeat + ריענון TTL של מוני SSE
             if now - last_sent >= SSE_HEARTBEAT_SEC:
+                await _sse_touch(sse_keys)
                 yield emit(b": keep-alive\n\n")
                 last_sent = now
             if now - started > SSE_MAX_IDLE_SEC:
@@ -533,7 +552,6 @@ async def _sse_chunks(last_event_id: Optional[str], accept_gzip: bool, sse_keys:
             await pubsub.close()
         if compressor:
             yield compressor.flush()
-        # unregister counters
         await _sse_unregister(sse_keys)
 
 @router.get("/scan/public-stream")
@@ -551,7 +569,14 @@ async def public_stream(
     if PUBLIC_REQUIRE_BEARER and kind == "none":
         _deny()
 
-    # Connection caps (global + per-IP) — stops storms
+    # אופציונלי: TB לשער פתיחת חיבורים
+    if _tb_allow is not None:
+        ip = _client_ip(request)
+        allowed, _ = await _tb_allow(ip, request.url.path, sse_hint=True)
+        if not allowed:
+            raise HTTPException(status_code=429, detail="rate_limited")
+
+    # Connection caps (global + per-IP)
     ok, key_g, key_i = await _sse_try_register(request)
     if not ok:
         raise HTTPException(status_code=429, detail="too_many_sse_connections")
@@ -582,7 +607,6 @@ async def issue_sse_ticket(
     ttl: Optional[int] = Query(TICKET_DEFAULT_TTL, ge=60, le=TICKET_MAX_TTL),
     cookie: Optional[int] = Query(1, description="1=set cookie, 0=just return JSON"),
 ):
-    # דרישת Bearer תקף כדי להנפיק ticket
     ok = False
     if _bearer_header_ok(authorization):
         ok = True
@@ -595,7 +619,6 @@ async def issue_sse_ticket(
     tok, exp = _issue_ticket(sub="viewer", ttl=int(ttl or TICKET_DEFAULT_TTL))
     resp = JSONResponse({"ok": True, "t": tok, "exp": exp})
     if cookie:
-        # SameSite=Lax מספיק ל־EventSource באותו דומיין; חוצה־דומיין => שקול SameSite=None;Secure
         resp.set_cookie(
             key="sse_token",
             value=tok,
@@ -617,18 +640,15 @@ async def ticket_inspect(
     auth: Optional[str] = Cookie(None),
     sse_token: Optional[str] = Cookie(None),
 ):
-    # נבדוק קודם אם התקבל Bearer (קביל) – “תקף”, אך אין payload כמו לטיקט
     q = (t or token or "").strip()
     if q and API_BEARER_TOKEN and hmac.compare_digest(q, API_BEARER_TOKEN):
         return JSONResponse({"valid": True, "kind": "bearer", "info": {"note": "bearer matches API_BEARER_TOKEN"}})
 
     if not q:
-        # Authorization Bearer
         if authorization and authorization.startswith("Bearer "):
             val = authorization.split(" ", 1)[1].strip()
             if API_BEARER_TOKEN and hmac.compare_digest(val, API_BEARER_TOKEN):
                 return JSONResponse({"valid": True, "kind": "bearer", "info": {"note": "bearer matches API_BEARER_TOKEN"}})
-        # cookies (ticket/bearer)
         for cand in (sse_token or "", auth or ""):
             cand = cand.strip()
             if not cand:
@@ -653,9 +673,7 @@ async def ticket_inspect(
 
 # === Legacy redirect: /topk -> /scan/public-topk ===
 @router.get("/topk")
-async def legacy_topk_redirect(
-    request: Request,
-):
+async def legacy_topk_redirect(request: Request):
     dest = "/scan/public-topk"
     if request.url.query:
         dest = f"{dest}?{request.url.query}"
@@ -667,7 +685,7 @@ async def topk_csv(
     request: Request,
     k: int = Query(5, ge=1, le=200),
     min_score: Optional[float] = Query(None, ge=0.0),
-    side: Optional[str] = Query(None, pattern="^(?i)(buy|sell)$"),
+    side: Optional[str] = Query(None, pattern="(?i)^(buy|sell)$"),
     symbols: Optional[str] = Query(None),
     authorization: Optional[str] = Header(None, alias="Authorization"),
     t: Optional[str] = Query(None),
@@ -711,11 +729,8 @@ async def topk_csv(
 
 # === Lightweight HTML web (SSE-first, polling fallback) for TOPK ===
 @router.get("/scan/public-topk/web")
-async def public_topk_web(
-    request: Request,
-) -> HTMLResponse:
+async def public_topk_web(request: Request) -> HTMLResponse:
     if not await _rate_limit(request, "web_topk", PUBLIC_WEB_RPS, PUBLIC_WEB_BURST):
-        # משיבים דף קטן עם הודעת 429 כדי לא “לשבור” UX
         return _secure_html_response("<!doctype html><title>Too Many Requests</title><h3 style='font-family:sans-serif;color:#e11d48'>Rate limited</h3>")
     html = f"""<!doctype html>
 <html lang="en">
@@ -799,14 +814,14 @@ async def public_topk_web(
       const t = qs.get('t') || qs.get('token') || '';
       if (t) url.searchParams.set('t', t);
       es = new EventSource(url.toString());
-      es.addEventListener('topk', (e)=>{
+      es.addEventListener('topk', (e)=>{{
         try {{
           const data = JSON.parse(e.data||'{{}}');
           paintTopk(data.items||[]);
           status.textContent = 'live';
           status.className = 'badge ok';
         }} catch {{}}
-      });
+      }});
       es.addEventListener('open', ()=> {{
         status.textContent = 'live';
         status.className = 'badge ok';
@@ -856,9 +871,7 @@ async def public_topk_web(
 
 # === Lightweight HTML web (SSE-first, polling fallback) for NOW ===
 @router.get("/scan/public-now/web")
-async def public_now_web(
-    request: Request,
-) -> HTMLResponse:
+async def public_now_web(request: Request) -> HTMLResponse:
     if not await _rate_limit(request, "web_now", PUBLIC_WEB_RPS, PUBLIC_WEB_BURST):
         return _secure_html_response("<!doctype html><title>Too Many Requests</title><h3 style='font-family:sans-serif;color:#e11d48'>Rate limited</h3>")
     html = f"""<!doctype html>
@@ -888,11 +901,6 @@ async def public_now_web(
 <header class="wrap">
   <div><strong>Now Live</strong> <span id="status" class="badge">connecting…</span></div>
   <div class="muted" id="stamp"></div>
-  <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
-    <label class="muted">Symbols</label>
-    <input id="symbols" placeholder="e.g. BTCUSDT,ETHUSDT" />
-    <button id="apply" style="background:#1f2937; color:#e5e7eb; border:1px solid #334155; border-radius:8px; padding:6px 10px; cursor:pointer;">Apply</button>
-  </div>
 </header>
 <div class="wrap">
   <table>
@@ -911,8 +919,6 @@ async def public_now_web(
   const rows = document.getElementById('rows');
   const status = document.getElementById('status');
   const stamp  = document.getElementById('stamp');
-  const symbolsInp = document.getElementById('symbols');
-  const applyBtn = document.getElementById('apply');
 
   function fmt(n, d=4) {{
     if (n === undefined || n === null || isNaN(n)) return '';
@@ -943,9 +949,6 @@ async def public_now_web(
     stamp.textContent = new Date().toLocaleTimeString();
   }}
 
-  let currentSymbols = (qs.get('symbols')||'').trim();
-  symbolsInp.value = currentSymbols;
-
   let es;
   function startSSE() {{
     status.textContent = 'connecting…';
@@ -953,19 +956,14 @@ async def public_now_web(
       const url = new URL('/scan/public-stream', location.origin);
       if (t) url.searchParams.set('t', t);
       es = new EventSource(url.toString());
-      es.addEventListener('now', (e)=>{
+      es.addEventListener('now', (e)=>{{
         try {{
           const data = JSON.parse(e.data||'{{}}');
-          let items = data.items||[];
-          if (currentSymbols) {{
-            const set = new Set(currentSymbols.split(',').map(s=>s.trim().toUpperCase()).filter(Boolean));
-            items = items.filter(x=> set.has(String(x.symbol||'').toUpperCase()));
-          }}
-          paintNow(items);
+          paintNow((data.items||[]));
           status.textContent = 'live';
           status.className = 'badge ok';
         }} catch {{}}
-      });
+      }});
       es.addEventListener('open', ()=> {{
         status.textContent = 'live';
         status.className = 'badge ok';
@@ -988,7 +986,6 @@ async def public_now_web(
       try {{
         const url = new URL('/scan/public-now', location.origin);
         if (t) url.searchParams.set('t', t);
-        if (currentSymbols) url.searchParams.set('symbols', currentSymbols);
         const res = await fetch(url.toString(), {{ credentials: 'same-origin' }});
         if (!res.ok) throw new Error('http '+res.status);
         const data = await res.json();
@@ -1004,19 +1001,12 @@ async def public_now_web(
     poller = setInterval(pull, 10000);
   }}
 
-  applyBtn.addEventListener('click', ()=>{
-    currentSymbols = (symbolsInp.value||'').trim();
-    startPolling();
-  });
-
   startSSE();
 }})();
 </script>
 </body>
 </html>"""
     return _secure_html_response(html)
-
-# === Done ===
 
 
 
