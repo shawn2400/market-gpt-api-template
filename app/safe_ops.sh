@@ -2,160 +2,158 @@ cat >/app/safe_ops.sh <<'BASH'
 #!/usr/bin/env bash
 set -euo pipefail
 
-: "${PUBLIC_HOST:?need PUBLIC_HOST}"
-: "${API_BEARER_TOKEN:?need API_BEARER_TOKEN}"
-SIGN_SECRET="${OPS_SIGN_SECRET:-${API_SIGNING_SECRET:-}}"
-: "${SIGN_SECRET:?need OPS_SIGN_SECRET or API_SIGNING_SECRET}"
+BASE="${PUBLIC_HOST:-http://localhost:10000}"
+AUTH="Authorization: Bearer ${API_BEARER_TOKEN:-}"
+SIGN_SECRET="${API_SIGNING_SECRET:-}"
 
-auth_hdr=("Authorization: Bearer ${API_BEARER_TOKEN}")
-json_hdr=("Content-Type: application/json")
+red() { printf "\033[31m%s\033[0m\n" "$*"; }
+green() { printf "\033[32m%s\033[0m\n" "$*"; }
+die() { red "ERR: $*"; exit 1; }
 
-canon_json() {
-  python3 - "$@" <<'PY'
-import sys, json
-s = sys.stdin.read()
-if not s.strip():
-    print("", end=""); raise SystemExit
-try:
-    o = json.loads(s)
-    print(json.dumps(o, separators=(",",":"), sort_keys=True, ensure_ascii=False), end="")
-except Exception:
-    print(s, end="")
+need_auth() {
+  if [ -z "${API_BEARER_TOKEN:-}" ]; then
+    die "API_BEARER_TOKEN לא מוגדר"
+  fi
+}
+
+need_sign() {
+  if [ -z "${SIGN_SECRET:-}" ]; then
+    die "API_SIGNING_SECRET/OPS_SIGN_SECRET לא מוגדר"
+  fi
+}
+
+# מחזיר: TS NONCE SIG
+sign_body() {
+  local body="$1"
+  python3 - <<PY
+import os,sys,time,secrets,hashlib,hmac
+secret = os.environ.get("SIGN_SECRET","").strip()
+if not secret: 
+    print(""); sys.exit(0)
+ts = str(int(time.time()))
+nonce = secrets.token_hex(8)
+payload = f"{ts}.{nonce}.{body}".encode("utf-8")
+# תואם לשרת: אם המפתח באורך 64 – נחשב כ-hex; אחרת טקסט
+key = bytes.fromhex(secret) if len(secret)==64 else secret.encode("utf-8")
+sig = hmac.new(key, payload, hashlib.sha256).hexdigest()
+print(ts, nonce, sig)
 PY
 }
 
-sha256_hex(){ printf "%s" "$1" | openssl dgst -sha256 -r | awk '{print $1}'; }
-
-sign_headers() {
-  local route="$1"; local body="${2-}"
-  local ts nonce canon hash base sig
-  ts="$(date +%s)"                              # שניות!
-  nonce="$(cat /proc/sys/kernel/random/uuid)"
-  canon="$(printf "%s" "${body}" | canon_json)"
-  hash="$(sha256_hex "${canon}")"
-  base="${ts}.${nonce}.${route}.${hash}"
-  sig="$(printf "%s" "${base}" | openssl dgst -sha256 -hmac "${SIGN_SECRET}" -r | awk '{print $1}')"
-  printf "X-Timestamp: %s\n" "${ts}"
-  printf "X-Nonce: %s\n" "${nonce}"
-  printf "X-Signature: %s\n" "${sig}"
-}
-
+# POST חתום למסלולים שמחייבים anti-replay + Bearer
 post_signed() {
-  local route="$1"; shift
-  local body="${1-}"; shift || true
-  mapfile -t sig < <(sign_headers "${route}" "${body}")
-  curl -sS -X POST "${PUBLIC_HOST}${route}" \
-    -H "${auth_hdr[0]}" -H "${json_hdr[0]}" \
-    $(printf ' -H %q' "${sig[@]}") \
-    --data-binary "${body}"
+  need_auth
+  need_sign
+  local path="$1"; shift
+  local body_json="$1"; shift
+  read TS NONCE SIG < <(SIGN_SECRET="$SIGN_SECRET" sign_body "$body_json")
+  [ -z "${TS:-}" ] && die "כשל בחתימה"
+  curl -sS -X POST "${BASE}${path}" \
+    -H "Content-Type: application/json" \
+    -H "${AUTH}" \
+    -H "X-Timestamp: ${TS}" \
+    -H "X-Nonce: ${NONCE}" \
+    -H "X-Signature: ${SIG}" \
+    --data-binary "${body_json}"
+  echo
 }
 
-get_signed() {
-  local route="$1"; shift
-  local query="${1-}"; shift || true
-  local body="${1-}"; shift || true
-  mapfile -t sig < <(sign_headers "${route}" "${body}")
-  curl -sS -X GET "${PUBLIC_HOST}${route}${query}" \
-    -H "${auth_hdr[0]}" \
-    $(printf ' -H %q' "${sig[@]}")
+# POST ללא חתימה (למשל /manage-once-lite)
+post_plain() {
+  local path="$1"; shift
+  local body_json="$1"; shift
+  local args=(-sS -X POST "${BASE}${path}" -H "Content-Type: application/json" --data-binary "${body_json}")
+  if [ -n "${API_BEARER_TOKEN:-}" ]; then
+    args+=(-H "${AUTH}")
+  fi
+  curl "${args[@]}"
+  echo
 }
 
-usage(){
-cat <<'U'
-usage:
-  manage-once SYMBOL
-  be SYMBOL [OFFSET_BPS]
-  trail SYMBOL [CALLBACK_RATE|auto] [ATR_MULT]
-  tp-one SYMBOL (--price PX | --pct PCT)
-  tp-ladder SYMBOL [PCTS_CSV] [SPLITS_CSV]
-  tp-cancel SYMBOL
-  sl-move SYMBOL PRICE
-  close SYMBOL [FRACTION 0..1]
-  status SYMBOL
-  auto-start ["SYM1,SYM2"] [EVERY_SEC]
-  auto-stop
-  open SYMBOL (long|short) NOTIONAL_USDT LEV
-  trail-off SYMBOL
-U
+usage() {
+  cat <<'US'
+safe_ops.sh – מעטפת בטוחה לקריאות AlgoGPT (ללא jq)
+
+שימושים נפוצים:
+  # בלי חתימה – מואצל פנימית ל-manager/position_ops אם קיים
+  safe_ops.sh manage-once-lite BTCUSDT
+
+  # עם חתימה למסלולי position-ops/*:
+  safe_ops.sh manage-once   BTCUSDT
+  safe_ops.sh be            BTCUSDT 12
+  safe_ops.sh trail         BTCUSDT 1.6
+  safe_ops.sh tp-one        BTCUSDT 3.2 0.5
+  safe_ops.sh tp-ladder     BTCUSDT "3,6,12" "0.25,0.25,0.5"
+  safe_ops.sh tp-cancel     BTCUSDT
+  safe_ops.sh sl-move       BTCUSDT 0.8
+  safe_ops.sh close         BTCUSDT
+  safe_ops.sh status        BTCUSDT
+  safe_ops.sh auto-start    BTCUSDT
+  safe_ops.sh auto-stop     BTCUSDT
+US
 }
 
-cmd="${1-}"; shift || true
-
+cmd="${1:-}"; shift || true
 case "${cmd}" in
+  help|-h|--help|"") usage; exit 0 ;;
+  manage-once-lite)
+    sym="${1:-}"; [ -z "$sym" ] && die "חסר סמל (symbol)"
+    post_plain "/manage-once-lite" "{\"symbol\":\"${sym}\"}"
+    ;;
   manage-once)
-    sym="${1:?need SYMBOL}"; post_signed "/position-ops/manage-once" "$(printf '{"symbol":"%s"}' "${sym}")";;
-
+    sym="${1:-}"; [ -z "$sym" ] && die "חסר סמל (symbol)"
+    # זהו המסלול ה"ראשי" שדורש חתימה
+    post_signed "/manage-once" "{\"symbol\":\"${sym}\"}"
+    ;;
   be)
-    sym="${1:?need SYMBOL}"; off="${2-}"; off="${off:-${TP_BE_OFFSET_BPS:-8}}"
-    post_signed "/position-ops/be" "$(printf '{"symbol":"%s","offset_bps":%s}' "${sym}" "${off}")";;
-
+    sym="${1:-}"; bps="${2:-12}"
+    [ -z "$sym" ] && die "חסר סמל"; [ -z "$bps" ] && die "חסר offset_bps"
+    post_signed "/position-ops/be" "{\"symbol\":\"${sym}\",\"offset_bps\":${bps}}"
+    ;;
   trail)
-    sym="${1:?need SYMBOL}"; cb="${2-}"; atr="${3-}"
-    if [[ -n "${cb:-}" && "${cb}" != "auto" ]]; then
-      post_signed "/position-ops/trail" "$(printf '{"symbol":"%s","callbackRate":%s}' "${sym}" "${cb}")"
-    elif [[ -n "${atr:-}" ]]; then
-      post_signed "/position-ops/trail" "$(printf '{"symbol":"%s","atr_mult":%s}' "${sym}" "${atr}")"
-    else
-      post_signed "/position-ops/trail" "$(printf '{"symbol":"%s"}' "${sym}")"
-    fi;;
-
+    sym="${1:-}"; atr="${2:-1.6}"
+    post_signed "/position-ops/trail" "{\"symbol\":\"${sym}\",\"atr_mult\":${atr}}"
+    ;;
   tp-one)
-    sym="${1:?need SYMBOL}"; flag="${2:?--price PX | --pct PCT}"; val="${3:?need value}"
-    if [[ "${flag}" == "--price" ]]; then
-      post_signed "/position-ops/tp/one" "$(printf '{"symbol":"%s","price":%s}' "${sym}" "${val}")"
-    elif [[ "${flag}" == "--pct" ]]; then
-      post_signed "/position-ops/tp/one" "$(printf '{"symbol":"%s","pct":%s}' "${sym}" "${val}")"
-    else echo "use: tp-one SYMBOL (--price PX | --pct PCT)" >&2; exit 2; fi;;
-
+    sym="${1:-}"; pct="${2:-3.0}"; split="${3:-1.0}"
+    post_signed "/position-ops/tp/one" "{\"symbol\":\"${sym}\",\"pcts\":[${pct}],\"splits\":[${split}]}"
+    ;;
   tp-ladder)
-    sym="${1:?need SYMBOL}"; pcts="${2-}"; splits="${3-}"
-    if [[ -n "${pcts:-}" && -n "${splits:-}" ]]; then
-      post_signed "/position-ops/tp/ladder" "$(printf '{"symbol":"%s","pcts":[%s],"splits":[%s]}' "${sym}" "${pcts}" "${splits}")"
-    else
-      post_signed "/position-ops/tp/ladder" "$(printf '{"symbol":"%s"}' "${sym}")"
-    fi;;
-
+    sym="${1:-}"; pcts="${2:-3,6,12}"; splits="${3:-0.25,0.25,0.5}"
+    # המרות למערכים:
+    pjson=$(printf '%s' "$pcts" | awk -F, '{printf("[" ); for(i=1;i<=NF;i++){ if(i>1) printf(","); printf("%s",$i)}; print "]"}')
+    sjson=$(printf '%s' "$splits"| awk -F, '{printf("[" ); for(i=1;i<=NF;i++){ if(i>1) printf(","); printf("%s",$i)}; print "]"}')
+    post_signed "/position-ops/tp/ladder" "{\"symbol\":\"${sym}\",\"pcts\":${pjson},\"splits\":${sjson}}"
+    ;;
   tp-cancel)
-    sym="${1:?need SYMBOL}"; post_signed "/position-ops/tp/cancel" "$(printf '{"symbol":"%s"}' "${sym}")";;
-
+    sym="${1:-}"; [ -z "$sym" ] && die "חסר סמל"
+    post_signed "/position-ops/tp/cancel" "{\"symbol\":\"${sym}\"}"
+    ;;
   sl-move)
-    sym="${1:?need SYMBOL}"; px="${2:?need PRICE}"
-    post_signed "/position-ops/sl/move" "$(printf '{"symbol":"%s","price":%s}' "${sym}" "${px}")";;
-
+    sym="${1:-}"; pct="${2:-0.8}"
+    post_signed "/position-ops/sl/move" "{\"symbol\":\"${sym}\",\"atr_mult\":${pct}}"
+    ;;
   close)
-    sym="${1:?need SYMBOL}"; frac="${2-1}"
-    post_signed "/position-ops/close" "$(printf '{"symbol":"%s","fraction":%s}' "${sym}" "${frac}")";;
-
+    sym="${1:-}"; [ -ז "$sym" ] && die "חסר סמל"
+    post_signed "/position-ops/close" "{\"symbol\":\"${sym}\"}"
+    ;;
   status)
-    sym="${1:?need SYMBOL}"
-    get_signed "/position-ops/status" "?symbol=${sym}" "$(printf '{"symbol":"%s"}' "${sym}")";;
-
+    sym="${1:-}"; [ -ז "$sym" ] && die "חסר סמל"
+    post_signed "/position-ops/status" "{\"symbol\":\"${sym}\"}"
+    ;;
   auto-start)
-    syms_csv="${1-}"; every="${2-}"
-    body='{}'
-    if [[ -n "${syms_csv:-}" ]]; then syms_json=$(printf '%s' "${syms_csv}" | sed 's/[^,][^,]*/"&"/g'); body=$(printf '{"symbols":[%s]}' "${syms_json}"); fi
-    if [[ -n "${every:-}" ]]; then
-      if [[ "${body}" == "{}" ]]; then body=$(printf '{"every_sec":%s}' "${every}");
-      else body=$(printf '%s' "${body}" | sed 's/}$/,"every_sec":'"${every}"'}/'); fi
-    fi
-    post_signed "/position-ops/auto/start" "${body}";;
-
+    sym="${1:-}"; [ -ז "$sym" ] && die "חסר סמל"
+    post_signed "/position-ops/auto/start" "{\"symbol\":\"${sym}\"}"
+    ;;
   auto-stop)
-    post_signed "/position-ops/auto/stop" "{}";;
-
-  # נדרש שרת: /position-ops/open (מצורף בקוד בהמשך)
-  open)
-    sym="${1:?need SYMBOL}"; side="${2:?long|short}"; notional="${3:?USDT}"; lev="${4:?LEV}"
-    side_up=$(printf "%s" "${side}" | tr a-z A-Z); [[ "${side_up}" == "LONG" ]] && s="BUY" || s="SELL"
-    post_signed "/position-ops/open" "$(printf '{"symbol":"%s","side":"%s","notional":%s,"leverage":%s,"margin":"ISOLATED"}' "${sym}" "${s}" "${notional}" "${lev}")";;
-
-  # נדרש שרת: /position-ops/trail/cancel (מצורף בקוד בהמשך)
-  trail-off)
-    sym="${1:?need SYMBOL}"
-    post_signed "/position-ops/trail/cancel" "$(printf '{"symbol":"%s"}' "${sym}")";;
-
-  *) usage; exit 2;;
+    sym="${1:-}"; [ -ז "$sym" ] && die "חסר סמל"
+    post_signed "/position-ops/auto/stop" "{\"symbol\":\"${sym}\"}"
+    ;;
+  *)
+    usage; die "פקודה לא מוכרת: ${cmd}"
+    ;;
 esac
 BASH
+
 chmod +x /app/safe_ops.sh
 
