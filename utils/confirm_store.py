@@ -1,6 +1,4 @@
-הנה גרסה מלאה ומתוקנת 1-ל-1 של `utils/confirm_store.py` (תיקנתי את שורת הסיום ששברה קומפילציה, שמרתי על ה־API שלך, והוספתי שמירה על TTL בעת עדכון ברדיס + דה־דופליקציה בתוצאות):
 
-```python
 # utils/confirm_store.py
 from __future__ import annotations
 import os, time, secrets, json
