@@ -5,8 +5,8 @@ import os, time, hmac, hashlib, json, logging, threading
 from typing import Optional, Dict, Any
 
 from fastapi import FastAPI, Request, HTTPException, Depends
-from fastapi.responses import PlainTextResponse, JSONResponse
-from pydantic import BaseModel, Field
+from fastapi.responses import PlainTextResponse, JSONResponse, Response
+from pydantic import BaseModel
 try:
     import jsonschema  # optional validation
 except Exception:
@@ -16,8 +16,13 @@ try:
 except Exception as e:
     raise RuntimeError("PyYAML is required. pip install pyyaml") from e
 
+# Prometheus
+from prometheus_client import (
+    Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST, CollectorRegistry, PROCESS_COLLECTOR, PLATFORM_COLLECTOR
+)
+
 APP_NAME = os.getenv("APP_NAME", "algogpt")
-APP_TITLE = os.getenv("APP_TITLE", "AlgoGPT API")
+APP_TITLE = os.getenv("APP_TITLE", "AlgoGPT Service")
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
 START_TS = time.time()
 
@@ -28,9 +33,51 @@ handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
 logger.addHandler(handler)
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO"))
 
+# ---------- Prometheus registry & metrics ----------
+registry = CollectorRegistry()
+# default python process/platform collectors
+PROCESS_COLLECTOR.registries = set()  # detach globals to avoid double-reg
+PLATFORM_COLLECTOR.registries = set()
+PROCESS_COLLECTOR.register(registry)
+PLATFORM_COLLECTOR.register(registry)
+
+APP_UPTIME = Gauge("app_uptime_seconds", "Application uptime seconds", registry=registry)
+READY_WS_OK = Gauge("ready_ws_ok", "WebSocket manager up", registry=registry)
+READY_POLICY = Gauge("ready_policy_loaded", "Policy loaded", registry=registry)
+ATTACH_SLTP_P95 = Gauge("attach_sltp_p95_ms", "Target SLO placeholder for attach SL/TP p95", registry=registry)
+BUILD_INFO = Gauge("build_info", "Build information", ["app", "version"], registry=registry)
+HTTP_REQS = Counter("http_requests_total", "HTTP requests total", ["method", "path", "status"], registry=registry)
+HTTP_LATENCY = Histogram("http_request_latency_seconds", "HTTP request latency seconds", ["method", "path"], registry=registry)
+
+BUILD_INFO.labels(app=APP_NAME, version=APP_VERSION).inc(0)
+ATTACH_SLTP_P95.set(300)  # default SLO placeholder
+
+# ---------- FastAPI ----------
+app = FastAPI(title=APP_TITLE, version=APP_VERSION)
+
+# ---------- Request metrics middleware ----------
+@app.middleware("http")
+async def metrics_middleware(request: Request, call_next):
+    start = time.time()
+    try:
+        resp = await call_next(request)
+        status = getattr(resp, "status_code", 500)
+    except Exception:
+        status = 500
+        raise
+    finally:
+        dur = time.time() - start
+        path = request.url.path
+        method = request.method
+        HTTP_REQS.labels(method=method, path=path, status=str(status)).inc()
+        # cap cardinality on path: keep common control-plane endpoints granular; others collapsed
+        bucket_path = path if path in ("/health", "/readyz", "/readyz/strict", "/meta", "/meta/version", "/metrics") else "/other"
+        HTTP_LATENCY.labels(method=method, path=bucket_path).observe(dur)
+    return resp
+
 # ---------- Runtime Prefs ----------
 class RuntimePrefs(BaseModel):
-    # a small subset; extend freely
+    # WS-only & core toggles (extend freely)
     NET_WS_ONLY_PRICES: int = 1
     NET_DISABLE_POLLING: int = 1
 
@@ -67,7 +114,8 @@ class RuntimePrefsStore:
         if vl in ("true", "false"):
             return 1 if vl == "true" else 0
         try:
-            if "." in v: return float(v)
+            if "." in v:
+                return float(v)
             return int(v)
         except:
             return v
@@ -128,8 +176,7 @@ def verify_hmac(headers: Dict[str, str], body: bytes, secret: str) -> None:
     if not hmac.compare_digest(mac, sig):
         raise HTTPException(status_code=403, detail="invalid signature")
 
-# ---------- App ----------
-app = FastAPI(title=APP_TITLE, version=APP_VERSION)
+# ---------- App state ----------
 prefs_store = RuntimePrefsStore.instance()
 state = {"ws_ok": False, "policy_loaded": False}
 policy_path = os.getenv("POLICY_DSL_PATH", "policies/dynamic_policy.yaml")
@@ -141,12 +188,13 @@ _stop = threading.Event()
 def ws_loop():
     logger.info("WS loop started")
     state["ws_ok"] = True
+    READY_WS_OK.set(1.0)
     try:
         while not _stop.is_set():
-            # TODO: חבר כאן את ה-WS האמיתי (Binance market/user streams, multiplex, resubscribe)
             time.sleep(1.0)
     finally:
         state["ws_ok"] = False
+        READY_WS_OK.set(0.0)
         logger.info("WS loop stopped")
 
 @app.on_event("startup")
@@ -154,11 +202,14 @@ def on_start():
     try:
         policy_mgr.load()
         state["policy_loaded"] = True
+        READY_POLICY.set(1.0)
     except Exception as e:
         logger.error("Policy load error: %s", e)
         state["policy_loaded"] = False
+        READY_POLICY.set(0.0)
     t = threading.Thread(target=ws_loop, name="ws", daemon=True)
     t.start()
+    logger.info("Startup complete")
 
 @app.on_event("shutdown")
 def on_stop():
@@ -175,7 +226,15 @@ def health():
 
 @app.get("/readyz", response_class=JSONResponse)
 def readyz():
-    return {"ws_ok": state["ws_ok"], "policy_loaded": state["policy_loaded"]}
+    ok = bool(state["ws_ok"] and state["policy_loaded"])
+    # keep healthcheck friendly: always 200 for Render /readyz
+    return {"ok": ok, "ws_ok": state["ws_ok"], "policy_loaded": state["policy_loaded"]}
+
+@app.get("/readyz/strict", response_class=JSONResponse)
+def readyz_strict():
+    ok = bool(state["ws_ok"] and state["policy_loaded"])
+    status = 200 if ok else 503
+    return JSONResponse({"ok": ok, "ws_ok": state["ws_ok"], "policy_loaded": state["policy_loaded"]}, status_code=status)
 
 @app.get("/meta/version", response_class=JSONResponse)
 def meta_version():
@@ -189,18 +248,13 @@ def meta_all(prefs: RuntimePrefs = Depends(get_prefs)):
         "flags": prefs.dict()
     }
 
-@app.get("/metrics", response_class=PlainTextResponse)
+@app.get("/metrics")
 def metrics():
-    uptime = time.time() - START_TS
-    return (
-        "# HELP process_uptime_seconds Uptime seconds\n"
-        "# TYPE process_uptime_seconds gauge\n"
-        f"process_uptime_seconds {uptime:.2f}\n"
-        "# HELP attach_sltp_p95_ms Target SLO placeholder\n"
-        "# TYPE attach_sltp_p95_ms gauge\n"
-        "attach_sltp_p95_ms 300\n"
-    )
+    APP_UPTIME.set(time.time() - START_TS)
+    blob = generate_latest(registry)
+    return Response(content=blob, media_type=CONTENT_TYPE_LATEST)
 
+# ---------- Ops (HMAC) ----------
 class PrefsPatch(BaseModel):
     patch: Dict[str, Any]
 
@@ -224,7 +278,9 @@ async def policy_reload(req: Request):
     verify_hmac(req.headers, body, secret)
     policy_mgr.load()
     state["policy_loaded"] = True
+    READY_POLICY.set(1.0)
     return {"ok": True, "policy_mtime": policy_mgr.mtime}
 
 # Run with:
 # uvicorn main_ultratop:app --host 0.0.0.0 --port ${PORT:-10000}
+
