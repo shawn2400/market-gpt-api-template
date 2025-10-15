@@ -12,7 +12,7 @@ import logging
 import threading
 from typing import Optional, Dict, Any
 
-from fastapi import FastAPI, Request, HTTPException, Depends, APIRouter
+from fastapi import FastAPI, Request, HTTPException, Depends, APIRouter, Header
 from fastapi.responses import PlainTextResponse, JSONResponse, Response
 from pydantic import BaseModel
 
@@ -187,6 +187,8 @@ policy_schema_path = os.getenv("POLICY_SCHEMA_PATH", "config/policy_schema.json"
 policy_mgr = PolicyManager(policy_path, policy_schema_path)
 _stop = threading.Event()
 
+# bearer protection for /metrics (recommended)
+METRICS_BEARER = os.getenv("METRICS_BEARER", "").strip()
 
 # ---------- WS manager (placeholder; plug real WS here) ----------
 def ws_loop():
@@ -242,7 +244,15 @@ def meta_all(prefs: RuntimePrefs = Depends(lambda: prefs_store.get())):
 
 
 @router.get("/metrics")
-def metrics():
+def metrics(authorization: Optional[str] = Header(default=None)):
+    # Bearer protection if configured
+    if METRICS_BEARER:
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="missing bearer")
+        token = authorization.split(" ", 1)[1]
+        if token != METRICS_BEARER:
+            raise HTTPException(status_code=403, detail="invalid bearer")
+
     APP_UPTIME.set(time.time() - START_TS)
     blob = generate_latest(registry)
     return Response(content=blob, media_type=CONTENT_TYPE_LATEST)
@@ -286,12 +296,11 @@ async def _metrics_middleware(request: Request, call_next):
     path = request.url.path
     method = request.method
     try:
-        HTTP_REQS.labels(method=method, path=path, status=str(status)).inc()
-        bucket_path = (
-            path
-            if path in ("/health", "/readyz", "/readyz/strict", "/meta", "/meta/version", "/metrics")
-            else "/other"
-        )
+        # bucket popular/diagnostic paths and collapse the rest to "/other"
+        bucket_path = path if path in (
+            "/health", "/readyz", "/readyz/strict", "/meta", "/meta/version", "/metrics"
+        ) else "/other"
+        HTTP_REQS.labels(method=method, path=bucket_path, status=str(status)).inc()
         HTTP_LATENCY.labels(method=method, path=bucket_path).observe(dur)
     except Exception:
         pass
