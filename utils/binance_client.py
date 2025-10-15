@@ -235,9 +235,15 @@ def _quantize_price(symbol: str, price: float) -> str:
     return f"{adj:.{decs}f}"
 
 def _quantize_qty(symbol: str, qty: float) -> str:
+    """
+    כימות כמות לצעד הבורסה. אם הכמות <= 0 — נחזיר "0" ולא נרים צעד אוטומטית.
+    """
     f = get_symbol_filters(symbol) or {}
     step = float(f.get("stepSize") or DEFAULT_QTY_STEP_STR)
-    if step <= 0: step = float(DEFAULT_QTY_STEP_STR)
+    if step <= 0:
+        step = float(DEFAULT_QTY_STEP_STR)
+    if qty <= 0:
+        return "0"
     steps = math.floor(max(qty, 0.0) / step)
     adj = max(step, steps * step)
     decs = _decs(str(f.get("stepSize") or DEFAULT_QTY_STEP_STR))
@@ -526,9 +532,6 @@ __all__ = [
     "get_open_orders","get_all_orders",
     "set_leverage","futures_create_order","futures_cancel_order",
 ]
-
-
-
 
 
 
