@@ -32,7 +32,7 @@ _bucket_take(){
   printf "%s %s\n" "$last" "$tokens" > "$BUCKET_FILE"
 }
 
-# ===== nonce/hmac עם fallbacks (בלי uuidgen/xxd) =====
+# ===== nonce/hmac גם בלי uuidgen/xxd =====
 _nonce(){
   if command -v uuidgen >/dev/null 2>&1; then uuidgen
   elif [[ -r /proc/sys/kernel/random/uuid ]]; then cat /proc/sys/kernel/random/uuid
@@ -77,12 +77,12 @@ ENV חובה:
 
 פקודות:
   manage-once [SYMBOL]                   — POST /manage-once (ללא חתימה)
-  tp-one SYMBOL PRICE QTY                — POST /position-ops/tp/one (reduceOnly)
-  tp-ladder SYMBOL P1 P2 P3 Q1 Q2 Q3     — POST /position-ops/tp/ladder (עד 3 רמות)
-  be SYMBOL [OFFSET_BPS=12]              — POST /position-ops/be/set
-  move-sl SYMBOL PRICE                   — POST /position-ops/sl/move
-  trail-off SYMBOL                       — POST /position-ops/trail/off
+  tp-one    SYMBOL PRICE QTY             — POST /position-ops/tp/one
+  tp-ladder SYMBOL P1 P2 P3 Q1 Q2 Q3     — POST /position-ops/tp/ladder
+  be        SYMBOL [OFFSET_BPS=12]       — POST /position-ops/be/set
+  move-sl   SYMBOL PRICE                 — POST /position-ops/sl/move
   tp-cancel SYMBOL                       — POST /position-ops/tp/cancel
+  trail-off SYMBOL                       — POST /position-ops/trail/off
   help                                   — עזרה
 USAGE
 }
@@ -137,6 +137,7 @@ case "$cmd" in
 esac
 EOF
 
-chmod +x safe_ops.sh
+chmod +x /app/safe_ops.sh
+
 
 
