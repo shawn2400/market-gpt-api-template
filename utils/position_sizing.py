@@ -131,9 +131,10 @@ def ensure_final_qty(ticket: dict, symbol_price: float) -> dict:
     if q is None or qf <= 0.0:
         q_calc = auto_qty(symbol, float(symbol_price), int(final_lev))
         if q_calc and q_calc > 0:
-            ticket["qty"] = q_calc  # ← תוקן: הוסרה שארית טקסט בעברית שגרמה ל-SyntaxError
+            ticket["qty"] = q_calc
 
     return ticket
+
 
 
 
