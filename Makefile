@@ -1,9 +1,3 @@
-
----
-
-# Makefile 
-
-```make
 # ====== Config ======
 REG        ?= ghcr.io/your-org
 IMAGE      ?= algogpt
@@ -37,7 +31,8 @@ SHELL := /bin/bash
         run-docker \
         ultra-readyz ultra-readyz-strict ultra-meta ultra-version ultra-metrics \
         ultra-prefs ultra-reload ultra-sig ultra-ts ultra-health \
-        public approve
+        public approve \
+        openapi openapi-json
 
 help:
 	echo "Targets:"
@@ -71,6 +66,9 @@ help:
 	echo "  --- Convenience (if scripts exist) ---"
 	echo "  public                - scripts/hit_public_feed.sh (BASE_URL + optional bearer)"
 	echo "  approve               - scripts/approve_via_telegram.sh (vars via env)"
+	echo "  --- OpenAPI (optional) ---"
+	echo "  openapi               - python scripts/export_openapi.py -> openapi.yaml"
+	echo "  openapi-json          - FORMAT=json python scripts/export_openapi.py -> openapi.json"
 
 # ====== Python local ======
 venv:
@@ -263,4 +261,13 @@ approve:
 	@if [ -z "$${BASE_URL}" ] || [ -z "$${TICKET_ID}" ] || [ -z "$${WEBHOOK_HMAC_SECRET}" ]; then \
 	  echo "Usage: make approve BASE_URL=<url> TICKET_ID=<id> WEBHOOK_HMAC_SECRET=<secret> ACTION=approve|reject REASON='text'"; exit 2; fi
 	bash scripts/approve_via_telegram.sh "$${BASE_URL}" "$${TICKET_ID}" "$${ACTION:-approve}" "$${WEBHOOK_HMAC_SECRET}" "$${REASON:-Approved via Makefile}"
+
+# ====== OpenAPI (optional) ======
+openapi:
+	@if [ ! -f scripts/export_openapi.py ]; then echo "scripts/export_openapi.py not found"; exit 2; fi
+	python3 scripts/export_openapi.py
+
+openapi-json:
+	@if [ ! -f scripts/export_openapi.py ]; then echo "scripts/export_openapi.py not found"; exit 2; fi
+	FORMAT=json python3 scripts/export_openapi.py
 
