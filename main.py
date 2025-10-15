@@ -1,3 +1,5 @@
+
+
 # main.py
 from __future__ import annotations
 
@@ -390,21 +392,37 @@ async def _public_cache_etag(request: Request, call_next):
         if int(getattr(resp, "status_code", 200)) >= 400:
             return resp
         hdrs_lower = {k.lower() for k in resp.headers.keys()}
+        # Cache-Control
         if "cache-control" not in hdrs_lower:
             resp.headers["Cache-Control"] = f"public, max-age={PUBLIC_CACHE_MAX_AGE}"
+        # Body (for ETag)
         body = b""
         with suppress(Exception):
             body = resp.body if getattr(resp, "body", None) else b""
         if not body:
+            # still ensure Vary header exists for clarity
+            if "vary" not in hdrs_lower:
+                resp.headers["Vary"] = "If-None-Match"
+            elif "if-none-match" not in resp.headers.get("Vary", "").lower():
+                resp.headers["Vary"] = resp.headers["Vary"] + ", If-None-Match"
             return resp
+        # ETag
         etag = '"' + hashlib.md5(body).hexdigest() + '"'
         if "etag" not in hdrs_lower:
             resp.headers["ETag"] = etag
+        # Vary: If-None-Match
+        if "vary" not in hdrs_lower:
+            resp.headers["Vary"] = "If-None-Match"
+        elif "if-none-match" not in resp.headers.get("Vary", "").lower():
+            resp.headers["Vary"] = resp.headers["Vary"] + ", If-None-Match"
+        # Conditional
         inm = request.headers.get("If-None-Match")
         if inm and inm == etag and resp.status_code == 200:
             fresh = Response(status_code=304)
             fresh.headers["Cache-Control"] = resp.headers.get("Cache-Control", f"public, max-age={PUBLIC_CACHE_MAX_AGE}")
             fresh.headers["ETag"] = etag
+            # also mirror Vary header for transparency
+            fresh.headers["Vary"] = resp.headers.get("Vary", "If-None-Match")
             return fresh
     except Exception:
         # אל תקרוס – החזר את התשובה כפי שהיא
@@ -479,12 +497,12 @@ async def _ensure_telegram_webhook() -> None:
     payload = {
         "url": f"{host}/telegram/webhook",
         "secret_token": secret,
-        "drop_pending_updates": "true",
-        "max_connections": "40",
+        "drop_pending_updates": True,
+        "max_connections": 40,
     }
     try:
         cli = _get_shared_async_client()
-        r = await cli.post(set_url, data=payload, timeout=httpx.Timeout(15.0))
+        r = await cli.post(set_url, json=payload, timeout=httpx.Timeout(15.0))
         ok = False
         with suppress(Exception):
             ok = (r.status_code == 200) and (r.json().get("ok", False))
@@ -1249,40 +1267,6 @@ async def _reject_core(ticket_id: str):
     return _html("⛔️ נדחה — הכרטיס הוסר.")
 
 
-# ==================== Real-time TRADE EVENTS ====================
-@router.post("/ops/trade-event")
-async def trade_event(payload: Dict[str, Any] = Body(...), request: Request = None):
-    _require_bearer(request)
-    etype = str(payload.get("event") or "").upper().strip()
-    symbol = str(payload.get("symbol") or "").upper()
-    side = str(payload.get("side") or "").upper()
-    desc = payload.get("desc") or payload.get("description") or ""
-    extra = payload.get("extra") or {}
-    if not etype or not symbol:
-        raise HTTPException(status_code=422, detail="Missing event or symbol")
-    lines = [f"📣 <b>Trade update</b> · <code>{_md_html(symbol)}</code>"]
-    if side:
-        lines.append(f"• Side: <code>{_md_html(side)}</code>")
-    lines.append(f"• Event: <b>{_md_html(etype)}</b>")
-    if "price" in payload:
-        lines.append(f"• Price: <code>{_md_html(payload['price'])}</code>")
-    if "qty" in payload:
-        lines.append(f"• Qty: <code>{_md_html(payload['qty'])}</code>")
-    if "lev" in payload or "leverage" in payload:
-        lv = payload.get("lev", payload.get("leverage"))
-        lines.append(f"• Lev: <code>{_md_html(lv)}</code>")
-    if desc:
-        lines.append(f"• Note: {_md_html(desc)}")
-    if extra:
-        try:
-            trimmed = json.dumps(extra, ensure_ascii=False)[:400]
-            lines.append(f"• Extra: <code>{_md_html(trimmed)}</code>")
-        except Exception:
-            pass
-    await _send_telegram_html("\n".join(lines))
-    return {"ok": True}
-
-
 # ==================== Digest/UI/etc. ====================
 @router.get("/ops/ui/pending")
 async def ui_pending(request: Request = None):
@@ -1439,53 +1423,19 @@ def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -
         return {"atr": 0.0, "adx": 0.0, "price": 0.0}
 
 
-async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, float], str]:
-    explicit_offset = payload.get("offset_bps")
-    explicit_pcts = payload.get("pcts")
-    explicit_splits = payload.get("splits")
-    explicit_atr = payload.get("atr_mult")
-    if explicit_pcts and explicit_splits:
-        prof = {
-            "offset_bps": int(explicit_offset if explicit_offset is not None else PROFILE_BASE_BE_BPS),
-            "pcts": [float(x) for x in explicit_pcts],
-            "splits": [float(x) for x in explicit_splits],
-            "atr_mult": (float(explicit_atr) if explicit_atr is not None else PROFILE_BASE_ATR_MULT),
-        }
-        kl = []
-        with suppress(Exception):
-            kl = client.futures_klines(symbol=symbol, interval="5m", limit=120)
-        ind = _compute_indicators_from_klines(kl, period=14)
-        return prof, ind, "custom"
-
-    if PROFILE_AUTO_SELECT:
-        kl = []
-        with suppress(Exception):
-            kl = client.futures_klines(symbol=symbol, interval="5m", limit=120)
-        ind = _compute_indicators_from_klines(kl, period=14)
-        atr = ind.get("atr", 0.0)
-        px = ind.get("price", 0.0)
-        adx = ind.get("adx", 0.0)
-        atrpct = (atr / px) if (atr > 0 and px > 0) else 0.0
-        is_extreme = (adx >= ADX_EXTREME_MIN) or (atrpct >= ATRPCT_EXTREME_MIN)
-        if is_extreme:
-            prof = {"offset_bps": PROFILE_EXTREME_BE_BPS, "pcts": PROFILE_EXTREME_PCTS[:], "splits": PROFILE_EXTREME_SPLITS[:], "atr_mult": PROFILE_EXTREME_ATR_MULT}
-            return prof, ind, "extreme"
-        else:
-            prof = {"offset_bps": PROFILE_BASE_BE_BPS, "pcts": PROFILE_BASE_PCTS[:], "splits": PROFILE_BASE_SPLITS[:], "atr_mult": PROFILE_BASE_ATR_MULT}
-            return prof, ind, "base"
-
-    ind = {"atr": 0.0, "adx": 0.0, "price": 0.0}
-    prof = {"offset_bps": PROFILE_BASE_BE_BPS, "pcts": PROFILE_BASE_PCTS[:], "splits": PROFILE_BASE_SPLITS[:], "atr_mult": PROFILE_BASE_ATR_MULT}
-    return prof, ind, "base"
-
-
-# ==================== /manage-once ====================
-
+# ---- tick rounding helpers ----
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
         return value
-    # שימוש ב-floor (גם לערכים קטולים מאוד) כדי לכבד tick/step
     return math.floor(value / step) * step
+
+def _round_tick_dir(value: float, step: float, direction: str) -> float:
+    if step <= 0:
+        return value
+    q = value / step
+    if direction.lower().startswith("up"):
+        return math.ceil(q) * step
+    return math.floor(q) * step
 
 
 def _get_filters(client, symbol: str) -> Tuple[float, float]:
@@ -1575,14 +1525,13 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     if any(x <= 0 for x in splits):
         raise HTTPException(status_code=422, detail="splits must be > 0")
 
-    # --- Correct BE stop computation (fix) ---
+    # --- Correct BE stop computation with safe rounding ---
     if side_txt == "BUY":
         be_price = float(entry_price) * (1.0 - (offset_bps / 10_000.0))
+        be_price = _round_tick_dir(be_price, tick, "down")
     else:
         be_price = float(entry_price) * (1.0 + (offset_bps / 10_000.0))
-
-    # Round to tick
-    be_price = _bn_round(be_price, tick)
+        be_price = _round_tick_dir(be_price, tick, "up")
 
     # Nudge to the safe side vs. current mark price to avoid immediate trigger
     if price_now:
@@ -1591,7 +1540,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
                 be_price = _bn_round(price_now - tick, tick)
         else:
             if be_price <= price_now:
-                be_price = _bn_round(price_now + tick, tick)
+                be_price = _round_tick_dir(price_now + tick, tick, "up")
 
     # --- Cancel existing protective stops/trails before placing ours ---
     try:
@@ -1619,13 +1568,13 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     except Exception as e:
         logger.warning("place_be_stop_failed: %s", e)
 
-    # --- Build TP ladder from current/entry base price ---
+    # --- Build TP ladder from current/entry base price (directional rounding) ---
     tps: List[float] = []
     for pct in pcts:
         if side_txt == "BUY":
-            tps.append(_bn_round(base_price * (1.0 + pct / 100.0), tick))
+            tps.append(_round_tick_dir(base_price * (1.0 + pct / 100.0), tick, "down"))
         else:
-            tps.append(_bn_round(base_price * (1.0 - pct / 100.0), tick))
+            tps.append(_round_tick_dir(base_price * (1.0 - pct / 100.0), tick, "up"))
 
     qty_abs = abs(pos_amt)
     placed_tp = []
@@ -2009,6 +1958,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
