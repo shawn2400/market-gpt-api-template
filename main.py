@@ -1470,6 +1470,70 @@ def _pos_side_from_amt(side_text: str, pos_amt: float) -> str:
     return "LONG" if pos_amt >= 0 else "SHORT"
 
 
+# -------------- NEW: auto-select profile helper (inserted before /manage-once) --------------
+async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, float], str]:
+    """
+    בוחר פרופיל ניהול (BASE/EXTREME) לפי ADX/ATR% מהקליינים של בינאנס (1m),
+    עם אפשרות override מה-payload.
+    """
+    # 1) שליפת קליינים וחישוב אינדיקטורים
+    klines = []
+    try:
+        klines = client.futures_klines(symbol=symbol, interval="1m", limit=60)
+    except Exception:
+        klines = []
+    indicators = _compute_indicators_from_klines(klines or [], period=14)
+    price = float(indicators.get("price") or 0.0)
+    atr = float(indicators.get("atr") or 0.0)
+    adx = float(indicators.get("adx") or 0.0)
+    atr_pct = (atr / price) if price > 0 else 0.0
+
+    # 2) קביעת שם הפרופיל לפי ספים
+    use_extreme = PROFILE_AUTO_SELECT and (
+        (adx >= ADX_EXTREME_MIN) or (atr_pct >= ATRPCT_EXTREME_MIN)
+    )
+    profile_name = "EXTREME" if use_extreme else "BASE"
+
+    # 3) בסיס פרופיל מה־env
+    if use_extreme:
+        prof = dict(
+            offset_bps=PROFILE_EXTREME_BE_BPS,
+            pcts=PROFILE_EXTREME_PCTS[:],
+            splits=PROFILE_EXTREME_SPLITS[:],
+            atr_mult=PROFILE_EXTREME_ATR_MULT,
+        )
+    else:
+        prof = dict(
+            offset_bps=PROFILE_BASE_BE_BPS,
+            pcts=PROFILE_BASE_PCTS[:],
+            splits=PROFILE_BASE_SPLITS[:],
+            atr_mult=PROFILE_BASE_ATR_MULT,
+        )
+
+    # 4) אפשרות override דרך ה-payload (אם נשלח)
+    if isinstance(payload.get("offset_bps"), int):
+        prof["offset_bps"] = int(payload["offset_bps"])
+    if payload.get("pcts"):
+        try:
+            prof["pcts"] = [float(x) for x in payload["pcts"]]
+        except Exception:
+            pass
+    if payload.get("splits"):
+        try:
+            prof["splits"] = [float(x) for x in payload["splits"]]
+        except Exception:
+            pass
+    if payload.get("atr_mult") is not None:
+        try:
+            v = float(payload["atr_mult"])
+            prof["atr_mult"] = v
+        except Exception:
+            pass
+
+    return prof, {"price": price, "atr": atr, "adx": adx}, profile_name
+# ------------------------------------------------------------------------------------------------
+
+
 @router.post("/manage-once")
 async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     _require_bearer(request)
@@ -1964,6 +2028,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
