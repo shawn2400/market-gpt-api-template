@@ -1,3 +1,4 @@
+
 # main.py
 from __future__ import annotations
 
@@ -96,11 +97,18 @@ app = FastAPI(
     openapi_url=OPENAPI_URL,
 )
 
-# ===== UltraTop integration (mount under /ultra without affecting existing routes) =====
+# ===== UltraTop integration (mount under /ultra only if enabled) =====
+ULTRATOP_MODE = os.getenv("ULTRATOP_MODE", "noop").lower()
+ULTRATOP_PREFIX = os.getenv("ULTRATOP_PREFIX", "/ultra")
+
 try:
+    # Import is safe even ב-noop (main_ultratop.py לא יצרף Router אוטומטית במצב זה)
     from main_ultratop import setup_ultratop  # type: ignore
-    setup_ultratop(app, prefix="/ultra")
-    logger.info("UltraTop mounted at /ultra")
+    if ULTRATOP_MODE in ("mount", "embed", "attach"):
+        setup_ultratop(app, prefix=ULTRATOP_PREFIX)
+        logger.info("UltraTop mounted at %s (mode=%s)", ULTRATOP_PREFIX, ULTRATOP_MODE)
+    else:
+        logger.info("UltraTop not mounted (mode=%s)", ULTRATOP_MODE)
 except Exception as e:
     logger.warning("UltraTop not mounted: %s", e)
 
@@ -2028,6 +2036,8 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
+
 
 
 
