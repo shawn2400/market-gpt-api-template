@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, time, math, logging, threading
-from typing import Any, Dict, List, Optional, Iterable, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 
 logger = logging.getLogger("algogpt.binance")
 
@@ -518,6 +518,7 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     except Exception:
         pass
 
+    last: Optional[Exception] = None
     # Rate bucket
     for attempt in range(1, max(1, BINANCE_MAX_RETRIES) + 1):
         if not _rate_allow():
@@ -537,13 +538,13 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
                         res = client.futures_create_order(recvWindow=RECV_WINDOW, **kw2)
                         return res or {}
                     except Exception as e2:
-                        _backoff_sleep(attempt); last = e2; continue  # will retry/raise later
+                        _backoff_sleep(attempt); last = e2; continue
             last = e
         except Exception as e:
             last = e
             _backoff_sleep(attempt)
             continue
-    raise RuntimeError(f"create_order_failed:{sym}:{typ}:{str(last)}")  # type: ignore[name-defined]
+    raise RuntimeError(f"create_order_failed:{sym}:{typ}:{str(last) if last else 'unknown_error'}")
 
 def futures_cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
     try:
@@ -567,6 +568,7 @@ __all__ = [
     "get_open_orders","get_all_orders",
     "set_leverage","futures_create_order","futures_cancel_order",
 ]
+
 
 
 
