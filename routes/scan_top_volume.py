@@ -788,7 +788,7 @@ async def public_scan_now(
         primary_tf=timeframe, kline_limit=kline_limit,
         min_score=min_score, require_side=require_side,
         fallback_enable=fallback_enable,
-        fallback_tfs=[t.strip() for t in (fallback_timeframes or "").split(",") if t.strip()],
+        fallback_tfs=[t.strip() for t in (fallback_timeframes or "").split(",") if t.strip() ],
         min_candidates=min_candidates
     )
     body = {"ok": True, "used_timeframe": used_tf, "returned": len(signals), "signals": signals}
@@ -877,6 +877,7 @@ async def public_topk(
         "Cache-Control": _cache_control(),
         "Last-Modified": _last_modified(),
     })
+
 
 
 
