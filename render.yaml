@@ -143,7 +143,7 @@ services:
       - key: PUBLIC_CACHE_PATHS
         value: "/scan/public-topk,/scan/public-now,/topk"
 
-      # ===== Extra RL knobs for routes/public.py =====
+      # ===== Extra RL knobs =====
       - key: PUBLIC_WEB_RPS
         value: "2"
       - key: PUBLIC_WEB_BURST
@@ -158,18 +158,6 @@ services:
         value: "4"
       - key: PUBLIC_RL_NS
         value: "ops-supervisor-web:rl"
-
-      # (אופציונלי) Token-Bucket אמיתי (אם תוסיף utils/rate_limit_tb.py)
-      # - key: TB_ENABLE
-      #   value: "1"
-      # - key: TB_NAMESPACE
-      #   value: "tb"
-      # - key: TB_DEFAULT_RATE
-      #   value: "5"
-      # - key: TB_DEFAULT_BURST
-      #   value: "15"
-      # - key: TB_DEFAULT_PERIOD_SEC
-      #   value: "1"
 
       # ========================= Redis =========================
       - key: REQUIRE_REDIS
@@ -321,7 +309,7 @@ services:
       - key: DEFAULT_STAKE_USDT
         value: "50"
 
-      # ========================= Approvals =========================
+      # ========================= Approvals (Gate = Telegram) =========================
       - key: APPROVAL_ENABLED
         value: "1"
       - key: REQUIRE_TELEGRAM_APPROVAL
@@ -637,6 +625,18 @@ services:
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
+      # ======== Auto Manager defaults (this service) ========
+      - key: AUTO_BE_BPS
+        value: "8"
+      - key: AUTO_ATR_MULT
+        value: "1.6"
+      - key: AUTO_TP_PCTS
+        value: "3,6,12"
+      - key: AUTO_TP_SPLITS
+        value: "0.278,0.333,0.389"
+      - key: AUTO_POLL_SEC
+        value: "8"
+
       # (Optional) BTC-Gate
       - key: BTC_GATE_ENABLE
         value: "1"
@@ -684,6 +684,7 @@ services:
         fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
         fromSecret: BINANCE_API_SECRET
+
 
 
 
