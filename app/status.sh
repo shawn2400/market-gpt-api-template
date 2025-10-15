@@ -12,7 +12,7 @@ curl -fsS "$BASE/health"; echo; echo
 echo "# /ops/manager/health"
 curl -fsS "$BASE/ops/manager/health"; echo; echo
 
-echo "# /ops/ui/pending (HTML, מוגן Bearer)"
+echo "# /ops/ui/pending (HTML; מוגן Bearer)"
 curl -fsS -H "Authorization: Bearer ${API_BEARER_TOKEN:-}" "$BASE/ops/ui/pending" || true; echo
 BASH
 
