@@ -1,4 +1,3 @@
-
 # main.py
 from __future__ import annotations
 
@@ -1935,18 +1934,18 @@ def _collect_critical_env_warnings() -> List[str]:
     if os.getenv("PROTECT_APPROVE_ROUTES", "1").lower() in ("1", "true", "yes", "on") and not API_BEARER_TOKEN:
         warnings.append("PROTECT_APPROVE_ROUTES=1 but API_BEARER_TOKEN is missing")
     # Telegram
-    if (STARTUP_NOTIFY_ENABLE or os.getenv("REQUIRE_TELEGRAM_APPROVAL", "0") in ("1","true","yes","on")):
+    if STARTUP_NOTIFY_ENABLE or os.getenv("REQUIRE_TELEGRAM_APPROVAL", "0").lower() in ("1", "true", "yes", "on"):
         if not TELEGRAM_BOT_TOKEN:
             warnings.append("Telegram enabled but TELEGRAM_BOT_TOKEN is missing")
         if not ADMIN_CHAT_ID:
             warnings.append("Telegram enabled but TELEGRAM_CHAT_ID/ADMIN_CHAT_ID is missing")
     # HMAC/signed links
-    if os.getenv("TELEGRAM_AUTO_WEBHOOK", "1") in ("1","true","yes","on") and not TELEGRAM_WEBHOOK_SECRET:
+    if os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on") and not TELEGRAM_WEBHOOK_SECRET:
         warnings.append("TELEGRAM_AUTO_WEBHOOK=1 but TELEGRAM_WEBHOOK_SECRET is missing")
     if not HMAC_SECRET:
         warnings.append("WEBHOOK_HMAC_SECRET/OPS_SIGN_SECRET missing — signed approve links will degrade to plain URLs")
     # Binance keys (only warn if trade execution is enabled)
-    if os.getenv("EXECUTE_TRADES", "0").lower() in ("1","true","yes","on"):
+    if os.getenv("EXECUTE_TRADES", "0").lower() in ("1", "true", "yes", "on"):
         if not os.getenv("BINANCE_API_KEY") or not os.getenv("BINANCE_API_SECRET"):
             warnings.append("EXECUTE_TRADES=1 but BINANCE_API_KEY/SECRET are missing")
     # Anti-replay signature
@@ -2010,6 +2009,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
