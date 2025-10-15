@@ -6,41 +6,44 @@ from typing import Dict, Any, List, Optional, Tuple, Callable, Awaitable
 
 log = logging.getLogger("algogpt.approvals")
 
-# -------- helpers ----------
+# -------- פונקציות עזר בסיסיות ----------
 def _as_bool(s: Optional[str], default: bool = False) -> bool:
+    # המרה בטוחה של מחרוזת לערך בוליאני (תומך ב־1/true/yes/on)
     return str(s).strip().lower() in {"1","true","yes","on"} if s is not None else default
 
 def _as_float(s: Optional[str], default: float) -> float:
+    # המרה בטוחה ל־float עם ערך ברירת־מחדל במקרה של שגיאה
     try:
         return float(str(s).strip())
     except Exception:
         return default
 
 def _as_int(s: Optional[str], default: int) -> int:
+    # המרה בטוחה ל־int עם ערך ברירת־מחדל במקרה של שגיאה
     try:
         return int(str(s).strip())
     except Exception:
         return default
 
-# -------- env / policy ----------
-APPROVAL_ENABLED = _as_bool(os.getenv("APPROVAL_ENABLED","1"), True)
-APPROVAL_SUCCESS_MIN = _as_float(os.getenv("APPROVAL_SUCCESS_MIN","60"), 60.0)
-APPROVAL_RR_MIN = _as_float(os.getenv("APPROVAL_RR_MIN","1.30"), 1.30)
-MIN_TP_SL_DIFF_PCT = _as_float(os.getenv("MIN_TP_SL_DIFF_PCT","3.0"), 3.0)
-APPROVAL_MAX_SL_PCT = _as_float(os.getenv("APPROVAL_MAX_SL_PCT","3.0"), 3.0)
-MIN_NOTIONAL_USDT = _as_float(os.getenv("MIN_NOTIONAL_USDT","5"), 5.0)
-APPROVAL_REQUIRE_FRESH_PRICE = _as_bool(os.getenv("APPROVAL_REQUIRE_FRESH_PRICE","1"), True)
-PRICE_MAX_AGE_SEC = _as_int(os.getenv("PRICE_MAX_AGE_SEC","15"), 15)
-WATCHLIST_CSV = os.getenv("WATCHLIST","") or os.getenv("HEALTH_SYMBOLS","")
-REQUIRE_IN_WATCHLIST = _as_bool(os.getenv("APPROVAL_REQUIRE_WATCHLIST","1"), True)
-APPROVAL_DUP_COOLDOWN_SEC = _as_int(os.getenv("APPROVAL_DUP_COOLDOWN_SEC","300"), 300)
-MAX_LEVERAGE = _as_int(os.getenv("MAX_LEVERAGE","35"), 35)
+# -------- קונפיגורציית סביבה / מדיניות אישור ----------
+APPROVAL_ENABLED = _as_bool(os.getenv("APPROVAL_ENABLED","1"), True)                       # האם מנגנון האישור פעיל
+APPROVAL_SUCCESS_MIN = _as_float(os.getenv("APPROVAL_SUCCESS_MIN","60"), 60.0)            # סף מינימלי לאומדן הסתברות הצלחה (%)
+APPROVAL_RR_MIN = _as_float(os.getenv("APPROVAL_RR_MIN","1.30"), 1.30)                    # יחס סיכון/סיכוי מינימלי (RR)
+MIN_TP_SL_DIFF_PCT = _as_float(os.getenv("MIN_TP_SL_DIFF_PCT","3.0"), 3.0)                # מרחק מינימלי באחוזים בין Entry ל־TP/SL
+APPROVAL_MAX_SL_PCT = _as_float(os.getenv("APPROVAL_MAX_SL_PCT","3.0"), 3.0)              # מרחק מקסימלי מותר ל־SL מה־Entry (%)
+MIN_NOTIONAL_USDT = _as_float(os.getenv("MIN_NOTIONAL_USDT","5"), 5.0)                    # נומינלי מינימלי מוערך (תקציב×מינוף)
+APPROVAL_REQUIRE_FRESH_PRICE = _as_bool(os.getenv("APPROVAL_REQUIRE_FRESH_PRICE","1"), True)  # האם נדרש מחיר "טרי"
+PRICE_MAX_AGE_SEC = _as_int(os.getenv("PRICE_MAX_AGE_SEC","15"), 15)                      # גיל מקסימלי לשער אחרון (שניות)
+WATCHLIST_CSV = os.getenv("WATCHLIST","") or os.getenv("HEALTH_SYMBOLS","")               # רשימת סימבולים מאושרת (CSV)
+REQUIRE_IN_WATCHLIST = _as_bool(os.getenv("APPROVAL_REQUIRE_WATCHLIST","1"), True)        # האם חייב להיות ברשימת המעקב
+APPROVAL_DUP_COOLDOWN_SEC = _as_int(os.getenv("APPROVAL_DUP_COOLDOWN_SEC","300"), 300)    # חלון קירור למניעת כפילויות (שניות)
+MAX_LEVERAGE = _as_int(os.getenv("MAX_LEVERAGE","35"), 35)                                # מינוף מקסימלי מותר
 
-TICKET_TTL_SEC = _as_int(os.getenv("CONFIRM_TTL_SEC","180"), 180)
-AUTO_DECIDE_EXPIRED = _as_bool(os.getenv("APPROVAL_AUTO_REJECT_EXPIRED","1"), True)
+TICKET_TTL_SEC = _as_int(os.getenv("CONFIRM_TTL_SEC","180"), 180)                         # TTL לכרטיס אישור (שניות)
+AUTO_DECIDE_EXPIRED = _as_bool(os.getenv("APPROVAL_AUTO_REJECT_EXPIRED","1"), True)       # האם לדחות אוטומטית כשפג תוקף
 
-# -------- recent map for preflight dup ----------
-APPROVAL_RECENT_BACKEND = (os.getenv("APPROVAL_RECENT_BACKEND","memory").strip().lower())
+# -------- אחסון "אחרונים" למניעת כפילויות בפרה־פלייט ----------
+APPROVAL_RECENT_BACKEND = (os.getenv("APPROVAL_RECENT_BACKEND","memory").strip().lower()) # backend: memory/redis
 RECENT_KEY_PREFIX = os.getenv("APPROVAL_RECENT_KEY_PREFIX","approvals:recent:")
 
 _recent: Dict[str, float] = {}
@@ -50,10 +53,11 @@ if APPROVAL_RECENT_BACKEND == "redis":
         import redis  # type: ignore
         _r = redis.Redis.from_url(os.getenv("REDIS_URL",""), decode_responses=True)
     except Exception as e:
-        log.warning("Redis not available for approvals recent: %s — falling back to memory", e)
+        log.warning("Redis לא זמין לשכבת recent של approvals: %s — מעבר ל־memory", e)
         _r = None
 
 def _recent_get(k: str) -> float:
+    # קריאה מאחסון recent (Redis אם זמין, אחרת זיכרון)
     if _r:
         try:
             ts = _r.get(f"{RECENT_KEY_PREFIX}{k}")
@@ -63,6 +67,7 @@ def _recent_get(k: str) -> float:
     return _recent.get(k, 0.0)
 
 def _recent_set(k: str, ts: float, ttl: int) -> None:
+    # כתיבה לאחסון recent עם TTL (ב־Redis) או בזיכרון
     if _r:
         try:
             _r.setex(f"{RECENT_KEY_PREFIX}{k}", ttl, str(ts))
@@ -72,14 +77,16 @@ def _recent_set(k: str, ts: float, ttl: int) -> None:
     _recent[k] = ts
 
 def _purge_recent(now: float) -> None:
+    # ניקוי רשומות ישנות במצב memory (ב־Redis TTL מטפל בכך)
     if _r:
-        return  # Redis מנקה ע"פ TTL
+        return  # Redis מנקה לפי TTL
     cut = now - max(60, APPROVAL_DUP_COOLDOWN_SEC)
     for k, ts in list(_recent.items()):
         if ts < cut:
             _recent.pop(k, None)
 
 def _key_for(tp: Dict[str, Any]) -> str:
+    # בניית מפתח־אצבע (hash) לזיהוי כפילויות על בסיס שדות מהותיים
     base = {
         "symbol": str(tp.get("symbol","")).upper(),
         "side": str(tp.get("side","")).upper(),
@@ -93,6 +100,7 @@ def _key_for(tp: Dict[str, Any]) -> str:
     return hashlib.sha256(raw).hexdigest()[:16]
 
 def _rr(entry: float, sl: float, tp1: float, side: str) -> Optional[float]:
+    # חישוב יחס סיכון/סיכוי (RR) בהתאם לכיוון (BUY/LONG מול SELL/SHORT)
     try:
         e = float(entry); s = float(sl); t = float(tp1); sd = (side or "").upper()
         risk = abs(e - s)
@@ -104,6 +112,7 @@ def _rr(entry: float, sl: float, tp1: float, side: str) -> Optional[float]:
         return None
 
 def _pct(a: float, b: float, ref: Optional[float] = None) -> float:
+    # חישוב מרחק יחסי באחוזים בין שני ערכים סביב ref (כברירת־מחדל a)
     try:
         r = float(a if ref is None else ref)
         if r == 0:
@@ -113,12 +122,14 @@ def _pct(a: float, b: float, ref: Optional[float] = None) -> float:
         return 0.0
 
 def _in_watchlist(sym: str) -> bool:
+    # בדיקה האם הסימבול מאושר ברשימת המעקב (אם דרוש)
     if not REQUIRE_IN_WATCHLIST:
         return True
     wl = [x.strip().upper() for x in (WATCHLIST_CSV or "").split(",") if x.strip()]
     return (not wl) or (sym.upper() in wl)
 
 def _fresh_price_ok(symbol: str) -> Tuple[bool, Optional[float]]:
+    # בדיקת זמינות מחיר "טרי" והחזרתו (אם קיים)
     if not APPROVAL_REQUIRE_FRESH_PRICE:
         return (True, None)
     try:
@@ -135,12 +146,14 @@ def _fresh_price_ok(symbol: str) -> Tuple[bool, Optional[float]]:
             return (False, None)
 
 def _aligned(val: float, step: float, tol: float = 1e-10) -> bool:
+    # בדיקה אם ערך מיושר ל־tickSize בהתאם לטולרנס קטן
     if step <= 0:
         return True
     k = round(val / step)
     return abs(k * step - val) <= max(tol, step * 1e-8)
 
 def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[str]:
+    # וולידציית דיוק מחירים מול tickSize של הסימבול; מחזיר רשימת שגיאות אם לא מיושר
     out: List[str] = []
     tick: Optional[float] = None
     try:
@@ -171,6 +184,13 @@ def _precision_checks(symbol: str, entry: float, sl: float, tp1: float) -> List[
     return out
 
 def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict[str, Any]:
+    """
+    בדיקות פרה־פלייט לתכנית טרייד:
+    • ולידציה של שדות חובה (symbol/side/entry/sl/tp1)
+    • בדיקות מדיניות: Watchlist, מחיר עדכני, מרחקי SL/TP, RR מינימלי, מינוף ונומינלי
+    • בדיקות דיוק מול tickSize
+    • חסם כפילויות (חלון קירור) עם אפשרות לעדכן מצב (mutate_state)
+    """
     out_errors: List[str] = []
     out_warns: List[str] = []
     metrics: Dict[str, Any] = {}
@@ -184,6 +204,7 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
     sl    = float(tp.get("sl", tp.get("sl_price", 0.0)) or 0.0)
     tp1   = float(tp.get("tp1", 0.0) or 0.0)
 
+    # שדות חובה
     if not symbol:
         out_errors.append("missing_symbol")
     if side not in ("BUY","SELL","LONG","SHORT"):
@@ -197,15 +218,18 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
     if out_errors:
         return {"ok": False, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
 
+    # Watchlist (אם נדרש)
     if not _in_watchlist(symbol):
         out_errors.append("symbol_not_in_watchlist")
 
+    # מחיר עדכני (טריות)
     fp_ok, px = _fresh_price_ok(symbol)
     metrics["fresh_price_ok"] = fp_ok
     metrics["last_price"] = px
     if not fp_ok:
         out_warns.append("stale_or_missing_price")
 
+    # מרחקים מינימליים/מקסימליים בין Entry ל־SL/TP
     min_pct = float(MIN_TP_SL_DIFF_PCT)
     if _pct(entry, sl, ref=entry)  < min_pct:
         out_errors.append(f"entry_sl_too_close(<{min_pct:.3f}%)")
@@ -214,10 +238,12 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
     if _pct(entry, sl, ref=entry)  > float(APPROVAL_MAX_SL_PCT):
         out_errors.append(f"sl_too_far(>{APPROVAL_MAX_SL_PCT:.2f}%)")
 
+    # RR מינימלי
     rr = _rr(entry, sl, tp1, side); metrics["rr"] = rr
     if rr is None or rr < APPROVAL_RR_MIN:
         out_errors.append(f"rr_below_min({rr:.2f}<{APPROVAL_RR_MIN:.2f})" if rr is not None else "rr_invalid")
 
+    # אומדן הצלחה (אופציונלי)
     sp = tp.get("success_pct")
     if sp is not None:
         try:
@@ -227,6 +253,7 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
         except Exception:
             out_warns.append("success_pct_not_numeric")
 
+    # מינוף ומגבלות
     lev = int(tp.get("leverage") or tp.get("lev") or 0)
     if lev <= 0:
         out_warns.append("missing_leverage")
@@ -234,6 +261,7 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
         out_errors.append(f"leverage_above_cap(x{lev}>x{MAX_LEVERAGE})")
     metrics["leverage"] = lev
 
+    # נומינלי משוער (תקציב×מינוף) אם קיים תקציב
     budget = tp.get("budget") or tp.get("budget_usd")
     if budget is not None and lev > 0:
         try:
@@ -243,8 +271,10 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
         except Exception:
             out_warns.append("notional_est_failed")
 
+    # בדיקות דיוק מול tickSize
     out_errors.extend(_precision_checks(symbol, entry, sl, tp1))
 
+    # חסם כפילויות בחלון קירור
     now = time.time()
     key = _key_for(tp)
     last = _recent_get(key)
@@ -259,24 +289,27 @@ def preflight_proposal(tp: Dict[str, Any], *, mutate_state: bool = True) -> Dict
     return {"ok": ok, "errors": out_errors, "warnings": out_warns, "metrics": metrics}
 
 def can_auto_forward(tp: Dict[str, Any]) -> bool:
+    # בדיקה מהירה האם ניתן לעבור לאישור אוטומטי (ללא עדכון־מצב)
     res = preflight_proposal(tp, mutate_state=False)
     return bool(res.get("ok", False))
 
-# ========================= ConfirmStore =========================
+# ========================= ConfirmStore — מחסן אישורים בזיכרון =========================
 from typing import Callable, Awaitable
 Handler = Callable[[], Awaitable[Dict[str, Any]]]
 
 class ConfirmStore:
-    _P: Dict[str, Dict[str, Any]] = {}
-    _RUN: Dict[str, Handler] = {}
-    _L = asyncio.Lock()
+    _P: Dict[str, Dict[str, Any]] = {}      # מיפוי idem -> רשומת כרטיס
+    _RUN: Dict[str, Handler] = {}            # מיפוי idem -> Handler אסינכרוני להפעלה
+    _L = asyncio.Lock()                      # נעילה לריצות מתוזמנות
 
     @classmethod
     def pending(cls) -> List[Dict[str, Any]]:
+        # החזרת כל הכרטיסים בסטטוס "pending"
         return [dict(v) for v in cls._P.values() if v.get("status") == "pending"]
 
     @classmethod
     def create(cls, payload: Dict[str, Any], handler: Optional[Handler] = None) -> str:
+        # יצירת כרטיס חדש עם idem יציב (מה־payload אם קיים או hash)
         idem = str(payload.get("ticket_id") or payload.get("idem") or f"{int(time.time()*1000)}_{hashlib.md5(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:12]}")
         rec = dict(payload)
         rec["idem"] = idem
@@ -291,10 +324,12 @@ class ConfirmStore:
 
     @classmethod
     def get(cls, idem: str) -> Optional[Dict[str, Any]]:
+        # שליפת כרטיס לפי idem
         return dict(cls._P.get(idem) or {}) if idem in cls._P else None
 
     @classmethod
     def approve(cls, idem: str, approver: Optional[str] = None) -> Dict[str, Any]:
+        # שינוי סטטוס ל־approved, רישום מאשר ושעת אישור
         it = cls._P.get(idem)
         if not it:
             return {"ok": False, "error": "not_found"}
@@ -308,6 +343,7 @@ class ConfirmStore:
 
     @classmethod
     def reject(cls, idem: str, approver: Optional[str] = None) -> Dict[str, Any]:
+        # שינוי סטטוס ל־rejected, הסרת ה־handler (אם הוגדר)
         it = cls._P.get(idem)
         if not it:
             return {"ok": False, "error": "not_found"}
@@ -322,6 +358,7 @@ class ConfirmStore:
 
     @classmethod
     async def run(cls, idem: str) -> Dict[str, Any]:
+        # הפעלת ה־handler של כרטיס שאושר; עדכון סטטוס ל־executed ושמירת תוצאה
         it = cls._P.get(idem)
         if not it:
             return {"ok": False, "error": "not_found"}
@@ -334,7 +371,7 @@ class ConfirmStore:
             async with cls._L:
                 res = await h()
         except Exception as e:
-            log.exception("ConfirmStore.run failed")
+            log.exception("ConfirmStore.run נכשל")
             return {"ok": False, "error": str(e)}
         it["status"] = "executed"
         it["executed_ts"] = int(time.time())
@@ -343,25 +380,32 @@ class ConfirmStore:
 
     @classmethod
     def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]:
+        # סיוע: decide -> approve/reject לפי הדגל
         return cls.approve(ticket_id) if approved else cls.reject(ticket_id)
 
     @classmethod
     def flush_all(cls) -> None:
+        # ניקוי מלא של כל הכרטיסים וה־handlers
         cls._P.clear()
         cls._RUN.clear()
 
-    flush = reset = flush_all
+    flush = reset = flush_all  # שמות חלופיים לניקוי
 
-# ========================= Notifier bridge =========================
+# ========================= גשר התראות (Notifier) =========================
 async def send_confirm_request(ticket_id: str, plan: Dict[str, Any]) -> None:
+    # שליחת בקשת אישור לטלגרם (אם המודול זמין); שקט בשגיאה
     try:
         from utils.telegram_notifier import send_trade_approval  # type: ignore
         await send_trade_approval(ticket_id, plan)
     except Exception:
         pass
 
-# ========================= Approval orchestrator =========================
+# ========================= אורקסטרטור האישור =========================
 async def require_approval(chat_id: int, plan: Dict[str, Any], handler: Optional[Handler] = None) -> Dict[str, Any]:
+    """
+    יוצר כרטיס אישור, בוחר אוטומטית לאשר אם המדיניות מאפשרת (auto-approve),
+    אחרת שולח בקשת אישור לטלגרם ומחזיר סטטוס התחלתי (pending/approved).
+    """
     ttl = int(plan.get("ttl_sec") or TICKET_TTL_SEC)
     idem = ConfirmStore.create({**plan, "ttl_sec": ttl, "ticket_id": plan.get("idem") or None}, handler=handler)
 
@@ -384,7 +428,7 @@ async def require_approval(chat_id: int, plan: Dict[str, Any], handler: Optional
         from utils.telegram_notifier import send_trade_approval  # type: ignore
         await send_trade_approval(idem, plan, chat_id=chat_id if chat_id else None)
     except Exception as e:
-        log.warning("send_trade_approval failed: %s", e)
+        log.warning("send_trade_approval נכשל: %s", e)
 
     return {"status": "pending", "idem": idem, "ttl_sec": ttl}
 
