@@ -615,7 +615,6 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
-
 # ==================== Execute trade helpers ====================
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     with suppress(Exception):
@@ -1241,7 +1240,6 @@ async def ui_pending(request: Request = None):
         "</body>"
     )
     return HTMLResponse(body)
-
 # =========== Guard Smoke (סינגל—כפילות הוסרה) ===========
 @router.post("/guard/smoke/run")
 async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
@@ -1789,7 +1787,7 @@ async def meta_routes(request: Request):
 @app.get("/meta/telegram", tags=["meta"])
 async def meta_telegram(
     request: Request,
-    mode: str = Query("info", regex="^(info|dry|set|send)$"),
+    mode: str = Query("info", pattern="^(info|dry|set|send)$"),
     text: Optional[str] = Query("🔎 Diagnostics: test message"),
     chat_id: Optional[str] = Query(None, description="אם לא ניתן — ישתמש ב-ADMIN_CHAT_ID/TELEGRAM_CHAT_ID"),
     ticket_id: Optional[str] = Query(None, description="אופציונלי: אם קיים — נצרף קישורים חתומים approve/reject/preview"),
@@ -1900,7 +1898,7 @@ async def meta_telegram(
                 cid = chat_id
 
             # idem עדין על Redis, אם זמין
-            if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
+            if USE_REDIS_IDEM && IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
                 try:
                     r = await _get_redis_cached()
                     if r:
@@ -2152,7 +2150,7 @@ async def _startup_tasks():
 @app.on_event("shutdown")
 async def _shutdown_tasks():
     with suppress(Exception):
-        t: Optional[asyncio.Task] = getattr(app.state, "trail_task", None)
+        t: Optional[asyncio.Task] = getattr(app.state, "bg_started_task", None)
         if t:
             t.cancel()
             with suppress(Exception):
@@ -2177,6 +2175,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
