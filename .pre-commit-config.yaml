@@ -1,40 +1,29 @@
-# pre-commit: הפעלה מקומית:
-#   pip install -r requirements-dev.txt
-#   pre-commit install
-#   pre-commit run --all-files
-
-minimum_pre_commit_version: "3.0.0"
 repos:
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
-    hooks:
-      - id: check-added-large-files
-        args: ["--maxkb=500"]
-      - id: end-of-file-fixer
-      - id: trailing-whitespace
-      - id: check-merge-conflict
-      - id: mixed-line-ending
-      - id: detect-private-key
-
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.5.7
     hooks:
       - id: ruff
-        args: ["--fix"]
+        args: [--fix]
       - id: ruff-format
 
-  # Black נשאר אופציונלי; אם אתה מעדיף רק Ruff-format – אפשר להסיר.
   - repo: https://github.com/psf/black
     rev: 24.8.0
     hooks:
       - id: black
-        language_version: python3.11
 
   - repo: https://github.com/pycqa/isort
     rev: 5.13.2
     hooks:
       - id: isort
-        args: ["--profile", "black"]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: detect-private-key
 
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.11.2
@@ -44,8 +33,4 @@ repos:
           - types-requests
           - types-PyYAML
           - types-redis
-          - types-setuptools
-        args:
-          - "--ignore-missing-imports"
-          - "--install-types"
-          - "--non-interactive"
+
