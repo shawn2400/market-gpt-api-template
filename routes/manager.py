@@ -10,6 +10,7 @@ from pydantic import BaseModel
 
 from utils.anti_replay import verify_request
 from utils.telegram_notifier import TelegramNotifier, send_trade_approval  # type: ignore
+from utils.metrics_tracker import observe_http_ctx_async  # מטריקות עוטפות HTTP
 
 logger = logging.getLogger("algogpt.manager")
 router = APIRouter(tags=["manager"])
@@ -197,15 +198,17 @@ def _auth_headers() -> Dict[str, str]:
 async def _post_alerts_ingest(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not ALERTS_INGEST_URL or not PUBLIC_HOST:
         raise RuntimeError("ALERTS_INGEST_URL/PUBLIC_HOST not configured")
-    async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as cli:
-        r = await cli.post(ALERTS_INGEST_URL, json=payload, headers=_auth_headers())
-        try:
-            data = r.json()
-        except Exception:
-            data = {"status": r.status_code, "text": r.text}
-        if r.status_code >= 400:
-            raise RuntimeError(f"alerts_ingest_http_{r.status_code}: {data}")
-        return data
+    # עיטוף זמן/לטנסי
+    async with observe_http_ctx_async(name="alerts_ingest"):
+        async with httpx.AsyncClient(timeout=HTTP_TIMEOUT) as cli:
+            r = await cli.post(ALERTS_INGEST_URL, json=payload, headers=_auth_headers())
+            try:
+                data = r.json()
+            except Exception:
+                data = {"status": r.status_code, "text": r.text}
+            if r.status_code >= 400:
+                raise RuntimeError(f"alerts_ingest_http_{r.status_code}: {data}")
+            return data
 
 def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
     symbol = str(obj.get("symbol","")).upper()
@@ -541,6 +544,4 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
 
