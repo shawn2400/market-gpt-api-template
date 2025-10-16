@@ -3,12 +3,10 @@ from __future__ import annotations
 import os
 import logging
 from typing import List, Optional, Dict, Any
-
 from fastapi import Header, HTTPException, Request, status
 
 logger = logging.getLogger("algogpt.auth")
 
-# ---------- helpers ----------
 def _coerce_bool(val: Optional[str]) -> bool:
     return str(val or "").strip().lower() in ("1", "true", "yes", "on", "y")
 
@@ -17,61 +15,34 @@ def _split_multi(s: str) -> List[str]:
     return [x for x in re.split(r"[,\s]+", (s or "").strip()) if x]
 
 def _mask(tok: str) -> str:
-    if not tok:
-        return ""
-    if len(tok) <= 4:
-        return tok[0] + "…" + tok[-1]
+    if not tok: return ""
+    if len(tok) <= 4: return tok[0] + "…" + tok[-1]
     return tok[:2] + "…" + tok[-2:]
 
-# ---------- storage ----------
 _TOKENS: List[str] = []
 _ALLOW_ALL: bool = False
 
 def _extend_with_api_tokens(toks: List[str]) -> List[str]:
-    """
-    אוספים טוקנים מכל מגוון השמות ההיסטוריים כדי לא לשבור תאימות,
-    אך בפועל מומלץ להישאר עם API_TOKEN יחיד.
-    """
-    # multi-value envs (מופרדים בפסיקים/רווחים/שורה)
     for k in ("AUTH_TOKENS", "API_TOKENS", "ALGOGPT_API_TOKENS", "ALGOGPT_TOKENS"):
         v = os.getenv(k, "")
         if v.strip():
             toks.extend(_split_multi(v))
-
-    # single-value fallbacks (שמות היסטוריים/וורקרים)
-    for k in (
-        "PRIMARY_API_TOKEN",
-        "API_BEARER_TOKEN",
-        "API_BEARER",
-        "ALGOGPT_API_TOKEN",
-        "ALGOGPT_TOKEN",
-        "API_TOKEN",
-        "TOKEN",
-    ):
+    for k in ("PRIMARY_API_TOKEN","API_BEARER_TOKEN","API_BEARER","ALGOGPT_API_TOKEN","ALGOGPT_TOKEN","API_TOKEN","TOKEN"):
         v = os.getenv(k, "").strip()
         if v:
             toks.append(v)
-
-    # from files (one token per line)
     for file_env in ("AUTH_TOKENS_FILE", "API_TOKENS_FILE"):
         path = os.getenv(file_env, "").strip()
-        if not path:
-            continue
+        if not path: continue
         try:
             with open(path, "r", encoding="utf-8") as f:
                 for line in f:
                     t = line.strip()
-                    if t:
-                        toks.append(t)
+                    if t: toks.append(t)
         except Exception as e:
-            logger.warning(
-                {"event": "auth.tokens_file_read_failed", "file": path, "error": str(e)}
-            )
-
-    # cleanup + unique (preserve order)
+            logger.warning({"event":"auth.tokens_file_read_failed","file":path,"error":str(e)})
     toks = [t for t in toks if t]
-    uniq = list(dict.fromkeys(toks))
-    return uniq
+    return list(dict.fromkeys(toks))
 
 def load_tokens_from_env() -> List[str]:
     toks: List[str] = []
@@ -81,23 +52,13 @@ def load_tokens_from_env() -> List[str]:
 def refresh_tokens_from_env() -> Dict[str, Any]:
     global _TOKENS, _ALLOW_ALL
     _TOKENS = load_tokens_from_env()
-    # respect both ALLOW_ALL and AUTH_ALLOW_ALL
     _ALLOW_ALL = _coerce_bool(os.getenv("ALLOW_ALL", os.getenv("AUTH_ALLOW_ALL", "0")))
-    logger.info(
-        {
-            "event": "auth.tokens_loaded",
-            "allow_all": _ALLOW_ALL,
-            "count": len(_TOKENS),
-            "tokens": [_mask(t) for t in _TOKENS],
-        }
-    )
+    logger.info({"event":"auth.tokens_loaded","allow_all":_ALLOW_ALL,"count":len(_TOKENS),"tokens":[_mask(t) for t in _TOKENS]})
     return {"ok": True, "count": len(_TOKENS), "allow_all": _ALLOW_ALL}
 
-# public alias (יש קוד שקורא לשם הזה)
 def refresh_tokens() -> Dict[str, Any]:
     return refresh_tokens_from_env()
 
-# initial load
 refresh_tokens_from_env()
 
 def get_loaded_tokens(mask: bool = True) -> List[str]:
@@ -106,24 +67,16 @@ def get_loaded_tokens(mask: bool = True) -> List[str]:
 def allow_all() -> bool:
     return _ALLOW_ALL
 
-# ---------- header/query parsing ----------
 def _extract_bearer_from_auth_header(h: Optional[str]) -> Optional[str]:
-    if not h:
-        return None
+    if not h: return None
     parts = h.strip().split(None, 1)
     if len(parts) == 2 and parts[0].lower() in ("bearer", "token", "jwt"):
         return parts[1].strip()
-    if len(parts) == 1 and parts[0]:  # token without "Bearer"
+    if len(parts) == 1 and parts[0]:
         return parts[0].strip()
     return None
 
 def extract_token(request: Request, auth_header: Optional[str], x_api_key: Optional[str]) -> Optional[str]:
-    """
-    פונקציית עזר לשימוש ידני ברואטרים (אם צריך):
-    1) X-API-Key
-    2) Authorization: Bearer <token>
-    3) query param: ?token=...
-    """
     if x_api_key:
         return x_api_key.strip()
     tok = _extract_bearer_from_auth_header(auth_header or "")
@@ -138,30 +91,21 @@ def extract_token(request: Request, auth_header: Optional[str], x_api_key: Optio
     return None
 
 def token_matches(token: Optional[str]) -> bool:
-    if allow_all():
-        return True
-    if not token:
-        return False
+    if allow_all(): return True
+    if not token: return False
     return token in _TOKENS
 
-# ---------- FastAPI dependency ----------
 def require_bearer_token(
     Authorization: Optional[str] = Header(default=None),
     X_API_Key: Optional[str] = Header(default=None, alias="X-API-Key"),
 ):
-    """
-    מקבל טוקן או מהכותרת 'X-API-Key' או מהכותרת 'Authorization: Bearer ...'
-    ומוודא שהוא קיים ב־_TOKENS (או כשALLOW_ALL=1).
-    """
     tok = X_API_Key or _extract_bearer_from_auth_header(Authorization)
     if not token_matches(tok):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
     return tok
 
-# שם תאימות – רוב ה־routes משתמשים בו
 require_api_key = require_bearer_token
 
-# ---------- public paths helpers ----------
 def _split_env(s: str) -> List[str]:
     return [x for x in _split_multi(s)]
 
@@ -170,12 +114,10 @@ def get_public_paths() -> Dict[str, Any]:
     prefixes = set(_split_env(os.getenv("SECURITY_PUBLIC_PREFIXES", "")))
     return {"paths": sorted(paths), "prefixes": sorted(prefixes)}
 
-# ---------- middleware (רך, עם החרגות ל-/ /health וכו') ----------
 def _is_public(path: str) -> bool:
     cfg = get_public_paths()
     paths = set(cfg["paths"])
     prefixes = tuple(cfg["prefixes"])
-    # תמיד מוחרגים:
     always = {"/", "/health", "/readyz", "/status/ping", "/debug/health",
               "/metrics", "/metrics-json", "/openapi.json", "/docs", "/redoc"}
     if path in always or path in paths:
@@ -188,27 +130,23 @@ async def validate_token(request: Request, call_next):
         if _is_public(path):
             return await call_next(request)
 
-        # אם אין טוקנים בכלל במערכת – לא חוסמים
         if not _TOKENS and not _ALLOW_ALL:
             return await call_next(request)
 
-        # בדיקת טוקן מהכותרות
         tok = request.headers.get("X-API-Key") or _extract_bearer_from_auth_header(request.headers.get("Authorization"))
         if not token_matches(tok):
-            # ⚠️ תיקון: יש להרים חריגה, לא להחזיר אובייקט HTTPException
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
         return await call_next(request)
     except HTTPException:
-        # אם כבר הרמנו HTTPException – תן לה לבעבע
         raise
     except Exception as e:
         logger.error("validate_token: middleware call_next failed for %s: %s", request.url.path, e)
-        # לעולם לא להפיל מסלולים – ננסה להעביר הלאה בכל מקרה
         try:
             return await call_next(request)
         except Exception:
             raise HTTPException(status_code=500, detail="middleware_error")
+
 
 
 
