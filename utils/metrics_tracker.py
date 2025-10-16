@@ -39,6 +39,11 @@ _TP_NUDGED = 0
 _MANAGE_ONCE_PLACED = 0
 _MANAGE_ONCE_FAILED = 0
 
+# New: שלב 6 – Time-Stop ו־Structural SL
+_TIME_STOP_KEEP = 0
+_TIME_STOP_MOVE_BE = 0
+_STRUCT_SL_APPLIED = 0
+
 # last computed checklist score (gauge)
 _LAST_ENTRY_SCORE: Optional[float] = None
 
@@ -128,6 +133,22 @@ def inc_manage_once_failed() -> None:
     global _MANAGE_ONCE_FAILED
     _MANAGE_ONCE_FAILED += 1
 
+# שלב 6 – Time-Stop & Structural SL
+def inc_time_stop_keep() -> None:
+    """נספר כש־time-stop החליט 'להישאר' (keep)"""
+    global _TIME_STOP_KEEP
+    _TIME_STOP_KEEP += 1
+
+def inc_time_stop_move_be() -> None:
+    """נספר כש־time-stop החליט 'להזיז ל־BE' (move to break-even)"""
+    global _TIME_STOP_MOVE_BE
+    _TIME_STOP_MOVE_BE += 1
+
+def inc_struct_sl_applied() -> None:
+    """נספר כשה־Structural SL באמת השפיע (merged_stop != be_price)"""
+    global _STRUCT_SL_APPLIED
+    _STRUCT_SL_APPLIED += 1
+
 # -------------------- Lightweight Histograms --------------------
 def _csv_floats(env: str, default: List[float]) -> List[float]:
     s = os.getenv(env, "").strip()
@@ -149,17 +170,17 @@ HTTP_LATENCY_BUCKETS = _csv_floats("HTTP_LATENCY_BUCKETS", [0.05, 0.1, 0.25, 0.5
 TP1_TIME_BUCKETS     = _csv_floats("TP1_TIME_BUCKETS",     [30, 60, 120, 300, 600, 1200, 3600])
 SLIP_BPS_BUCKETS     = _csv_floats("SLIP_BPS_BUCKETS",     [1, 2, 5, 10, 20, 50, 100])
 
-_http_lat_buckets: Dict[float, int] = {b:0 for b in HTTP_LATENCY_BUCKETS}
+_http_lat_buckets: Dict[float, int] = {b: 0 for b in HTTP_LATENCY_BUCKETS}
 _http_lat_inf: int = 0
 _http_lat_sum: float = 0.0
 _http_lat_count: int = 0
 
-_tp1_time_buckets: Dict[float, int] = {b:0 for b in TP1_TIME_BUCKETS}
+_tp1_time_buckets: Dict[float, int] = {b: 0 for b in TP1_TIME_BUCKETS}
 _tp1_time_inf: int = 0
 _tp1_time_sum: float = 0.0
 _tp1_time_count: int = 0
 
-_slip_bps_buckets: Dict[float, int] = {b:0 for b in SLIP_BPS_BUCKETS}
+_slip_bps_buckets: Dict[float, int] = {b: 0 for b in SLIP_BPS_BUCKETS}
 _slip_bps_inf: int = 0
 _slip_bps_sum: float = 0.0
 _slip_bps_count: int = 0
@@ -332,6 +353,9 @@ def get_metrics_snapshot() -> Dict[str, Any]:
         "tp_nudged": _TP_NUDGED,
         "manage_once_placed": _MANAGE_ONCE_PLACED,
         "manage_once_failed": _MANAGE_ONCE_FAILED,
+        "time_stop_keep": _TIME_STOP_KEEP,
+        "time_stop_move_be": _TIME_STOP_MOVE_BE,
+        "struct_sl_applied": _STRUCT_SL_APPLIED,
         "last_entry_score": _LAST_ENTRY_SCORE,
         "last_slip_estimate_bps": _LAST_SLIP_ESTIMATE_BPS,
         "last_callback_rate": _LAST_CALLBACK_RATE,
@@ -408,6 +432,15 @@ def render_prometheus_text() -> str:
         "# HELP algogpt_manage_once_failed_total manage-once flows failed to place.",
         "# TYPE algogpt_manage_once_failed_total counter",
         f"algogpt_manage_once_failed_total {_MANAGE_ONCE_FAILED}",
+        "# HELP algogpt_time_stop_keep_total Time-stop decisions to KEEP position.",
+        "# TYPE algogpt_time_stop_keep_total counter",
+        f"algogpt_time_stop_keep_total {_TIME_STOP_KEEP}",
+        "# HELP algogpt_time_stop_move_be_total Time-stop decisions to MOVE to break-even.",
+        "# TYPE algogpt_time_stop_move_be_total counter",
+        f"algogpt_time_stop_move_be_total {_TIME_STOP_MOVE_BE}",
+        "# HELP algogpt_struct_sl_applied_total Structural SL actually affected stop (merged != BE).",
+        "# TYPE algogpt_struct_sl_applied_total counter",
+        f"algogpt_struct_sl_applied_total {_STRUCT_SL_APPLIED}",
     ]
     if _LAST_ENTRY_SCORE is not None:
         lines += [
@@ -466,6 +499,7 @@ __all__ = [
     "inc_approvals_created",
     "inc_tp_merge","inc_tp_rearm","inc_tp_nudged",
     "inc_manage_once_placed","inc_manage_once_failed",
+    "inc_time_stop_keep","inc_time_stop_move_be","inc_struct_sl_applied",
     "render_prometheus_text","set_last_entry_score","get_last_entry_score",
     "set_last_slip_estimate_bps","get_last_slip_estimate_bps",
     "observe_http_latency","observe_time_to_tp1","observe_slip_bps",
