@@ -1,16 +1,21 @@
-# utils/binance_health.py
+# utils/db_health.py
 from __future__ import annotations
-import os
-import httpx
+import os, sqlite3
 
-_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
-
-async def check_binance_ready(timeout: float = 0.8) -> dict:
+def check_db_ready(timeout: float = 0.5) -> dict:
+    # SQLite path (אם אין—skip בשקט)
+    path = os.getenv("SQLITE_PATH", "").strip()
+    if not path:
+        return {"ok": True, "skipped": True, "reason": "no_db"}
     try:
-        async with httpx.AsyncClient(timeout=timeout) as cli:
-            r = await cli.get(f"{_BASE}/fapi/v1/ping")
-            if r.status_code == 200:
-                return {"ok": True}
-            return {"ok": False, "status": r.status_code, "text": r.text[:120]}
+        con = sqlite3.connect(path, timeout=timeout, check_same_thread=False)
+        try:
+            cur = con.cursor()
+            cur.execute("PRAGMA schema_version;")
+            cur.fetchone()
+            return {"ok": True, "skipped": False}
+        finally:
+            con.close()
     except Exception as e:
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "skipped": False, "error": str(e)}
+
