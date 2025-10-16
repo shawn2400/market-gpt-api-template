@@ -7,8 +7,10 @@ import math
 # ─── נפילות-רכות למטריקות (אם קיימות) ─────────────────────────────────────────
 try:
     from utils.metrics_tracker import (
-        inc_manage_once_placed, inc_manage_once_failed, observe_callback_rate,
-        observe_be_distance_bps, observe_tp_ladders,  # type: ignore
+        inc_manage_once_placed, inc_manage_once_failed,
+        observe_callback_rate, observe_be_distance_bps, observe_tp_ladders,
+        inc_tp_merge, inc_tp_rearm, inc_tp_nudged,  # שלב 5
+        observe_time_to_tp1,  # לשימוש עתידי (לא חובה כאן)
     )
 except Exception:
     def inc_manage_once_placed():  # type: ignore
@@ -20,6 +22,14 @@ except Exception:
     def observe_be_distance_bps(_v: float):  # type: ignore
         pass
     def observe_tp_ladders(_n: int):  # type: ignore
+        pass
+    def inc_tp_merge():  # type: ignore
+        pass
+    def inc_tp_rearm():  # type: ignore
+        pass
+    def inc_tp_nudged():  # type: ignore
+        pass
+    def observe_time_to_tp1(_sec: float):  # type: ignore
         pass
 
 
@@ -276,4 +286,187 @@ def manage_once_place_all(*, client, symbol: str, side_txt: str,
         inc_manage_once_failed()
 
     return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Merge / Rearm / Anti-stale  (שלב 5)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _side_txt_of_position_amt(amt: float) -> str:
+    return "BUY" if float(amt) > 0 else "SELL"
+
+
+def fetch_reduce_only_limits(client, symbol: str):
+    """
+    מחזיר רשימת הזמנות LIMIT עם reduceOnly=True (TPים פעילים).
+    שדות עיקריים: price, side, orderId, origQty
+    """
+    out = []
+    try:
+        oo = client.futures_get_open_orders(symbol=symbol)
+        for o in oo or []:
+            if str(o.get("type")) == "LIMIT" and str(o.get("reduceOnly")).lower() == "true":
+                try:
+                    out.append({
+                        "price": float(o.get("price")),
+                        "side": str(o.get("side")),
+                        "orderId": o.get("orderId"),
+                        "origQty": float(o.get("origQty") or o.get("origqty") or 0.0),
+                    })
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    # ממיינים לפי מחיר
+    out.sort(key=lambda x: x["price"])
+    return out
+
+
+def maybe_merge_close_tps(client, symbol: str, *, tick: float, tick_band: int) -> dict:
+    """
+    מאחד TPים קרובים: אם שני מחירים בטווח <= tick_band*tick,
+    מבטל את השני, ומוסיף כמות נוספת למחיר הראשי (כהזמנה נוספת באותו מחיר).
+    """
+    ro = fetch_reduce_only_limits(client, symbol)
+    if len(ro) < 2:
+        return {"ok": True, "merged": 0}
+
+    merged = 0
+    band = max(1, int(tick_band)) * float(tick)
+
+    # הולכים בזוגות קרובים
+    i = 0
+    while i + 1 < len(ro):
+        a, b = ro[i], ro[i + 1]
+        if abs(a["price"] - b["price"]) <= band and a["side"] == b["side"]:
+            # נבטל את B ונפתח תוספת באותו מחיר של A
+            try:
+                client.futures_cancel_order(symbol=symbol, orderId=b["orderId"])
+            except Exception:
+                i += 1
+                continue
+            try:
+                client.futures_create_order(
+                    symbol=symbol,
+                    side=a["side"],
+                    type="LIMIT",
+                    price=a["price"],
+                    quantity=b["origQty"],
+                    timeInForce="GTC",
+                    reduceOnly=True,
+                )
+                merged += 1
+            except Exception:
+                # אם פתיחת order נוסף נכשלה — לא מהותי
+                pass
+            inc_tp_merge()
+            # רענון הרשימה כדי שלא נסתבך באינדקסים
+            ro = fetch_reduce_only_limits(client, symbol)
+            i = 0
+            continue
+        i += 1
+
+    return {"ok": True, "merged": merged}
+
+
+def maybe_rearm_on_bounce(client, symbol: str, *, side_txt: str,
+                          price_now: float, last_planned_tps: list,
+                          tick: float, rearm_tick: int) -> dict:
+    """
+    Rearm פשוט: אם אין כרגע הזמנת LIMIT בטווח target±rearm_band,
+    והמחיר קרוב ליעד "מוחמץ", נפתח שוב LIMIT קטן (10% מכמות משוערת).
+    last_planned_tps: [{"price": <float>, "qty": <float>}, ...]
+    """
+    try:
+        ro = fetch_reduce_only_limits(client, symbol)
+        existing_prices = [r["price"] for r in ro]
+        band = max(1, int(rearm_tick)) * float(tick)
+
+        placed = 0
+        for tp in last_planned_tps or []:
+            tgt = float(tp.get("price", 0.0))
+            qty_hint = max(0.0, float(tp.get("qty", 0.0)) * 0.10)  # 10% קטן
+            if qty_hint <= 0 or tgt <= 0:
+                continue
+            close_enough = abs(price_now - tgt) <= band
+            already_there = any(abs(p - tgt) <= band for p in existing_prices)
+            if close_enough and (not already_there):
+                try:
+                    client.futures_create_order(
+                        symbol=symbol,
+                        side=("SELL" if side_txt.upper() == "BUY" else "BUY"),
+                        type="LIMIT",
+                        price=tgt,
+                        quantity=qty_hint,
+                        timeInForce="GTC",
+                        reduceOnly=True,
+                    )
+                    inc_tp_rearm()
+                    placed += 1
+                except Exception:
+                    continue
+        return {"ok": True, "rearmed": placed}
+    except Exception as e:
+        return {"ok": False, "error": f"{e}"}
+
+
+def anti_stale_nudge(client, symbol: str, *, side_txt: str,
+                     tick: float, nudge_bps: float,
+                     min_distance_ticks: int = 1) -> dict:
+    """
+    ניוד קל להחזרת TPים 'עייפים' לכיוון המחיר:
+    - BUY: מורידים מחיר TP (קירוב) ב־bps, תוך שמירה על לפחות tick אחד מעל המחיר הנוכחי.
+    - SELL: מעלים מחיר TP.
+    """
+    try:
+        # מחירי שוק
+        px = None
+        try:
+            t = client.futures_symbol_ticker(symbol=symbol)
+            px = float(t["price"]) if t and "price" in t else None
+        except Exception:
+            px = None
+        if not px:
+            return {"ok": False, "error": "price_unavailable"}
+
+        ro = fetch_reduce_only_limits(client, symbol)
+        if not ro:
+            return {"ok": True, "nudged": 0}
+        moved = 0
+        for o in ro:
+            old = float(o["price"])
+            if side_txt.upper() == "BUY":
+                new = old * (1.0 - float(nudge_bps) / 10_000.0)
+                # נשמור מרחק מינימלי
+                min_ok = px + min_distance_ticks * float(tick)
+                if new <= min_ok:
+                    new = min_ok
+            else:
+                new = old * (1.0 + float(nudge_bps) / 10_000.0)
+                min_ok = px - min_distance_ticks * float(tick)
+                if new >= min_ok:
+                    new = min_ok
+            # עיגול לטיק
+            new_rounded = round_tick_dir(new, float(tick), "down" if side_txt.upper() == "BUY" else "up")
+            if abs(new_rounded - old) >= float(tick):
+                try:
+                    # שינוי LIMIT מחייב ביטול+פתיחה — ננקוט add+cancel (כמו merge)
+                    client.futures_create_order(
+                        symbol=symbol,
+                        side=o["side"],
+                        type="LIMIT",
+                        price=new_rounded,
+                        quantity=o["origQty"],
+                        timeInForce="GTC",
+                        reduceOnly=True,
+                    )
+                    client.futures_cancel_order(symbol=symbol, orderId=o["orderId"])
+                    moved += 1
+                except Exception:
+                    continue
+        if moved:
+            inc_tp_nudged()
+        return {"ok": True, "nudged": moved}
+    except Exception as e:
+        return {"ok": False, "error": f"{e}"}
 
