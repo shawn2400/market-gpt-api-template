@@ -20,13 +20,14 @@ try:
 except Exception:
     compute_pretrade_score = None  # type: ignore
 
-# Metrics (מונים + עדכון gauge לציון אחרון)
+# Metrics (מונים + עדכון gauge לציון אחרון + observe)
 try:
     from utils.metrics_tracker import (
         inc_scan_eval,
         inc_scan_passed,
         inc_scan_blocked,
         set_last_entry_score,
+        observe_http,  # NEW
     )  # type: ignore
 except Exception:
     def inc_scan_eval():  # type: ignore
@@ -37,6 +38,11 @@ except Exception:
         pass
     def set_last_entry_score(_):  # type: ignore
         pass
+    # no-op decorator
+    def observe_http(name: str):  # type: ignore
+        def deco(fn):
+            return fn
+        return deco
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 ENTRY_SCORE_MIN = float(os.getenv("ENTRY_SCORE_MIN", "0") or 0)
@@ -94,6 +100,7 @@ class ScanResponse(BaseModel):
     error: Optional[str] = None
 
 # ===================== Binance helpers =====================
+@observe_http("binance.klines")  # NEW: מדידה קלילה
 async def _fetch_klines_async(symbol: str, interval: str = "15m", limit: int = 200) -> pd.DataFrame:
     sym = symbol.strip().upper()
     if not sym.endswith("USDT"):
@@ -256,6 +263,5 @@ async def scan_multi(
     results = await asyncio.gather(*[_one(s) for s in syms], return_exceptions=False)
     ok_any = any(r.ok for r in results)
     return ScanResponse(ok=ok_any, count_total=len(syms), returned=len(results), signals=list(results))
-
 
 
