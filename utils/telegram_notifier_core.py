@@ -561,7 +561,6 @@ async def send_eod_report_now(summary: Dict[str, Any]) -> None:
 _heartbeat_task: Optional[asyncio.Task] = None
 
 async def _heartbeat_loop() -> None:
-    # ברירת מחדל: אחת לשעה. רוצה 30 דק'? שנה את המספר ל-1800.
     interval_sec = 3600
     while True:
         try:
