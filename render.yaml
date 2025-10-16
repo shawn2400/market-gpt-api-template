@@ -1,6 +1,4 @@
-הנה הגרסה המלאה עם כל החוסרים שנדרשו (בדגש על readiness ו־metrics buckets), מעודכנת 1:1:
 
-```yaml
 services:
   - type: web
     name: algogpt-prod
