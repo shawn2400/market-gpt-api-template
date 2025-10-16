@@ -1,4 +1,4 @@
-# utils/tp_helper.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os
@@ -8,7 +8,7 @@ import logging
 import asyncio
 from typing import List, Optional, Dict, Any, Tuple
 
-# פעולות טלאי/BE מתבצעות דרך binance_client (כבר קיים אצלך)
+# פעולות טלאי/BE מתבצעות דרך binance_client (חייב להיות קיים אצלך)
 from utils.binance_client import place_tp_ladder, set_breakeven_stop
 
 logger = logging.getLogger("algogpt.tp_helper")
@@ -84,7 +84,7 @@ def _deduce_tp_inputs(
     decision: Dict[str, Any],
     tp_pcts: Optional[List[float]],
     splits: Optional[List[float]],
-) -> Tuple[List[float], List[float]]:
+) -> Tuple[List[float], List[float]]]:
     # 1) פרמטרים ישירים
     if tp_pcts and len(tp_pcts) > 0:
         tp = tp_pcts[:]
@@ -154,7 +154,7 @@ def on_tp1_hit(symbol: str) -> Dict[str, Any]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Async wrappers (לשימוש מתוך FastAPI/async)
+# Async wrappers
 # ──────────────────────────────────────────────────────────────────────────────
 async def on_approve_trade_async(
     decision: Dict[str, Any],
@@ -168,3 +168,7 @@ async def on_approve_trade_async(
 async def on_tp1_hit_async(symbol: str) -> Dict[str, Any]:
     loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, lambda: on_tp1_hit(symbol))
+
+
+__all__ = ["on_approve_trade", "on_tp1_hit", "on_approve_trade_async", "on_tp1_hit_async"]
+
