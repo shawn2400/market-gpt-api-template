@@ -27,6 +27,9 @@ TP_BE_ONLY_AFTER_TP1 = os.getenv("TP_BE_ONLY_AFTER_TP1", "1") == "1"
 ENV_TP_PCTS = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
 ENV_TP_SPLITS = os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25")
 
+# Profit-Lock bands (RR levels) – optional
+PROFIT_LOCK_STEPS = os.getenv("PROFIT_LOCK_STEPS", "1.0,1.5,2.0")
+
 # Idempotency: הימנעות מחזרת סולם בתדירות גבוהה
 _last_ladder_at: Dict[str, float] = {}
 _LADDER_COOLDOWN_SEC = 60.0
@@ -84,7 +87,7 @@ def _deduce_tp_inputs(
     decision: Dict[str, Any],
     tp_pcts: Optional[List[float]],
     splits: Optional[List[float]],
-) -> Tuple[List[float], List[float]]]:
+) -> Tuple[List[float], List[float]]:
     # 1) פרמטרים ישירים
     if tp_pcts and len(tp_pcts) > 0:
         tp = tp_pcts[:]
@@ -109,6 +112,61 @@ def _ladder_cooldown_ok(symbol: str) -> bool:
         return False
     _last_ladder_at[symbol.upper()] = _now()
     return True
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Profit-Lock & BE Stair (רזה, אופציונלי)
+# ──────────────────────────────────────────────────────────────────────────────
+def compute_be_offset_bps(adx: float, atr_pct: float) -> float:
+    """
+    מדרגת BE דינמית לפי ADX/ATR% (רזה):
+      - בסיס מה-ENV (TP_BE_OFFSET_BPS)
+      - +20% אם ADX גבוה מ-22
+      - +20% אם ATR% נמוך מ-1%
+    """
+    base = float(TP_BE_OFFSET_BPS)
+    if adx >= 22:
+        base *= 1.2
+    if atr_pct <= 1.0:
+        base *= 1.2
+    return float(base)
+
+
+def profit_lock_should_lock(rr: float) -> Optional[float]:
+    """
+    קובע רמת נעילה (bps מעל BE) לפי מדרגות RR (1.0/1.5/2.0...).
+    מחזיר offset_bps אם יש מה לנעול.
+    """
+    steps = _env_list_of_floats(PROFIT_LOCK_STEPS)
+    if not steps:
+        return None
+    # אם rr עבר מדרגה 1.0 → BE, 1.5 → BE+7bps, 2.0 → BE+12bps (דוגמה רזה)
+    if rr >= max(steps):
+        return 12.0
+    if rr >= sorted(steps)[-2]:
+        return 7.0
+    if rr >= min(steps):
+        return 0.0  # BE נקי
+    return None
+
+
+def be_stair_and_profit_lock(symbol: str, rr: float, adx: float, atr_pct: float) -> Dict[str, Any]:
+    """
+    מחליט אם להזיז ל-BE (או BE+), לפי rr/ADX/ATR%.
+    דורש set_breakeven_stop ב-binance_client.
+    """
+    off = profit_lock_should_lock(rr)
+    if off is None:
+        return {"ok": True, "skipped": True}
+    # אם זו מדרגה ראשונה – השתמש בעדכון מדרגי
+    if off == 0.0:
+        off = compute_be_offset_bps(adx, atr_pct)
+    try:
+        resp = set_breakeven_stop(symbol, offset_bps=float(off))
+        return {"ok": True, "resp": resp, "offset_bps": off}
+    except Exception as e:
+        logger.error("be_stair_and_profit_lock failed: %s", e)
+        return {"ok": False, "error": str(e)}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -170,5 +228,14 @@ async def on_tp1_hit_async(symbol: str) -> Dict[str, Any]:
     return await loop.run_in_executor(None, lambda: on_tp1_hit(symbol))
 
 
-__all__ = ["on_approve_trade", "on_tp1_hit", "on_approve_trade_async", "on_tp1_hit_async"]
+__all__ = [
+    "on_approve_trade",
+    "on_tp1_hit",
+    "on_approve_trade_async",
+    "on_tp1_hit_async",
+    "compute_be_offset_bps",
+    "profit_lock_should_lock",
+    "be_stair_and_profit_lock",
+]
+
 
