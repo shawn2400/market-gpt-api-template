@@ -1064,7 +1064,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
-            # FIX: סוגר מרובע חסר במקור
             row = f"• TP{i}: <code>{req_body[f'tp{i}']}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
                 row += f"  ETA:<code>{req_body[f'eta_tp{i}_min']}m</code>"
@@ -2327,12 +2326,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
-
-
-
-
-
 
 
 
