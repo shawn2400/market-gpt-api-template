@@ -374,4 +374,3 @@ def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Di
 
 
 
-
