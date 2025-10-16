@@ -30,11 +30,21 @@ _SCAN_BLOCKED = 0
 # New: approvals created
 _APPROVALS_CREATED = 0
 
+# New: שלב 5 – מונים לניהול TP
+_TP_MERGE = 0
+_TP_REARM = 0
+_TP_NUDGED = 0
+
 # last computed checklist score (gauge)
 _LAST_ENTRY_SCORE: Optional[float] = None
 
 # New: last slip estimate bps (gauge)
 _LAST_SLIP_ESTIMATE_BPS: Optional[float] = None
+
+# New: gauges "אחרונים" לשלב 4
+_LAST_CALLBACK_RATE: Optional[float] = None
+_LAST_BE_DISTANCE_BPS: Optional[float] = None
+_LAST_TP_LADDERS: Optional[int] = None
 
 def set_last_entry_score(val: Optional[float]) -> None:
     global _LAST_ENTRY_SCORE
@@ -91,6 +101,19 @@ def inc_scan_blocked() -> None:
 def inc_approvals_created() -> None:
     global _APPROVALS_CREATED
     _APPROVALS_CREATED += 1
+
+# שלב 5 – Counters
+def inc_tp_merge() -> None:
+    global _TP_MERGE
+    _TP_MERGE += 1
+
+def inc_tp_rearm() -> None:
+    global _TP_REARM
+    _TP_REARM += 1
+
+def inc_tp_nudged() -> None:
+    global _TP_NUDGED
+    _TP_NUDGED += 1
 
 # -------------------- Lightweight Histograms --------------------
 def _csv_floats(env: str, default: List[float]) -> List[float]:
@@ -178,6 +201,28 @@ def observe_slip_bps(bps: float) -> None:
     _slip_bps_sum += v
     _slip_bps_count += 1
     _observe_into_buckets(v, _slip_bps_buckets, "slip")
+
+# --- Gauges “אחרונים” לשלב 4/5 (פשוטים, נמוכי-קרדינליות) ---
+def observe_callback_rate(v: float) -> None:
+    global _LAST_CALLBACK_RATE
+    try:
+        _LAST_CALLBACK_RATE = float(v)
+    except Exception:
+        _LAST_CALLBACK_RATE = None
+
+def observe_be_distance_bps(v: float) -> None:
+    global _LAST_BE_DISTANCE_BPS
+    try:
+        _LAST_BE_DISTANCE_BPS = float(v)
+    except Exception:
+        _LAST_BE_DISTANCE_BPS = None
+
+def observe_tp_ladders(n: int) -> None:
+    global _LAST_TP_LADDERS
+    try:
+        _LAST_TP_LADDERS = int(n)
+    except Exception:
+        _LAST_TP_LADDERS = None
 
 # -------------------- Observe (ctx + decorator) --------------------
 @contextmanager
@@ -269,8 +314,14 @@ def get_metrics_snapshot() -> Dict[str, Any]:
         "scan_passed": _SCAN_PASSED,
         "scan_blocked": _SCAN_BLOCKED,
         "approvals_created": _APPROVALS_CREATED,
+        "tp_merged": _TP_MERGE,
+        "tp_rearmed": _TP_REARM,
+        "tp_nudged": _TP_NUDGED,
         "last_entry_score": _LAST_ENTRY_SCORE,
         "last_slip_estimate_bps": _LAST_SLIP_ESTIMATE_BPS,
+        "last_callback_rate": _LAST_CALLBACK_RATE,
+        "last_be_distance_bps": _LAST_BE_DISTANCE_BPS,
+        "last_tp_ladders": _LAST_TP_LADDERS,
     }
 
 def _render_histogram(name: str,
@@ -327,6 +378,15 @@ def render_prometheus_text() -> str:
         "# HELP algogpt_approvals_created_total Approval tickets created.",
         "# TYPE algogpt_approvals_created_total counter",
         f"algogpt_approvals_created_total {_APPROVALS_CREATED}",
+        "# HELP algogpt_tp_merge_total TP merges executed.",
+        "# TYPE algogpt_tp_merge_total counter",
+        f"algogpt_tp_merge_total {_TP_MERGE}",
+        "# HELP algogpt_tp_rearm_total TP rearm actions executed.",
+        "# TYPE algogpt_tp_rearm_total counter",
+        f"algogpt_tp_rearm_total {_TP_REARM}",
+        "# HELP algogpt_tp_nudged_total TP anti-stale nudges executed.",
+        "# TYPE algogpt_tp_nudged_total counter",
+        f"algogpt_tp_nudged_total {_TP_NUDGED}",
     ]
     if _LAST_ENTRY_SCORE is not None:
         lines += [
@@ -339,6 +399,24 @@ def render_prometheus_text() -> str:
             "# HELP algogpt_slip_estimate_bps_last Last estimated slip (bps) at ticket creation.",
             "# TYPE algogpt_slip_estimate_bps_last gauge",
             f"algogpt_slip_estimate_bps_last {_LAST_SLIP_ESTIMATE_BPS:.3f}",
+        ]
+    if _LAST_CALLBACK_RATE is not None:
+        lines += [
+            "# HELP algogpt_trailing_callback_rate_last Last computed trailing callback rate (percent).",
+            "# TYPE algogpt_trailing_callback_rate_last gauge",
+            f"algogpt_trailing_callback_rate_last {_LAST_CALLBACK_RATE:.3f}",
+        ]
+    if _LAST_BE_DISTANCE_BPS is not None:
+        lines += [
+            "# HELP algogpt_be_distance_bps_last Last computed BE distance from price (bps).",
+            "# TYPE algogpt_be_distance_bps_last gauge",
+            f"algogpt_be_distance_bps_last {_LAST_BE_DISTANCE_BPS:.3f}",
+        ]
+    if _LAST_TP_LADDERS is not None:
+        lines += [
+            "# HELP algogpt_tp_ladders_last Last number of TP ladders placed in manage-once.",
+            "# TYPE algogpt_tp_ladders_last gauge",
+            f"algogpt_tp_ladders_last {_LAST_TP_LADDERS}",
         ]
 
     lines += _render_histogram(
@@ -365,9 +443,12 @@ __all__ = [
     "inc_approve_ok","inc_approve_fail","inc_reject",
     "inc_scan_eval","inc_scan_passed","inc_scan_blocked",
     "inc_approvals_created",
+    "inc_tp_merge","inc_tp_rearm","inc_tp_nudged",
     "render_prometheus_text","set_last_entry_score","get_last_entry_score",
     "set_last_slip_estimate_bps","get_last_slip_estimate_bps",
     "observe_http_latency","observe_time_to_tp1","observe_slip_bps",
     "observe_http_ctx","observe_http_ctx_async","observe_http",
+    "observe_callback_rate","observe_be_distance_bps","observe_tp_ladders",
 ]
+
 
