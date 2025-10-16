@@ -167,9 +167,9 @@ services:
       - key: CONFIRMSTORE_ENABLE
         value: "0"
       - key: USE_REDIS_IDEM
-        value: "1"
+        value: "0"             # עודכן מ-1 לפי בקשתך
       - key: IDEM_TTL_SEC
-        value: "90"
+        value: "60"            # עודכן מ-90 לפי בקשתך
       - key: SETEX_STRICT
         value: "1"
       - key: REDIS_CONNECT_TIMEOUT
@@ -618,19 +618,21 @@ services:
         value: "config/policy_schema.json"
 
       # ========================= Pretrade Checklist (NEW) =========================
-      - key: ENTRY_SCORE_MODE               # log | gate
+      - key: ENTRY_SCORE_MODE
         value: "log"
       - key: ENTRY_SCORE_MIN
-        value: "6.8"
+        value: "6.5"           # עודכן מ-6.8
+      - key: ENTRY_SCORE_INTERVAL
+        value: "15m"           # חדש
       - key: ENTRY_SCORE_ENFORCE_ON_APPROVE
-        value: "0"                          # 1 כדי לאכוף בשלב approve
+        value: "0"
       - key: CHECKLIST_LOG_FEATURES
         value: "1"
       - key: REGIME_ADX_TREND
         value: "22"
-      - key: REGIME_CHOP_ATR               # באחוזים (0.6 => 0.6%)
+      - key: REGIME_CHOP_ATR
         value: "0.6"
-      - key: REGIME_COMPRESSION_BW         # אפשר גם 0.012 (=>1.2%) או 1.2 (%)
+      - key: REGIME_COMPRESSION_BW
         value: "1.2"
       - key: EMA_GAP_MAX_PCT
         value: "6"
@@ -655,7 +657,7 @@ services:
       - key: PROM_METRICS_PATH
         value: "/metrics"
       - key: METRICS_PROTECT
-        value: "1"          # אם 1 – ידרוש Authorization: Bearer <METRICS_BEARER>
+        value: "1"
 
       # ========================= Secrets =========================
       - key: API_BEARER_TOKEN
@@ -686,6 +688,7 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
+
 
 
 
