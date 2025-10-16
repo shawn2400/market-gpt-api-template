@@ -1,4 +1,3 @@
-
 # main.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
@@ -61,6 +60,8 @@ try:
         inc_approvals_created,
         set_last_entry_score, set_last_slip_estimate_bps,
     )
+    # Stage 6 metrics:
+    from utils.metrics_tracker import inc_time_stop_keep, inc_time_stop_move_be, inc_struct_sl_applied  # type: ignore
 except Exception:
     def inc_approve_ok():  # type: ignore
         pass
@@ -79,6 +80,13 @@ except Exception:
     def set_last_entry_score(_v: float):  # type: ignore
         pass
     def set_last_slip_estimate_bps(_v: float):  # type: ignore
+        pass
+    # Stage 6 metrics fallbacks:
+    def inc_time_stop_keep():  # type: ignore
+        pass
+    def inc_time_stop_move_be():  # type: ignore
+        pass
+    def inc_struct_sl_applied():  # type: ignore
         pass
 
 # (NEW) optional histogram for time-to-TP1
@@ -170,6 +178,17 @@ TP_MERGE_TICK_BAND = int(os.getenv("TP_MERGE_TICK_BAND", "1") or 1)
 TP_REARM_TICK = int(os.getenv("TP_REARM_TICK", "1") or 1)
 ANTI_STALE_MIN = int(os.getenv("ANTI_STALE_MIN", "15") or 15)  # דקות
 ANTI_STALE_NUDGE_BPS = float(os.getenv("ANTI_STALE_NUDGE_BPS", "2") or 2.0)
+
+# ====== (NEW) Time-Stop knobs (best-effort; used only if the logic exists) ======
+TIME_STOP_MIN = int(os.getenv("TIME_STOP_MIN", "0") or 0)
+TIME_STOP_KEEP_PROFIT_MIN_PCT = float(os.getenv("TIME_STOP_KEEP_PROFIT_MIN_PCT", "0") or 0.0)
+
+# (optional) external time-stop logic (only used if present)
+try:
+    from utils.time_stop import should_time_stop, time_stop_decision  # type: ignore
+except Exception:
+    should_time_stop = None  # type: ignore
+    time_stop_decision = None  # type: ignore
 
 # ==================== App & CORS ====================
 APP_TITLE = os.getenv("APP_TITLE", "AlgoGPT API")
@@ -1761,6 +1780,18 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     except Exception as e:
         return {"ok": False, "error": "manage_once_place_all_failed", "detail": f"{e}"}
 
+    # (NEW 2.2) סימון כשה-Structural SL באמת השפיע (רק אם merged_stop != be_price)
+    try:
+        computed = (res or {}).get("computed", {}) or {}
+        be_price = computed.get("be_price")
+        struct_price = computed.get("struct_price")
+        merged_stop = computed.get("merged_stop", be_price)
+        if struct_price is not None and be_price is not None and abs(float(merged_stop) - float(be_price)) > 1e-12:
+            inc_struct_sl_applied()
+    except Exception:
+        pass
+    # הערה: אם STRUCT_SL_MERGE_MODE=be_only לא יספר (הגיוני) — כי merged_stop יישאר = be_price.
+
     result = {
         "ok": bool(res.get("ok")),
         "delegated": False,
@@ -2341,7 +2372,28 @@ async def _trail_rt_loop():
                                     int(app.state.tp1_hit_ts[sym]) - int(app.state.pos_open_ts[sym])
                                 )
                                 break
-                # ====================== סוף תחזוקת TP ======================
+
+                # -------- (NEW 2.3) Time-Stop counters (best-effort, only if logic exists) --------
+                # אם קיימות פונקציות should_time_stop/time_stop_decision במודול החיצוני — נספור בהתאם להחלטה.
+                # לא מבצעים כאן שינויי הזמנות כדי לא לשנות התנהגות קיימת (החלק המבצעי כבקשתך נמצא בקטע הקודם אצלך).
+                try:
+                    if callable(should_time_stop) and callable(time_stop_decision) and TIME_STOP_MIN > 0:
+                        entry_time_ms = int((app.state.pos_open_ts.get(sym, int(time.time())) or int(time.time())) * 1000)
+                        if should_time_stop(entry_time_ms, int(time.time() * 1000), TIME_STOP_MIN):
+                            act = time_stop_decision(side_txt, entry_price, px_now, profit_lock_min_pct=TIME_STOP_KEEP_PROFIT_MIN_PCT)
+                            if act == "MOVE_BE":
+                                try:
+                                    inc_time_stop_move_be()
+                                except Exception:
+                                    pass
+                            else:
+                                try:
+                                    inc_time_stop_keep()
+                                except Exception:
+                                    pass
+                except Exception:
+                    pass
+                # ---------------------- סוף Time-Stop counters ----------------------
 
         except Exception as e:
             logger.debug("trail_rt.loop_error: %s", e)
@@ -2419,7 +2471,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
 
 
 
