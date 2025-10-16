@@ -80,6 +80,13 @@ except Exception:
     def set_last_slip_estimate_bps(_v: float):  # type: ignore
         pass
 
+# (NEW) optional histogram for time-to-TP1
+try:
+    from utils.metrics_tracker import observe_time_to_tp1  # type: ignore
+except Exception:
+    def observe_time_to_tp1(_v: float):  # type: ignore
+        pass
+
 # === Checklist (עם נפילה רכה) ===
 try:
     from utils.pretrade_checklist import compute_pretrade_score, estimate_impact_slip_bps  # type: ignore
@@ -150,6 +157,19 @@ TRAIL_PAUSE_WINDOWS = (os.getenv("TRAIL_PAUSE_WINDOWS", "") or "").strip()   # e
 AUTO_TRAIL_ADX_MIN = float(os.getenv("AUTO_TRAIL_ADX_MIN", "0") or 0.0)
 AUTO_TRAIL_ATRPCT_MAX = float(os.getenv("AUTO_TRAIL_ATRPCT_MAX", "0") or 0.0)
 
+# === תחזוקת TP: Merge / Rearm / Anti-stale (imports + ENV) ===
+try:
+    from utils.tp_helper import (  # type: ignore
+        maybe_merge_close_tps, maybe_rearm_on_bounce, anti_stale_nudge
+    )
+except Exception:
+    maybe_merge_close_tps = maybe_rearm_on_bounce = anti_stale_nudge = None  # type: ignore
+
+TP_MERGE_TICK_BAND = int(os.getenv("TP_MERGE_TICK_BAND", "1") or 1)
+TP_REARM_TICK = int(os.getenv("TP_REARM_TICK", "1") or 1)
+ANTI_STALE_MIN = int(os.getenv("ANTI_STALE_MIN", "15") or 15)  # דקות
+ANTI_STALE_NUDGE_BPS = float(os.getenv("ANTI_STALE_NUDGE_BPS", "2") or 2.0)
+
 # ==================== App & CORS ====================
 APP_TITLE = os.getenv("APP_TITLE", "AlgoGPT API")
 APP_VERSION = os.getenv("ALGOGPT_VERSION", "dev")
@@ -164,6 +184,11 @@ app = FastAPI(
     redoc_url=REDOC_URL,
     openapi_url=OPENAPI_URL,
 )
+
+# (NEW) מעקב In-memory: כניסה ראשונית ו-TP1 timing
+# ייווצרו אם לא קיימים (טעינה/רילוד)
+app.state.pos_open_ts = getattr(app.state, "pos_open_ts", {})
+app.state.tp1_hit_ts = getattr(app.state, "tp1_hit_ts", {})
 
 # ===== UltraTop integration (mount under /ultra only if enabled) =====
 ULTRATOP_MODE = os.getenv("ULTRATOP_MODE", "noop").lower()
@@ -2045,8 +2070,8 @@ async def meta_telegram(
             except Exception:
                 cid = chat_id
 
-            # idem עדין על Redis, אם זמין
-            if USE_REDIS_IDEM && IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):  # noqa: E712 (logical and style)
+            # (FIX) Python uses 'and' not '&&'
+            if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
                 try:
                     r = await _get_redis_cached()
                     if r:
@@ -2179,8 +2204,19 @@ async def _trail_rt_loop():
                             entry_price = float(p.get("entryPrice") or 0.0)
                             side_txt = "BUY" if amt > 0 else "SELL"
                             break
-                if not side_txt:
-                    continue
+
+                # (NEW) מעקב פתיחת פוזיציה ראשונית וזמן TP1 (in-memory)
+                if side_txt and abs(pos_amt) > 0:
+                    with suppress(Exception):
+                        if sym not in app.state.pos_open_ts:
+                            app.state.pos_open_ts[sym] = int(time.time())
+                            app.state.tp1_hit_ts.pop(sym, None)
+                else:
+                    # אין פוזיציה — ננקה זכרון (לא חובה, אבל מונע stale)
+                    with suppress(Exception):
+                        app.state.pos_open_ts.pop(sym, None)
+                        app.state.tp1_hit_ts.pop(sym, None)
+                    continue  # בלי פוזיציה אין המשך ניהול
 
                 # last price
                 px_now = entry_price
@@ -2247,6 +2283,65 @@ async def _trail_rt_loop():
                     )
                     with suppress(Exception):
                         client.futures_create_order(**kwargs)
+
+                # =============== תחזוקת TP: Merge / Rearm / Anti-stale ==================
+
+                # 1) Merge TPs קרובים (קלה)
+                if maybe_merge_close_tps:
+                    # צריך tick מה-exchange info
+                    tick, _step = _get_filters(client, sym)
+                    with suppress(Exception):
+                        maybe_merge_close_tps(client, sym, tick=tick, tick_band=TP_MERGE_TICK_BAND)
+
+                # 2) Rearm-on-bounce — משתמשים ב-TPים הפתוחים כ"planned"
+                last_planned: List[Dict[str, float]] = []
+                with suppress(Exception):
+                    ro = client.futures_get_open_orders(symbol=sym)
+                    for o in ro or []:
+                        if str(o.get("type")) == "LIMIT" and str(o.get("reduceOnly")).lower() == "true":
+                            last_planned.append({
+                                "price": float(o.get("price")),
+                                "qty": float(o.get("origQty") or 0.0)
+                            })
+                if maybe_rearm_on_bounce and last_planned:
+                    with suppress(Exception):
+                        maybe_rearm_on_bounce(
+                            client, sym, side_txt=side_txt, price_now=px_now,
+                            last_planned_tps=last_planned, tick=_get_filters(client, sym)[0],
+                            rearm_tick=TP_REARM_TICK
+                        )
+
+                # 3) Anti-stale nudge — אם עברו ≥ ANTI_STALE_MIN דקות מאז פתיחה ואין TP1
+                opened_at = getattr(app.state, "pos_open_ts", {}).get(sym)
+                tp1_at = getattr(app.state, "tp1_hit_ts", {}).get(sym)
+                if opened_at and (not tp1_at):
+                    elapsed_min = (int(time.time()) - int(opened_at)) / 60.0
+                    if elapsed_min >= ANTI_STALE_MIN and anti_stale_nudge:
+                        with suppress(Exception):
+                            anti_stale_nudge(
+                                client, sym, side_txt=side_txt,
+                                tick=_get_filters(client, sym)[0],
+                                nudge_bps=ANTI_STALE_NUDGE_BPS,
+                                min_distance_ticks=1
+                            )
+
+                # === Best-effort: זיהוי TP1 נלקח (על בסיס הזמנה reduceOnly שמולאה לאחר הפתיחה)
+                # אם נמצא — נחתים את הטיימסטמפ ונרשום metric
+                with suppress(Exception):
+                    if (sym in app.state.pos_open_ts) and (sym not in app.state.tp1_hit_ts):
+                        # חיפוש היסטוריית הזמנות אחרונות (קליל)
+                        # הערה: אם endpoint לא יחזיר reduceOnly/status, שום דבר לא יקרה — suppress(Exception)
+                        orders = client.futures_get_all_orders(symbol=sym, limit=20)
+                        # נסדר מהחדשות לישנות
+                        for o in reversed(orders or []):
+                            if str(o.get("reduceOnly")).lower() == "true" and str(o.get("status")).upper() == "FILLED":
+                                app.state.tp1_hit_ts[sym] = int(time.time())
+                                observe_time_to_tp1(
+                                    int(app.state.tp1_hit_ts[sym]) - int(app.state.pos_open_ts[sym])
+                                )
+                                break
+                # ====================== סוף תחזוקת TP ======================
+
         except Exception as e:
             logger.debug("trail_rt.loop_error: %s", e)
         await asyncio.sleep(max(3, TRAIL_RT_INTERVAL_SEC))
@@ -2323,8 +2418,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
-
 
 
 
