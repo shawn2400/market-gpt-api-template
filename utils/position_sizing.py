@@ -17,21 +17,25 @@ def _env_float(name: str, default: float) -> float:
     except Exception:
         return default
 
+
 def _env_int(name: str, default: int) -> int:
     try:
         return int(os.getenv(name, str(default)))
     except Exception:
         return default
 
+
 # ---------- Quantization helpers (Decimal, step-aware) ----------
 def _as_dec(x) -> Decimal:
     return x if isinstance(x, Decimal) else D(str(x))
+
 
 def _q_floor(value: Decimal, step: Decimal) -> Decimal:
     """חותך למטה למדרגת step (LOT_SIZE)."""
     if step <= 0:
         return value
     return (value // step) * step
+
 
 def _q_ceil(value: Decimal, step: Decimal) -> Decimal:
     """מעגל מעלה למדרגת step (לכיסוי minNotional)."""
@@ -40,6 +44,7 @@ def _q_ceil(value: Decimal, step: Decimal) -> Decimal:
     floored = _q_floor(value, step)
     return floored if floored == value else (floored + step)
 
+
 # ---------- Filters ----------
 @dataclass(frozen=True)
 class SymbolFilters:
@@ -47,11 +52,13 @@ class SymbolFilters:
     price_tick: Decimal
     min_notional: Decimal
 
+
 def _from_env_defaults() -> SymbolFilters:
     qty_step = _as_dec(_env_float("DEFAULT_QTY_STEP", 0.001))
     price_tick = _as_dec(_env_float("DEFAULT_PRICE_TICK", 0.01))
     min_notional = _as_dec(_env_float("MIN_NOTIONAL_USDT", 5.0))
     return SymbolFilters(qty_step=qty_step, price_tick=price_tick, min_notional=min_notional)
+
 
 def _apply_symbol_overrides(sym: str, f: SymbolFilters) -> SymbolFilters:
     s = sym.upper()
@@ -72,6 +79,7 @@ def _apply_symbol_overrides(sym: str, f: SymbolFilters) -> SymbolFilters:
             f = SymbolFilters(qty_step=f.qty_step, price_tick=f.price_tick, min_notional=_as_dec(mn_override))
     return f
 
+
 def _symbol_filters_from_exchange(symbol: str) -> Optional[SymbolFilters]:
     """
     מצפה ל־utils.exchange_info.get_symbol_filters(symbol) → dict עם:
@@ -79,6 +87,7 @@ def _symbol_filters_from_exchange(symbol: str) -> Optional[SymbolFilters]:
     """
     with suppress(Exception):
         from utils.exchange_info import get_symbol_filters  # type: ignore
+
         f = get_symbol_filters(symbol)
         if not f:
             return None
@@ -95,9 +104,11 @@ def _symbol_filters_from_exchange(symbol: str) -> Optional[SymbolFilters]:
         )
     return None
 
+
 def _symbol_filters(symbol: str) -> SymbolFilters:
     f = _symbol_filters_from_exchange(symbol) or _from_env_defaults()
     return _apply_symbol_overrides(symbol, f)
+
 
 # ---------- Leverage cap ----------
 def _leverage_cap(symbol: str, req_leverage: int) -> int:
@@ -128,10 +139,13 @@ def _leverage_cap(symbol: str, req_leverage: int) -> int:
                 adx_cap = max(int(v) for v in adx_map.values())
 
     caps_to_apply = [int(req_leverage or 0), int(max_lev)]
-    if sym_cap: caps_to_apply.append(int(sym_cap))
-    if adx_cap: caps_to_apply.append(int(adx_cap))
+    if sym_cap:
+        caps_to_apply.append(int(sym_cap))
+    if adx_cap:
+        caps_to_apply.append(int(adx_cap))
     vals = [x for x in caps_to_apply if x and x > 0]
     return max(1, min(vals)) if vals else 1
+
 
 # ---------- Public API ----------
 def _compute_qty_by_budget(price_dec: Decimal, lev: int, budget_usdt: Decimal) -> Decimal:
@@ -139,6 +153,7 @@ def _compute_qty_by_budget(price_dec: Decimal, lev: int, budget_usdt: Decimal) -
     if price_dec <= 0 or lev <= 0 or budget_usdt <= 0:
         return D(0)
     return (budget_usdt * D(lev)) / price_dec
+
 
 def auto_qty(symbol: str, symbol_price: float, leverage: int) -> Optional[float]:
     """
@@ -153,7 +168,7 @@ def auto_qty(symbol: str, symbol_price: float, leverage: int) -> Optional[float]
         return None
 
     budget = _as_dec(_env_float("AUTO_QTY_BUDGET_USDT", 50.0))
-    buf    = _as_dec(_env_float("AUTO_QTY_MARGIN_BUFFER_PCT", 0.20))
+    buf = _as_dec(_env_float("AUTO_QTY_MARGIN_BUFFER_PCT", 0.20))
     max_budget = _as_dec(_env_float("MAX_TRADE_BUDGET", float(budget)))
 
     budget = budget if budget <= max_budget else max_budget
@@ -175,6 +190,7 @@ def auto_qty(symbol: str, symbol_price: float, leverage: int) -> Optional[float]
         qty = _q_ceil(needed, f.qty_step)
 
     return float(qty) if qty > 0 else None
+
 
 def ensure_final_qty(ticket: dict, symbol_price: float) -> dict:
     """
