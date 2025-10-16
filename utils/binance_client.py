@@ -3,6 +3,8 @@ from __future__ import annotations
 import os, time, math, logging, threading
 from typing import Any, Dict, List, Optional, Tuple, cast
 
+from utils.metrics_tracker import observe_http, observe_http_ctx  # מדידת לטנסי/HTTP
+
 logger = logging.getLogger("algogpt.binance")
 
 try:
@@ -156,6 +158,7 @@ def get_futures_client():
     return _get_client() or client
 
 
+@observe_http(name="binance_exinfo")
 def futures_exchange_info_safe(force_refresh: bool = False) -> Optional[Dict[str, Any]]:
     ts = _now()
     if not force_refresh and _exinfo_cache["data"] and (ts - _exinfo_cache["ts"] < EXINFO_TTL):
@@ -170,6 +173,7 @@ def futures_exchange_info_safe(force_refresh: bool = False) -> Optional[Dict[str
         return _exinfo_cache["data"]
 
 
+@observe_http(name="binance_ping")
 def fapi_ping() -> bool:
     try:
         client.futures_ping()
@@ -292,6 +296,7 @@ def _cache_put(cache: Dict[str, Tuple[float, float]], symbol: str, value: float)
     cache[symbol.upper()] = (_ms(), float(value))
 
 
+@observe_http(name="binance_mark_price", include_labels=["symbol"])
 def futures_mark_price(symbol: str) -> Optional[float]:
     sym = symbol.upper()
     try:
@@ -308,6 +313,7 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         return None
 
 
+@observe_http(name="binance_index_price", include_labels=["symbol"])
 def futures_index_price(symbol: str) -> Optional[float]:
     sym = symbol.upper()
     try:
@@ -345,17 +351,18 @@ def futures_index_price(symbol: str) -> Optional[float]:
 
         base = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
         url = f"{base}/fapi/v1/premiumIndex"
-        with httpx.Client(timeout=float(os.getenv("BINANCE_HTTP_TIMEOUT", "10.0"))) as cli:
-            r = cli.get(url, params={"symbol": sym})
-            r.raise_for_status()
-            data = r.json()
-            if isinstance(data, list) and data:
-                data = data[0]
-            p = data.get("indexPrice")
-            if p is not None:
-                val = float(p)
-                _cache_put(_index_cache, sym, val)
-                return val
+        with observe_http_ctx(name="binance_http"):
+            with httpx.Client(timeout=float(os.getenv("BINANCE_HTTP_TIMEOUT", "10.0"))) as cli:
+                r = cli.get(url, params={"symbol": sym})
+                r.raise_for_status()
+                data = r.json()
+                if isinstance(data, list) and data:
+                    data = data[0]
+                p = data.get("indexPrice")
+                if p is not None:
+                    val = float(p)
+                    _cache_put(_index_cache, sym, val)
+                    return val
     except Exception as e:
         logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
     return None
@@ -372,6 +379,7 @@ def get_price(symbol: str) -> Optional[float]:
     return futures_mark_price(symbol)
 
 
+@observe_http(name="binance_balance")
 def futures_balance() -> List[Dict[str, Any]]:
     try:
         data = client.futures_account()
@@ -381,6 +389,7 @@ def futures_balance() -> List[Dict[str, Any]]:
         return []
 
 
+@observe_http(name="binance_positions", include_labels=["symbol"])
 def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         acc_info = client.futures_account() or {}
@@ -407,6 +416,7 @@ def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+@observe_http(name="binance_open_orders", include_labels=["symbol"])
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         if symbol:
@@ -417,6 +427,7 @@ def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         return []
 
 
+@observe_http(name="binance_all_orders", include_labels=["symbol"])
 def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, Any]]:
     if not symbol or not symbol.strip():
         return []
@@ -495,6 +506,7 @@ def _backoff_sleep(attempt: int) -> None:
     time.sleep(delay_ms / 1000.0)
 
 
+@observe_http(name="binance_set_leverage", include_labels=["symbol"])
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     try:
         leverage = max(1, min(int(leverage), 125))
@@ -504,6 +516,7 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
+@observe_http(name="binance_create_order", include_labels=["symbol"])
 def futures_create_order(**kwargs) -> Dict[str, Any]:
     sym = str(kwargs.get("symbol") or "").upper()
     if not sym:
@@ -576,6 +589,7 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     raise RuntimeError(f"create_order_failed:{sym}:{typ}:{str(last) if last else 'unknown_error'}")
 
 
+@observe_http(name="binance_cancel_order", include_labels=["symbol"])
 def futures_cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
     try:
         return client.futures_cancel_order(symbol=symbol.upper(), orderId=int(order_id))
