@@ -46,30 +46,36 @@ def record_telegram_failed() -> None:
     global _FAILED_TELEGRAM
     _FAILED_TELEGRAM += 1
 
-def inc_approve_ok():
-    global _APPROVE_OK; _APPROVE_OK += 1
+def inc_approve_ok() -> None:
+    global _APPROVE_OK
+    _APPROVE_OK += 1
 
-def inc_approve_fail():
-    global _APPROVE_FAIL; _APPROVE_FAIL += 1
+def inc_approve_fail() -> None:
+    global _APPROVE_FAIL
+    _APPROVE_FAIL += 1
 
-def inc_reject():
-    global _REJECT; _REJECT += 1
+def inc_reject() -> None:
+    global _REJECT
+    _REJECT += 1
 
-def inc_scan_eval():
-    global _SCAN_EVALS; _SCAN_EVALS += 1
+def inc_scan_eval() -> None:
+    global _SCAN_EVALS
+    _SCAN_EVALS += 1
 
-def inc_scan_passed():
-    global _SCAN_PASSED; _SCAN_PASSED += 1
+def inc_scan_passed() -> None:
+    global _SCAN_PASSED
+    _SCAN_PASSED += 1
 
-def inc_scan_blocked():
-    global _SCAN_BLOCKED; _SCAN_BLOCKED += 1
+def inc_scan_blocked() -> None:
+    global _SCAN_BLOCKED
+    _SCAN_BLOCKED += 1
 
 def get_metrics_snapshot() -> Dict[str, Any]:
     uptime = time.time() - _START_TIME
     if _HAS_PSUTIL:
         try:
-            cpu = float(psutil.cpu_percent(interval=0.1))
-            mem = float(psutil.virtual_memory().percent)
+            cpu = float(psutil.cpu_percent(interval=0.1))  # type: ignore
+            mem = float(psutil.virtual_memory().percent)   # type: ignore
         except Exception:
             cpu, mem = None, None
     else:
@@ -135,3 +141,4 @@ __all__ = [
     "inc_scan_eval","inc_scan_passed","inc_scan_blocked",
     "render_prometheus_text","set_last_entry_score","get_last_entry_score",
 ]
+
