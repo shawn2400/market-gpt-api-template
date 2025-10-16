@@ -1,7 +1,7 @@
-# utils/open_trade_manager.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import logging
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from utils.order_hygiene import (
     place_limit_order_safe,
@@ -14,7 +14,6 @@ from utils.order_hygiene import (
 logger = logging.getLogger("algogpt.open_trade_manager")
 
 
-# ===================== Core Trade Management =====================
 def manage_open_trades(
     symbol: str,
     side: str,
@@ -27,8 +26,8 @@ def manage_open_trades(
     position_side: str = "BOTH",
 ) -> Dict[str, Any]:
     """
-    ניהול טרייד פתוח כולל Entry + SL + TP
-    עם בדיקות מינימום וניקוי קונפליקטים קיימים.
+    ניהול טרייד פתוח כולל Entry + SL + TP.
+    מנקה קונפליקטים קיימים ומוודא מינימום.
     """
     logger.info(
         {
@@ -53,7 +52,7 @@ def manage_open_trades(
         logger.warning({"event": "trade_rejected", "reason": msg})
         return {"ok": False, "error": msg}
 
-    # שלב 1: Limit Entry
+    # Limit Entry
     entry = place_limit_order_safe(
         symbol=symbol,
         side=side,
@@ -65,7 +64,7 @@ def manage_open_trades(
     if not entry.get("ok"):
         return {"ok": False, "error": f"entry_failed: {entry.get('error')}"}
 
-    # שלב 2: Stop-Market (SL)
+    # Stop-Market (SL)
     sl = place_stop_market_safe(
         symbol=symbol,
         side="SELL" if side.upper() == "BUY" else "BUY",
@@ -77,7 +76,7 @@ def manage_open_trades(
     if not sl.get("ok"):
         return {"ok": False, "error": f"sl_failed: {sl.get('error')}"}
 
-    # שלב 3: Take-Profit (TP)
+    # Take-Profit (TP)
     tp = place_take_profit_safe(
         symbol=symbol,
         side="SELL" if side.upper() == "BUY" else "BUY",
@@ -89,23 +88,15 @@ def manage_open_trades(
     if not tp.get("ok"):
         return {"ok": False, "error": f"tp_failed: {tp.get('error')}"}
 
-    logger.info(
-        {"event": "manage_open_trades_success", "symbol": symbol, "entry_id": entry.get("orderId")}
-    )
-    return {
-        "ok": True,
-        "entry": entry,
-        "sl": sl,
-        "tp": tp,
-    }
+    logger.info({"event": "manage_open_trades_success", "symbol": symbol, "entry_id": entry.get("orderId")})
+    return {"ok": True, "entry": entry, "sl": sl, "tp": tp}
 
 
-# ===================== Batch Manager =====================
 def bulk_manage_trades(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """
     ניהול מספר טריידים ברצף (batch).
     """
-    results = []
+    results: List[Dict[str, Any]] = []
     for t in trades:
         try:
             res = manage_open_trades(
@@ -125,10 +116,7 @@ def bulk_manage_trades(trades: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return results
 
 
-__all__ = [
-    "manage_open_trades",
-    "bulk_manage_trades",
-]
+__all__ = ["manage_open_trades", "bulk_manage_trades"]
 
 
 
