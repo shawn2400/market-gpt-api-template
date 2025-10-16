@@ -617,6 +617,46 @@ services:
       - key: POLICY_SCHEMA_PATH
         value: "config/policy_schema.json"
 
+      # ========================= Pretrade Checklist (NEW) =========================
+      - key: ENTRY_SCORE_MODE               # log | gate
+        value: "log"
+      - key: ENTRY_SCORE_MIN
+        value: "6.8"
+      - key: ENTRY_SCORE_ENFORCE_ON_APPROVE
+        value: "0"                          # 1 כדי לאכוף בשלב approve
+      - key: CHECKLIST_LOG_FEATURES
+        value: "1"
+      - key: REGIME_ADX_TREND
+        value: "22"
+      - key: REGIME_CHOP_ATR               # באחוזים (0.6 => 0.6%)
+        value: "0.6"
+      - key: REGIME_COMPRESSION_BW         # אפשר גם 0.012 (=>1.2%) או 1.2 (%)
+        value: "1.2"
+      - key: EMA_GAP_MAX_PCT
+        value: "6"
+      - key: IMPACT_SLIP_BPS_MAX
+        value: "25"
+
+      # ===== Weights (optional tuning) =====
+      - key: W_REGIME
+        value: "2.0"
+      - key: W_COMPRESSION
+        value: "2.0"
+      - key: W_TRENDCONF
+        value: "3.0"
+      - key: W_RSI_COMP
+        value: "1.5"
+      - key: W_EMA_GAP
+        value: "1.5"
+
+      # ===== Prometheus metrics (NEW) =====
+      - key: PROM_METRICS_ENABLE
+        value: "1"
+      - key: PROM_METRICS_PATH
+        value: "/metrics"
+      - key: METRICS_PROTECT
+        value: "1"          # אם 1 – ידרוש Authorization: Bearer <METRICS_BEARER>
+
       # ========================= Secrets =========================
       - key: API_BEARER_TOKEN
         fromSecret: API_BEARER_TOKEN
