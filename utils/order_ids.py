@@ -1,4 +1,3 @@
-# /app/utils/order_ids.py
 from __future__ import annotations
 import os, re, time, hashlib
 from typing import Optional
