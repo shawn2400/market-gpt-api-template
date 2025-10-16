@@ -35,6 +35,10 @@ _TP_MERGE = 0
 _TP_REARM = 0
 _TP_NUDGED = 0
 
+# New: שלב 4 – manage-once placement/fail (נדרש ע"י tp_helper)
+_MANAGE_ONCE_PLACED = 0
+_MANAGE_ONCE_FAILED = 0
+
 # last computed checklist score (gauge)
 _LAST_ENTRY_SCORE: Optional[float] = None
 
@@ -114,6 +118,15 @@ def inc_tp_rearm() -> None:
 def inc_tp_nudged() -> None:
     global _TP_NUDGED
     _TP_NUDGED += 1
+
+# שלב 4 – manage-once counters (נדרש ע"י tp_helper)
+def inc_manage_once_placed() -> None:
+    global _MANAGE_ONCE_PLACED
+    _MANAGE_ONCE_PLACED += 1
+
+def inc_manage_once_failed() -> None:
+    global _MANAGE_ONCE_FAILED
+    _MANAGE_ONCE_FAILED += 1
 
 # -------------------- Lightweight Histograms --------------------
 def _csv_floats(env: str, default: List[float]) -> List[float]:
@@ -317,6 +330,8 @@ def get_metrics_snapshot() -> Dict[str, Any]:
         "tp_merged": _TP_MERGE,
         "tp_rearmed": _TP_REARM,
         "tp_nudged": _TP_NUDGED,
+        "manage_once_placed": _MANAGE_ONCE_PLACED,
+        "manage_once_failed": _MANAGE_ONCE_FAILED,
         "last_entry_score": _LAST_ENTRY_SCORE,
         "last_slip_estimate_bps": _LAST_SLIP_ESTIMATE_BPS,
         "last_callback_rate": _LAST_CALLBACK_RATE,
@@ -387,6 +402,12 @@ def render_prometheus_text() -> str:
         "# HELP algogpt_tp_nudged_total TP anti-stale nudges executed.",
         "# TYPE algogpt_tp_nudged_total counter",
         f"algogpt_tp_nudged_total {_TP_NUDGED}",
+        "# HELP algogpt_manage_once_placed_total manage-once flows successfully placed.",
+        "# TYPE algogpt_manage_once_placed_total counter",
+        f"algogpt_manage_once_placed_total {_MANAGE_ONCE_PLACED}",
+        "# HELP algogpt_manage_once_failed_total manage-once flows failed to place.",
+        "# TYPE algogpt_manage_once_failed_total counter",
+        f"algogpt_manage_once_failed_total {_MANAGE_ONCE_FAILED}",
     ]
     if _LAST_ENTRY_SCORE is not None:
         lines += [
@@ -444,11 +465,11 @@ __all__ = [
     "inc_scan_eval","inc_scan_passed","inc_scan_blocked",
     "inc_approvals_created",
     "inc_tp_merge","inc_tp_rearm","inc_tp_nudged",
+    "inc_manage_once_placed","inc_manage_once_failed",
     "render_prometheus_text","set_last_entry_score","get_last_entry_score",
     "set_last_slip_estimate_bps","get_last_slip_estimate_bps",
     "observe_http_latency","observe_time_to_tp1","observe_slip_bps",
     "observe_http_ctx","observe_http_ctx_async","observe_http",
     "observe_callback_rate","observe_be_distance_bps","observe_tp_ladders",
 ]
-
 
