@@ -18,7 +18,6 @@ BASE_DIR   = Path(os.getenv("BASE_DIR", "/app"))
 INGEST_DIR = Path(os.getenv("INGEST_DIR", str(BASE_DIR / "static" / "cache")))
 MANAGER_ENABLE       = os.getenv("MANAGER_ENABLE", "1").lower() in ("1","true","yes","on")
 MANAGER_INTERVAL_SEC = int(os.getenv("MANAGER_INTERVAL_SEC", "10"))
-# <<< תיקון סוגר מיותר שהיה גורם ל־SyntaxError >>>
 CONFIRMSTORE_ENABLE  = os.getenv("CONFIRMSTORE_ENABLE", "1").lower() in ("1","true","yes","on")
 
 PUBLIC_HOST = (os.getenv("PUBLIC_HOST", "") or os.getenv("WEBHOOK_HOST", "")).rstrip("/")
@@ -29,6 +28,16 @@ API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "
 DEFAULT_QTY = float(os.getenv("DEFAULT_QTY", "0.001"))
 DEFAULT_LEVERAGE = int(os.getenv("DEFAULT_LEVERAGE", "5"))
 HTTP_TIMEOUT = float(os.getenv("MANAGER_HTTP_TIMEOUT", "10.0"))
+
+# ----- State Machine (אופציונלי) -----
+try:
+    from utils.open_trade_manager_state import TradePlan, TradeStateManager  # type: ignore
+    _STATE_MACHINE_AVAILABLE = True
+except Exception as _e:
+    TradePlan = None      # type: ignore
+    TradeStateManager = None  # type: ignore
+    _STATE_MACHINE_AVAILABLE = False
+    logger.info("StateMachine not available: %s", _e)
 
 # ConfirmStore (respect CONFIRMSTORE_ENABLE)
 try:
@@ -54,6 +63,49 @@ LAST_TICK_TS: int = 0
 LAST_CREATED: List[str] = []
 LAST_PENDING: int = 0
 LAST_ERROR: Optional[str] = None
+
+# ========= /manager/open — נקודת כניסה ל-State Machine =========
+class TradeOpenRequest(BaseModel):
+    symbol: str
+    side: str  # BUY | SELL
+    qty: float
+    entry_price: Optional[float] = None
+    sl_price: Optional[float] = None
+    tp_price: Optional[float] = None
+    leverage: int = 10
+    position_side: str = "BOTH"
+    time_stop_sec: Optional[int] = None
+    meta: Optional[Dict[str, Any]] = None
+
+@router.post("/manager/open")
+async def manager_open(req: TradeOpenRequest) -> Dict[str, Any]:
+    if not _STATE_MACHINE_AVAILABLE:
+        raise HTTPException(status_code=501, detail="StateMachine not available (utils.open_trade_manager_state.py missing)")
+    try:
+        plan = TradePlan(  # type: ignore[call-arg]
+            symbol=req.symbol.upper(),
+            side=req.side.upper(),
+            qty=float(req.qty),
+            entry_price=req.entry_price,
+            sl_price=req.sl_price,
+            tp_price=req.tp_price,
+            leverage=int(req.leverage),
+            position_side=req.position_side.upper(),
+            time_stop_sec=req.time_stop_sec,
+            meta=req.meta or {},
+        )
+        mgr = TradeStateManager(plan)  # type: ignore[call-arg]
+        # מריצים צעד אחד — ה-loop הגדול יהיה אצלך ב־worker/מפל או cron
+        res = await asyncio.get_running_loop().run_in_executor(None, mgr.run_once)
+        if not isinstance(res, dict):
+            res = {"ok": True, "result": res}
+        res.setdefault("state_available", True)
+        return res
+    except Exception as e:
+        logger.exception("manager_open failed")
+        raise HTTPException(status_code=500, detail={"ok": False, "error": str(e)})
+
+# ========= חלק האינגסט והאישורים (כמו אצלך) =========
 
 class UpdateTicketReq(BaseModel):
     ticket_id: str
@@ -265,7 +317,8 @@ async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
 
 async def _tick_once() -> Dict[str, Any]:
     global TICK_COUNT, LAST_TICK_TS, LAST_CREATED, LAST_PENDING, LAST_ERROR
-    created: List[str] = []
+    created: List[string] = []  # type: ignore[name-defined]
+    created = []
     LAST_ERROR = None
     try:
         for obj in _load_ingests():
@@ -304,6 +357,7 @@ async def ops_manager_health():
         **({"errors_last": LAST_ERROR} if LAST_ERROR else {}),
         "alerts_ingest_url": ALERTS_INGEST_URL or None,
         "public_host": PUBLIC_HOST or None,
+        "state_machine": _STATE_MACHINE_AVAILABLE,
     }
 
 # === Tickets status / actions ===
@@ -319,6 +373,10 @@ async def alerts_trades_active():
         tid = it.get("ticket_id") or _ticket_id_for(it)
         out[tid] = it
     return {"ok": True, "count": len(out), "items": out}
+
+class UpdateTicketReq(BaseModel):
+    ticket_id: str
+    action: str
 
 @router.post("/alerts/trades/update")
 async def alerts_trades_update(
@@ -419,8 +477,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
 
 
 
