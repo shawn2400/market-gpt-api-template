@@ -27,8 +27,14 @@ _SCAN_EVALS = 0
 _SCAN_PASSED = 0
 _SCAN_BLOCKED = 0
 
+# New: approvals created
+_APPROVALS_CREATED = 0
+
 # last computed checklist score (gauge)
 _LAST_ENTRY_SCORE: Optional[float] = None
+
+# New: last slip estimate bps (gauge)
+_LAST_SLIP_ESTIMATE_BPS: Optional[float] = None
 
 def set_last_entry_score(val: Optional[float]) -> None:
     global _LAST_ENTRY_SCORE
@@ -39,6 +45,16 @@ def set_last_entry_score(val: Optional[float]) -> None:
 
 def get_last_entry_score() -> Optional[float]:
     return _LAST_ENTRY_SCORE
+
+def set_last_slip_estimate_bps(val: Optional[float]) -> None:
+    global _LAST_SLIP_ESTIMATE_BPS
+    try:
+        _LAST_SLIP_ESTIMATE_BPS = None if val is None else float(val)
+    except Exception:
+        _LAST_SLIP_ESTIMATE_BPS = None
+
+def get_last_slip_estimate_bps() -> Optional[float]:
+    return _LAST_SLIP_ESTIMATE_BPS
 
 def record_telegram_sent() -> None:
     global _SENT_TELEGRAM
@@ -71,6 +87,10 @@ def inc_scan_passed() -> None:
 def inc_scan_blocked() -> None:
     global _SCAN_BLOCKED
     _SCAN_BLOCKED += 1
+
+def inc_approvals_created() -> None:
+    global _APPROVALS_CREATED
+    _APPROVALS_CREATED += 1
 
 # -------------------- Lightweight Histograms --------------------
 def _csv_floats(env: str, default: List[float]) -> List[float]:
@@ -168,7 +188,7 @@ def observe_http_ctx(name: str = "io", labels: Optional[Dict[str,str]] = None):
           await cli.get(...)
     מודד latency ושופך להיסטוגרמה הגנרית (דלי נמוך קרדינליות).
     """
-    _ = name, labels  # נשמר לשימוש עתידי (תיוג ייצוא), כרגע מטריקה אחת כללית
+    _ = name, labels  # לעתיד
     t0 = time.perf_counter()
     try:
         yield
@@ -187,11 +207,6 @@ async def observe_http_ctx_async(name: str = "io", labels: Optional[Dict[str,str
         observe_http_latency(dt)
 
 def observe_http(name: str = "io", include_labels: Optional[List[str]] = None):
-    """
-    דקורטור למדידת IO/latency של פונקציות sync/async.
-    include_labels: רשימת שמות פרמטרים לשמירה כ-labels (low-cardinality) — כרגע לא נחשף החוצה,
-                    אבל שימושי אם תרצה לוג/דיבוג.
-    """
     include_labels = include_labels or []
 
     def _decorator(fn: Callable[..., Any]):
@@ -203,7 +218,6 @@ def observe_http(name: str = "io", include_labels: Optional[List[str]] = None):
             for k in include_labels:
                 v = kwargs.get(k, None)
                 if v is None and args:
-                    # אם הפרמטר עבר בפוזיציה - ננסה לאתר לפי חתימה (best-effort; עלות זניחה)
                     try:
                         sig = inspect.signature(fn)
                         names = list(sig.parameters.keys())
@@ -254,7 +268,9 @@ def get_metrics_snapshot() -> Dict[str, Any]:
         "scan_evals": _SCAN_EVALS,
         "scan_passed": _SCAN_PASSED,
         "scan_blocked": _SCAN_BLOCKED,
+        "approvals_created": _APPROVALS_CREATED,
         "last_entry_score": _LAST_ENTRY_SCORE,
+        "last_slip_estimate_bps": _LAST_SLIP_ESTIMATE_BPS,
     }
 
 def _render_histogram(name: str,
@@ -308,12 +324,21 @@ def render_prometheus_text() -> str:
         "# HELP algogpt_scan_blocked_total Tickets blocked by checklist gate.",
         "# TYPE algogpt_scan_blocked_total counter",
         f"algogpt_scan_blocked_total {_SCAN_BLOCKED}",
+        "# HELP algogpt_approvals_created_total Approval tickets created.",
+        "# TYPE algogpt_approvals_created_total counter",
+        f"algogpt_approvals_created_total {_APPROVALS_CREATED}",
     ]
     if _LAST_ENTRY_SCORE is not None:
         lines += [
             "# HELP algogpt_entry_quality_score_last Last computed pre-trade entry score (0..10).",
             "# TYPE algogpt_entry_quality_score_last gauge",
             f"algogpt_entry_quality_score_last {_LAST_ENTRY_SCORE:.3f}",
+        ]
+    if _LAST_SLIP_ESTIMATE_BPS is not None:
+        lines += [
+            "# HELP algogpt_slip_estimate_bps_last Last estimated slip (bps) at ticket creation.",
+            "# TYPE algogpt_slip_estimate_bps_last gauge",
+            f"algogpt_slip_estimate_bps_last {_LAST_SLIP_ESTIMATE_BPS:.3f}",
         ]
 
     lines += _render_histogram(
@@ -339,7 +364,9 @@ __all__ = [
     "record_telegram_sent","record_telegram_failed","get_metrics_snapshot",
     "inc_approve_ok","inc_approve_fail","inc_reject",
     "inc_scan_eval","inc_scan_passed","inc_scan_blocked",
+    "inc_approvals_created",
     "render_prometheus_text","set_last_entry_score","get_last_entry_score",
+    "set_last_slip_estimate_bps","get_last_slip_estimate_bps",
     "observe_http_latency","observe_time_to_tp1","observe_slip_bps",
     "observe_http_ctx","observe_http_ctx_async","observe_http",
 ]
