@@ -315,7 +315,7 @@ services:
         value: "6"
       - key: IMPACT_SLIP_BPS_MAX
         value: "25"
-      # ----- Sensitivity: spread & volatility (new) -----
+      # ----- Sensitivity: spread & volatility -----
       - key: SPREAD_ASSUME_PCT
         value: "0.02"
       - key: SPREAD_SOFT_PCT
@@ -503,6 +503,9 @@ services:
         value: "1"
       - key: TP_MAX_LADDERS
         value: "3"
+      # ----- Profit-Lock bands -----
+      - key: PROFIT_LOCK_STEPS
+        value: "1.0,1.5,2.0"
       - key: TRAIL_ENABLE
         value: "1"
       - key: TRAIL_ATR_MULT
@@ -739,7 +742,6 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
 
 
 
