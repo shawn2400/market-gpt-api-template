@@ -2,7 +2,10 @@
 from __future__ import annotations
 from fastapi import APIRouter, Query
 from typing import List, Optional
-import os, requests, pandas as pd
+import os
+import pandas as pd
+import httpx
+import asyncio
 
 try:
     from pydantic import BaseModel, Field, ConfigDict
@@ -64,14 +67,15 @@ class ScanResponse(BaseModel):
     error: Optional[str] = None
 
 # ===================== Binance helpers =====================
-def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) -> pd.DataFrame:
+async def _fetch_klines_async(symbol: str, interval: str = "15m", limit: int = 200) -> pd.DataFrame:
     sym = symbol.strip().upper()
     if not sym.endswith("USDT"):
         sym += "USDT"
     url = f"{FUTURES_BASE}/fapi/v1/klines"
-    r = requests.get(url, params={"symbol": sym, "interval": interval, "limit": int(limit)}, timeout=10)
-    r.raise_for_status()
-    arr = r.json()
+    async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as cli:
+        r = await cli.get(url, params={"symbol": sym, "interval": interval, "limit": int(limit)})
+        r.raise_for_status()
+        arr = r.json()
     if not arr:
         return pd.DataFrame()
     cols = [
@@ -91,10 +95,11 @@ async def scan_info(
     limit: int = Query(200, ge=50, le=200)
 ) -> ScanResponse:
     try:
-        df = _fetch_klines(symbol, interval, limit)
+        df = await _fetch_klines_async(symbol, interval, limit)
         if df.empty:
             return ScanResponse(ok=False, count_total=1, returned=0, error="no data")
-        ind = prepare_indicators_for_backtest(df)
+        # הפעלת חישובי אינדיקטורים ב־thread למניעת חסימה
+        ind = await asyncio.to_thread(prepare_indicators_for_backtest, df)
         row = {k: (float(v) if pd.notna(v) else None) for k, v in ind.iloc[-1].to_dict().items()}
         sig = ScanSignal(symbol=(symbol if symbol.endswith("USDT") else symbol + "USDT").upper(),
                          interval=interval,
@@ -112,12 +117,12 @@ async def scan_symbols(
     out: List[ScanSignal] = []
     for s in symbols:
         try:
-            df = _fetch_klines(s, interval, limit)
+            df = await _fetch_klines_async(s, interval, limit)
             if df.empty:
                 out.append(ScanSignal(symbol=(s if s.endswith("USDT") else s + "USDT").upper(),
                                       interval=interval, ok=False, error="no data"))
                 continue
-            ind = prepare_indicators_for_backtest(df)
+            ind = await asyncio.to_thread(prepare_indicators_for_backtest, df)
             row = {k: (float(v) if pd.notna(v) else None) for k, v in ind.iloc[-1].to_dict().items()}
             out.append(ScanSignal(symbol=(s if s.endswith("USDT") else s + "USDT").upper(),
                                   interval=interval, indicators=IndicatorSet(**row)))
