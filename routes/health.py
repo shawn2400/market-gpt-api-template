@@ -9,14 +9,22 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 router = APIRouter(prefix="/health", tags=["Health"])
 log = logging.getLogger("algogpt.health")
 
+# --- Optional AI healthcheck (best-effort) ---
 _ai_check = None
 with suppress(Exception):
     from utils.ai_client import ai_healthcheck as _ai_check  # type: ignore
 
+# --- Optional TP1 self-test helpers (best-effort) ---
 _health_tp1_loaded = False
 with suppress(Exception):
     from utils.health_tp1 import health_check_tp1_tags, quick_check_tp1  # type: ignore
     _health_tp1_loaded = True
+
+# --- Optional metrics snapshot / prometheus text ---
+_metrics_available = False
+with suppress(Exception):
+    from utils.metrics_tracker import get_metrics_snapshot, render_prometheus_text  # type: ignore
+    _metrics_available = True
 
 WATCHLIST = [s.strip().upper() for s in (os.getenv("WATCHLIST", "") or "").split(",") if s.strip()] \
             or ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "NEARUSDT"]
@@ -56,7 +64,7 @@ async def ai():
     if _ai_check is None:
         return {"ok": True, "ai": "skipped"}
     try:
-        result = await _ai_check()  # {"ok": ...}
+        result = await _ai_check()  # expected shape: {"ok": ...}
         return result
     except Exception as e:
         log.warning("ai_healthcheck_failed: %s", e)
@@ -75,6 +83,7 @@ async def health_tp1_now(request: Request, symbols: Optional[str] = None):
         raise HTTPException(status_code=400, detail="no symbols")
 
     try:
+        # אם קיימת בדיקת תגים – העדף, אחרת quick-check
         if 'health_check_tp1_tags' in globals():
             res = health_check_tp1_tags(sym_list, TP1_TAGS)  # type: ignore
         else:
@@ -84,8 +93,31 @@ async def health_tp1_now(request: Request, symbols: Optional[str] = None):
         log.warning("health_tp1 failed: %s", e)
         return JSONResponse({"ok": False, "error": str(e)}, headers=_base_headers(), status_code=200)
 
+# --- Optional meta & metrics (exposed only if utils.metrics_tracker is available) ---
+@router.get("/meta", summary="Service meta snapshot")
+async def meta():
+    if not _metrics_available:
+        return {"ok": True, "metrics": "unavailable"}
+    try:
+        snap = get_metrics_snapshot()  # type: ignore
+        return {"ok": True, "metrics": snap}
+    except Exception as e:
+        log.debug("meta snapshot failed: %s", e)
+        return {"ok": False, "error": "meta_unavailable", "detail": str(e)}
 
-
+@router.get("/metrics", summary="Prometheus metrics")
+async def metrics():
+    if not _metrics_available:
+        return PlainTextResponse("",
+                                 status_code=200,
+                                 headers={"Content-Type": "text/plain; version=0.0.4"})
+    try:
+        text = render_prometheus_text()  # type: ignore
+    except Exception as e:
+        log.debug("metrics render failed: %s", e)
+        text = ""
+    return PlainTextResponse(text, status_code=200,
+                             headers={"Content-Type": "text/plain; version=0.0.4", **_base_headers()})
 
 
 
