@@ -64,6 +64,22 @@ LAST_CREATED: List[str] = []
 LAST_PENDING: int = 0
 LAST_ERROR: Optional[str] = None
 
+# --- Entry-score gate (לא חוסם, רק סימון ללוג/טלגרם/ingest) ---
+def _entry_score_block_info(obj: Dict[str, Any]) -> Dict[str, float | bool]:
+    """
+    מחשב האם האיתות "חסום" לפי ENTRY_SCORE_MIN. לא חוסם בפועל — רק מחזיר שדות לסימון.
+    """
+    try:
+        min_req = float(os.getenv("ENTRY_SCORE_MIN", "0") or 0)
+    except Exception:
+        min_req = 0.0
+    try:
+        score = float(obj.get("score") or 0.0)
+    except Exception:
+        score = 0.0
+    blocked = (min_req > 0 and score < min_req)
+    return {"blocked": bool(blocked), "score": float(score), "min_req": float(min_req)}
+
 # ========= /manager/open — נקודת כניסה ל-State Machine =========
 class TradeOpenRequest(BaseModel):
     symbol: str
@@ -105,7 +121,7 @@ async def manager_open(req: TradeOpenRequest) -> Dict[str, Any]:
         logger.exception("manager_open failed")
         raise HTTPException(status_code=500, detail={"ok": False, "error": str(e)})
 
-# ========= חלק האינגסט והאישורים (כמו אצלך) =========
+# ========= חלק האינגסט והאישורים =========
 
 class UpdateTicketReq(BaseModel):
     ticket_id: str
@@ -182,6 +198,9 @@ def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
     reason = obj.get("reason","")
     score = float(obj.get("score", 0.0))
 
+    # סימון Entry Score (לא חוסם, רק מידע)
+    es = _entry_score_block_info(obj)
+
     payload: Dict[str, Any] = {
         "ticket_id": _ticket_id_for(obj),
         "symbol": symbol,
@@ -197,6 +216,11 @@ def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
         "tp2": obj.get("tp2"),
         "tp3": obj.get("tp3"),
         "sl": obj.get("sl"),
+
+        # >>> הרחבה ל-/alerts/ingest <<<
+        "blocked_by_entry_score": bool(es["blocked"]),
+        "entry_score": float(es["score"]),
+        "entry_score_min": float(es["min_req"]),
     }
     for k in ["prob_overall_pct","prob_tp1_pct","prob_tp2_pct","prob_tp3_pct",
               "eta_open_min","eta_tp1_min","eta_tp2_min","eta_tp3_min","expiry_ts","tp_splits","position_side","note",
@@ -241,6 +265,9 @@ def _create_ticket_fallback(obj: Dict[str, Any]) -> Optional[str]:
         return None
 
 async def _notify_telegram_approval_from_obj(obj: Dict[str, Any], ticket_id: str) -> None:
+    # סימון "חסום לפי ציון" (לא עוצר פעולה, רק מידע)
+    es = _entry_score_block_info(obj)
+
     symbol = str(obj.get("symbol","")).upper()
     side   = str(obj.get("side","")).upper()
     leverage = obj.get("leverage") or DEFAULT_LEVERAGE
@@ -269,6 +296,13 @@ async def _notify_telegram_approval_from_obj(obj: Dict[str, Any], ticket_id: str
         "tp3_sec": (obj.get("eta_tp3_min") or 0) * 60 if obj.get("eta_tp3_min") is not None else None,
     }
 
+    base_why = (obj.get("reason") or "")
+    if es["blocked"]:
+        badge = f"[BLOCKED: score {es['score']:.2f} < min {es['min_req']:.2f}] "
+        why = badge + base_why
+    else:
+        why = base_why
+
     plan: Dict[str, Any] = {
         "symbol": symbol,
         "side": side,
@@ -278,8 +312,14 @@ async def _notify_telegram_approval_from_obj(obj: Dict[str, Any], ticket_id: str
         "sl": sl_obj,
         "tp": tp_legs,
         "timeframe": obj.get("timeframe","15m"),
-        "why": obj.get("reason") or "",
+        "why": why,
         "score": float(obj.get("score",0.0) or 0.0),
+
+        # >>> שדות סימון חדשים לטלגרם/UI <<<
+        "blocked_by_entry_score": bool(es["blocked"]),
+        "entry_score": float(es["score"]),
+        "entry_score_min": float(es["min_req"]),
+
         "probs": probs,
         "eta": eta,
         "trade_kind": obj.get("market","futures"),
@@ -317,8 +357,7 @@ async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
 
 async def _tick_once() -> Dict[str, Any]:
     global TICK_COUNT, LAST_TICK_TS, LAST_CREATED, LAST_PENDING, LAST_ERROR
-    created: List[string] = []  # type: ignore[name-defined]
-    created = []
+    created: List[str] = []
     LAST_ERROR = None
     try:
         for obj in _load_ingests():
@@ -477,7 +516,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
 
 
