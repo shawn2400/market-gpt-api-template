@@ -15,8 +15,10 @@ def rr_now(side: str, entry: float, sl: float, tp: float, current: float) -> Opt
         if s == "BUY":
             denom = max(1e-12, entry - sl)
             return (current - entry) / denom
-        else:
+        elif s == "SELL":
             denom = max(1e-12, sl - entry)
             return (entry - current) / denom
+        else:
+            return None
     except Exception:
         return None
