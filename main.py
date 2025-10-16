@@ -435,7 +435,6 @@ async def _public_cache_etag(request: Request, call_next):
     except Exception:
         return resp
     return resp
-
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1243,7 +1242,7 @@ async def ui_pending(request: Request = None):
     )
     return HTMLResponse(body)
 
-# =========== Guard Smoke (SINGLE DEFINITION — duplicate removed) ===========
+# =========== Guard Smoke (סינגל—כפילות הוסרה) ===========
 @router.post("/guard/smoke/run")
 async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None)):
     _require_bearer(request)
@@ -1276,7 +1275,6 @@ async def guard_smoke_run(request: Request, symbols: Optional[str] = Body(None))
     if emergencies and not ONLY_TRADE_NOTIFICATIONS:
         await _send_telegram_html("🚨 <b>Smoke Guard</b> · Emergency protective SL placed\n• Symbols: <code>" + ",".join(emergencies) + "</code>")
     return {"ok": True, "checked": sym_list, "emergencies": emergencies, "results": results}
-
 # ==================== Indicator & profile helpers ====================
 PROFILE_AUTO_SELECT = os.getenv("PROFILE_AUTO_SELECT", "1").lower() in ("1", "true", "yes", "on")
 
@@ -2179,6 +2177,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
