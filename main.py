@@ -21,18 +21,10 @@ from typing import Any, Dict, List, Optional, Callable, Tuple, Union
 import sys, types  # noqa: E402
 if "utils.anti_replay" not in sys.modules:
     _m = types.ModuleType("utils.anti_replay")
-
-    def verify_request(
-        ts_header: Optional[str],
-        nonce_header: Optional[str],
-        signature_header: Optional[str],
-        route: str,
-        body: Any,
-        require_signature: bool = False,
-    ) -> Tuple[bool, str]:
+    def verify_request(ts_header: Optional[str], nonce_header: Optional[str], signature_header: Optional[str],
+                       route: str, body: Any, require_signature: bool = False) -> Tuple[bool, str]:
         # permissive default; real verification lives in utils.anti_replay if present
         return True, "ok"
-
     _m.verify_request = verify_request  # type: ignore[attr-defined]
     sys.modules["utils.anti_replay"] = _m
 # ----------------------------------------------------------------------------------------
@@ -938,7 +930,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         price_now = None
         with suppress(Exception):
             price_now = await get_last_price_async(symbol)
-
         def _smart(symbol: str, side: str, price_now: Optional[float], tps: List[Optional[float]]) -> Dict[str, Any]:
             if not price_now:
                 return {}
@@ -949,7 +940,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
                     out[f"eta_tp{i}_min"] = max(1, int(dist_bps / max(1, ETA_VELOCITY_WINDOW)))
             out.setdefault("eta_open_min", out.get("eta_tp1_min", 2))
             return out
-
         etas = _smart(symbol, side, price_now, [payload.get("tp1"), payload.get("tp2"), payload.get("tp3")])
         payload.update(etas)
 
@@ -1018,7 +1008,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
-            row = f"• TP{i}: <code>{req_body[f'tp{i}']}</code>"
+            row = f"• TP{i}: <code>{req_body[f'tp{i]']}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
                 row += f"  ETA:<code>{req_body[f'eta_tp{i}_min']}m</code>"
             if req_body.get(f"prob_tp{i}_pct") is not None:
@@ -1418,20 +1408,16 @@ def _parse_pause_windows(spec: str) -> List[Tuple[int, int]]:
         if "-" not in p:
             continue
         a, b = [x.strip() for x in p.split("-", 1)]
-
         def _hm(s: str) -> Optional[int]:
             try:
                 hh, mm = s.split(":")
-                h = int(hh)
-                m = int(mm)
+                h = int(hh); m = int(mm)
                 if 0 <= h < 24 and 0 <= m < 60:
                     return h * 60 + m
             except Exception:
                 return None
             return None
-
-        s = _hm(a)
-        e = _hm(b)
+        s = _hm(a); e = _hm(b)
         if s is None or e is None:
             continue
         windows.append((s, e))
@@ -1915,7 +1901,7 @@ async def meta_telegram(
             except Exception:
                 cid = chat_id
 
-            # idem עדין על Redis, אם זמין
+            # idem עדין על Redis, אם זמין (תיקון: and במקום &&)
             if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
                 try:
                     r = await _get_redis_cached()
@@ -2193,6 +2179,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
