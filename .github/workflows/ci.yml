@@ -1,13 +1,62 @@
 name: CI
-on: [push, pull_request]
+
+on:
+  push:
+  pull_request:
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
-        with: { python-version: "3.11" }
-      - run: pip install -r requirements.txt pytest httpx
-      - run: uvicorn main:app --host 0.0.0.0 --port 10000 &
-      - run: sleep 5
-      - run: BASE_URL=http://localhost:10000 pytest -q
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          # מבטיחים ש-Uvicorn/FastAPI/pytest/httpx קיימים גם אם לא ברקוורמנטס
+          pip install uvicorn fastapi pytest httpx
+
+      - name: Start app
+        run: |
+          nohup uvicorn main:app --host 0.0.0.0 --port 10000 --log-level warning > uvicorn.log 2>&1 &
+          echo $! > uvicorn.pid
+
+      - name: Wait for app health
+        run: |
+          for i in {1..30}; do
+            if curl -fsS http://127.0.0.1:10000/health >/dev/null 2>&1; then
+              echo "App is up"; exit 0
+            fi
+            sleep 1
+          done
+          echo "App did not start in time"
+          echo "=== Uvicorn log (last 200 lines) ==="
+          tail -n 200 uvicorn.log || true
+          exit 1
+
+      - name: Run tests
+        env:
+          BASE_URL: http://localhost:10000
+        run: pytest -q
+
+      - name: Show logs on failure
+        if: failure()
+        run: |
+          echo "=== Uvicorn log (last 200 lines) ==="
+          tail -n 200 uvicorn.log || true
+
+      - name: Stop app
+        if: always()
+        run: |
+          if [ -f uvicorn.pid ]; then kill "$(cat uvicorn.pid)" || true; fi
