@@ -18,9 +18,12 @@ def compute_vwap(df: pd.DataFrame) -> float:
     """
     מצפה לעמודות: high, low, close, volume.
     """
+    if df is None or df.empty:
+        return float("nan")
     tp = (df["high"].astype(float) + df["low"].astype(float) + df["close"].astype(float)) / 3.0
     vol = pd.to_numeric(df["volume"], errors="coerce")
-    denom = float(vol.sum()) if float(vol.sum()) != 0.0 else 1e-12
+    vol_sum = float(vol.sum())
+    denom = vol_sum if vol_sum != 0.0 else 1e-12
     vwap = (tp * vol).sum() / denom
     return float(vwap)
 
@@ -29,6 +32,8 @@ def compute_obv(df: pd.DataFrame) -> float:
     """
     On-Balance Volume בסיסי על close/volume.
     """
+    if df is None or df.empty:
+        return 0.0
     close = pd.to_numeric(df["close"], errors="coerce").to_numpy(dtype=float, copy=False)
     vol = pd.to_numeric(df["volume"], errors="coerce").to_numpy(dtype=float, copy=False)
     obv = 0.0
@@ -178,6 +183,7 @@ __all__ = [
     "rsi_composite",
     "ema_gap_guard",
 ]
+
 
 
 
