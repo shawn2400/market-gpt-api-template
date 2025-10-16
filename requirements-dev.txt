@@ -5,9 +5,10 @@ isort==5.13.2
 
 # --- Type Checking ---
 mypy==1.11.2
+types-requests==2.32.0.20240914
 types-PyYAML==6.0.12.20240917
 types-setuptools==75.1.0.20240917
-typing-extensions==4.12.2    # מסייע ל-mypy/טייפינג בסביבות שונות
+typing-extensions==4.12.2
 
 # --- Testing (כלי עזר) ---
 pytest==8.3.3
