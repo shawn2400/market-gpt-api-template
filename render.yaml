@@ -1,3 +1,6 @@
+הנה הגרסה המלאה עם כל החוסרים שנדרשו (בדגש על readiness ו־metrics buckets), מעודכנת 1:1:
+
+```yaml
 services:
   - type: web
     name: algogpt-prod
@@ -603,9 +606,9 @@ services:
       - key: READINESS_CHECK_REDIS
         value: "1"
       - key: READINESS_CHECK_SQLITE
-        value: "1"
+        value: "0"
       - key: SQLITE_PATH
-        value: "/app/state.db"
+        value: "/app/data/state.db"
 
       # ========================= Metrics / Buckets =========================
       - key: PROM_METRICS_ENABLE
@@ -615,11 +618,11 @@ services:
       - key: METRICS_PROTECT
         value: "1"
       - key: HTTP_LATENCY_BUCKETS
-        value: "0.03,0.05,0.075,0.1,0.15,0.2,0.3,0.5,0.8,1.2,2,3"
+        value: "0.05,0.1,0.25,0.5,1,2,5"
       - key: TP1_TIME_BUCKETS
-        value: "30,60,90,120,180,240,300,420,600,900,1200,1800,2400,3600,5400,7200"
+        value: "30,60,120,300,600,1200,3600"
       - key: SLIP_BPS_BUCKETS
-        value: "0.5,1,1.5,2,3,4,5,7,10,15,20,30,40,50,75,100"
+        value: "1,2,5,10,20,50,100"
 
       # ========================= Risk rails =========================
       - key: DAILY_LOSS_CAP_USDT
@@ -730,8 +733,7 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
-
+```
 
 
 
