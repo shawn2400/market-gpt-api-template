@@ -1,3 +1,6 @@
+הנה גרסה תקינה להעתקה:
+
+```python
 # utils/open_trade_manager_state.py
 from __future__ import annotations
 import time
@@ -21,12 +24,13 @@ class TradePlan:
     symbol: str
     side: str                  # BUY / SELL
     qty: float
-    entry_price: float
-    sl_price: float
-    tp_price: float
+    entry_price: Optional[float] = None
+    sl_price: Optional[float] = None
+    tp_price: Optional[float] = None
     leverage: int = 10
     position_side: str = "BOTH"         # LONG/SHORT/BOTH
     time_stop_sec: Optional[int] = None # זמן-עצירה מנהלי (אופציונלי)
+    meta: Dict[str, Any] = field(default_factory=dict)
     created_ts: float = field(default_factory=lambda: time.time())
 
 
@@ -80,6 +84,14 @@ class TradeStateManager:
     # ───────────────────────── INIT ─────────────────────────
     def _step_init(self) -> Dict[str, Any]:
         p = self.plan
+
+        # 0) ולידציה בסיסית לשדות האופציונליים שנדרשים לפתיחה
+        if p.entry_price is None:
+            return {"ok": False, "state": "INIT", "error": "missing_entry_price"}
+        if p.sl_price is None:
+            return {"ok": False, "state": "INIT", "error": "missing_sl_price"}
+        if p.tp_price is None:
+            return {"ok": False, "state": "INIT", "error": "missing_tp_price"}
 
         # 1) ניקוי קונפליקטים (SL/Trail/TPS ישנים)
         try:
@@ -156,5 +168,7 @@ class TradeStateManager:
 
         # Hooks עתידיים (anti-stale / merge / profit-lock) — כרגע no-op
         return {"ok": True, "state": "MANAGE", "note": "idle"}
+```
+
 
 
