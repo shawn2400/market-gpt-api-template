@@ -1,3 +1,4 @@
+# utils/log_middleware.py
 import time, logging
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -19,3 +20,4 @@ class JsonLogMiddleware(BaseHTTPMiddleware):
         })
 
         return response
+
