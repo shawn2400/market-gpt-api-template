@@ -65,20 +65,43 @@ LAST_PENDING: int = 0
 LAST_ERROR: Optional[str] = None
 
 # --- Entry-score gate (לא חוסם, רק סימון ללוג/טלגרם/ingest) ---
-def _entry_score_block_info(obj: Dict[str, Any]) -> Dict[str, float | bool]:
+def _entry_score_block_info(obj: Dict[str, Any]) -> Dict[str, float | bool | str]:
     """
-    מחשב האם האיתות "חסום" לפי ENTRY_SCORE_MIN. לא חוסם בפועל — רק מחזיר שדות לסימון.
+    מחשב האם האיתות "חסום" לפי ENTRY_SCORE_MIN. לא חוסם בפועל — רק מחזיר שדות סימון.
     """
     try:
         min_req = float(os.getenv("ENTRY_SCORE_MIN", "0") or 0)
     except Exception:
         min_req = 0.0
+    # אם לא נשלח score, נתמוך ב-None -> נחשב כ-0 לצורך הצגה פשוטה
     try:
-        score = float(obj.get("score") or 0.0)
+        raw_score = obj.get("score", None)
+        score = float(raw_score) if raw_score is not None else 0.0
     except Exception:
         score = 0.0
+
     blocked = (min_req > 0 and score < min_req)
-    return {"blocked": bool(blocked), "score": float(score), "min_req": float(min_req)}
+    if blocked:
+        badge = "⚠️ BLOCKED_BY_ENTRY_SCORE"
+        line  = f"⚠️ blocked: score {score:.2f} < min {min_req:.2f}"
+        severity = "warn"
+    else:
+        badge = "✅ ENTRY SCORE OK"
+        # אם min_req==0, נציג “OK” פשוט
+        if min_req > 0:
+            line = f"✅ entry score OK: {score:.2f} ≥ min {min_req:.2f}"
+        else:
+            line = f"✅ entry score: {score:.2f}"
+        severity = "ok"
+
+    return {
+        "blocked": bool(blocked),
+        "score": float(score),
+        "min_req": float(min_req),
+        "badge": badge,
+        "status_line": line,
+        "severity": severity,
+    }
 
 # ========= /manager/open — נקודת כניסה ל-State Machine =========
 class TradeOpenRequest(BaseModel):
@@ -111,7 +134,6 @@ async def manager_open(req: TradeOpenRequest) -> Dict[str, Any]:
             meta=req.meta or {},
         )
         mgr = TradeStateManager(plan)  # type: ignore[call-arg]
-        # מריצים צעד אחד — ה-loop הגדול יהיה אצלך ב־worker/מפל או cron
         res = await asyncio.get_running_loop().run_in_executor(None, mgr.run_once)
         if not isinstance(res, dict):
             res = {"ok": True, "result": res}
@@ -122,10 +144,6 @@ async def manager_open(req: TradeOpenRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail={"ok": False, "error": str(e)})
 
 # ========= חלק האינגסט והאישורים =========
-
-class UpdateTicketReq(BaseModel):
-    ticket_id: str
-    action: str  # APPROVE | REJECT
 
 def _ticket_id_for(obj: Dict[str, Any]) -> str:
     key = {
@@ -196,7 +214,11 @@ def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
     leverage = int(obj.get("leverage") or DEFAULT_LEVERAGE)
     require_approval = bool(obj.get("require_approval", True))
     reason = obj.get("reason","")
-    score = float(obj.get("score", 0.0))
+    # קריאת score “רכה”
+    try:
+        score = float(obj.get("score", 0.0) or 0.0)
+    except Exception:
+        score = 0.0
 
     # סימון Entry Score (לא חוסם, רק מידע)
     es = _entry_score_block_info(obj)
@@ -246,7 +268,7 @@ def _create_ticket_fallback(obj: Dict[str, Any]) -> Optional[str]:
         "market": obj.get("market","futures"),
         "timeframe": obj.get("timeframe","15m"),
         "side": obj.get("side"),
-        "score": float(obj.get("score", 0.0)),
+        "score": float(obj.get("score", 0.0)) if obj.get("score") is not None else None,
         "reason": obj.get("reason",""),
         "entry_mode": obj.get("entry","limit"),
         "risk_pct": float(obj.get("risk_pct", 0.5)),
@@ -297,9 +319,9 @@ async def _notify_telegram_approval_from_obj(obj: Dict[str, Any], ticket_id: str
     }
 
     base_why = (obj.get("reason") or "")
-    if es["blocked"]:
-        badge = f"[BLOCKED: score {es['score']:.2f} < min {es['min_req']:.2f}] "
-        why = badge + base_why
+    # נדביק את שורת הסטטוס ל־why כדי שיופיע בוודאות בהודעה
+    if es["status_line"]:
+        why = f"{es['status_line']} | {base_why}".strip(" |")
     else:
         why = base_why
 
@@ -319,6 +341,9 @@ async def _notify_telegram_approval_from_obj(obj: Dict[str, Any], ticket_id: str
         "blocked_by_entry_score": bool(es["blocked"]),
         "entry_score": float(es["score"]),
         "entry_score_min": float(es["min_req"]),
+        "badges": [str(es["badge"])],
+        "entry_score_status_line": str(es["status_line"]),
+        "severity": str(es["severity"]),
 
         "probs": probs,
         "eta": eta,
@@ -415,7 +440,7 @@ async def alerts_trades_active():
 
 class UpdateTicketReq(BaseModel):
     ticket_id: str
-    action: str
+    action: str  # APPROVE | REJECT
 
 @router.post("/alerts/trades/update")
 async def alerts_trades_update(
@@ -516,5 +541,6 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
 
 
