@@ -5,12 +5,14 @@ from __future__ import annotations
 Position Manager (Lite): BE-stair בסיסי + ATR-based Trail
 ---------------------------------------------------------
 מיועד לקריאה מתוך routes/manager.py::manage_once_lite()
+
 חתימות תואמות:
     async def manage_once(symbol: Optional[str] = None,
                           offset_bps: Optional[int] = None,
                           pcts: Optional[list[float]] = None,
                           splits: Optional[list[float]] = None,
                           atr_mult: Optional[float] = None) -> dict
+
 הקובץ בטוח לשימוש גם כשה־Binance SDK לא מותקן / מפתחות חסרים — יחזיר skipped=True.
 """
 
@@ -19,16 +21,16 @@ import math
 from typing import Any, Dict, List, Optional
 from contextlib import suppress
 
-# --- Metrics (אופציונלי) ---
-try:
+# --- Metrics (אופציונלי; כרגע לא בשימוש ישיר) ---
+with suppress(Exception):
     from utils.metrics_tracker import inc_scan_passed as _noop1  # noqa: F401
+with suppress(Exception):
     from utils.metrics_tracker import inc_scan_blocked as _noop2  # noqa: F401
-except Exception:
-    pass
 
 # --- COID helper (נקרא אם קיים, אחרת גרסה מקומית) ---
 with suppress(Exception):
     from utils.order_ids import build_client_order_id as _build_id  # type: ignore
+
 def _build_local_id(symbol: str, side: str, role: str = "GEN") -> str:
     import time, hashlib  # local to avoid global imports if unused
     pref = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
@@ -37,6 +39,7 @@ def _build_local_id(symbol: str, side: str, role: str = "GEN") -> str:
         return base
     h = hashlib.md5(base.encode("utf-8")).hexdigest()[:6]
     return base[:36 - (len(h) + 1)] + "_" + h
+
 def _coid(symbol: str, side: str, role: str) -> str:
     with suppress(Exception):
         return _build_id(symbol, side, role=role)  # type: ignore
@@ -44,9 +47,9 @@ def _coid(symbol: str, side: str, role: str) -> str:
 
 # --- ENV knobs (ברירות מחדל עדינות) ---
 BE_BASE_BPS      = int(os.getenv("BE_BASE_BPS", "5") or 5)
-BE_ADX_FACTOR    = float(os.getenv("BE_ADX_FACTOR", "0.2") or 0.2)     # לא בשימוש ישיר כאן (מוכן לשדרוג)
-TRAIL_MIN_PCT    = float(os.getenv("TRAIL_MIN_PCT", "0.08") or 0.08)   # %
-TRAIL_MAX_PCT    = float(os.getenv("TRAIL_MAX_PCT", "5.0") or 5.0)     # %
+BE_ADX_FACTOR    = float(os.getenv("BE_ADX_FACTOR", "0.2") or 0.2)     # מוכן לשדרוג עתידי
+TRAIL_MIN_PCT    = float(os.getenv("TRAIL_MIN_PCT", "0.08") or 0.08)   # אחוז
+TRAIL_MAX_PCT    = float(os.getenv("TRAIL_MAX_PCT", "5.0") or 5.0)     # אחוז
 BINANCE_WORKING  = os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE").upper()
 
 # --- עוזרים מתמטיים (ticks/steps) ---
@@ -76,7 +79,7 @@ def _get_filters(client, symbol: str) -> tuple[float, float]:
                 break
     return tick, step
 
-# --- ADX/ATR calculation (Lite, כמו ב-main) ---
+# --- ADX/ATR calculation (Lite) ---
 def _wilder_smooth(values: List[float], period: int) -> List[float]:
     if not values or period <= 0 or len(values) < period:
         return []
@@ -224,6 +227,7 @@ async def manage_once(
             if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
                 client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
 
+    # Create BE Stop (STOP_MARKET closePosition)
     with suppress(Exception):
         sl_kwargs = dict(
             symbol=symbol,
@@ -272,8 +276,10 @@ async def manage_once(
     if _atr_mult is not None:
         px = base_price or 0.0
         if px > 0:
-            cb = (atr * float(_atr_mult) / px) * 100.0
-            cb = max(TRAIL_MIN_PCT, min(TRAIL_MAX_PCT, cb))
+            cb = (atr * float(_atr_mult) / px) * 100.0  # אחוז
+            # Binance דורש 0.1–5.0; נכבד גם את ENV וגם את המינימום הרשמי
+            binance_min_cb = 0.1
+            cb = max(binance_min_cb, max(TRAIL_MIN_PCT, min(TRAIL_MAX_PCT, cb)))
             cb = round(cb, 1)
             trail_kwargs = dict(
                 symbol=symbol,
