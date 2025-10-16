@@ -1,4 +1,3 @@
-# routes/price.py
 from __future__ import annotations
 
 import asyncio
@@ -112,7 +111,6 @@ def price_plain(symbol: str = Path(..., description="e.g. BTCUSDT")):
     if v is None:
         raise HTTPException(status_code=503, detail="price_unavailable")
     return f"{v:.8f}"
-
 
 
 
