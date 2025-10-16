@@ -1,8 +1,12 @@
+# utils/metrics_tracker.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import time
 import os
-from typing import Dict, Any, Optional, List
+import functools
+import inspect
+from contextlib import asynccontextmanager, contextmanager
+from typing import Dict, Any, Optional, List, Callable, Awaitable
 
 _START_TIME = time.time()
 _SENT_TELEGRAM = 0
@@ -27,7 +31,6 @@ _SCAN_BLOCKED = 0
 _LAST_ENTRY_SCORE: Optional[float] = None
 
 def set_last_entry_score(val: Optional[float]) -> None:
-    """שומר מדד ציון כניסה אחרון (0..10)."""
     global _LAST_ENTRY_SCORE
     try:
         _LAST_ENTRY_SCORE = None if val is None else float(val)
@@ -35,7 +38,6 @@ def set_last_entry_score(val: Optional[float]) -> None:
         _LAST_ENTRY_SCORE = None
 
 def get_last_entry_score() -> Optional[float]:
-    """מאפשר קריאה של הציון האחרון (ל־/meta או דשבורד)."""
     return _LAST_ENTRY_SCORE
 
 def record_telegram_sent() -> None:
@@ -71,7 +73,6 @@ def inc_scan_blocked() -> None:
     _SCAN_BLOCKED += 1
 
 # -------------------- Lightweight Histograms --------------------
-# קוביות קבועות מראש (ENV-override אופציונלי, CSV)
 def _csv_floats(env: str, default: List[float]) -> List[float]:
     s = os.getenv(env, "").strip()
     if not s:
@@ -92,7 +93,6 @@ HTTP_LATENCY_BUCKETS = _csv_floats("HTTP_LATENCY_BUCKETS", [0.05, 0.1, 0.25, 0.5
 TP1_TIME_BUCKETS     = _csv_floats("TP1_TIME_BUCKETS",     [30, 60, 120, 300, 600, 1200, 3600])
 SLIP_BPS_BUCKETS     = _csv_floats("SLIP_BPS_BUCKETS",     [1, 2, 5, 10, 20, 50, 100])
 
-# מצטברים בסגנון Prometheus: bucket_le (<=), sum, count
 _http_lat_buckets: Dict[float, int] = {b:0 for b in HTTP_LATENCY_BUCKETS}
 _http_lat_inf: int = 0
 _http_lat_sum: float = 0.0
@@ -109,15 +109,10 @@ _slip_bps_sum: float = 0.0
 _slip_bps_count: int = 0
 
 def _observe_into_buckets(value: float, buckets: Dict[float,int], inf_ref: str) -> None:
-    # cumulative increment: לכל bucket שה־le שלו >= value, נעלה ב־1
-    # אבל לשמירה על O(#buckets) קטן, נעלה רק בדלי הראשון הגדל־שווה — ונשתמש בייצוג non-cumulative ביצוא.
-    # כדי להתאים ל־Prometheus, נכפיל לוגית ביצוא (נבנה cumulative שם).
-    # כאן: נסמן רק את הדלי הראשון שמכסה את הערך.
     for b in sorted(buckets.keys()):
         if value <= b:
             buckets[b] += 1
             return
-    # אם גדול מכל הדליים — נחשב ב־+Inf
     if inf_ref == "http":
         global _http_lat_inf
         _http_lat_inf += 1
@@ -134,7 +129,7 @@ def observe_http_latency(seconds: float) -> None:
         v = float(seconds)
     except Exception:
         return
-    if v < 0: 
+    if v < 0:
         return
     _http_lat_sum += v
     _http_lat_count += 1
@@ -163,6 +158,78 @@ def observe_slip_bps(bps: float) -> None:
     _slip_bps_sum += v
     _slip_bps_count += 1
     _observe_into_buckets(v, _slip_bps_buckets, "slip")
+
+# -------------------- Observe (ctx + decorator) --------------------
+@contextmanager
+def observe_http_ctx(name: str = "io", labels: Optional[Dict[str,str]] = None):
+    """
+    שימוש:
+      with observe_http_ctx("binance", {"route":"/scan"}):
+          await cli.get(...)
+    מודד latency ושופך להיסטוגרמה הגנרית (דלי נמוך קרדינליות).
+    """
+    _ = name, labels  # נשמר לשימוש עתידי (תיוג ייצוא), כרגע מטריקה אחת כללית
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        dt = time.perf_counter() - t0
+        observe_http_latency(dt)
+
+@asynccontextmanager
+async def observe_http_ctx_async(name: str = "io", labels: Optional[Dict[str,str]] = None):
+    _ = name, labels
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        dt = time.perf_counter() - t0
+        observe_http_latency(dt)
+
+def observe_http(name: str = "io", include_labels: Optional[List[str]] = None):
+    """
+    דקורטור למדידת IO/latency של פונקציות sync/async.
+    include_labels: רשימת שמות פרמטרים לשמירה כ-labels (low-cardinality) — כרגע לא נחשף החוצה,
+                    אבל שימושי אם תרצה לוג/דיבוג.
+    """
+    include_labels = include_labels or []
+
+    def _decorator(fn: Callable[..., Any]):
+        is_async = inspect.iscoroutinefunction(fn)
+
+        @functools.wraps(fn)
+        async def _aw(*args, **kwargs):
+            labels: Dict[str,str] = {}
+            for k in include_labels:
+                v = kwargs.get(k, None)
+                if v is None and args:
+                    # אם הפרמטר עבר בפוזיציה - ננסה לאתר לפי חתימה (best-effort; עלות זניחה)
+                    try:
+                        sig = inspect.signature(fn)
+                        names = list(sig.parameters.keys())
+                        if k in names:
+                            idx = names.index(k)
+                            if idx < len(args):
+                                v = args[idx]
+                    except Exception:
+                        pass
+                if v is not None:
+                    labels[k] = str(v)
+            async with observe_http_ctx_async(name=name, labels=labels):
+                return await fn(*args, **kwargs)
+
+        @functools.wraps(fn)
+        def _sw(*args, **kwargs):
+            labels: Dict[str,str] = {}
+            for k in include_labels:
+                if k in kwargs and kwargs[k] is not None:
+                    labels[k] = str(kwargs[k])
+            with observe_http_ctx(name=name, labels=labels):
+                return fn(*args, **kwargs)
+
+        return _aw if is_async else _sw
+
+    return _decorator
 
 def get_metrics_snapshot() -> Dict[str, Any]:
     uptime = time.time() - _START_TIME
@@ -201,7 +268,6 @@ def _render_histogram(name: str,
         f"# HELP {name} {help_text}",
         f"# TYPE {name} histogram",
     ]
-    # הפוך ל־cumulative בזמן הרינדור
     total = 0
     for b in sorted(buckets.keys()):
         total += buckets[b]
@@ -250,7 +316,6 @@ def render_prometheus_text() -> str:
             f"algogpt_entry_quality_score_last {_LAST_ENTRY_SCORE:.3f}",
         ]
 
-    # histograms
     lines += _render_histogram(
         "http_request_latency_seconds",
         _http_lat_buckets, _http_lat_inf, _http_lat_sum, _http_lat_count,
@@ -267,7 +332,7 @@ def render_prometheus_text() -> str:
         "Realized slippage in basis points."
     )
 
-    lines.append("")  # trailing newline
+    lines.append("")
     return "\n".join(lines)
 
 __all__ = [
@@ -275,7 +340,8 @@ __all__ = [
     "inc_approve_ok","inc_approve_fail","inc_reject",
     "inc_scan_eval","inc_scan_passed","inc_scan_blocked",
     "render_prometheus_text","set_last_entry_score","get_last_entry_score",
-    # histograms observe API
     "observe_http_latency","observe_time_to_tp1","observe_slip_bps",
+    "observe_http_ctx","observe_http_ctx_async","observe_http",
 ]
+
 
