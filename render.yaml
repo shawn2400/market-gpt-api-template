@@ -126,7 +126,6 @@ services:
         value: "60"
       - key: SIGNED_NONCE_TTL_SEC
         value: "120"
-      # מורחב (לפי הבקשה)
       - key: ANTI_REPLAY_SKEW_SEC
         value: "30"
       - key: ANTI_REPLAY_NONCE_TTL
@@ -523,7 +522,6 @@ services:
         value: "14"
       - key: AUTO_TRAIL_ATRPCT_MAX
         value: "0.015"
-      # BE/Trail tuning (נוסף)
       - key: BE_BASE_BPS
         value: "5"
       - key: BE_ADX_FACTOR
@@ -681,9 +679,9 @@ services:
 
       # ========================= Bearer tokens (RO/ACTION) =========================
       - key: API_BEARER_TOKEN_RO
-        value: "<ro-or-any>"
+        fromSecret: API_BEARER_TOKEN_RO
       - key: API_BEARER_TOKEN_ACTION
-        value: "<action-or-any>"
+        fromSecret: API_BEARER_TOKEN_ACTION
 
       # ========================= Secrets =========================
       - key: API_BEARER_TOKEN
