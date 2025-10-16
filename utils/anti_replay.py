@@ -1,123 +1,99 @@
 # utils/anti_replay.py
 from __future__ import annotations
-import os, hmac, json, time, hashlib, logging
-from typing import Optional, Tuple, Dict, Any
+import os, time, hmac, hashlib
+from contextlib import suppress
+from typing import Optional, Tuple, Any, Dict
 
-logger = logging.getLogger("algogpt.anti_replay")
+try:
+    import redis.asyncio as aioredis  # type: ignore
+except Exception:
+    aioredis = None  # type: ignore
 
-ANTI_REPLAY_ENABLE = os.getenv("ANTI_REPLAY_ENABLE", "1").lower() in ("1", "true", "yes", "on")
-WINDOW_SEC = int(os.getenv("ANTI_REPLAY_WINDOW_SEC", "60"))
-SIGNING_SECRET = (os.getenv("API_SIGNING_SECRET") or "").encode("utf-8")
+_NS = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
+_REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
-REDIS_URL = os.getenv("REDIS_URL") or os.getenv("CACHE_URL") or ""
-_USE_REDIS = bool(REDIS_URL)
+_SKEW_SEC = int(os.getenv("ANTI_REPLAY_SKEW_SEC", "30") or 30)
+_NONCE_TTL = int(os.getenv("ANTI_REPLAY_NONCE_TTL", "45") or 45)
+_REQUIRE = os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "1").lower() in ("1","true","yes","on")
 
-_redis = None
-_mem_seen: Dict[str, float] = {}
+# מפתח חתימה: OPS_SIGN_SECRET או WEBHOOK_HMAC_SECRET
+_SECRET = (os.getenv("OPS_SIGN_SECRET") or os.getenv("WEBHOOK_HMAC_SECRET") or "").strip()
 
-def _get_redis():
-    global _redis
-    if _redis or not _USE_REDIS:
-        return _redis
-    try:
-        import redis  # type: ignore
-        _redis = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-        _redis.ping()
-        return _redis
-    except Exception as e:
-        logger.warning("anti_replay: redis unavailable (%s) — falling back to in-proc memory", e)
+async def _get_redis():
+    if not (_REDIS_URL and aioredis):
         return None
+    r = getattr(_get_redis, "_r", None)
+    if r: return r
+    r = aioredis.from_url(_REDIS_URL, decode_responses=True)
+    _get_redis._r = r  # type: ignore[attr-defined]
+    return r
 
-def _seen_add(key: str, ttl: int) -> bool:
-    r = _get_redis()
-    now = time.time()
-    if r:
-        try:
-            ok = r.set(name=f"nonce:{key}", value=str(int(now)), nx=True, ex=int(ttl))
+def _sha256_hex(b: bytes) -> str:
+    return hashlib.sha256(b).hexdigest()
+
+def _sign(payload: str) -> str:
+    key = _SECRET.encode("utf-8")
+    return hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+
+async def _claim_nonce(nonce: str) -> bool:
+    # Redis אם יש; אחרת in-memory קצר
+    if _REDIS_URL and aioredis:
+        r = await _get_redis()
+        if r:
+            k = f"{_NS}:nonce:{nonce}"
+            ok = await r.setnx(k, "1")
+            if ok:
+                with suppress(Exception):
+                    await r.expire(k, _NONCE_TTL)
             return bool(ok)
-        except Exception:
-            pass
-    dead = [k for k, ts in _mem_seen.items() if now - ts > ttl]
-    for k in dead: _mem_seen.pop(k, None)
-    if key in _mem_seen: return False
-    _mem_seen[key] = now
+    # fallback in-memory
+    store: Dict[str, float] = getattr(_claim_nonce, "_mem", {})
+    now = time.time()
+    # clean
+    for k, ts in list(store.items()):
+        if now - ts > _NONCE_TTL: store.pop(k, None)
+    if nonce in store:
+        return False
+    store[nonce] = now
+    _claim_nonce._mem = store  # type: ignore[attr-defined]
     return True
 
-def _canon_body(body: Any) -> str:
+async def verify_request(
+    ts_header: Optional[str],
+    nonce_header: Optional[str],
+    signature_header: Optional[str],
+    route: str,
+    body: Any,
+    require_signature: bool = False
+) -> Tuple[bool, str]:
+    """
+    אימות חתימה אנטי-ריפליי:
+    - ts: שניות UNIX (טולרנס _SKEW_SEC)
+    - nonce: חד-פעמי, TTL = _NONCE_TTL
+    - signature: hex(HMAC_SHA256(secret, f"{ts}|{nonce}|{route}|{sha256(body)}"))
+    """
+    if not _SECRET:
+        return (not (_REQUIRE or require_signature), "no_secret_configured")
+    if not (ts_header and nonce_header and signature_header):
+        return (not (_REQUIRE or require_signature), "missing_headers")
     try:
-        if body is None: return ""
-        if isinstance(body, (bytes, bytearray)):
-            try:
-                obj = json.loads(body.decode("utf-8"))
-                return json.dumps(obj, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
-            except Exception:
-                return body.decode("utf-8", errors="ignore")
-        if isinstance(body, str):
-            try:
-                obj = json.loads(body)
-                return json.dumps(obj, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
-            except Exception:
-                return body
-        return json.dumps(body, separators=(",", ":"), sort_keys=True, ensure_ascii=False)
+        ts = int(ts_header)
     except Exception:
-        return ""
-
-def _sha256(s: str) -> str:
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()
-
-def _build_sign_base(ts: str, nonce: str, route: str, canon_json: str) -> str:
-    return f"{ts}.{nonce}.{route}.{_sha256(canon_json)}"
-
-def _hmac(base: str, secret: bytes) -> str:
-    return hmac.new(secret, base.encode("utf-8"), hashlib.sha256).hexdigest()
-
-class AntiReplayError(Exception):
-    def __init__(self, code: str, detail: Optional[str] = None):
-        self.code = code
-        self.detail = detail or code
-        super().__init__(f"{code}: {detail}")
-
-def verify_request(
-    *, ts_header: Optional[str], nonce_header: Optional[str], signature_header: Optional[str],
-    route: str, body: Any, require_signature: bool = False, window_sec: Optional[int] = None,
-) -> Tuple[bool, Optional[str]]:
-    if not ANTI_REPLAY_ENABLE:
-        return True, None
+        return (False, "bad_ts")
+    now = int(time.time())
+    if abs(now - ts) > _SKEW_SEC:
+        return (False, "ts_skew")
+    if not await _claim_nonce(str(nonce_header)):
+        return (False, "nonce_reuse")
     try:
-        if not ts_header or not nonce_header:
-            return False, "missing_ts_or_nonce"
-        window = int(window_sec or WINDOW_SEC)
-        ts = int(str(ts_header).strip()); now = int(time.time())
-        if abs(now - ts) > window:
-            return False, "timestamp_out_of_window"
-        uniq = f"{route}:{ts}:{nonce_header.strip()}"
-        if not _seen_add(uniq, ttl=window):
-            return False, "replay_detected"
-        if SIGNING_SECRET:
-            canon = _canon_body(body)
-            base = _build_sign_base(str(ts), nonce_header.strip(), route, canon)
-            calc = _hmac(base, SIGNING_SECRET)
-            if signature_header:
-                got = str(signature_header).strip().lower()
-                if got != calc.lower():
-                    return False, "bad_signature"
-            elif require_signature:
-                return False, "signature_required"
-            else:
-                logger.warning("anti_replay: signature missing; route=%s", route)
-        return True, None
+        raw = body if isinstance(body, (bytes, bytearray)) else (str(body).encode("utf-8") if body is not None else b"")
+        body_hash = _sha256_hex(raw)
+        payload = f"{ts}|{nonce_header}|{route}|{body_hash}"
+        expected = _sign(payload)
+        ok = hmac.compare_digest(expected, signature_header)
+        return (ok, "ok" if ok else "sig_mismatch")
     except Exception as e:
-        logger.warning("anti_replay: verify error: %s", e)
-        return False, "verify_exception"
+        return (False, f"verify_error:{e}")
 
-def build_signature_headers(route: str, body: Any) -> Dict[str, str]:
-    ts = str(int(time.time()))
-    nonce = hashlib.sha256(f"{ts}.{os.getpid()}.{time.time()}".encode()).hexdigest()[:16]
-    canon = _canon_body(body)
-    base = _build_sign_base(ts, nonce, route, canon)
-    sig = _hmac(base, SIGNING_SECRET) if SIGNING_SECRET else ""
-    h = {"X-Timestamp": ts, "X-Nonce": nonce}
-    if sig: h["X-Signature"] = sig
-    return h
 
 
