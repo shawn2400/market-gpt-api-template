@@ -90,6 +90,7 @@ class Settings:
     SL_TRAIL_ENABLE: bool = _env_bool("SL_TRAIL_ENABLE", True)
 
     LEVERAGE_SYMBOL_CAPS: Dict[str, int] = field(default_factory=lambda: _load_json_env("LEVERAGE_SYMBOL_CAPS", '{"BTCUSDT":15,"1000PEPEUSDT":8}'))
+    MAX_LEVERAGE: int = _env_int("MAX_LEVERAGE", 50)  # ← מוסיף כדי לתאם עם order_sanity
 
     TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     TELEGRAM_CHAT_ID_DEFAULT: int = _env_int("TELEGRAM_CHAT_ID", 0)
@@ -138,6 +139,7 @@ class Settings:
             "SL_ATR_MULT": self.SL_ATR_MULT,
             "SL_TRAIL_ENABLE": self.SL_TRAIL_ENABLE,
             "LEVERAGE_SYMBOL_CAPS": self.LEVERAGE_SYMBOL_CAPS,
+            "MAX_LEVERAGE": self.MAX_LEVERAGE,
             "TELEGRAM_BOT_TOKEN_SET": bool(self.TELEGRAM_BOT_TOKEN),
             "TELEGRAM_CHAT_ID_DEFAULT": self.TELEGRAM_CHAT_ID_DEFAULT,
             "TELEGRAM_PARSE_MODE": self.TELEGRAM_PARSE_MODE,
@@ -274,6 +276,14 @@ def dump_config_sanitized() -> Dict[str, object]:
         else:
             redacted[k] = v
     return redacted
+
+# ----- מודול-לבל אליאסים נוחים לקוד ישן -----
+# שים לב: אלו pointers לאובייקט Settings החי (לא העתקי ערכים)
+def __getattr__(name: str):
+    s = get_settings()
+    if hasattr(s, name):
+        return getattr(s, name)
+    raise AttributeError(name)
 
 load_settings()
 
