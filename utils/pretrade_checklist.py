@@ -2,7 +2,13 @@
 from __future__ import annotations
 from typing import Dict, Any, Tuple, Optional, List
 import os
-from utils.indicators_ext import detect_regime, compression_bandwidth, trend_confidence, rsi_composite, ema_gap_guard
+from utils.indicators_ext import (
+    detect_regime,
+    compression_bandwidth,
+    trend_confidence,
+    rsi_composite,
+    ema_gap_guard,
+)
 
 def _envf(name: str, default: float) -> float:
     try:
@@ -10,9 +16,17 @@ def _envf(name: str, default: float) -> float:
     except Exception:
         return default
 
+
+def _threshold_bw() -> float:
+    # תמיכה גם בערך שברי (0.012) וגם אחוזי (1.2)
+    raw = _envf("REGIME_COMPRESSION_BW", 1.2)
+    return raw * 100.0 if raw < 0.2 else raw
+
+
 def compute_pretrade_score(kl: List[List[float]], *, adx: float, atr_pct: float) -> Dict[str, Any]:
     """
     מניב ציון 0..10 + flags: regime, compression, trend_conf, rsi_comp, ema_gap_ok.
+    atr_pct צפוי באחוזים (למשל 0.8 -> 0.8%)
     """
     closes = [float(r[4]) for r in kl] if kl else []
     regime = detect_regime(adx, atr_pct, adx_trend=_envf("REGIME_ADX_TREND", 22.0), chop_atr_pct=_envf("REGIME_CHOP_ATR", 0.6))
@@ -30,7 +44,7 @@ def compute_pretrade_score(kl: List[List[float]], *, adx: float, atr_pct: float)
 
     # נורמליזציה:
     regime_score = {0: 4.5, 1: 5.5, 2: 7.0}.get(regime, 5.0)  # טרנד עדיף
-    comp_score   = 7.0 if comp_bw <= _envf("REGIME_COMPRESSION_BW", 1.2) else 5.0
+    comp_score   = 7.0 if comp_bw <= _threshold_bw() else 5.0
     trend_score  = max(0.0, min(10.0, tconf * 10.0))
     rsi_score    = 10.0 - abs((rsi_c - 50.0) / 50.0) * 10.0  # ניטרלי עדין טוב
     ema_score    = 7.5 if ema_ok else max(2.0, 7.5 - (ema_gap / 2.0))
@@ -50,19 +64,21 @@ def compute_pretrade_score(kl: List[List[float]], *, adx: float, atr_pct: float)
         },
     }
 
+
 def entry_window_open(kl: List[List[float]], max_bars: int = 3) -> bool:
     """
-    חלון כניסה: אות תקף עד 2–3 נרות. כאן נניח שהשיחה נקראת בזמן אמת – נחזיר True.
-    בעתיד ניתן לשלב חותמת זמן הנר האחרון.
+    חלון כניסה: אות תקף עד 2–3 נרות.
+    (גרסה רזה – תמיד True; ניתן לשלב חותמת זמן בהמשך)
     """
     return True
+
 
 def estimate_impact_slip_bps(spread_pct: float, atr_pct: float, notional_usdt: float, *, max_bps: float = 25.0) -> float:
     """
     אומדן סליפאג' בסיסי: שילוב spread% + ATR% ביחס לנוטיונל. החזרה ב-bps.
     """
-    # דגם קל: 50% spread + 50% atr_pct scaled × גודל נוטיונל
     base = (spread_pct * 50.0) + (atr_pct * 50.0)
     size_factor = 1.0 + min(1.0, notional_usdt / 5000.0) * 0.5  # עד פי 1.5
     bps = base * size_factor
     return float(min(max_bps, max(0.0, bps)))
+
