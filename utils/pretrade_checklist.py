@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-from typing import Dict, Any, Tuple, Optional, List
+from typing import Dict, Any, Optional, List
 import os
 from utils.indicators_ext import (
     detect_regime,
