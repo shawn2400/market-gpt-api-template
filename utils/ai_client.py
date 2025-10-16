@@ -5,6 +5,8 @@ import os
 import logging
 from typing import Optional, Dict
 
+from utils.metrics_tracker import observe_http_ctx_async  # מטריקות HTTP
+
 logger = logging.getLogger("algogpt.ai")
 
 # Optional OpenAI client (graceful fallback if lib/env missing)
@@ -44,23 +46,26 @@ async def chat(
     if not _client:
         return None
     try:
-        resp = await _client.chat.completions.create(
-            model=(model or _MODEL),
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        # עוטפים את הקריאה האסינכרונית במטריקת HTTP כללית
+        async with observe_http_ctx_async(name="openai_chat"):
+            resp = await _client.chat.completions.create(
+                model=(model or _MODEL),
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
         return (resp.choices[0].message.content or "").strip()
     except Exception as e:
         logger.warning("OpenAI chat failed: %s", e)
         return None
 
-def ai_healthcheck() -> Dict[str, object]:
+async def ai_healthcheck() -> Dict[str, object]:
     """
-    Lightweight health: no network call. Synchronous for broad compatibility.
+    Lightweight async health: no network call.
+    שמרתי אסינכרוני כדי להתאים ל- await _ai_check() ב-/health/ai
     """
     return {
         "ok": True,                    # module loaded
@@ -70,19 +75,17 @@ def ai_healthcheck() -> Dict[str, object]:
         "base_url": _BASE_URL or "https://api.openai.com/v1",
     }
 
-async def ai_healthcheck_async() -> Dict[str, object]:
-    """
-    Async alias for frameworks expecting an awaitable.
-    """
-    return ai_healthcheck()
+def ai_healthcheck_sync() -> Dict[str, object]:
+    """גרסה סינכרונית למי שצריך."""
+    return {
+        "ok": True,
+        "client": bool(_client),
+        "model": _MODEL,
+        "api_key_set": bool(_API_KEY),
+        "base_url": _BASE_URL or "https://api.openai.com/v1",
+    }
 
-__all__ = ["chat", "ai_healthcheck", "ai_healthcheck_async"]
-
-
-
-
-
-
+__all__ = ["chat", "ai_healthcheck", "ai_healthcheck_sync"]
 
 
 
