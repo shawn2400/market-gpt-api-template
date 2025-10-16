@@ -1,3 +1,4 @@
+
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, time, math, logging, threading
@@ -57,11 +58,7 @@ def _now() -> float: return time.time()
 def _ms() -> int: return int(time.time() * 1000)
 
 try:
-    from utils.ws_fallback import (
-        get_price as ws_get_price,
-        is_price_fresh as ws_is_fresh,
-        update_price as ws_update_price
-    )
+    from utils.ws_fallback import get_price as ws_get_price, is_price_fresh as ws_is_fresh, update_price as ws_update_price
 except Exception:
     ws_get_price = None  # type: ignore
     ws_is_fresh = None   # type: ignore
@@ -70,8 +67,8 @@ except Exception:
 _exinfo_cache: Dict[str, Any] = {"ts": 0.0, "data": None}
 _account_cache: Dict[str, Any] = {"ts": 0.0, "data": None, "ban_until": 0.0}
 
-_price_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, mark)
-_index_cache: Dict[str, Tuple[float, float]] = {}  # symbol -> (ts_ms, index)
+_price_cache: Dict[str, Tuple[float, float]] = {}
+_index_cache: Dict[str, Tuple[float, float]] = {}
 
 _idem_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 _idem_lock = threading.RLock()
@@ -83,22 +80,18 @@ _client_ban_until: float = 0.0
 
 def _init_client() -> Optional[Client]:
     global _CLIENT, _client_ban_until
-
     if not _BINANCE_AVAILABLE:
         logger.warning("python-binance unavailable — client stub active")
         return None
     if not (API_KEY and API_SECRET):
         logger.warning("BINANCE API keys missing — client will remain uninitialized until keys provided")
         return None
-
     now = _now()
     if _client_ban_until and now < _client_ban_until:
         return None
-
     try:
         c = Client(API_KEY, API_SECRET, requests_params={"timeout": HTTP_TIMEOUT})
         c.API_URL = _BINANCE_HTTP_BASE
-
         try:
             try:
                 server_time = c.futures_time().get("serverTime")  # type: ignore
@@ -114,7 +107,6 @@ def _init_client() -> Optional[Client]:
             logger.info("Binance TIME_OFFSET set to %d ms", offset)
         except Exception as e:
             logger.warning("Time sync failed: %s", e)
-
         _CLIENT = c
         return _CLIENT
     except BinanceAPIException as e:
@@ -147,7 +139,7 @@ class _ClientProxy:
 client: Client | _ClientProxy = _ClientProxy()
 
 def get_futures_client():
-    return _get_client() or client  # proxy is acceptable
+    return _get_client() or client
 
 def futures_exchange_info_safe(force_refresh: bool=False) -> Optional[Dict[str, Any]]:
     ts = _now()
@@ -235,9 +227,6 @@ def _quantize_price(symbol: str, price: float) -> str:
     return f"{adj:.{decs}f}"
 
 def _quantize_qty(symbol: str, qty: float) -> str:
-    """
-    כימות כמות לצעד הבורסה. אם הכמות <= 0 — נחזיר "0" ולא נרים צעד אוטומטית.
-    """
     f = get_symbol_filters(symbol) or {}
     step = float(f.get("stepSize") or DEFAULT_QTY_STEP_STR)
     if step <= 0:
@@ -451,7 +440,6 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     price = kwargs.get("price")
     stop = kwargs.get("stopPrice")
     activation = kwargs.get("activationPrice")
-
     if qty is not None:
         kwargs["quantity"] = _quantize_qty(sym, float(qty))
     if price is not None:
@@ -465,10 +453,8 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     if activation is not None:
         a_str = _quantize_price(sym, float(activation))
         kwargs["activationPrice"] = a_str
-
     if "workingType" not in kwargs:
         kwargs["workingType"] = WORKING_TYPE
-
     coid = str(kwargs.get("newClientOrderId") or "")
     if coid:
         if ORDER_ID_PREFIX and not coid.startswith(ORDER_ID_PREFIX):
@@ -478,13 +464,11 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
         kwargs["newClientOrderId"] = coid
     elif ORDER_ID_PREFIX:
         kwargs["newClientOrderId"] = f"{ORDER_ID_PREFIX}_{int(_ms()%10**9)}"
-
     try:
         if HEDGE_MODE_OVERRIDE in ("0","false","no","off","oneway"):
             kwargs.pop("positionSide", None)
     except Exception:
         pass
-
     last: Optional[Exception] = None
     for attempt in range(1, max(1, BINANCE_MAX_RETRIES) + 1):
         if not _rate_allow():
@@ -532,6 +516,7 @@ __all__ = [
     "get_open_orders","get_all_orders",
     "set_leverage","futures_create_order","futures_cancel_order",
 ]
+
 
 
 
