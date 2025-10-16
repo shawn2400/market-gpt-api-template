@@ -1,4 +1,4 @@
-# main.py
+# main.py (Part 1/3)
 from __future__ import annotations
 
 import os
@@ -53,7 +53,12 @@ logger = logging.getLogger("algogpt.main")
 
 # ====== Metrics counters integration ======
 try:
-    from utils.metrics_tracker import inc_approve_ok, inc_approve_fail, inc_reject  # type: ignore
+    from utils.metrics_tracker import (  # type: ignore
+        inc_approve_ok, inc_approve_fail, inc_reject,
+        inc_scan_eval, inc_scan_passed, inc_scan_blocked,
+        inc_approvals_created,
+        set_last_entry_score, set_last_slip_estimate_bps,
+    )
 except Exception:
     def inc_approve_ok():  # type: ignore
         pass
@@ -61,24 +66,32 @@ except Exception:
         pass
     def inc_reject():  # type: ignore
         pass
-
-# === Checklist & scan metrics imports (עם נפילה רכה) ===
-try:
-    from utils.metrics_tracker import inc_scan_eval, inc_scan_passed, inc_scan_blocked, set_last_entry_score  # type: ignore
-except Exception:
     def inc_scan_eval():  # type: ignore
         pass
     def inc_scan_passed():  # type: ignore
         pass
     def inc_scan_blocked():  # type: ignore
         pass
+    def inc_approvals_created():  # type: ignore
+        pass
     def set_last_entry_score(_v: float):  # type: ignore
         pass
+    def set_last_slip_estimate_bps(_v: float):  # type: ignore
+        pass
 
+# === Checklist (עם נפילה רכה) ===
 try:
-    from utils.pretrade_checklist import compute_pretrade_score  # type: ignore
+    from utils.pretrade_checklist import compute_pretrade_score, estimate_impact_slip_bps  # type: ignore
 except Exception:
     compute_pretrade_score = None  # type: ignore
+    def estimate_impact_slip_bps(spread_pct: float, atr_pct: float, notional_usdt: float, *, max_bps: float = 25.0) -> float:  # type: ignore
+        return 0.0
+
+# Exec-decider (שלב 3) – אופציונלי
+try:
+    from utils.exec_decider import decide_execution_mode  # type: ignore
+except Exception:
+    decide_execution_mode = None  # type: ignore
 
 # ==================== Inline safe defaults ====================
 _inline_env_defaults: Dict[str, str] = {
@@ -313,7 +326,10 @@ class ConfirmStore:
 
     @classmethod
     def remove(cls, ticket_id: str) -> None:
-        cls._items.pop(str(ticket_id), None)
+        cls._items.pop(str(ticket_id"), None)
+# main.py (Part 2/3)
+
+import httpx  # keep import in scope for Part 2
 
 # ==================== Shared HTTP and Redis ====================
 try:
@@ -672,6 +688,7 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
+# main.py (Part 3/3)
 
 # ==================== Execute trade helpers ====================
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
@@ -982,6 +999,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         raise HTTPException(status_code=422, detail="Missing fields (symbol/side).")
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
+    # Smart ETA for TP levels (best-effort)
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         with suppress(Exception):
@@ -1034,6 +1052,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         "expiry_ts": payload.get("expiry_ts"),
     }
 
+    # Persist ticket
     persisted = False
     if aioredis and REDIS_URL:
         try:
@@ -1051,6 +1070,40 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
             with suppress(Exception):
                 ConfirmStore.create(dict(req_body))
             persisted = True
+
+    # Metrics: approvals_created_total++
+    with suppress(Exception):
+        inc_approvals_created()
+
+    # Soft slip-estimate gauge (best-effort)
+    with suppress(Exception):
+        # get price + book spread
+        cli = _get_shared_async_client()
+        px = await get_last_price_async(symbol) or 0.0
+        spread_pct = 0.0
+        try:
+            r = await cli.get("https://fapi.binance.com/fapi/v1/ticker/bookTicker", params={"symbol": symbol}, timeout=httpx.Timeout(6.0))
+            if r.status_code == 200:
+                bd = r.json()
+                bid = float(bd.get("bidPrice") or 0.0)
+                ask = float(bd.get("askPrice") or 0.0)
+                if bid > 0 and ask > 0:
+                    spread_pct = abs(ask - bid) / ((ask + bid) / 2.0) * 100.0
+        except Exception:
+            pass
+        # atr% from klines
+        atr_pct = 0.0
+        kl = await _fetch_klines_http(symbol, "15m", 120)
+        if kl:
+            ind = _compute_indicators_from_klines(kl, period=14)
+            price = float(ind.get("price") or 0.0) or px
+            atr = float(ind.get("atr") or 0.0)
+            atr_pct = (atr / price) * 100.0 if price > 0 else 0.0
+        notional = float(budget or 0.0)
+        if notional <= 0 and px > 0 and qty > 0 and lev > 0:
+            notional = float(px) * float(qty) / max(1.0, float(lev))
+        est_bps = estimate_impact_slip_bps(spread_pct, atr_pct, notional, max_bps=float(os.getenv("IMPACT_SLIP_BPS_MAX", "25") or 25.0))
+        set_last_slip_estimate_bps(float(est_bps))
 
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     preview_url = _build_signed_link(base, "/ops/ui/ticket/signed", tid, ttl_sec=900, action="preview")
@@ -1095,9 +1148,17 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     }
 
 def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
+    # prefer explicit mode hint in note
     mode = _parse_mode(ticket.get("note"))
     if mode in ("MARKET", "HYBRID", "AUTO"):
         return mode
+    # optional external policy from utils.exec_decider
+    if callable(decide_execution_mode):
+        with suppress(Exception):
+            m = decide_execution_mode(ticket)  # type: ignore
+            if isinstance(m, str) and m.upper() in ("MARKET", "HYBRID", "AUTO"):
+                return m.upper()
+    # fallback
     return "HYBRID" if os.getenv("TP_LADDER_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on") else "MARKET"
 
 def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLResponse:
@@ -1849,7 +1910,7 @@ for mod, tag in (
     ("routes.public", "Public Feed"),
     ("routes.public_web", "Public Feed"),
     ("routes.ai", "AI"),
-    ("routes.metrics", "metrics"),   # <<< הוסף: /metrics
+    ("routes.metrics", "metrics"),   # <<< /metrics
 ):
     try:
         module = __import__(mod, fromlist=["router"])
@@ -1858,6 +1919,7 @@ for mod, tag in (
         logger.warning("%s router not loaded: %s", mod, e)
 
 app.include_router(router)
+
 # ==================== Meta & Diagnostics ====================
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
@@ -2252,6 +2314,7 @@ async def _trail_rt_loop():
         except Exception as e:
             logger.debug("trail_rt.loop_error: %s", e)
         await asyncio.sleep(max(3, TRAIL_RT_INTERVAL_SEC))
+
 # --- אזהרות סטארטאפ (אופציונלי, לא חוסם) ---
 def _collect_critical_env_warnings() -> List[str]:
     warns: List[str] = []
@@ -2324,7 +2387,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
 
 
 
