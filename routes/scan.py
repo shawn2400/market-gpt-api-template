@@ -1,7 +1,7 @@
 # routes/scan.py
 from __future__ import annotations
 from fastapi import APIRouter, Query
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 import os
 import pandas as pd
 import httpx
@@ -14,7 +14,18 @@ except Exception:
     from pydantic import BaseModel, Field
     _PYD_V2 = False
 
-from utils.indicators import prepare_indicators_for_backtest
+try:
+    from utils.pretrade_checklist import compute_pretrade_score  # type: ignore
+except Exception:
+    compute_pretrade_score = None  # type: ignore
+
+try:
+    from utils.metrics_tracker import inc_scan_eval, inc_scan_passed, inc_scan_blocked, set_last_entry_score  # type: ignore
+except Exception:
+    def inc_scan_eval(): pass  # type: ignore
+    def inc_scan_passed(): pass  # type: ignore
+    def inc_scan_blocked(): pass  # type: ignore
+    def set_last_entry_score(_): pass  # type: ignore
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 router = APIRouter(prefix="/scan", tags=["Scan"])
@@ -56,6 +67,8 @@ class ScanSignal(BaseModel):
     symbol: str
     interval: str
     indicators: Optional[IndicatorSet] = None
+    score: Optional[float] = None
+    features: Optional[Dict[str, Any]] = None
     ok: bool = True
     error: Optional[str] = None
 
@@ -68,7 +81,7 @@ class ScanResponse(BaseModel):
 
 # ===================== Binance helpers =====================
 async def _fetch_klines_async(symbol: str, interval: str = "15m", limit: int = 200) -> pd.DataFrame:
-    sym = symbol.strip().upper()
+    sym = (symbol or "").strip().upper()
     if not sym.endswith("USDT"):
         sym += "USDT"
     url = f"{FUTURES_BASE}/fapi/v1/klines"
@@ -87,6 +100,42 @@ async def _fetch_klines_async(symbol: str, interval: str = "15m", limit: int = 2
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df[["open","high","low","close","volume"]]
 
+# ===== helper: adx/atr% מתוך df (קומפקטי) =====
+def _adx_atr_pct_from_df(df: pd.DataFrame, period: int = 14) -> Dict[str, float]:
+    try:
+        if len(df) < period + 2:
+            return {"adx": 0.0, "atr_pct": 0.0}
+        highs = df["high"].to_list(); lows = df["low"].to_list(); closes = df["close"].to_list()
+        trs, plus_dm, minus_dm = [], [], []
+        for i in range(1, len(closes)):
+            h, l, ph, pl, pc = highs[i], lows[i], highs[i-1], lows[i-1], closes[i-1]
+            trs.append(max(h-l, abs(h-pc), abs(l-pc)))
+            up_move = h-ph; down_move = pl-l
+            plus_dm.append(up_move if (up_move > down_move and up_move > 0) else 0.0)
+            minus_dm.append(down_move if (down_move > up_move and down_move > 0) else 0.0)
+        def _w(vs):
+            if len(vs) < period: return []
+            out = [sum(vs[:period]) / period]
+            for v in vs[period:]:
+                out.append((out[-1]*(period-1)+v)/period)
+            return out
+        atr_s = _w(trs); p_s = _w(plus_dm); m_s = _w(minus_dm)
+        if not (atr_s and p_s and m_s): return {"adx": 0.0, "atr_pct": 0.0}
+        plus_di = [(p/atr_s[i])*100 if atr_s[i]>0 else 0.0 for i,p in enumerate(p_s)]
+        minus_di = [(m/atr_s[i])*100 if atr_s[i]>0 else 0.0 for i,m in enumerate(m_s)]
+        dx = []
+        for i in range(min(len(plus_di), len(minus_di))):
+            s = plus_di[i] + minus_di[i]; d = abs(plus_di[i]-minus_di[i])
+            dx.append((d/s)*100 if s>0 else 0.0)
+        adx_s = _w(dx)
+        adx = adx_s[-1] if adx_s else 0.0
+        price = closes[-1]
+        atr = atr_s[-1] if atr_s else 0.0
+        atr_pct = (atr/price)*100.0 if price>0 else 0.0
+        return {"adx": float(adx), "atr_pct": float(atr_pct)}
+    except Exception:
+        return {"adx": 0.0, "atr_pct": 0.0}
+
 # ===================== Endpoints =====================
 @router.get("/info", response_model=ScanResponse, summary="Basic Scan Info")
 async def scan_info(
@@ -98,12 +147,48 @@ async def scan_info(
         df = await _fetch_klines_async(symbol, interval, limit)
         if df.empty:
             return ScanResponse(ok=False, count_total=1, returned=0, error="no data")
-        # הפעלת חישובי אינדיקטורים ב־thread למניעת חסימה
-        ind = await asyncio.to_thread(prepare_indicators_for_backtest, df)
-        row = {k: (float(v) if pd.notna(v) else None) for k, v in ind.iloc[-1].to_dict().items()}
-        sig = ScanSignal(symbol=(symbol if symbol.endswith("USDT") else symbol + "USDT").upper(),
-                         interval=interval,
-                         indicators=IndicatorSet(**row))
+
+        # אינדיקטורים (אם יש utils.indicators – משתמשים; אחרת ממשיכים בלי)
+        try:
+            from utils.indicators import prepare_indicators_for_backtest  # type: ignore
+            ind = await asyncio.to_thread(prepare_indicators_for_backtest, df)
+            row = {k: (float(v) if pd.notna(v) else None) for k, v in ind.iloc[-1].to_dict().items()}
+            indicators = IndicatorSet(**row)
+        except Exception:
+            indicators = None
+
+        # Score enrichment
+        score = None; features = None
+        if compute_pretrade_score is not None:
+            try:
+                # בניית klines בסגנון Binance מה-DataFrame
+                k_arr = df.reset_index(drop=True)
+                kl = [[0,row.open,row.high,row.low,row.close,0,0,0,0,0,0,0] for row in k_arr.itertuples()]
+                iv = _adx_atr_pct_from_df(df)
+                inc_scan_eval()
+                res = compute_pretrade_score(kl, adx=iv["adx"], atr_pct=iv["atr_pct"])
+                score = float(res.get("score", 0.0))
+                features = res.get("features", None)
+                set_last_entry_score(score)
+            except Exception:
+                pass
+
+        sig = ScanSignal(
+            symbol=(symbol if symbol.endswith("USDT") else symbol + "USDT").upper(),
+            interval=interval,
+            indicators=indicators,
+            score=score,
+            features=features,
+        )
+
+        # מונים עבר/נחסם לפי ENTRY_SCORE_MIN (לא חוסם API)
+        try:
+            min_req = float(os.getenv("ENTRY_SCORE_MIN","0") or 0)
+            if score is not None and min_req>0:
+                (inc_scan_passed if score >= min_req else inc_scan_blocked)()
+        except Exception:
+            pass
+
         return ScanResponse(ok=True, count_total=1, returned=1, signals=[sig])
     except Exception as e:
         return ScanResponse(ok=False, count_total=1, returned=0, error=str(e))
@@ -115,34 +200,16 @@ async def scan_symbols(
     limit: int = Query(200, ge=50, le=200)
 ) -> ScanResponse:
     out: List[ScanSignal] = []
-    for s in symbols:
+    for sym in symbols:
         try:
-            df = await _fetch_klines_async(s, interval, limit)
-            if df.empty:
-                out.append(ScanSignal(symbol=(s if s.endswith("USDT") else s + "USDT").upper(),
-                                      interval=interval, ok=False, error="no data"))
-                continue
-            ind = await asyncio.to_thread(prepare_indicators_for_backtest, df)
-            row = {k: (float(v) if pd.notna(v) else None) for k, v in ind.iloc[-1].to_dict().items()}
-            out.append(ScanSignal(symbol=(s if s.endswith("USDT") else s + "USDT").upper(),
-                                  interval=interval, indicators=IndicatorSet(**row)))
+            r = await scan_info(sym, interval, limit)  # שימוש באותו מנוע
+            if r.ok and r.signals:
+                out.append(r.signals[0])
+            else:
+                out.append(ScanSignal(symbol=(sym or "").upper(), interval=interval, ok=False, error=r.error))
         except Exception as e:
-            out.append(ScanSignal(symbol=(s if s.endswith("USDT") else s + "USDT").upper(),
-                                  interval=interval, ok=False, error=str(e)))
+            out.append(ScanSignal(symbol=(sym or "").upper(), interval=interval, ok=False, error=str(e)))
     return ScanResponse(ok=True, count_total=len(symbols), returned=len(out), signals=out)
-
-# ====== Compatibility alias: /scan/public-now ======
-@router.get("/public-now", response_model=ScanResponse, summary="[compat] quick public scan")
-async def scan_public_now(
-    interval: str = Query("15m"),
-    limit: int = Query(200, ge=50, le=200),
-    symbols_csv: Optional[str] = Query(None, description="CSV of symbols; default WATCHLIST")
-) -> ScanResponse:
-    watch = symbols_csv.split(",") if symbols_csv else os.getenv("WATCHLIST","").split(",")
-    syms = [s.strip().upper() for s in watch if s.strip()] or ["BTCUSDT","ETHUSDT","SOLUSDT"]
-    return await scan_symbols(symbols=syms, interval=interval, limit=limit)
-
-
 
 
 
