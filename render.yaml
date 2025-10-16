@@ -1,6 +1,4 @@
-להלן קובץ Blueprint מלא (render.yaml) מאוחד ו”תקין 1-1“ עם כל ההגדרות שנתת, כולל הוספת מקטע ה-Checklist/Gate, Anti-Replay המורחב, Bearer (RO/ACTION) ו-BE/Trail tuning. עדכנתי/הוספתי את המפתחות החדשים תחת `envVars` בלי לשבור את מה שהיה קודם.
 
-```yaml
 services:
   - type: web
     name: algogpt-prod
