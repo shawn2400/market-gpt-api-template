@@ -62,6 +62,24 @@ except Exception:
     def inc_reject():  # type: ignore
         pass
 
+# === Checklist & scan metrics imports (עם נפילה רכה) ===
+try:
+    from utils.metrics_tracker import inc_scan_eval, inc_scan_passed, inc_scan_blocked, set_last_entry_score  # type: ignore
+except Exception:
+    def inc_scan_eval():  # type: ignore
+        pass
+    def inc_scan_passed():  # type: ignore
+        pass
+    def inc_scan_blocked():  # type: ignore
+        pass
+    def set_last_entry_score(_v: float):  # type: ignore
+        pass
+
+try:
+    from utils.pretrade_checklist import compute_pretrade_score  # type: ignore
+except Exception:
+    compute_pretrade_score = None  # type: ignore
+
 # ==================== Inline safe defaults ====================
 _inline_env_defaults: Dict[str, str] = {
     "GUARD_SL_GRACE_SEC": "2",
@@ -587,6 +605,25 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
             if v and v > 0:
                 return v
     return None
+
+# >>> KL HTTP HELPER (לוקלי; מביא klines ב-HTTP לצ'קליסט)
+async def _fetch_klines_http(symbol: str, interval: str = "15m", limit: int = 120) -> List[List[Any]]:
+    """
+    מחזיר klines בפורמט binance (מערכים) דרך HTTP. Best-effort בלבד.
+    """
+    sym = symbol.upper()
+    if not sym.endswith("USDT"):
+        sym += "USDT"
+    url = "https://fapi.binance.com/fapi/v1/klines"
+    try:
+        cli = _get_shared_async_client()
+        r = await cli.get(url, params={"symbol": sym, "interval": interval, "limit": int(limit)}, timeout=httpx.Timeout(10.0))
+        if r.status_code == 200:
+            data = r.json()
+            return data if isinstance(data, list) else []
+    except Exception:
+        pass
+    return []
 
 # ==================== Misc helpers ====================
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
@@ -1171,6 +1208,47 @@ async def _approve_core(ticket_id: str):
     with suppress(Exception):
         for k in ("blocked_by_rr_min", "blocked_by_velocity", "velocity_error"):
             ticket.pop(k, None)
+
+    # --- Checklist Gate (ENTRY_SCORE_MIN) ---
+    ENTRY_SCORE_MIN = float(os.getenv("ENTRY_SCORE_MIN", "0") or 0)
+    if ENTRY_SCORE_MIN > 0 and compute_pretrade_score is not None:
+        try:
+            inc_scan_eval()
+        except Exception:
+            pass
+        try:
+            kl = await _fetch_klines_http(str(ticket.get("symbol", "")), interval=os.getenv("ENTRY_SCORE_INTERVAL", "15m"), limit=120)
+            adx = atr_pct = 0.0
+            if kl:
+                ind = _compute_indicators_from_klines(kl, period=14)
+                price = float(ind.get("price") or 0.0)
+                atr = float(ind.get("atr") or 0.0)
+                adx = float(ind.get("adx") or 0.0)
+                atr_pct = (atr / price) * 100.0 if price > 0 else 0.0
+            res = compute_pretrade_score(kl, adx=adx, atr_pct=atr_pct) if kl else {"score": 0.0, "features": {}}
+            score = float(res.get("score", 0.0))
+            ticket["score"] = score
+            with suppress(Exception):
+                set_last_entry_score(score)
+            if score < ENTRY_SCORE_MIN:
+                with suppress(Exception):
+                    inc_scan_blocked()
+                with suppress(Exception):
+                    await _send_telegram_html(
+                        "🚫 <b>Approval Blocked (Checklist)</b>\n"
+                        f"• Ticket: <code>{_md_html(ticket_id)}</code>\n"
+                        f"• { _md_html(str(ticket.get('symbol',''))) } { _md_html(str(ticket.get('side',''))) }\n"
+                        f"• score=<code>{score:.2f}</code>, min=<code>{ENTRY_SCORE_MIN:.2f}</code>"
+                    )
+                await _delete_ticket(ticket_id, source, final_status=False)
+                return _html(f"⛔️ נחסם ע״י Checklist · score={score:.2f} < {ENTRY_SCORE_MIN:.2f}")
+            else:
+                with suppress(Exception):
+                    inc_scan_passed()
+        except Exception as e:
+            logger.warning("checklist_gate_failed (permissive allow): %s", e)
+    # --- סוף ה-Checklist Gate ---
+
     t2 = await _apply_auto_qty_on_ticket_async(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
@@ -1247,7 +1325,7 @@ async def _reject_core(ticket_id: str):
     sym, side, qty = (str(ticket.get("symbol", "")) or "").upper(), str(ticket.get("side", "")).upper(), ticket.get("qty", "")
     with suppress(Exception):
         await _send_telegram_html(
-            f"⛔️ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n— — —\nהבקשה נדחתה."
+            f"⛔️ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n— — —\נהבקשה נדחתה."
         )
     await _delete_ticket(ticket_id, source, final_status=False)
     return _html("⛔️ נדחה — הכרטיס הוסר.")
@@ -1772,6 +1850,7 @@ for mod, tag in (
     ("routes.public", "Public Feed"),
     ("routes.public_web", "Public Feed"),
     ("routes.ai", "AI"),
+    ("routes.metrics", "metrics"),   # <<< הוסף: /metrics
 ):
     try:
         module = __import__(mod, fromlist=["router"])
@@ -2248,6 +2327,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
