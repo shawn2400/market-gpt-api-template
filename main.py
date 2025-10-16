@@ -1,4 +1,5 @@
-# main.py (Part 1/3)
+# main.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os
@@ -253,7 +254,7 @@ PUBLIC_NOW_WINDOW = int(os.getenv("PUBLIC_NOW_WINDOW", "3") or "3")
 PUBLIC_TOPK_DIGEST_ENABLE = os.getenv("PUBLIC_TOPK_DIGEST_ENABLE", "0").lower() in ("1", "true", "yes", "on")
 PUBLIC_TOPK_DIGEST_EVERY_SEC = int(os.getenv("PUBLIC_TOPK_DIGEST_EVERY_SEC", "300") or "300")
 PUBLIC_TOPK_DIGEST_K = int(os.getenv("PUBLIC_TOPK_DIGEST_K", "5") or "5")
-PUBLIC_TOPK_DIGEST_MIN_SCORE = float(os.getenv("PUBLIC_TOPK_DIGEST_MIN_SCORE", "7.0") or "7.0")
+PUBLIC_TOPK_DIGEST_MIN_SCORE = float(os.getenv("PUBLIC_TOPK_DIGEST_MIN_SCORE", "7.0") or 7.0)
 PUBLIC_TOPK_DIGEST_REQUIRE_SIDE = os.getenv("PUBLIC_TOPK_DIGEST_REQUIRE_SIDE", "1").lower() in ("1", "true", "yes", "on")
 PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS = os.getenv("PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS", "0").lower() in ("1", "true", "yes", "on")
 
@@ -326,8 +327,11 @@ class ConfirmStore:
 
     @classmethod
     def remove(cls, ticket_id: str) -> None:
-        cls._items.pop(str(ticket_id"), None)
-# main.py (Part 2/3)
+        # FIX: גרש לא חוקי תוקן
+        cls._items.pop(str(ticket_id), None)
+
+
+# ==================== (Part 2) ====================
 
 import httpx  # keep import in scope for Part 2
 
@@ -688,7 +692,8 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
-# main.py (Part 3/3)
+
+# ==================== (Part 3) ====================
 
 # ==================== Execute trade helpers ====================
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
@@ -1385,7 +1390,7 @@ async def _reject_core(ticket_id: str):
     sym, side, qty = (str(ticket.get("symbol", "")) or "").upper(), str(ticket.get("side", "")).upper(), ticket.get("qty", "")
     with suppress(Exception):
         await _send_telegram_html(
-            f"⛔️ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n— — —\נהבקשה נדחתה."
+            f"⛔️ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n— — —\nהבקשה נדחתה."
         )
     await _delete_ticket(ticket_id, source, final_status=False)
     return _html("⛔️ נדחה — הכרטיס הוסר.")
@@ -1702,112 +1707,43 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     if any(x <= 0 for x in splits):
         raise HTTPException(status_code=422, detail="splits must be > 0")
 
-    if side_txt == "BUY":
-        be_price = float(entry_price) * (1.0 - (offset_bps / 10_000.0))
-        be_price = _round_tick_dir(be_price, tick, "down")
-    else:
-        be_price = float(entry_price) * (1.0 + (offset_bps / 10_000.0))
-        be_price = _round_tick_dir(be_price, tick, "up")
-
-    if price_now:
-        if side_txt == "BUY":
-            if be_price >= price_now:
-                be_price = _bn_round(price_now - tick, tick)
-        else:
-            if be_price <= price_now:
-                be_price = _round_tick_dir(price_now + tick, tick, "up")
-
+    # === החלפה: ניהול בעזרת tp_helper (BE + TP + Trail) ===
     try:
-        open_orders = client.futures_get_open_orders(symbol=symbol)
-        for o in open_orders or []:
-            t = o.get("type", "")
-            if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
-                with suppress(Exception):
-                    client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
-    except Exception:
-        pass
-
-    try:
-        sl_kwargs = dict(
-            symbol=symbol,
-            side="SELL" if side_txt == "BUY" else "BUY",
-            type="STOP_MARKET",
-            stopPrice=be_price,
-            closePosition=True,
-            workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
-            newClientOrderId=build_client_order_id(symbol, "SELL" if side_txt == "BUY" else "BUY", role="SL@BE"),
-        )
-        client.futures_create_order(**sl_kwargs)
+        from utils.tp_helper import manage_once_place_all  # type: ignore
     except Exception as e:
-        logger.warning("place_be_stop_failed: %s", e)
+        return {"ok": False, "error": "tp_helper_missing", "detail": str(e)}
 
-    tps: List[float] = []
-    for pct in pcts:
-        if side_txt == "BUY":
-            tps.append(_round_tick_dir(base_price * (1.0 + pct / 100.0), tick, "down"))
-        else:
-            tps.append(_round_tick_dir(base_price * (1.0 - pct / 100.0), tick, "up"))
-
-    qty_abs = abs(pos_amt)
-    placed_tp = []
-    for i, (tp_price, split) in enumerate(zip(tps, splits), start=1):
-        qty_i = _bn_round(qty_abs * float(split), step)
-        if qty_i <= 0:
-            continue
-        tp_kwargs = dict(
+    try:
+        res = manage_once_place_all(
+            client=client,
             symbol=symbol,
-            side="SELL" if side_txt == "BUY" else "BUY",
-            type="LIMIT",
-            price=tp_price,
-            quantity=qty_i,
-            timeInForce="GTC",
-            reduceOnly=True,
-            newClientOrderId=build_client_order_id(symbol, "SELL" if side_txt == "BUY" else "BUY", role=f"TP{i}"),
+            side_txt=side_txt,
+            entry_price=float(entry_price),
+            price_now=float(base_price),
+            qty_abs=float(abs(pos_amt)),
+            tick=float(tick),
+            step=float(step),
+            offset_bps=int(offset_bps),
+            pcts=[float(x) for x in pcts],
+            splits=[float(x) for x in splits],
+            atr=float(indicators.get("atr", 0.0)),
+            atr_mult=atr_mult if atr_mult is not None else None,
+            working_type=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+            coid_builder=build_client_order_id,
+            dry_run=False,
         )
-        try:
-            client.futures_create_order(**tp_kwargs)
-            placed_tp.append({"i": i, "price": tp_price, "qty": qty_i})
-        except Exception as e:
-            logger.warning("place_tp_failed[%s]: %s", i, e)
-
-    placed_trail = None
-    if atr_mult is not None:
-        try:
-            kl = client.futures_klines(symbol=symbol, interval="1m", limit=50)
-            highs = [float(k[2]) for k in kl]
-            lows = [float(k[3]) for k in kl]
-            closes = [float(k[4]) for k in kl]
-            trs = []
-            for i in range(1, len(kl)):
-                h, l, pc = highs[i], lows[i], closes[i - 1]
-                tr = max(h - l, abs(h - pc), abs(l - pc))
-                trs.append(tr)
-            atr = sum(trs[-14:]) / float(min(14, len(trs))) if trs else 0.0
-            px = base_price
-            callback_rate = max(TRAIL_RT_MIN_CALLBACK, min(TRAIL_RT_MAX_CALLBACK, (atr * float(atr_mult) / px) * 100.0 if px > 0 else 0.5))
-            trail_kwargs = dict(
-                symbol=symbol,
-                side="SELL" if side_txt == "BUY" else "BUY",
-                type="TRAILING_STOP_MARKET",
-                callbackRate=round(callback_rate, 1),
-                reduceOnly=True,
-                workingType=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
-                newClientOrderId=build_client_order_id(symbol, "SELL" if side_txt == "BUY" else "BUY", role="TRAIL"),
-            )
-            client.futures_create_order(**trail_kwargs)
-            placed_trail = {"callbackRate": round(callback_rate, 1)}
-        except Exception as e:
-            logger.warning("place_trailing_failed: %s", e)
+    except Exception as e:
+        return {"ok": False, "error": "manage_once_place_all_failed", "detail": f"{e}"}
 
     result = {
-        "ok": True,
+        "ok": bool(res.get("ok")),
         "delegated": False,
         "symbol": symbol,
         "side": side_txt,
         "entry": entry_price,
-        "be_stop_price": be_price,
-        "tp": placed_tp,
-        "trail": placed_trail,
+        "be_stop_price": res.get("computed", {}).get("be_price"),
+        "tp": res.get("tp"),
+        "trail": res.get("trail"),
         "profile": {"name": profile_name, "offset_bps": offset_bps, "pcts": pcts, "splits": splits, "atr_mult": atr_mult},
         "indicators": {
             "adx": round(float(indicators.get("adx", 0.0)), 2),
@@ -2110,7 +2046,7 @@ async def meta_telegram(
                 cid = chat_id
 
             # idem עדין על Redis, אם זמין
-            if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
+            if USE_REDIS_IDEM && IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):  # noqa: E712 (logical and style)
                 try:
                     r = await _get_redis_cached()
                     if r:
@@ -2387,13 +2323,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
-
-
-
-
-
-
 
 
 
