@@ -14,11 +14,13 @@ except Exception:
     from pydantic import BaseModel, Field
     _PYD_V2 = False
 
+# Checklist scoring (בטוח: אם חסר—לא נופלים)
 try:
     from utils.pretrade_checklist import compute_pretrade_score  # type: ignore
 except Exception:
     compute_pretrade_score = None  # type: ignore
 
+# Metrics (מונים + עדכון gauge לציון אחרון)
 try:
     from utils.metrics_tracker import (
         inc_scan_eval,
@@ -105,7 +107,7 @@ async def _fetch_klines_async(symbol: str, interval: str = "15m", limit: int = 2
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df[["open","high","low","close","volume"]]
 
-# ===== helper: adx/atr% מתוך df =====
+# ===== helper: ADX/ATR% מתוך df =====
 def _adx_atr_pct_from_df(df: pd.DataFrame, period: int = 14) -> Dict[str, float]:
     try:
         if len(df) < period + 2:
@@ -161,15 +163,17 @@ async def scan_info(
             indicators = IndicatorSet(**row)
         except Exception:
             indicators = None
+            row = {}
 
         # Score enrichment
         score = None; features = None
         if compute_pretrade_score is not None:
             try:
+                # בונים klines בסכימה דמוית-בינאנס (close בשדה 4)
                 k_arr = df.reset_index(drop=True).assign(
                     open_time=0, close_time=0, qv=0, nTrades=0, taker_base=0, taker_quote=0, x=0
                 )
-                kl = [[0,row.open,row.high,row.low,row.close,0,0,0,0,0,0,0] for row in k_arr.itertuples()]
+                kl = [[0,r.open,r.high,r.low,r.close,0,0,0,0,0,0,0] for r in k_arr.itertuples(index=False)]
                 iv = _adx_atr_pct_from_df(df)
                 inc_scan_eval()
                 res = compute_pretrade_score(kl, adx=iv["adx"], atr_pct=iv["atr_pct"])
@@ -186,7 +190,8 @@ async def scan_info(
             score=score,
             features=features,
         )
-        # Counters pass/blocked לפי ENTRY_SCORE_MIN (לא חוסם API)
+
+        # Counters pass/blocked לפי ENTRY_SCORE_MIN (אינפורמטיבי בלבד)
         try:
             min_req = float(os.getenv("ENTRY_SCORE_MIN","0") or 0)
             if score is not None and min_req > 0:
@@ -216,6 +221,7 @@ async def scan_symbols(
         except Exception as e:
             out.append(ScanSignal(symbol=sym.upper(), interval=interval, ok=False, error=str(e)))
     return ScanResponse(ok=True, count_total=len(symbols), returned=len(out), signals=out)
+
 
 
 
