@@ -29,12 +29,19 @@ try:
         set_last_entry_score,
     )  # type: ignore
 except Exception:
-    def inc_scan_eval(): pass  # type: ignore
-    def inc_scan_passed(): pass  # type: ignore
-    def inc_scan_blocked(): pass  # type: ignore
-    def set_last_entry_score(_): pass  # type: ignore
+    def inc_scan_eval():  # type: ignore
+        pass
+    def inc_scan_passed():  # type: ignore
+        pass
+    def inc_scan_blocked():  # type: ignore
+        pass
+    def set_last_entry_score(_):  # type: ignore
+        pass
 
 FUTURES_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+ENTRY_SCORE_MIN = float(os.getenv("ENTRY_SCORE_MIN", "0") or 0)
+ENTRY_SCORE_INTERVAL = os.getenv("ENTRY_SCORE_INTERVAL", "15m")
+
 router = APIRouter(prefix="/scan", tags=["Scan"])
 
 # ===================== Models =====================
@@ -143,12 +150,49 @@ def _adx_atr_pct_from_df(df: pd.DataFrame, period: int = 14) -> Dict[str, float]
     except Exception:
         return {"adx": 0.0, "atr_pct": 0.0}
 
+# ===================== Core helpers =====================
+async def _score_from_df(df: pd.DataFrame) -> Dict[str, Any]:
+    """
+    מחזיר dict עם score ו-features; אם compute_pretrade_score לא זמין/אין df -> score=None.
+    """
+    if compute_pretrade_score is None or df is None or df.empty:
+        return {"score": None, "features": None}
+    try:
+        # בונים klines בפורמט "דמוי בינאנס" שהסקורינג שלך מצפה לו (close בעמדת index 4)
+        k_df = df.reset_index(drop=True).assign(
+            open_time=0, close_time=0, qv=0, nTrades=0, taker_base=0, taker_quote=0, x=0
+        )
+        kl = [
+            [int(r.open_time) if "open_time" in k_df.columns else 0,
+             float(r.open), float(r.high), float(r.low), float(r.close),
+             float(r.volume) if "volume" in k_df.columns else 0.0,
+             0, 0, 0, 0, 0, 0]
+            for _, r in k_df.iterrows()
+        ]
+        # חישוב ADX/ATR% מקומי
+        adx_atr = _adx_atr_pct_from_df(df, period=14)
+        inc_scan_eval()
+        res = compute_pretrade_score(kl, adx=float(adx_atr["adx"]), atr_pct=float(adx_atr["atr_pct"])) or {}
+        score = float(res.get("score", 0.0))
+        features = dict(res.get("features") or {})
+        # מטריקות + threshold
+        set_last_entry_score(score)
+        if ENTRY_SCORE_MIN > 0:
+            if score >= ENTRY_SCORE_MIN:
+                inc_scan_passed()
+            else:
+                inc_scan_blocked()
+        return {"score": score, "features": features}
+    except Exception:
+        # לא מפילים את ה־API בגלל תקלת סקורינג
+        return {"score": None, "features": None}
+
 # ===================== Endpoints =====================
 @router.get("/info", response_model=ScanResponse, summary="Basic Scan Info")
 async def scan_info(
     symbol: str = Query(..., description="Symbol e.g. BTCUSDT"),
-    interval: str = Query("15m"),
-    limit: int = Query(200, ge=50, le=200)
+    interval: str = Query(lambda: ENTRY_SCORE_INTERVAL or "15m"),
+    limit: int = Query(200, ge=50, le=200),
 ) -> ScanResponse:
     try:
         df = await _fetch_klines_async(symbol, interval, limit)
@@ -163,66 +207,48 @@ async def scan_info(
             indicators = IndicatorSet(**row)
         except Exception:
             indicators = None
-            row = {}
 
-        # Score enrichment
-        score = None; features = None
-        if compute_pretrade_score is not None:
-            try:
-                # בונים klines בסכימה דמוית-בינאנס (close בשדה 4)
-                k_arr = df.reset_index(drop=True).assign(
-                    open_time=0, close_time=0, qv=0, nTrades=0, taker_base=0, taker_quote=0, x=0
-                )
-                kl = [[0,r.open,r.high,r.low,r.close,0,0,0,0,0,0,0] for r in k_arr.itertuples(index=False)]
-                iv = _adx_atr_pct_from_df(df)
-                inc_scan_eval()
-                res = compute_pretrade_score(kl, adx=iv["adx"], atr_pct=iv["atr_pct"])
-                score = float(res.get("score", 0.0))
-                features = res.get("features", None)
-                set_last_entry_score(score)
-            except Exception:
-                pass
-
+        # Score enrichment (מהיר, לוקלי)
+        scored = await _score_from_df(df)
         sig = ScanSignal(
-            symbol=(symbol if symbol.endswith("USDT") else symbol + "USDT").upper(),
+            symbol=symbol.upper(),
             interval=interval,
             indicators=indicators,
-            score=score,
-            features=features,
+            score=scored["score"],
+            features=scored["features"],
+            ok=True,
         )
-
-        # Counters pass/blocked לפי ENTRY_SCORE_MIN (אינפורמטיבי בלבד)
-        try:
-            min_req = float(os.getenv("ENTRY_SCORE_MIN","0") or 0)
-            if score is not None and min_req > 0:
-                if score >= min_req: inc_scan_passed()
-                else: inc_scan_blocked()
-        except Exception:
-            pass
-
         return ScanResponse(ok=True, count_total=1, returned=1, signals=[sig])
     except Exception as e:
         return ScanResponse(ok=False, count_total=1, returned=0, error=str(e))
 
-@router.get("/", response_model=ScanResponse, summary="Multi-symbol scan (array query)")
-async def scan_symbols(
-    symbols: List[str] = Query(..., description="List of symbols e.g. BTCUSDT,ETHUSDT (repeat ?symbols=...)"),
-    interval: str = Query("15m"),
-    limit: int = Query(200, ge=50, le=200)
+@router.get("", response_model=ScanResponse, summary="Multi-symbol scan")
+async def scan_multi(
+    symbols: Optional[str] = Query(None, description="CSV of symbols, e.g. BTCUSDT,ETHUSDT"),
+    interval: str = Query(lambda: ENTRY_SCORE_INTERVAL or "15m"),
+    limit: int = Query(200, ge=50, le=200),
 ) -> ScanResponse:
-    out: List[ScanSignal] = []
-    for sym in symbols:
+    # אם לא הועברו סמלים — ננסה מה־WATCHLIST או ברירת מחדל
+    if not symbols:
+        wl = (os.getenv("WATCHLIST") or "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT").split(",")
+        syms = [s.strip().upper() for s in wl if s.strip()]
+    else:
+        syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    syms = [s for s in syms if s]
+
+    async def _one(sym: str) -> ScanSignal:
         try:
-            r = await scan_info(sym, interval, limit)  # שימוש באותו מנוע
-            if r.ok and r.signals:
-                out.append(r.signals[0])
-            else:
-                out.append(ScanSignal(symbol=sym.upper(), interval=interval, ok=False, error=r.error))
+            df = await _fetch_klines_async(sym, interval, limit)
+            if df.empty:
+                return ScanSignal(symbol=sym, interval=interval, ok=False, error="no data")
+            scored = await _score_from_df(df)
+            return ScanSignal(symbol=sym, interval=interval, score=scored["score"], features=scored["features"], ok=True)
         except Exception as e:
-            out.append(ScanSignal(symbol=sym.upper(), interval=interval, ok=False, error=str(e)))
-    return ScanResponse(ok=True, count_total=len(symbols), returned=len(out), signals=out)
+            return ScanSignal(symbol=sym, interval=interval, ok=False, error=str(e))
 
-
+    results = await asyncio.gather(*[_one(s) for s in syms], return_exceptions=False)
+    ok_any = any(r.ok for r in results)
+    return ScanResponse(ok=ok_any, count_total=len(syms), returned=len(results), signals=list(results))
 
 
 
