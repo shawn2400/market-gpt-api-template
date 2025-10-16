@@ -1,4 +1,3 @@
-
 services:
   - type: web
     name: algogpt-prod
@@ -29,7 +28,38 @@ services:
       - key: APP_INSTANCE
         value: "algogpt-prod"
       - key: SERVICE_INSTANCE
-      ...
+        value: "algogpt-prod"
+
+      - key: MODE
+        value: "run"
+      - key: PORT
+        value: "10000"
+      - key: APP_MODULE
+        value: "main:app"
+      - key: ULTRATOP_MODE
+        value: "noop"
+      - key: PYTHONPATH
+        value: "/app"
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: GUNICORN_TIMEOUT
+        value: "180"
+      - key: GUNICORN_GRACEFUL_TIMEOUT
+        value: "45"
+      - key: GUNICORN_KEEPALIVE
+        value: "30"
+      - key: GUNICORN_MAX_REQUESTS
+        value: "500"
+      - key: GUNICORN_MAX_REQUESTS_JITTER
+        value: "50"
+      - key: LOG_LEVEL
+        value: "INFO"
+      - key: UVICORN_ACCESS_LOG
+        value: "false"
+      - key: UVICORN_LOG_LEVEL
+        value: "info"
+      - key: HTTP_MAX_CONNECTIONS
+        value: "30"
       - key: HTTP_MAX_KEEPALIVE
         value: "200"
 
@@ -82,7 +112,6 @@ services:
         value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/meta/telegram,/debug/env,/ultra/readyz,/ultra/readyz/strict,/ultra/metrics,/ultra/meta/version,/ultra/health"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
-      # (חדש) נתיבים מוגנים באופן מפורש
       - key: SECURITY_PROTECTED_PATHS
         value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run"
 
@@ -97,7 +126,7 @@ services:
         value: "60"
       - key: SIGNED_NONCE_TTL_SEC
         value: "120"
-      # (מורחב – נוספים לפי הבקשה)
+      # מורחב (לפי הבקשה)
       - key: ANTI_REPLAY_SKEW_SEC
         value: "30"
       - key: ANTI_REPLAY_NONCE_TTL
@@ -266,7 +295,7 @@ services:
         value: "0"
       - key: INDICATORS_SUBSET
         value: ""
-      # ===== Checklist / Gate (עודכן) =====
+      # ===== Checklist / Gate =====
       - key: ENTRY_SCORE_MODE
         value: "log"
       - key: ENTRY_SCORE_MIN
@@ -494,7 +523,7 @@ services:
         value: "14"
       - key: AUTO_TRAIL_ATRPCT_MAX
         value: "0.015"
-      # (חדש) BE / Trail tuning כללי
+      # BE/Trail tuning (נוסף)
       - key: BE_BASE_BPS
         value: "5"
       - key: BE_ADX_FACTOR
@@ -650,7 +679,7 @@ services:
       - key: METRICS_PROTECT
         value: "1"
 
-      # ========================= Bearer tokens =========================
+      # ========================= Bearer tokens (RO/ACTION) =========================
       - key: API_BEARER_TOKEN_RO
         value: "<ro-or-any>"
       - key: API_BEARER_TOKEN_ACTION
