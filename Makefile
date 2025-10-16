@@ -234,7 +234,7 @@ ultra-reload:
 	SIG=$$(TS="$$TS" OPS_SIGN_SECRET="$(OPS_SIGN_SECRET)" python3 - <<'PY'
 import os, hmac, hashlib
 sec=os.environ["OPS_SIGN_SECRET"]; ts=os.environ["TS"]
-print(hmac.new(sec.encode("utf-8"), (ts.encode("utf-8")+b"."), hashlib.sha256).hexdigest())
+print(hmac.new(sec.encode("utf-8"), (ts.encode("utf-8")+b"."), hashlib.sha256).hexdigest()))
 PY
 ); \
 	echo "[POST] $(ULTRA_HOST)/ultra/ops/policy/reload"; \
@@ -270,4 +270,5 @@ openapi:
 openapi-json:
 	@if [ ! -f scripts/export_openapi.py ]; then echo "scripts/export_openapi.py not found"; exit 2; fi
 	FORMAT=json python3 scripts/export_openapi.py
+
 
