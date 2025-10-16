@@ -1,229 +1,279 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-
+from typing import Dict, Any, List, Tuple, Optional
 import os
-import re
-import time
-import logging
-import asyncio
-from contextlib import suppress
-from typing import List, Optional, Dict, Any, Tuple, Callable
+import math
 
-# פעולות טלאי/BE מתבצעות דרך binance_client (חייב להיות קיים אצלך)
-from utils.binance_client import place_tp_ladder, set_breakeven_stop
-
-logger = logging.getLogger("algogpt.tp_helper")
-
-# ──────────────────────────────────────────────────────────────────────────────
-# ENV flags
-# ──────────────────────────────────────────────────────────────────────────────
-LADDER_TP_ENABLE = os.getenv("LADDER_TP_ENABLE", "1") == "1"
-TP_LADDER_ON_APPROVE = os.getenv("TP_LADDER_ON_APPROVE", "1") == "1"
-
-STREAM_TP_BE = os.getenv("STREAM_TP_BE", "true").lower() in ("1", "true", "yes")
-TP_BE_OFFSET_BPS = float(os.getenv("TP_BE_OFFSET_BPS", "5"))  # 0.05%
-TP_BE_ONLY_AFTER_TP1 = os.getenv("TP_BE_ONLY_AFTER_TP1", "1") == "1"
-
-# Defaults for ladder (binance_client כבר מכיר)
-ENV_TP_PCTS = os.getenv("LADDER_TP_DEFAULT_PCTS", "1.8,3.2,5.5")
-ENV_TP_SPLITS = os.getenv("LADDER_TP_DEFAULT_SPLITS", "0.4,0.35,0.25")
-
-# Profit-Lock bands (RR levels) – אופציונלי
-PROFIT_LOCK_STEPS = os.getenv("PROFIT_LOCK_STEPS", "1.0,1.5,2.0")
-
-# Idempotency: הימנעות מחזרת סולם בתדירות גבוהה
-_last_ladder_at: Dict[str, float] = {}
-_LADDER_COOLDOWN_SEC = 60.0
+# ─── נפילות-רכות למטריקות (אם קיימות) ─────────────────────────────────────────
+try:
+    from utils.metrics_tracker import (
+        inc_manage_once_placed, inc_manage_once_failed, observe_callback_rate,
+        observe_be_distance_bps, observe_tp_ladders,  # type: ignore
+    )
+except Exception:
+    def inc_manage_once_placed():  # type: ignore
+        pass
+    def inc_manage_once_failed():  # type: ignore
+        pass
+    def observe_callback_rate(_v: float):  # type: ignore
+        pass
+    def observe_be_distance_bps(_v: float):  # type: ignore
+        pass
+    def observe_tp_ladders(_n: int):  # type: ignore
+        pass
 
 
-def _now() -> float:
-    return time.time()
+# ─── עזרי עיגול לטיק/סטפ של בורסה ─────────────────────────────────────────────
+def bn_round(value: float, step: float) -> float:
+    if step <= 0:
+        return value
+    return math.floor(value / step) * step
+
+def round_tick_dir(value: float, tick: float, direction: str) -> float:
+    if tick <= 0:
+        return value
+    q = value / tick
+    if direction.lower().startswith("up"):
+        return math.ceil(q) * tick
+    return math.floor(q) * tick
 
 
-def _parse_tp_pcts_from_text(text: str) -> List[float]:
+# ─── חישובי BE / Trail / Profit-Lock ───────────────────────────────────────────
+def compute_be_price(entry: float, side_txt: str, offset_bps: int,
+                     price_now: Optional[float], tick: float) -> float:
     """
-    מחפש תבניות כמו: TP1=+1.8% | TP2=+3.2% | TP3=+5.5%
-    ומחזיר רשימת אחוזים בסדר עולה.
+    מחזיר מחיר SL בסגנון BE (offset_bps בבסיס bps), מכוון לצד.
+    מוודא אי-דריסה של המחיר הנוכחי (לפי הטיק).
     """
-    if not text:
-        return []
-    pcts: List[float] = []
-
-    # חפש "TPn=+x.x%"
-    for m in re.finditer(r"TP\d+\s*=\s*\+?(-?\d+(?:\.\d+)?)\s*%", text, re.IGNORECASE):
-        with suppress(Exception):
-            pcts.append(float(m.group(1)))
-
-    # אם לא מצא — חפש אחוזים בסמיכות ל־TP או אחרי סימן אחוז כללי
-    if not pcts:
-        for m in re.finditer(r"(?:TP\d*[^0-9\-+]{0,8})?(\+?-?\d+(?:\.\d+)?)\s*%", text, re.IGNORECASE):
-            with suppress(Exception):
-                val = float(m.group(1))
-                if val > 0:
-                    pcts.append(val)
-
-    pcts = [x for x in pcts if x > 0]
-    pcts.sort()
-    return pcts
+    side_txt = side_txt.upper()
+    bps = max(0, int(offset_bps))
+    if side_txt == "BUY":
+        be = float(entry) * (1.0 - (bps / 10_000.0))
+        be = round_tick_dir(be, tick, "down")
+        if price_now and be >= price_now:
+            be = max(round_tick_dir(price_now - tick, tick, "down"), 0.0)
+    else:
+        be = float(entry) * (1.0 + (bps / 10_000.0))
+        be = round_tick_dir(be, tick, "up")
+        if price_now and be <= price_now:
+            be = round_tick_dir(price_now + tick, tick, "up")
+    # מטריקה: מרחק ב-bps
+    if price_now and price_now > 0:
+        dist_bps = abs((price_now - be) / price_now) * 10_000.0
+        observe_be_distance_bps(dist_bps)
+    return float(be)
 
 
-def _env_list_of_floats(csv_str: str) -> List[float]:
+def calc_adaptive_callback(atr: float, px: float, *,
+                           atr_mult: Optional[float],
+                           min_pct: float, max_pct: float) -> Optional[float]:
+    """
+    אם atr_mult None → אין טרייל. אחרת callback% = min/max על בסיס ATR.
+    """
+    if atr_mult is None:
+        return None
+    if px <= 0 or atr <= 0:
+        # פוֹלבק קל: אם אין ATR/מחיר – החזר ערך שמרני
+        cb = max(min_pct, min(max_pct, 0.5))
+        observe_callback_rate(cb)
+        return cb
+    cb = (atr * float(atr_mult) / px) * 100.0
+    cb = round(max(min_pct, min(max_pct, cb)), 1)
+    observe_callback_rate(cb)
+    return cb
+
+
+def plan_profit_lock_steps(rr_steps_cfg: str) -> List[float]:
+    """
+    קלט ENV "PROFIT_LOCK_STEPS" למשל "1.0,1.5,2.0"
+    החזרה: רשימת R-steps (float), אחרי סינון סביר.
+    """
+    raw = rr_steps_cfg.strip() if rr_steps_cfg else ""
     out: List[float] = []
-    for part in (csv_str or "").split(","):
-        part = part.strip()
-        if not part:
+    for chunk in raw.split(","):
+        c = chunk.strip()
+        if not c:
             continue
-        with suppress(Exception):
-            out.append(float(part))
-    return out
-
-
-def _deduce_tp_inputs(
-    decision: Dict[str, Any],
-    tp_pcts: Optional[List[float]],
-    splits: Optional[List[float]],
-) -> Tuple[List[float], List[float]]:
-    """
-    גוזר אחוזי TP וחלוקות מהעדפות/טקסט/ENV.
-    סדר עדיפויות:
-      1) פרמטרים ישירים (tp_pcts/splits ב־decision)
-      2) ניתוח מתוך ה־note/description
-      3) ברירות מחדל מה־ENV
-    """
-    # 1) פרמטרים ישירים
-    if tp_pcts and len(tp_pcts) > 0:
-        pcts = [float(x) for x in tp_pcts if float(x) > 0]
-    else:
-        # 2) נסה לחלץ מהטקסט
-        text = str(decision.get("note") or decision.get("description") or "")
-        parsed = _parse_tp_pcts_from_text(text)
-        pcts = parsed if parsed else _env_list_of_floats(ENV_TP_PCTS)
-
-    if splits and len(splits) == len(pcts):
-        s = [float(x) for x in splits]
-    else:
-        s = _env_list_of_floats(ENV_TP_SPLITS)
-        if len(s) != len(pcts):
-            # אם לא תואם — חלק שווה בשווה
-            s = [round(1.0 / len(pcts), 6)] * len(pcts) if pcts else []
-
-    # נרמול סכום חלוקות ל־1.0
-    tot = sum(s) if s else 0.0
-    if s and abs(tot - 1.0) > 1e-3:
-        s = [x / tot for x in s]
-
-    return pcts, s
-
-
-async def _maybe_set_be(symbol: str, side: str, decision: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    הצבת Stop BE בהתאם לדגלי ENV.
-    """
-    if not STREAM_TP_BE:
-        return {"ok": True, "skipped": True, "reason": "be_stream_disabled"}
-    try:
-        kw = dict(
-            symbol=symbol,
-            side=side,
-            offset_bps=float(decision.get("be_offset_bps", TP_BE_OFFSET_BPS)),
-            only_after_tp1=bool(decision.get("be_only_after_tp1", TP_BE_ONLY_AFTER_TP1)),
-        )
-        # נסה כמה תבניות חתימה כדי להיות סלחני לשינויים פנימיים:
-        # 1) kwargs נקיים
         try:
-            res = await _maybe_await(set_breakeven_stop(**kw))
-            return {"ok": True, "result": res}
-        except TypeError:
-            # 2) עטיפה עם decision
-            res = await _maybe_await(set_breakeven_stop(**kw, decision=decision))
-            return {"ok": True, "result": res}
-    except Exception as e:
-        logger.warning("tp_helper.set_be.failed: %s", e)
-        return {"ok": False, "error": f"{e}"}
+            v = float(c)
+            if v > 0:
+                out.append(v)
+        except Exception:
+            continue
+    # שמירה על סדר, ללא כפילויות־סמוכות
+    uniq: List[float] = []
+    for v in out:
+        if not uniq or abs(uniq[-1] - v) > 1e-9:
+            uniq.append(v)
+    return uniq
 
 
-async def _maybe_await(x):
-    if asyncio.iscoroutine(x):
-        return await x
-    return x
-
-
-async def _call_place_tp_ladder(symbol: str, side: str, pcts: List[float], splits: List[float], decision: Dict[str, Any]) -> Dict[str, Any]:
+# ─── פעולות מול Binance (תלויות לקוח שהוזרק) ─────────────────────────────────
+def prune_conflicting(client, symbol: str) -> None:
     """
-    קריאה סלחנית ל־place_tp_ladder עם ניסיונות חתימה שונים כדי להבטיח תאימות.
+    מסיר STOP/TRAIL ישנים כדי למנוע התנגשויות.
     """
-    # ניסיון 1: החתימה ה"נקייה"
     try:
-        res = await _maybe_await(place_tp_ladder(symbol=symbol, side=side, pcts=pcts, splits=splits))
-        return {"ok": True, "result": res, "pattern": "kwargs-minimal"}
-    except TypeError:
-        pass
-    # ניסיון 2: הוספת decision
+        oo = client.futures_get_open_orders(symbol=symbol)
+        for o in oo or []:
+            t = str(o.get("type") or "")
+            if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
+                client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+    except Exception:
+        # לא מפיל את הזרימה
+        return
+
+
+def place_be_stop(client, symbol: str, side_txt: str, be_price: float, coid: str,
+                  working_type: str = "MARK_PRICE") -> Optional[Dict[str, Any]]:
     try:
-        res = await _maybe_await(place_tp_ladder(symbol=symbol, side=side, pcts=pcts, splits=splits, decision=decision))
-        return {"ok": True, "result": res, "pattern": "kwargs+decision"}
-    except TypeError:
-        pass
-    # ניסיון 3: אם יש כמות/צד פוזיציה — ננסה להעביר
+        res = client.futures_create_order(
+            symbol=symbol,
+            side=("SELL" if side_txt.upper() == "BUY" else "BUY"),
+            type="STOP_MARKET",
+            stopPrice=be_price,
+            closePosition=True,
+            workingType=working_type,
+            newClientOrderId=coid,
+        )
+        return res
+    except Exception:
+        return None
+
+
+def place_tp_ladders(client, symbol: str, side_txt: str, base_price: float,
+                     pcts: List[float], splits: List[float],
+                     tick: float, step: float, qty_abs: float,
+                     coid_builder) -> List[Dict[str, Any]]:
+    """
+    מחזיר רשימת TP שנפתחו בפועל: [{i, price, qty}]
+    """
+    placed = []
     try:
-        qty = float(decision.get("qty") or decision.get("quantity") or 0.0)
-        position_side = (decision.get("position_side") or decision.get("positionSide") or "").upper() or None
-        res = await _maybe_await(place_tp_ladder(symbol=symbol, side=side, pcts=pcts, splits=splits, qty=qty or None, position_side=position_side))
-        return {"ok": True, "result": res, "pattern": "kwargs+qty+posSide"}
-    except Exception as e:
-        return {"ok": False, "error": f"{e}"}
-
-
-async def apply_tp_ladder_and_be(decision: Dict[str, Any], *, force: bool = False) -> Dict[str, Any]:
-    """
-    פונקציית העזר הראשית: מציבה סולם TP (אם מופעל) ו־BE Stop בהתאם לפוליסי.
-    פרמטרי כניסה מינימליים ב־decision:
-      - symbol: str
-      - side: "BUY"/"SELL"
-      - note/description: אופציונלי לצורך חילוץ אחוזים
-      - tp_pcts / tp_splits: אופציונלי – עקיפה ידנית
-    """
-    symbol = str(decision.get("symbol") or "").upper()
-    side = str(decision.get("side") or "").upper()
-    if not (symbol and side in ("BUY", "SELL")):
-        return {"ok": False, "error": "bad_decision_params"}
-
-    # קירור/אידמפוטנטיות על סולם
-    now = _now()
-    last = _last_ladder_at.get(symbol)
-    if not force and last and (now - last) < _LADDER_COOLDOWN_SEC:
-        cool_left = round(_LADDER_COOLDOWN_SEC - (now - last), 1)
-        logger.info("tp_helper: cooldown active for %s (%.1fs left)", symbol, cool_left)
-        ladder_part = {"ok": True, "skipped": True, "reason": f"cooldown_{cool_left}s"}
-    else:
-        ladder_part = {"ok": True, "skipped": True, "reason": "disabled"}
-        if LADDER_TP_ENABLE and TP_LADDER_ON_APPROVE:
-            pcts, splits = _deduce_tp_inputs(decision, decision.get("tp_pcts"), decision.get("tp_splits"))
-            if not pcts:
-                ladder_part = {"ok": True, "skipped": True, "reason": "no_pcts"}
+        for i, (pct, split) in enumerate(zip(pcts, splits), start=1):
+            if pct <= 0 or split <= 0:
+                continue
+            if side_txt.upper() == "BUY":
+                px = round_tick_dir(base_price * (1.0 + pct / 100.0), tick, "down")
+                sd = "SELL"
             else:
-                ladder_part = await _call_place_tp_ladder(symbol, side, pcts, splits, decision)
-                if ladder_part.get("ok"):
-                    _last_ladder_at[symbol] = now
+                px = round_tick_dir(base_price * (1.0 - pct / 100.0), tick, "up")
+                sd = "BUY"
+            qty_i = bn_round(abs(qty_abs) * float(split), step)
+            if qty_i <= 0:
+                continue
+            try:
+                client.futures_create_order(
+                    symbol=symbol,
+                    side=sd,
+                    type="LIMIT",
+                    price=px,
+                    quantity=qty_i,
+                    timeInForce="GTC",
+                    reduceOnly=True,
+                    newClientOrderId=coid_builder(symbol, sd, role=f"TP{i}"),
+                )
+                placed.append({"i": i, "price": px, "qty": qty_i})
+            except Exception:
+                # ממשיכים לשאר הלהבים
+                continue
+    finally:
+        observe_tp_ladders(len(placed))
+    return placed
 
-    # Breakeven stop
-    be_part = await _maybe_set_be(symbol, side, decision)
 
-    out = {
-        "ok": bool(ladder_part.get("ok")) and bool(be_part.get("ok")),
-        "symbol": symbol,
-        "side": side,
-        "ladder": ladder_part,
-        "breakeven": be_part,
-        "policy": {
-            "ladder_enable": LADDER_TP_ENABLE,
-            "ladder_on_approve": TP_LADDER_ON_APPROVE,
-            "stream_tp_be": STREAM_TP_BE,
-            "be_offset_bps": decision.get("be_offset_bps", TP_BE_OFFSET_BPS),
-            "be_only_after_tp1": decision.get("be_only_after_tp1", TP_BE_ONLY_AFTER_TP1),
-            "profit_lock_steps": _env_list_of_floats(PROFIT_LOCK_STEPS),
-        },
+def place_trailing(client, symbol: str, side_txt: str, callback_rate: float,
+                   coid: str, working_type: str = "MARK_PRICE") -> Optional[Dict[str, Any]]:
+    try:
+        res = client.futures_create_order(
+            symbol=symbol,
+            side=("SELL" if side_txt.upper() == "BUY" else "BUY"),
+            type="TRAILING_STOP_MARKET",
+            callbackRate=float(callback_rate),
+            reduceOnly=True,
+            workingType=working_type,
+            newClientOrderId=coid,
+        )
+        return res
+    except Exception:
+        return None
+
+
+# ─── Orchestrator ל-/manage-once ───────────────────────────────────────────────
+def manage_once_place_all(*, client, symbol: str, side_txt: str,
+                          entry_price: float, price_now: Optional[float],
+                          qty_abs: float, tick: float, step: float,
+                          offset_bps: int, pcts: List[float], splits: List[float],
+                          atr: float, atr_mult: Optional[float],
+                          working_type: str,
+                          coid_builder,
+                          dry_run: bool = False) -> Dict[str, Any]:
+    """
+    מפעיל:
+      1) ניקוי STOP/TRAIL ישנים
+      2) BE-Stop לפי offset_bps
+      3) TP-ladders לפי pcts/splits
+      4) Trailing אופציונלי לפי ATR*atr_mult
+    """
+    result: Dict[str, Any] = {
+        "ok": True, "be_stop": None, "tp": [], "trail": None,
+        "computed": {}, "dry_run": bool(dry_run),
     }
-    return out
 
+    # 0) אימות inputs בסיסי
+    if len(pcts) != len(splits) or not (0.999 <= sum(splits) <= 1.001):
+        return {"ok": False, "error": "pcts/splits mismatch or splits must sum to 1.0"}
+
+    # 1) חישובי BE + Callback
+    be_price = compute_be_price(entry_price, side_txt, int(offset_bps), price_now, tick)
+    cb = calc_adaptive_callback(
+        atr=float(atr),
+        px=float(price_now or entry_price),
+        atr_mult=atr_mult,
+        min_pct=float(os.getenv("TRAIL_RT_MIN_CALLBACK", "0.1") or 0.1),
+        max_pct=float(os.getenv("TRAIL_RT_MAX_CALLBACK", "5.0") or 5.0),
+    )
+
+    result["computed"] = {
+        "be_price": be_price,
+        "callback_rate": cb,
+    }
+
+    if dry_run:
+        return result
+
+    # 2) סנכרון הזמנות ישנות
+    prune_conflicting(client, symbol)
+
+    # 3) BE stop
+    be_res = place_be_stop(
+        client, symbol, side_txt, be_price,
+        coid_builder(symbol, "SELL" if side_txt == "BUY" else "BUY", role="SL@BE"),
+        working_type=working_type
+    )
+    result["be_stop"] = {"price": be_price, "ok": bool(be_res)}
+
+    # 4) TP ladders
+    placed_tp = place_tp_ladders(
+        client, symbol, side_txt, float(price_now or entry_price),
+        pcts, splits, tick, step, qty_abs, coid_builder
+    )
+    result["tp"] = placed_tp
+
+    # 5) Trailing (אם יש cb)
+    if cb is not None:
+        trail_res = place_trailing(
+            client, symbol, side_txt, cb,
+            coid_builder(symbol, "SELL" if side_txt == "BUY" else "BUY", role="TRAIL"),
+            working_type=working_type
+        )
+        result["trail"] = {"callbackRate": cb, "ok": bool(trail_res)}
+
+    # מטריקות
+    if result["be_stop"] and result["be_stop"]["ok"]:
+        inc_manage_once_placed()
+    else:
+        inc_manage_once_failed()
+
+    return result
 
