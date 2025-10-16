@@ -2,7 +2,7 @@
 from __future__ import annotations
 import time
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 _START_TIME = time.time()
 _SENT_TELEGRAM = 0
@@ -24,14 +24,19 @@ _SCAN_PASSED = 0
 _SCAN_BLOCKED = 0
 
 # last computed checklist score (gauge)
-_LAST_ENTRY_SCORE = None  # type: ignore
+_LAST_ENTRY_SCORE: Optional[float] = None
 
-def set_last_entry_score(val: float) -> None:
+def set_last_entry_score(val: Optional[float]) -> None:
+    """שומר מדד ציון כניסה אחרון (0..10)."""
     global _LAST_ENTRY_SCORE
     try:
-        _LAST_ENTRY_SCORE = float(val)
+        _LAST_ENTRY_SCORE = None if val is None else float(val)
     except Exception:
         _LAST_ENTRY_SCORE = None
+
+def get_last_entry_score() -> Optional[float]:
+    """מאפשר קריאה של הציון האחרון (ל־/meta או דשבורד)."""
+    return _LAST_ENTRY_SCORE
 
 def record_telegram_sent() -> None:
     global _SENT_TELEGRAM
@@ -76,6 +81,13 @@ def get_metrics_snapshot() -> Dict[str, Any]:
         "mem_pct": mem,
         "telegram_sent": _SENT_TELEGRAM,
         "telegram_failed": _FAILED_TELEGRAM,
+        "approve_ok": _APPROVE_OK,
+        "approve_fail": _APPROVE_FAIL,
+        "reject": _REJECT,
+        "scan_evals": _SCAN_EVALS,
+        "scan_passed": _SCAN_PASSED,
+        "scan_blocked": _SCAN_BLOCKED,
+        "last_entry_score": _LAST_ENTRY_SCORE,
     }
 
 def render_prometheus_text() -> str:
@@ -121,5 +133,5 @@ __all__ = [
     "record_telegram_sent","record_telegram_failed","get_metrics_snapshot",
     "inc_approve_ok","inc_approve_fail","inc_reject",
     "inc_scan_eval","inc_scan_passed","inc_scan_blocked",
-    "render_prometheus_text","set_last_entry_score",
+    "render_prometheus_text","set_last_entry_score","get_last_entry_score",
 ]
