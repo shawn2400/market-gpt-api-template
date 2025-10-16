@@ -2,18 +2,31 @@
 from __future__ import annotations
 import os, logging
 from datetime import datetime
-from typing import Tuple
-from utils.pnl_summary import get_pnl_summary
-from utils.trade_store import list_active
+from typing import Tuple, Dict, Any
 
 logger = logging.getLogger("algogpt.risk_guard")
 
-def _get_env_flags():
+# פולבק: אם מודולים לא קיימים – נגדיר פונקציות דמה
+try:
+    from utils.pnl_summary import get_pnl_summary  # type: ignore
+except Exception:
+    def get_pnl_summary(limit_days: int = 1) -> Dict[str, Any]:
+        return {"days": []}
+
+try:
+    from utils.trade_store import list_active  # type: ignore
+except Exception:
+    def list_active():
+        return []
+
+
+def _get_env_flags() -> Dict[str, Any]:
     return {
         "GLOBAL_OFF": str(os.getenv("GLOBAL_RISK_OFF", "0")).lower() in ("1", "true", "yes", "on"),
-        "DAILY_MAX_LOSS": float(os.getenv("DAILY_NET_LOSS_USD_MAX", "999999")),
+        "DAILY_MAX_LOSS": float(os.getenv("DAILY_NET_LOSS_USD_MAX", os.getenv("DAILY_LOSS_CAP_USDT", "999999"))),
         "MAX_OPEN_PER_SYMBOL": int(os.getenv("MAX_CONCURRENT_TRADES_PER_SYMBOL", "999")),
     }
+
 
 def allow_new_trade(symbol: str) -> Tuple[bool, str]:
     env = _get_env_flags()
@@ -34,7 +47,7 @@ def allow_new_trade(symbol: str) -> Tuple[bool, str]:
     try:
         day = datetime.utcnow().strftime("%Y-%m-%d")
         pnl = get_pnl_summary(limit_days=1)
-        today = next((d for d in pnl.get("days", []) if d.get("day") == day), None)
+        today = next((d for d in pnl.get("days", []) if str(d.get("day")) == day), None)
         loss = float(today.get("pnl", 0.0)) if today else 0.0
         if loss < 0 and abs(loss) > env["DAILY_MAX_LOSS"]:
             logger.warning("🚫 Trade blocked: DAILY_NET_LOSS_USD_MAX=%s hit (loss=%.2f)", env["DAILY_MAX_LOSS"], loss)
@@ -45,4 +58,5 @@ def allow_new_trade(symbol: str) -> Tuple[bool, str]:
     return (True, "OK")
 
 
+__all__ = ["allow_new_trade"]
 
