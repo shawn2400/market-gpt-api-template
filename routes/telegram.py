@@ -12,6 +12,18 @@ from utils.telegram_notifier import (
 )
 from utils.anti_replay import build_signature_headers
 
+# metrics observe (עם fallback)
+try:
+    from utils.metrics_tracker import observe_http, observe_http_latency  # type: ignore
+except Exception:
+    def observe_http(name: str):  # type: ignore
+        def deco(fn): return fn
+        return deco
+    def observe_http_latency(name: str, sec: float):  # type: ignore
+        pass
+
+import time as _time
+
 logger = logging.getLogger("algogpt.telegram.webhook")
 router = APIRouter(prefix="/telegram", tags=["telegram"])
 
@@ -36,6 +48,19 @@ def _auth_headers() -> Dict[str,str]:
 async def ping():
     return {"ok": True, "ts": int(time.time())}
 
+# helper: POST with latency observation
+async def _post_json(cli: httpx.AsyncClient, url: str, *, body: Dict[str, Any], headers: Dict[str, str], name: str) -> httpx.Response:
+    t0 = _time.perf_counter()
+    try:
+        return await cli.post(url, json=body, headers=headers)
+    finally:
+        dt = _time.perf_counter() - t0
+        try:
+            observe_http_latency(name, dt)
+        except Exception:
+            pass
+
+@observe_http("telegram.webhook")  # מדידת זמן טיפול כולל
 @router.post("/webhook")
 async def webhook(
     request: Request,
@@ -93,7 +118,7 @@ async def webhook(
             if action in ("APPROVE","REJECT"):
                 body    = {"ticket_id": trade_id, "action": action}
                 headers = {**_auth_headers(), **build_signature_headers("/alerts/trades/update", body)}
-                r       = await cli.post(URL_TRADE_UPDATE, json=body, headers=headers)
+                r       = await _post_json(cli, URL_TRADE_UPDATE, body=body, headers=headers, name="ops.trade_update")
                 ok      = r.status_code < 400
                 txt     = "Approved ✅" if action == "APPROVE" else "Rejected ❌"
 
@@ -113,7 +138,7 @@ async def webhook(
             elif action == "MANAGE_AGAIN":
                 body    = {"symbol": symbol or "", "do": ["be","trail","tp_ladder"]}
                 headers = {**_auth_headers(), **build_signature_headers("/position-ops/manage-once", body)}
-                r       = await cli.post(URL_MANAGE_ONCE, json=body, headers=headers)
+                r       = await _post_json(cli, URL_MANAGE_ONCE, body=body, headers=headers, name="ops.manage_once")
                 ok      = r.status_code < 400
                 txt     = "ManageOnce triggered ⚙️"
                 await TelegramNotifier.answer_callback(cb_id, text=txt, show_alert=False)
@@ -124,7 +149,7 @@ async def webhook(
             elif action == "CANCEL_TPS":
                 body    = {"symbol": symbol}
                 headers = {**_auth_headers(), **build_signature_headers("/position-ops/cancel-tps", body)}
-                r       = await cli.post(URL_POS_CANCEL_TPS, json=body, headers=headers)
+                r       = await _post_json(cli, URL_POS_CANCEL_TPS, body=body, headers=headers, name="ops.cancel_tps")
                 ok      = r.status_code < 400
                 await TelegramNotifier.answer_callback(cb_id, text="TPs canceled 🧹", show_alert=False)
                 if not ok:
@@ -135,7 +160,7 @@ async def webhook(
                 close_pct = pct or 50.0
                 body      = {"symbol": symbol, "pct": close_pct}
                 headers   = {**_auth_headers(), **build_signature_headers("/position-ops/close-percent", body)}
-                r         = await cli.post(URL_POS_CLOSE_PCT, json=body, headers=headers)
+                r         = await _post_json(cli, URL_POS_CLOSE_PCT, body=body, headers=headers, name="ops.close_pct")
                 ok        = r.status_code < 400
                 await TelegramNotifier.answer_callback(cb_id, text=f"Closed ~{close_pct:.0f}% ➗", show_alert=False)
                 if not ok:
@@ -151,6 +176,5 @@ async def webhook(
     except Exception as e:
         logger.exception("webhook handling failed: %s", e)
         raise HTTPException(status_code=500, detail=f"webhook_error: {e}")
-
 
 
