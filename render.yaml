@@ -21,8 +21,6 @@ services:
         value: "AlgoGPT Service"
       - key: ALGOGPT_VERSION
         value: "2.18.0"
-
-      # === Instance identity ===
       - key: INSTANCE_ID
         value: "algogpt-prod"
       - key: INSTANCE
@@ -286,10 +284,9 @@ services:
         value: "0"
       - key: MAX_ATR_PCT
         value: "3"
-      # ==== New: Indicators runtime guards ====
-      - key: ALLOW_HTTP_IN_INDICATORS   # dev-only fallback for CVD helper in indicators_ext.py
+      - key: ALLOW_HTTP_IN_INDICATORS
         value: "0"
-      - key: INDICATORS_SUBSET          # optional: run subset "alpha,mc_b,qqe"
+      - key: INDICATORS_SUBSET
         value: ""
 
       # ========================= Watchlist =========================
@@ -649,6 +646,7 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
+
 
 
 
