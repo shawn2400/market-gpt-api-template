@@ -3,7 +3,7 @@ from __future__ import annotations
 from math import floor
 from typing import Dict, Any, Tuple
 from utils.binance_client import exchange_info as _exchange_info
-from utils.config import MAX_LEVERAGE, MIN_NOTIONAL_USDT, DEFAULT_QTY_STEP, DEFAULT_PRICE_TICK
+from utils.config import get_settings
 
 def _round_step(val: float, step: float) -> float:
     if step <= 0:
@@ -20,8 +20,9 @@ def normalize_order(symbol: str, qty: float, price: float) -> Tuple[float, float
     except Exception:
         info = {}
 
-    step = DEFAULT_QTY_STEP
-    tick = DEFAULT_PRICE_TICK
+    s = get_settings()
+    step = s.DEFAULT_QTY_STEP
+    tick = s.DEFAULT_PRICE_TICK
 
     for it in (info.get("symbols") or []):
         if (it.get("symbol") or "").upper() == symbol.upper():
@@ -37,13 +38,14 @@ def normalize_order(symbol: str, qty: float, price: float) -> Tuple[float, float
     return (_round_step(qty, step), _round_step(price, tick))
 
 def enforce_min_notional(qty: float, price: float) -> bool:
-    """בודק אם ערך ההזמנה עומד במינימום Notional"""
-    return (qty * price) >= float(MIN_NOTIONAL_USDT)
+    s = get_settings()
+    return (qty * price) >= float(s.MIN_NOTIONAL_USDT)
 
 def clamp_leverage(lev: int) -> int:
-    """מוודא מינוף בתחום 1..MAX_LEVERAGE"""
+    s = get_settings()
     try:
-        return max(1, min(int(MAX_LEVERAGE), int(lev)))
+        return max(1, min(int(s.MAX_LEVERAGE), int(lev)))
     except Exception:
         return 1
+
 
