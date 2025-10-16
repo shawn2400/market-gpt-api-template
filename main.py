@@ -51,6 +51,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("algogpt.main")
 
+# ====== Metrics counters integration ======
+try:
+    from utils.metrics_tracker import inc_approve_ok, inc_approve_fail, inc_reject  # type: ignore
+except Exception:
+    def inc_approve_ok():  # type: ignore
+        pass
+    def inc_approve_fail():  # type: ignore
+        pass
+    def inc_reject():  # type: ignore
+        pass
+
 # ==================== Inline safe defaults ====================
 _inline_env_defaults: Dict[str, str] = {
     "GUARD_SL_GRACE_SEC": "2",
@@ -225,7 +236,15 @@ HMAC_SECRET = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") 
 
 # ==================== Security helpers ====================
 def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
-    key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text) == 64 else secret_hex_or_text.encode("utf-8")
+    # שדרוג: נסיון לפענח hex באורך 64, ואם נכשל — להשתמש כטקסט רגיל
+    key: bytes
+    try:
+        if len(secret_hex_or_text) == 64:
+            key = bytes.fromhex(secret_hex_or_text)
+        else:
+            key = secret_hex_or_text.encode("utf-8")
+    except ValueError:
+        key = secret_hex_or_text.encode("utf-8")
     return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
 def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600, action: Optional[str] = None) -> str:
@@ -1170,6 +1189,16 @@ async def _approve_core(ticket_id: str):
         retry_res = await _execute_trade(ticket)
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
+
+    # === Metrics ===
+    try:
+        if ok:
+            inc_approve_ok()
+        else:
+            inc_approve_fail()
+    except Exception:
+        pass
+
     if ok:
         try:
             sm = {
@@ -1208,6 +1237,13 @@ async def _reject_core(ticket_id: str):
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור/דחייה.")
+
+    # === Metrics ===
+    try:
+        inc_reject()
+    except Exception:
+        pass
+
     sym, side, qty = (str(ticket.get("symbol", "")) or "").upper(), str(ticket.get("side", "")).upper(), ticket.get("qty", "")
     with suppress(Exception):
         await _send_telegram_html(
@@ -2212,8 +2248,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
-
 
 
 
