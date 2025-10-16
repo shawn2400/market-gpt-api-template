@@ -2,26 +2,36 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 """
-Position Manager (Lite): BE-stair בסיסי + ATR-based Trail
----------------------------------------------------------
+Position Manager (PLUS): BE-stair פרוגרסיבי + Profit-Lock Bands + TP Merge/Rearm + ATR-Trail
+---------------------------------------------------------------------------------------------
 מיועד לקריאה מתוך routes/manager.py::manage_once_lite()
 
-חתימות תואמות:
+ENV רלוונטי:
+  BE_BASE_BPS=5
+  BE_ADX_FACTOR=0.2               # שמור לעתיד (כרגע לא משפיע ישיר)
+  TRAIL_MIN_PCT=0.08
+  TRAIL_MAX_PCT=5.0
+  BINANCE_WORKING_TYPE=MARK_PRICE|CONTRACT_PRICE
+
+  PROFIT_LOCK_STEPS="1.0,1.5,2.0" # RR ספים; RR מחושב כ(תזוזה%/BE%)
+  TP_MERGE_TICK_BAND=1            # מרחק טיקים למיזוג יעדים סמוכים
+  TP_REARM_TICK=1                 # מרחק טיקים להפעלה מחודשת אם היה "כמעט"
+
+חתימה:
     async def manage_once(symbol: Optional[str] = None,
                           offset_bps: Optional[int] = None,
                           pcts: Optional[list[float]] = None,
                           splits: Optional[list[float]] = None,
                           atr_mult: Optional[float] = None) -> dict
 
-הקובץ בטוח לשימוש גם כשה־Binance SDK לא מותקן / מפתחות חסרים — יחזיר skipped=True.
+הקובץ בטוח גם ללא Binance SDK/מפתחות — יחזיר skipped=True.
 """
 
-import os
-import math
-from typing import Any, Dict, List, Optional
+import os, math
+from typing import Any, Dict, List, Optional, Tuple
 from contextlib import suppress
 
-# --- Metrics (אופציונלי; כרגע לא בשימוש ישיר) ---
+# --- Metrics (אופציונלי; לא בשימוש ישיר) ---
 with suppress(Exception):
     from utils.metrics_tracker import inc_scan_passed as _noop1  # noqa: F401
 with suppress(Exception):
@@ -32,7 +42,7 @@ with suppress(Exception):
     from utils.order_ids import build_client_order_id as _build_id  # type: ignore
 
 def _build_local_id(symbol: str, side: str, role: str = "GEN") -> str:
-    import time, hashlib  # local to avoid global imports if unused
+    import time, hashlib
     pref = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
     base = f"{pref}-{symbol.upper()}-{side.upper()}-{role.upper()}-{int(time.time()*1000)}"
     if len(base) <= 36:
@@ -45,26 +55,43 @@ def _coid(symbol: str, side: str, role: str) -> str:
         return _build_id(symbol, side, role=role)  # type: ignore
     return _build_local_id(symbol, side, role)
 
-# --- ENV knobs (ברירות מחדל עדינות) ---
+# --- ENV knobs ---
 BE_BASE_BPS      = int(os.getenv("BE_BASE_BPS", "5") or 5)
 BE_ADX_FACTOR    = float(os.getenv("BE_ADX_FACTOR", "0.2") or 0.2)     # מוכן לשדרוג עתידי
-TRAIL_MIN_PCT    = float(os.getenv("TRAIL_MIN_PCT", "0.08") or 0.08)   # אחוז
-TRAIL_MAX_PCT    = float(os.getenv("TRAIL_MAX_PCT", "5.0") or 5.0)     # אחוז
+TRAIL_MIN_PCT    = float(os.getenv("TRAIL_MIN_PCT", "0.08") or 0.08)
+TRAIL_MAX_PCT    = float(os.getenv("TRAIL_MAX_PCT", "5.0") or 5.0)
 BINANCE_WORKING  = os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE").upper()
 
-# --- עוזרים מתמטיים (ticks/steps) ---
+PROFIT_LOCK_STEPS_ENV = (os.getenv("PROFIT_LOCK_STEPS") or "1.0,1.5,2.0").strip()
+TP_MERGE_TICK_BAND    = int(os.getenv("TP_MERGE_TICK_BAND", "1") or 1)
+TP_REARM_TICK         = int(os.getenv("TP_REARM_TICK", "1") or 1)
+
+def _parse_profit_lock_steps(s: str) -> List[float]:
+    out: List[float] = []
+    for p in s.split(","):
+        with suppress(Exception):
+            v = float(p.strip())
+            if v > 0:
+                out.append(v)
+    return sorted(out)
+
+PROFIT_LOCK_STEPS = _parse_profit_lock_steps(PROFIT_LOCK_STEPS_ENV)
+
+# --- math helpers (ticks/steps) ---
 def _bn_round(value: float, step: float) -> float:
-    if step <= 0:
-        return value
+    if step <= 0: return value
     return math.floor(value / step) * step
 
 def _round_tick_dir(value: float, step: float, direction: str) -> float:
-    if step <= 0:
-        return value
+    if step <= 0: return value
     q = value / step
     return (math.ceil(q) if direction.lower().startswith("up") else math.floor(q)) * step
 
-def _get_filters(client, symbol: str) -> tuple[float, float]:
+def _ticks_between(p1: float, p2: float, tick: float) -> int:
+    if tick <= 0: return 0
+    return int(abs(round((p1 - p2) / tick)))
+
+def _get_filters(client, symbol: str) -> Tuple[float, float]:
     tick = 0.1
     step = 0.001
     with suppress(Exception):
@@ -79,14 +106,14 @@ def _get_filters(client, symbol: str) -> tuple[float, float]:
                 break
     return tick, step
 
-# --- ADX/ATR calculation (Lite) ---
+# --- ADX/ATR (Lite) ---
 def _wilder_smooth(values: List[float], period: int) -> List[float]:
     if not values or period <= 0 or len(values) < period:
         return []
-    smoothed = [sum(values[:period]) / period]
+    out = [sum(values[:period]) / period]
     for v in values[period:]:
-        smoothed.append((smoothed[-1] * (period - 1) + v) / period)
-    return smoothed
+        out.append((out[-1] * (period - 1) + v) / period)
+    return out
 
 def _ind_from_kl(klines: List[List[Any]], period: int = 14) -> Dict[str, float]:
     try:
@@ -116,8 +143,11 @@ def _ind_from_kl(klines: List[List[Any]], period: int = 14) -> Dict[str, float]:
             d = abs(plus_di[i] - minus_di[i])
             dx.append((d/s)*100 if s > 0 else 0.0)
         adx_s = _wilder_smooth(dx, period)
-        adx = adx_s[-1] if adx_s else 0.0
-        return {"price": closes[-1], "atr": float(atr_s[-1] if atr_s else 0.0), "adx": float(adx)}
+        return {
+            "price": closes[-1],
+            "atr": float(atr_s[-1] if atr_s else 0.0),
+            "adx": float(adx_s[-1] if adx_s else 0.0)
+        }
     except Exception:
         return {"price": 0.0, "atr": 0.0, "adx": 0.0}
 
@@ -130,6 +160,64 @@ def _align_position_mode(client) -> None:
         elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
 
+def _profit_rr(entry: float, price_now: float, be_bps: int, side: str) -> float:
+    if entry <= 0 or be_bps <= 0: return 0.0
+    move_pct = ((price_now - entry) / entry * 100.0) if side == "BUY" else ((entry - price_now) / entry * 100.0)
+    be_pct = be_bps / 100.0  # bps -> %
+    if be_pct <= 0: return 0.0
+    return max(0.0, move_pct / be_pct)
+
+def _apply_profit_lock(base_offset_bps: int, rr: float, steps: List[float]) -> int:
+    """
+    מגדיל את מרחק ה-BE (offset_bps) לפי מדרגות RR שחצינו.
+    לדוגמה: base=5, RR>=1.5 -> 5*1.5 = 7 bps; RR>=2.0 -> 10 bps.
+    """
+    if not steps: return base_offset_bps
+    factor = 1.0
+    for s in steps:
+        if rr >= s:
+            # נשמור שזה מונוטוני — כל מדרגה לפחות 1.0×
+            factor = max(factor, s)
+    return max(1, int(round(base_offset_bps * factor)))
+
+def _merge_targets_if_close(targets: List[float], splits: List[float], tick: float, side: str, band_ticks: int) -> Tuple[List[float], List[float], List[str]]:
+    """
+    אם שני יעדים קרובים <= band_ticks — מאחדים:
+      * LONG: נבחר את המחיר היותר קרוב לשוק (נמוך יותר) כדי לשפר סיכוי מילוי.
+      * SHORT: נבחר מחיר קרוב לשוק (גבוה יותר).
+    מחזיר (targets_new, splits_new, notes) עם רשימת פעולות מיזוג לבקרה.
+    """
+    if band_ticks <= 0 or len(targets) <= 1:
+        return targets, splits, []
+
+    notes: List[str] = []
+    out_t: List[float] = []
+    out_s: List[float] = []
+
+    i = 0
+    while i < len(targets):
+        if i < len(targets) - 1 and _ticks_between(targets[i], targets[i+1], tick) <= band_ticks:
+            # merge i and i+1
+            if side == "BUY":
+                chosen = min(targets[i], targets[i+1])  # קרוב יותר למחיר כדי שיתמלא
+            else:
+                chosen = max(targets[i], targets[i+1])
+            merged_split = splits[i] + splits[i+1]
+            notes.append(f"merge TP{i+1}&TP{i+2} -> price={chosen}")
+            out_t.append(chosen)
+            out_s.append(merged_split)
+            i += 2
+        else:
+            out_t.append(targets[i])
+            out_s.append(splits[i])
+            i += 1
+
+    # נוודא שסכום splits נשאר 1.0 (תיקון זניח לפלואט)
+    ssum = sum(out_s)
+    if 0.99 <= ssum <= 1.01 and ssum != 1.0:
+        out_s = [x / ssum for x in out_s]
+    return out_t, out_s, notes
+
 async def manage_once(
     symbol: Optional[str] = None,
     offset_bps: Optional[int] = None,
@@ -138,8 +226,7 @@ async def manage_once(
     atr_mult: Optional[float] = None,
 ) -> Dict[str, Any]:
     """
-    BE@entry -> SL at BE-offset, TP ladder לפי pcts/splits, Trail לפי ATR*mult (אופציונלי).
-    החזר בפורמט תואם ל-/manage-once הקיים אצלך (main.py).
+    BE@entry (עם Stair פרוגרסיבי לפי RR) -> SL, TP ladder (עם Merge/Rearm), Trail לפי ATR*mult (אופציונלי).
     """
     # Binance client
     try:
@@ -185,11 +272,12 @@ async def manage_once(
             price_now = float(t["price"]) or entry_price
     base_price = price_now or entry_price
 
-    # Indicators from klines for ATR & ADX (for trail sizing)
-    kl = []
+    # Recent OHLC לקביעת bounce קרוב
+    kl_1m: List[List[Any]] = []
     with suppress(Exception):
-        kl = client.futures_klines(symbol=symbol, interval="1m", limit=60)
-    ind = _ind_from_kl(kl or [], period=14)
+        kl_1m = client.futures_klines(symbol=symbol, interval="1m", limit=30)
+
+    ind = _ind_from_kl(kl_1m or [], period=14)
     atr = float(ind.get("atr") or 0.0)
     adx = float(ind.get("adx") or 0.0)
 
@@ -207,14 +295,18 @@ async def manage_once(
     if any(x <= 0 for x in _pcts) or any(x <= 0 for x in _splits):
         return {"ok": False, "error": "pcts/splits must be > 0"}
 
-    # Place BE Stop (Reduce risk)
+    # --- BE-Stair & Profit-Lock ---
+    current_rr = _profit_rr(entry=float(entry_price), price_now=base_price, be_bps=_offset_bps, side=side_txt)
+    stair_offset_bps = _apply_profit_lock(_offset_bps, current_rr, PROFIT_LOCK_STEPS)
+
+    # Place BE Stop (Reduce risk), עם offset משודרג
     if side_txt == "BUY":
-        be_price = float(entry_price) * (1.0 - (_offset_bps / 10_000.0))
+        be_price = float(entry_price) * (1.0 - (stair_offset_bps / 10_000.0))
         be_price = _round_tick_dir(be_price, tick, "down")
         if base_price and be_price >= base_price:
             be_price = _bn_round(base_price - tick, tick)
     else:
-        be_price = float(entry_price) * (1.0 + (_offset_bps / 10_000.0))
+        be_price = float(entry_price) * (1.0 + (stair_offset_bps / 10_000.0))
         be_price = _round_tick_dir(be_price, tick, "up")
         if base_price and be_price <= base_price:
             be_price = _round_tick_dir(base_price + tick, tick, "up")
@@ -227,7 +319,7 @@ async def manage_once(
             if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
                 client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
 
-    # Create BE Stop (STOP_MARKET closePosition)
+    # Create/Replace BE Stop (STOP_MARKET closePosition)
     with suppress(Exception):
         sl_kwargs = dict(
             symbol=symbol,
@@ -236,14 +328,13 @@ async def manage_once(
             stopPrice=be_price,
             closePosition=True,
             workingType=BINANCE_WORKING,
-            newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role="SL@BE"),
+            newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role=f"SL@BE{xround:=stair_offset_bps}"),  # unique-ish
         )
         client.futures_create_order(**sl_kwargs)
 
-    # TP ladder (ReduceOnly)
+    # --- TP ladder + Merge ---
     qty_abs = abs(pos_amt)
-    placed_tp: List[Dict[str, Any]] = []
-    targets: List[float] = []
+    raw_targets: List[float] = []
     for pct in _pcts:
         if side_txt == "BUY":
             px = base_price * (1.0 + pct / 100.0)
@@ -251,12 +342,14 @@ async def manage_once(
         else:
             px = base_price * (1.0 - pct / 100.0)
             px = _round_tick_dir(px, tick, "up")
-        targets.append(px)
+        raw_targets.append(px)
 
-    for i, (tp_price, split) in enumerate(zip(targets, _splits), start=1):
+    targets, splits_used, merge_notes = _merge_targets_if_close(raw_targets, _splits, tick, side_txt, TP_MERGE_TICK_BAND)
+
+    placed_tp: List[Dict[str, Any]] = []
+    for i, (tp_price, split) in enumerate(zip(targets, splits_used), start=1):
         qty_i = _bn_round(qty_abs * float(split), step)
-        if qty_i <= 0:
-            continue
+        if qty_i <= 0: continue
         tp_kwargs = dict(
             symbol=symbol,
             side=("SELL" if side_txt == "BUY" else "BUY"),
@@ -271,27 +364,70 @@ async def manage_once(
             client.futures_create_order(**tp_kwargs)
             placed_tp.append({"i": i, "price": tp_price, "qty": qty_i})
 
-    # ATR-based Trailing (optional)
+    # --- Rearm on Bounce (כמעט נגיעה) ---
+    # נבדוק high/low אחרונים אל מול היעד; אם קרוב בתוך TP_REARM_TICK — נזיז את ההזמנה טיק אחד פנימה לטובת מילוי.
+    with suppress(Exception):
+        if kl_1m:
+            last_h = float(kl_1m[-1][2])
+            last_l = float(kl_1m[-1][3])
+            # נקרא שוב את ההזמנות הפתוחות כדי לאתר את ה-TPים
+            oos = client.futures_get_open_orders(symbol=symbol) or []
+            for o in oos:
+                if o.get("type") == "LIMIT" and bool(o.get("reduceOnly")):
+                    px = float(o.get("price") or 0.0)
+                    oid = o.get("orderId")
+                    if side_txt == "BUY":
+                        # יעד למעלה: אם ה-high היה קרוב מספיק אבל לא מילא — נקרב טיק אחד מטה
+                        if _ticks_between(last_h, px, tick) <= TP_REARM_TICK and last_h < px:
+                            new_px = _bn_round(max(px - tick, tick), tick)
+                            client.futures_cancel_order(symbol=symbol, orderId=oid)
+                            with suppress(Exception):
+                                client.futures_create_order(
+                                    symbol=symbol,
+                                    side="SELL",
+                                    type="LIMIT",
+                                    price=new_px,
+                                    quantity=float(o.get("origQty")),
+                                    timeInForce="GTC",
+                                    reduceOnly=True,
+                                    newClientOrderId=_coid(symbol, "SELL", role="TP_REARM"),
+                                )
+                    else:
+                        # יעד למטה: אם ה-low היה קרוב מספיק אבל לא מילא — נקרב טיק אחד מעלה
+                        if _ticks_between(last_l, px, tick) <= TP_REARM_TICK and last_l > px:
+                            new_px = _round_tick_dir(px + tick, tick, "up")
+                            client.futures_cancel_order(symbol=symbol, orderId=oid)
+                            with suppress(Exception):
+                                client.futures_create_order(
+                                    symbol=symbol,
+                                    side="BUY",
+                                    type="LIMIT",
+                                    price=new_px,
+                                    quantity=float(o.get("origQty")),
+                                    timeInForce="GTC",
+                                    reduceOnly=True,
+                                    newClientOrderId=_coid(symbol, "BUY", role="TP_REARM"),
+                                )
+
+    # --- ATR-based Trailing (optional) ---
     placed_trail = None
     if _atr_mult is not None:
         px = base_price or 0.0
         if px > 0:
-            cb = (atr * float(_atr_mult) / px) * 100.0  # אחוז
-            # Binance דורש 0.1–5.0; נכבד גם את ENV וגם את המינימום הרשמי
+            cb = (atr * float(_atr_mult) / px) * 100.0  # %
             binance_min_cb = 0.1
             cb = max(binance_min_cb, max(TRAIL_MIN_PCT, min(TRAIL_MAX_PCT, cb)))
             cb = round(cb, 1)
-            trail_kwargs = dict(
-                symbol=symbol,
-                side=("SELL" if side_txt == "BUY" else "BUY"),
-                type="TRAILING_STOP_MARKET",
-                callbackRate=cb,
-                reduceOnly=True,
-                workingType=BINANCE_WORKING,
-                newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role="TRAIL"),
-            )
             with suppress(Exception):
-                client.futures_create_order(**trail_kwargs)
+                client.futures_create_order(
+                    symbol=symbol,
+                    side=("SELL" if side_txt == "BUY" else "BUY"),
+                    type="TRAILING_STOP_MARKET",
+                    callbackRate=cb,
+                    reduceOnly=True,
+                    workingType=BINANCE_WORKING,
+                    newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role="TRAIL"),
+                )
                 placed_trail = {"callbackRate": cb}
 
     return {
@@ -300,20 +436,26 @@ async def manage_once(
         "symbol": symbol,
         "side": side_txt,
         "entry": float(entry_price),
+        "price_now": float(base_price),
         "be_stop_price": float(be_price),
+        "be_base_bps": int(_offset_bps),
+        "be_stair_bps": int(stair_offset_bps),
+        "rr_now": round(current_rr, 2),
         "tp": placed_tp,
+        "tp_merge_notes": merge_notes or None,
         "trail": placed_trail,
         "profile": {
-            "name": "LITE",
-            "offset_bps": int(_offset_bps),
+            "name": "PLUS",
             "pcts": [float(x) for x in _pcts],
             "splits": [float(x) for x in _splits],
             "atr_mult": (_atr_mult if _atr_mult is not None else None),
+            "profit_lock_steps": PROFIT_LOCK_STEPS,
+            "tp_merge_tick_band": TP_MERGE_TICK_BAND,
+            "tp_rearm_tick": TP_REARM_TICK,
         },
         "indicators": {
             "adx": round(adx, 2),
             "atr": float(atr),
-            "price": float(base_price),
             "atr_pct": (float(atr) / float(base_price)) if base_price else 0.0,
         },
     }
