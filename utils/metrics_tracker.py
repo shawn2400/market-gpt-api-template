@@ -23,6 +23,16 @@ _SCAN_EVALS = 0
 _SCAN_PASSED = 0
 _SCAN_BLOCKED = 0
 
+# last computed checklist score (gauge)
+_LAST_ENTRY_SCORE = None  # type: ignore
+
+def set_last_entry_score(val: float) -> None:
+    global _LAST_ENTRY_SCORE
+    try:
+        _LAST_ENTRY_SCORE = float(val)
+    except Exception:
+        _LAST_ENTRY_SCORE = None
+
 def record_telegram_sent() -> None:
     global _SENT_TELEGRAM
     _SENT_TELEGRAM += 1
@@ -97,15 +107,19 @@ def render_prometheus_text() -> str:
         "# HELP algogpt_scan_blocked_total Tickets blocked by checklist gate.",
         "# TYPE algogpt_scan_blocked_total counter",
         f"algogpt_scan_blocked_total {_SCAN_BLOCKED}",
-        "",
     ]
+    if _LAST_ENTRY_SCORE is not None:
+        lines += [
+            "# HELP algogpt_entry_quality_score_last Last computed pre-trade entry score (0..10).",
+            "# TYPE algogpt_entry_quality_score_last gauge",
+            f"algogpt_entry_quality_score_last {_LAST_ENTRY_SCORE:.3f}",
+        ]
+    lines.append("")  # trailing newline
     return "\n".join(lines)
 
 __all__ = [
     "record_telegram_sent","record_telegram_failed","get_metrics_snapshot",
     "inc_approve_ok","inc_approve_fail","inc_reject",
     "inc_scan_eval","inc_scan_passed","inc_scan_blocked",
-    "render_prometheus_text",
+    "render_prometheus_text","set_last_entry_score",
 ]
-
-
