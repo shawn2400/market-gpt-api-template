@@ -86,7 +86,6 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
         trade_id = parts[2]
         if action not in ("APPROVE","REJECT"):
             raise ValueError("bad_action")
-        # אם יש סוד — חייבים ts+sig
         if _SIGN_SECRET:
             if len(parts) < 5:
                 raise ValueError("unsigned_callback")
@@ -107,7 +106,6 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
         tail = parts[3:]
         ts = None; sig = None
         if tail:
-            # נסה לחלץ ts+sig מהסוף
             if len(tail) >= 2:
                 try:
                     maybe_ts = int(float(tail[-2]))
@@ -117,13 +115,11 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
                 except Exception:
                     ts = None
                     sig = None
-            # אם נשאר פרמטר אחד ב-tail הוא עשוי להיות pct
             if tail:
                 try:
                     pct = float(tail[0])
                 except Exception:
                     pct = None
-        # אם יש סוד — חובה ts+sig
         if _SIGN_SECRET:
             if ts is None or sig is None:
                 raise ValueError("unsigned_callback")
@@ -165,7 +161,6 @@ def _ops_action_kb(symbol: str) -> Dict[str,Any]:
 class TelegramNotifier:
     @staticmethod
     async def ensure_webhook() -> bool:
-        # אין צורך לייבא את עצמנו—פשוט קרא לפונקציה המקומית.
         try:
             return await register_webhook()
         except Exception:
@@ -190,7 +185,6 @@ class TelegramNotifier:
             return
         kb: Dict[str,Any] = new_kb or {}
         if disable_all and not new_kb:
-            # מומלץ להסיר לגמרי את המקשים כדי למנוע קליקים מיותרים
             kb = {"inline_keyboard": []}
         import httpx
         async with httpx.AsyncClient(timeout=8.0) as cli:
@@ -226,10 +220,8 @@ class TelegramNotifier:
         plan.setdefault("timeframe", timeframe)
         plan.setdefault("why", reason)
         plan.setdefault("score", score)
-        # שדות אופציונליים לתצוגה נוחה
         plan.setdefault("order_type", plan.get("entry_type", "MARKET"))
         plan.setdefault("leverage", plan.get("lev", plan.get("leverage", 0)))
-        # URLs אם נבנו כבר; אחרת יבנו אוטומטית מתוך trade_id
         if "approve_url" not in plan or "reject_url" not in plan or "ticket_url" not in plan:
             urls = _build_trade_urls(trade_id, plan)
             plan.setdefault("approve_url", urls["approve"])
@@ -369,6 +361,35 @@ async def notify_explain_trade(plan: Dict[str, Any]) -> None:
     await _tg_send("\n".join(lines))
 
 # ===================== Trade Approval (rich) =====================
+def _entry_score_badge(plan: Dict[str, Any]) -> Optional[str]:
+    # אם הלקוח סיפק badges ידניים — נציג אותם (מרובים) עם רווחים
+    badges = plan.get("badges")
+    if isinstance(badges, list) and badges:
+        return " ".join(str(b) for b in badges)
+
+    # Badge אוטומטי לפי blocked_by_entry_score / entry_score(+min)
+    blocked = bool(plan.get("blocked_by_entry_score", False))
+    score   = plan.get("entry_score")
+    min_s   = plan.get("entry_score_min")
+    try:
+        s = float(score) if score is not None else float("nan")
+    except Exception:
+        s = float("nan")
+    try:
+        m = float(min_s) if min_s is not None else float("nan")
+    except Exception:
+        m = float("nan")
+
+    if blocked:
+        if s == s and m == m:
+            return f"⚠️ BLOCKED_BY_ENTRY_SCORE (s={s:.2f} < min={m:.2f})"
+        return "⚠️ BLOCKED_BY_ENTRY_SCORE"
+    # passed/neutral
+    if m == m and m > 0 and s == s:
+        if s >= m:
+            return f"✅ ENTRY SCORE OK (s={s:.2f} ≥ min={m:.2f})"
+    return "✅ ENTRY READY"
+
 async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional[int] = None) -> None:
     est     = make_estimations(plan)
     probs   = est.get("probs") or {}
@@ -390,7 +411,7 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     eta_entry = (eta or {}).get("entry_sec") or (eta or {}).get("entry")
 
     reason  = plan.get("why") or plan.get("explain") or plan.get("reasons")
-    def _trim_reason(reason: Any, limit: int = 240) -> str:
+    def _trim_reason_local(reason: Any, limit: int = 240) -> str:
         text = ""
         if isinstance(reason, str):
             text = reason
@@ -402,7 +423,7 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
         if len(text) > limit:
             text = text[: limit - 1] + "…"
         return text or "—"
-    why_txt = _trim_reason(reason)
+    why_txt = _trim_reason_local(reason)
     kind    = (plan.get("trade_kind") or plan.get("mode") or plan.get("market") or "Futures").capitalize()
 
     tp_lines = _tp_legs_to_lines(tp_legs, eta=eta, probs=probs)
@@ -416,8 +437,14 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     overall_p = probs.get("overall") or probs.get("success") or probs.get("p_overall")
     market_line = get_btc_anchor_summary()
 
+    # ===== headline =====
+    title = f"🟡 <b>Trade Pending Approval</b> · <b>{kind}</b>"
+    badge = _entry_score_badge(plan)
+
     lines: List[str] = []
-    lines.append(f"🟡 <b>Trade Pending Approval</b> · <b>{kind}</b>")
+    lines.append(title)
+    if badge:
+        lines.append(badge)
     lines.append(market_line)
     lines.append(f"🪙 <b>{symbol}</b> · {side} · lev <b>{lev}</b> · {otype}")
     lines.append(f"💫 מחיר עכשיו: <code>{_fmt_num(now_px, 4)}</code>")
@@ -546,7 +573,6 @@ __all__ = [
     "build_ticket_buttons",
     "_send",
 ]
-
 
 
 
