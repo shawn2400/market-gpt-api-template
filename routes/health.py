@@ -1,8 +1,8 @@
 # routes/health.py
 from __future__ import annotations
-import os, time, logging
+import os, time, logging, sqlite3, socket
 from contextlib import suppress
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 from fastapi import APIRouter, Response, Request, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 
@@ -93,7 +93,77 @@ async def health_tp1_now(request: Request, symbols: Optional[str] = None):
         log.warning("health_tp1 failed: %s", e)
         return JSONResponse({"ok": False, "error": str(e)}, headers=_base_headers(), status_code=200)
 
-# --- Optional meta & metrics (exposed only if utils.metrics_tracker is available) ---
+# ---------------- Readiness (low-overhead) ----------------
+
+# ENV toggles / endpoints
+_BINANCE_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
+_READINESS_BINANCE = os.getenv("READINESS_CHECK_BINANCE", "1").lower() in ("1","true","yes","on")
+_READINESS_REDIS   = os.getenv("READINESS_CHECK_REDIS", "1").lower() in ("1","true","yes","on")
+_READINESS_SQLITE  = os.getenv("READINESS_CHECK_SQLITE", "0").lower() in ("1","true","yes","on")
+_SQLITE_PATH       = os.getenv("SQLITE_PATH", "").strip()
+_REDIS_URL         = os.getenv("REDIS_URL", "").strip()
+
+async def _check_binance(timeout: float = 2.5) -> Tuple[bool, str]:
+    if not _READINESS_BINANCE:
+        return True, "skipped"
+    try:
+        import httpx  # local import to keep cold-start light
+        url = f"{_BINANCE_BASE}/fapi/v1/ping"
+        async with httpx.AsyncClient(timeout=timeout) as cli:
+            r = await cli.get(url)
+            if r.status_code < 400:
+                return True, "ok"
+            return False, f"http_{r.status_code}"
+    except Exception as e:
+        return False, f"err:{e}"
+
+async def _check_redis(timeout: float = 1.0) -> Tuple[bool, str]:
+    if not _READINESS_REDIS or not _REDIS_URL:
+        return True, "skipped"
+    try:
+        import asyncio
+        import redis.asyncio as aioredis  # type: ignore
+        r = aioredis.from_url(_REDIS_URL, decode_responses=True, socket_timeout=timeout)
+        # PING with short timeout
+        async def _ping():
+            await r.ping()
+        await asyncio.wait_for(_ping(), timeout=timeout + 0.25)
+        return True, "ok"
+    except Exception as e:
+        return False, f"err:{e}"
+
+def _check_sqlite() -> Tuple[bool, str]:
+    if not _READINESS_SQLITE:
+        return True, "skipped"
+    if not _SQLITE_PATH:
+        return False, "missing_path"
+    try:
+        conn = sqlite3.connect(_SQLITE_PATH, timeout=0.8)
+        try:
+            conn.execute("PRAGMA quick_check;")
+        finally:
+            conn.close()
+        return True, "ok"
+    except Exception as e:
+        return False, f"err:{e}"
+
+@router.get("/readiness", summary="Dependency readiness (Redis/Binance/DB)")
+async def readiness():
+    # run the lightweight checks
+    ok_bin, why_bin = await _check_binance()
+    ok_rd,  why_rd  = await _check_redis()
+    ok_sql, why_sql = _check_sqlite()
+
+    overall = ok_bin and ok_rd and ok_sql
+    detail = {
+        "binance": {"ok": ok_bin, "detail": why_bin},
+        "redis":   {"ok": ok_rd,  "detail": why_rd},
+        "sqlite":  {"ok": ok_sql, "detail": why_sql, "path": _SQLITE_PATH or None},
+    }
+    code = 200 if overall else 503
+    return JSONResponse({"ok": overall, "deps": detail}, status_code=code, headers=_base_headers())
+
+# ---------------- Meta & Prometheus ----------------
 @router.get("/meta", summary="Service meta snapshot")
 async def meta():
     if not _metrics_available:
@@ -118,8 +188,6 @@ async def metrics():
         text = ""
     return PlainTextResponse(text, status_code=200,
                              headers={"Content-Type": "text/plain; version=0.0.4", **_base_headers()})
-
-
 
 
 
