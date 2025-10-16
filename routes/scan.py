@@ -81,7 +81,7 @@ class ScanResponse(BaseModel):
 
 # ===================== Binance helpers =====================
 async def _fetch_klines_async(symbol: str, interval: str = "15m", limit: int = 200) -> pd.DataFrame:
-    sym = (symbol or "").strip().upper()
+    sym = symbol.strip().upper()
     if not sym.endswith("USDT"):
         sym += "USDT"
     url = f"{FUTURES_BASE}/fapi/v1/klines"
@@ -100,7 +100,7 @@ async def _fetch_klines_async(symbol: str, interval: str = "15m", limit: int = 2
         df[c] = pd.to_numeric(df[c], errors="coerce")
     return df[["open","high","low","close","volume"]]
 
-# ===== helper: adx/atr% מתוך df (קומפקטי) =====
+# ===== helper: adx/atr% מתוך df =====
 def _adx_atr_pct_from_df(df: pd.DataFrame, period: int = 14) -> Dict[str, float]:
     try:
         if len(df) < period + 2:
@@ -113,13 +113,13 @@ def _adx_atr_pct_from_df(df: pd.DataFrame, period: int = 14) -> Dict[str, float]
             up_move = h-ph; down_move = pl-l
             plus_dm.append(up_move if (up_move > down_move and up_move > 0) else 0.0)
             minus_dm.append(down_move if (down_move > up_move and down_move > 0) else 0.0)
-        def _w(vs):
+        def _wilder(vs):
             if len(vs) < period: return []
             out = [sum(vs[:period]) / period]
             for v in vs[period:]:
                 out.append((out[-1]*(period-1)+v)/period)
             return out
-        atr_s = _w(trs); p_s = _w(plus_dm); m_s = _w(minus_dm)
+        atr_s = _wilder(trs); p_s = _wilder(plus_dm); m_s = _wilder(minus_dm)
         if not (atr_s and p_s and m_s): return {"adx": 0.0, "atr_pct": 0.0}
         plus_di = [(p/atr_s[i])*100 if atr_s[i]>0 else 0.0 for i,p in enumerate(p_s)]
         minus_di = [(m/atr_s[i])*100 if atr_s[i]>0 else 0.0 for i,m in enumerate(m_s)]
@@ -127,7 +127,7 @@ def _adx_atr_pct_from_df(df: pd.DataFrame, period: int = 14) -> Dict[str, float]
         for i in range(min(len(plus_di), len(minus_di))):
             s = plus_di[i] + minus_di[i]; d = abs(plus_di[i]-minus_di[i])
             dx.append((d/s)*100 if s>0 else 0.0)
-        adx_s = _w(dx)
+        adx_s = _wilder(dx)
         adx = adx_s[-1] if adx_s else 0.0
         price = closes[-1]
         atr = atr_s[-1] if atr_s else 0.0
@@ -148,7 +148,7 @@ async def scan_info(
         if df.empty:
             return ScanResponse(ok=False, count_total=1, returned=0, error="no data")
 
-        # אינדיקטורים (אם יש utils.indicators – משתמשים; אחרת ממשיכים בלי)
+        # אינדיקטורים (אם יש utils.indicators)
         try:
             from utils.indicators import prepare_indicators_for_backtest  # type: ignore
             ind = await asyncio.to_thread(prepare_indicators_for_backtest, df)
@@ -161,8 +161,9 @@ async def scan_info(
         score = None; features = None
         if compute_pretrade_score is not None:
             try:
-                # בניית klines בסגנון Binance מה-DataFrame
-                k_arr = df.reset_index(drop=True)
+                k_arr = df.reset_index(drop=True).assign(
+                    open_time=0, close_time=0, qv=0, nTrades=0, taker_base=0, taker_quote=0, x=0
+                )
                 kl = [[0,row.open,row.high,row.low,row.close,0,0,0,0,0,0,0] for row in k_arr.itertuples()]
                 iv = _adx_atr_pct_from_df(df)
                 inc_scan_eval()
@@ -180,12 +181,12 @@ async def scan_info(
             score=score,
             features=features,
         )
-
-        # מונים עבר/נחסם לפי ENTRY_SCORE_MIN (לא חוסם API)
+        # Counters pass/blocked לפי ENTRY_SCORE_MIN (לא חוסם API)
         try:
             min_req = float(os.getenv("ENTRY_SCORE_MIN","0") or 0)
             if score is not None and min_req>0:
-                (inc_scan_passed if score >= min_req else inc_scan_blocked)()
+                if score >= min_req: inc_scan_passed()
+                else: inc_scan_blocked()
         except Exception:
             pass
 
@@ -206,11 +207,10 @@ async def scan_symbols(
             if r.ok and r.signals:
                 out.append(r.signals[0])
             else:
-                out.append(ScanSignal(symbol=(sym or "").upper(), interval=interval, ok=False, error=r.error))
+                out.append(ScanSignal(symbol=sym.upper(), interval=interval, ok=False, error=r.error))
         except Exception as e:
-            out.append(ScanSignal(symbol=(sym or "").upper(), interval=interval, ok=False, error=str(e)))
+            out.append(ScanSignal(symbol=sym.upper(), interval=interval, ok=False, error=str(e)))
     return ScanResponse(ok=True, count_total=len(symbols), returned=len(out), signals=out)
-
 
 
 
