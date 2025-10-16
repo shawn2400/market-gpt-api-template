@@ -1,4 +1,3 @@
-
 services:
   - type: web
     name: algogpt-prod
@@ -316,6 +315,15 @@ services:
         value: "6"
       - key: IMPACT_SLIP_BPS_MAX
         value: "25"
+      # ----- Sensitivity: spread & volatility (new) -----
+      - key: SPREAD_ASSUME_PCT
+        value: "0.02"
+      - key: SPREAD_SOFT_PCT
+        value: "0.05"
+      - key: VOLATILITY_GATE_ATRPCT
+        value: "1.2"
+      - key: PREFER_HYBRID_DEFAULT
+        value: "1"
       # ===== Weights (optional tuning) =====
       - key: W_REGIME
         value: "2.0"
@@ -436,7 +444,7 @@ services:
       - key: MAX_TRADES_PER_TICK
         value: "1"
       - key: MIN_NOTIONAL_USDT
-        value: "5"
+        value: "25"
       - key: MAX_TRADE_BUDGET
         value: "600"
       - key: ORDER_TRIGGER
@@ -731,8 +739,6 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
-
 
 
 
