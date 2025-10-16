@@ -503,6 +503,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                 return {"ok": False, "error": str(e)}
             await asyncio.sleep(0.6 * (attempt + 1))
     return {"ok": False, "error": "telegram_send_exhausted"}
+
 async def _ensure_telegram_webhook() -> None:
     if not TELEGRAM_AUTO_WEBHOOK:
         return
@@ -1112,6 +1113,39 @@ async def reject_signed(ticket_id: str = Query(...), exp: str = Query(...), sig:
     if not _verify_signed_params(ticket_id, exp, sig, "/ops/reject/signed"):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _reject_core(ticket_id)
+
+# ===== NEW: implement _smart_manage_now (previously missing) =====
+async def _smart_manage_now(symbol: str, offset_bps: Optional[int] = None,
+                            pcts: Optional[List[float]] = None,
+                            splits: Optional[List[float]] = None,
+                            atr_mult: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Fire-and-forget call to our own /manage-once route to place BE stop, TPs and optional trailing.
+    Uses INTERNAL_BASE (falls back to 127.0.0.1:PORT). Includes Bearer if configured.
+    """
+    try:
+        url = (PUBLIC_HOST or get_internal_base()).rstrip("/") + "/manage-once"
+        payload: Dict[str, Any] = {"symbol": symbol}
+        if offset_bps is not None:
+            payload["offset_bps"] = int(offset_bps)
+        if pcts is not None:
+            payload["pcts"] = list(pcts)
+        if splits is not None:
+            payload["splits"] = list(splits)
+        if atr_mult is not None:
+            payload["atr_mult"] = float(atr_mult)
+        headers = {}
+        if API_BEARER_TOKEN:
+            headers["Authorization"] = f"Bearer {API_BEARER_TOKEN}"
+        cli = _get_shared_async_client()
+        r = await cli.post(url, json=payload, headers=headers or None, timeout=httpx.Timeout(15.0))
+        with suppress(Exception):
+            j = r.json()
+        return {"ok": (r.status_code == 200 and (j.get("ok", False) if isinstance(j, dict) else True)), "status": r.status_code, "result": j}
+    except Exception as e:
+        logger.warning("smart_manage_now_failed: %s", e)
+        return {"ok": False, "error": str(e)}
+
 async def _approve_core(ticket_id: str):
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
@@ -2179,7 +2213,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
 
 
 
