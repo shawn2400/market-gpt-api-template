@@ -10,9 +10,12 @@ router = APIRouter(prefix="/health", tags=["Health"])
 log = logging.getLogger("algogpt.health")
 
 # --- Optional AI healthcheck (best-effort) ---
-_ai_check = None
+_ai_check_async = None
+_ai_check_sync = None
 with suppress(Exception):
-    from utils.ai_client import ai_healthcheck as _ai_check  # type: ignore
+    from utils.ai_client import ai_healthcheck_async as _ai_check_async  # type: ignore
+with suppress(Exception):
+    from utils.ai_client import ai_healthcheck as _ai_check_sync  # type: ignore
 
 # --- Optional TP1 self-test helpers (best-effort) ---
 _health_tp1_loaded = False
@@ -61,14 +64,22 @@ async def strategy_version():
 
 @router.get("/ai", summary="AI Health")
 async def ai():
-    if _ai_check is None:
-        return {"ok": True, "ai": "skipped"}
-    try:
-        result = await _ai_check()  # expected shape: {"ok": ...}
-        return result
-    except Exception as e:
-        log.warning("ai_healthcheck_failed: %s", e)
-        return {"ok": False, "error": "ai_healthcheck_failed", "detail": str(e)}
+    # prefer async healthcheck if available; fallback to sync
+    if _ai_check_async:
+        try:
+            result = await _ai_check_async()  # type: ignore
+            return result
+        except Exception as e:
+            log.warning("ai_healthcheck_async_failed: %s", e)
+            return {"ok": False, "error": "ai_healthcheck_async_failed", "detail": str(e)}
+    if _ai_check_sync:
+        try:
+            result = _ai_check_sync()  # type: ignore
+            return result
+        except Exception as e:
+            log.warning("ai_healthcheck_failed: %s", e)
+            return {"ok": False, "error": "ai_healthcheck_failed", "detail": str(e)}
+    return {"ok": True, "ai": "skipped"}
 
 @router.api_route("/tp1", methods=["GET", "HEAD"], summary="TP1 heartbeat / tags check")
 async def health_tp1_now(request: Request, symbols: Optional[str] = None):
