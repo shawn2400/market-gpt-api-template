@@ -9,7 +9,6 @@ from utils.trade_store import list_active
 logger = logging.getLogger("algogpt.risk_guard")
 
 def _get_env_flags():
-    """ טוען ערכי ENV בזמן אמת (כדי לא להינעל על ערכים ישנים). """
     return {
         "GLOBAL_OFF": str(os.getenv("GLOBAL_RISK_OFF", "0")).lower() in ("1", "true", "yes", "on"),
         "DAILY_MAX_LOSS": float(os.getenv("DAILY_NET_LOSS_USD_MAX", "999999")),
@@ -17,12 +16,6 @@ def _get_env_flags():
     }
 
 def allow_new_trade(symbol: str) -> Tuple[bool, str]:
-    """
-    כללי ניהול סיכונים:
-    - GLOBAL_RISK_OFF → חסום הכל
-    - לא לעבור MAX_CONCURRENT_TRADES_PER_SYMBOL
-    - לא לעבור DAILY_NET_LOSS_USD_MAX
-    """
     env = _get_env_flags()
 
     if env["GLOBAL_OFF"]:
@@ -50,5 +43,6 @@ def allow_new_trade(symbol: str) -> Tuple[bool, str]:
         logger.error("get_pnl_summary failed: %s", e)
 
     return (True, "OK")
+
 
 
