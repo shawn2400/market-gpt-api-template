@@ -503,7 +503,6 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                 return {"ok": False, "error": str(e)}
             await asyncio.sleep(0.6 * (attempt + 1))
     return {"ok": False, "error": "telegram_send_exhausted"}
-
 async def _ensure_telegram_webhook() -> None:
     if not TELEGRAM_AUTO_WEBHOOK:
         return
@@ -1008,7 +1007,8 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
-            row = f"• TP{i}: <code>{req_body[f'tp{i]']}</code>"
+            # FIX: סוגר מרובע חסר במקור
+            row = f"• TP{i}: <code>{req_body[f'tp{i}']}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
                 row += f"  ETA:<code>{req_body[f'eta_tp{i}_min']}m</code>"
             if req_body.get(f"prob_tp{i}_pct") is not None:
@@ -1112,7 +1112,6 @@ async def reject_signed(ticket_id: str = Query(...), exp: str = Query(...), sig:
     if not _verify_signed_params(ticket_id, exp, sig, "/ops/reject/signed"):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _reject_core(ticket_id)
-
 async def _approve_core(ticket_id: str):
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
@@ -1854,6 +1853,7 @@ async def meta_telegram(
                 "parse_mode": "HTML",
                 "disable_web_page_preview": True,
             }
+            # מציגים את הקישורים שיוצמדו (תצוגה מקדימה)
             payload.update({k: v for k, v in _maybe_links().items() if v})
             return {
                 "ok": True,
@@ -1901,7 +1901,7 @@ async def meta_telegram(
             except Exception:
                 cid = chat_id
 
-            # idem עדין על Redis, אם זמין (תיקון: and במקום &&)
+            # idem עדין על Redis, אם זמין
             if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
                 try:
                     r = await _get_redis_cached()
@@ -2179,6 +2179,7 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
+
 
 
 
