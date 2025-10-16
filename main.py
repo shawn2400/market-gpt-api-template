@@ -1858,7 +1858,6 @@ for mod, tag in (
         logger.warning("%s router not loaded: %s", mod, e)
 
 app.include_router(router)
-
 # ==================== Meta & Diagnostics ====================
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
@@ -2253,7 +2252,6 @@ async def _trail_rt_loop():
         except Exception as e:
             logger.debug("trail_rt.loop_error: %s", e)
         await asyncio.sleep(max(3, TRAIL_RT_INTERVAL_SEC))
-
 # --- אזהרות סטארטאפ (אופציונלי, לא חוסם) ---
 def _collect_critical_env_warnings() -> List[str]:
     warns: List[str] = []
