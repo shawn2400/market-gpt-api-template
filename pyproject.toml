@@ -1,0 +1,51 @@
+[tool.black]
+line-length = 100
+target-version = ["py310"]
+skip-string-normalization = true
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+fix = true
+show-fixes = true
+# בחרתי סט חוקים סביר ללא רעש
+select = [
+  "E", "F", "W",        # pycodestyle/pyflakes
+  "I",                  # isort (סידור ייבואים דרך ruff)
+  "UP",                 # שדרוגי פייתון
+  "B",                  # bugbear
+  "PYI",                # טייפ־הינטס בסיסי
+]
+ignore = [
+  "E203",               # תאימות Black לגבי slice
+  "W503",               # line break before binary operator
+]
+exclude = [
+  ".git",
+  ".venv",
+  "venv",
+  "__pycache__",
+  "build",
+  "dist",
+]
+
+[tool.ruff.isort]
+known-first-party = ["utils"]
+combine-as-imports = true
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers --maxfail=1"
+testpaths = ["tests"]
+
+[tool.coverage.run]
+branch = true
+source = ["utils"]
+omit = ["**/__init__.py"]
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
+
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
