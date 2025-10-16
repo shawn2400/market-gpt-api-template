@@ -20,7 +20,12 @@ except Exception:
     compute_pretrade_score = None  # type: ignore
 
 try:
-    from utils.metrics_tracker import inc_scan_eval, inc_scan_passed, inc_scan_blocked, set_last_entry_score  # type: ignore
+    from utils.metrics_tracker import (
+        inc_scan_eval,
+        inc_scan_passed,
+        inc_scan_blocked,
+        set_last_entry_score,
+    )  # type: ignore
 except Exception:
     def inc_scan_eval(): pass  # type: ignore
     def inc_scan_passed(): pass  # type: ignore
@@ -184,7 +189,7 @@ async def scan_info(
         # Counters pass/blocked לפי ENTRY_SCORE_MIN (לא חוסם API)
         try:
             min_req = float(os.getenv("ENTRY_SCORE_MIN","0") or 0)
-            if score is not None and min_req>0:
+            if score is not None and min_req > 0:
                 if score >= min_req: inc_scan_passed()
                 else: inc_scan_blocked()
         except Exception:
@@ -211,7 +216,6 @@ async def scan_symbols(
         except Exception as e:
             out.append(ScanSignal(symbol=sym.upper(), interval=interval, ok=False, error=str(e)))
     return ScanResponse(ok=True, count_total=len(symbols), returned=len(out), signals=out)
-
 
 
 
