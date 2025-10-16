@@ -1,4 +1,3 @@
-# routes/meta.py
 from fastapi import APIRouter
 import os
 try:
