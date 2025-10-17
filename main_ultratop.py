@@ -171,7 +171,7 @@ class PolicyManager:
 # ---------- HMAC helpers ----------
 def verify_hmac(headers: Dict[str, str], body: bytes, secret: str) -> None:
     sig = headers.get("X-Signature", "")
-    ts = headers.get("X-Timestamp", "")
+    ts = headers.get("X-Timestamp", "") or headers.get("X-Signature-Timestamp", "")
     if not sig or not ts:
         raise HTTPException(status_code=401, detail="missing signature headers")
     mac = hmac.new(secret.encode("utf-8"), ts.encode("utf-8") + b"." + body, hashlib.sha256).hexdigest()
