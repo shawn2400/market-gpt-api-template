@@ -317,7 +317,6 @@ def fetch_reduce_only_limits(client, symbol: str):
                     continue
     except Exception:
         pass
-    # ממיינים לפי מחיר
     out.sort(key=lambda x: x["price"])
     return out
 
@@ -334,12 +333,10 @@ def maybe_merge_close_tps(client, symbol: str, *, tick: float, tick_band: int) -
     merged = 0
     band = max(1, int(tick_band)) * float(tick)
 
-    # הולכים בזוגות קרובים
     i = 0
     while i + 1 < len(ro):
         a, b = ro[i], ro[i + 1]
         if abs(a["price"] - b["price"]) <= band and a["side"] == b["side"]:
-            # נבטל את B ונפתח תוספת באותו מחיר של A
             try:
                 client.futures_cancel_order(symbol=symbol, orderId=b["orderId"])
             except Exception:
@@ -357,10 +354,8 @@ def maybe_merge_close_tps(client, symbol: str, *, tick: float, tick_band: int) -
                 )
                 merged += 1
             except Exception:
-                # אם פתיחת order נוסף נכשלה — לא מהותי
                 pass
             inc_tp_merge()
-            # רענון הרשימה כדי שלא נסתבך באינדקסים
             ro = fetch_reduce_only_limits(client, symbol)
             i = 0
             continue
@@ -419,7 +414,6 @@ def anti_stale_nudge(client, symbol: str, *, side_txt: str,
     - SELL: מעלים מחיר TP.
     """
     try:
-        # מחירי שוק
         px = None
         try:
             t = client.futures_symbol_ticker(symbol=symbol)
@@ -437,7 +431,6 @@ def anti_stale_nudge(client, symbol: str, *, side_txt: str,
             old = float(o["price"])
             if side_txt.upper() == "BUY":
                 new = old * (1.0 - float(nudge_bps) / 10_000.0)
-                # נשמור מרחק מינימלי
                 min_ok = px + min_distance_ticks * float(tick)
                 if new <= min_ok:
                     new = min_ok
@@ -446,11 +439,9 @@ def anti_stale_nudge(client, symbol: str, *, side_txt: str,
                 min_ok = px - min_distance_ticks * float(tick)
                 if new >= min_ok:
                     new = min_ok
-            # עיגול לטיק
             new_rounded = round_tick_dir(new, float(tick), "down" if side_txt.upper() == "BUY" else "up")
             if abs(new_rounded - old) >= float(tick):
                 try:
-                    # שינוי LIMIT מחייב ביטול+פתיחה — ננקוט add+cancel (כמו merge)
                     client.futures_create_order(
                         symbol=symbol,
                         side=o["side"],
