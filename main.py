@@ -22,10 +22,12 @@ from typing import Any, Dict, List, Optional, Callable, Tuple, Union
 import sys, types  # noqa: E402
 if "utils.anti_replay" not in sys.modules:
     _m = types.ModuleType("utils.anti_replay")
+
     def verify_request(ts_header: Optional[str], nonce_header: Optional[str], signature_header: Optional[str],
                        route: str, body: Any, require_signature: bool = False) -> Tuple[bool, str]:
         # permissive default; real verification lives in utils.anti_replay if present
         return True, "ok"
+
     _m.verify_request = verify_request  # type: ignore[attr-defined]
     sys.modules["utils.anti_replay"] = _m
 # ----------------------------------------------------------------------------------------
@@ -65,27 +67,38 @@ try:
 except Exception:
     def inc_approve_ok():  # type: ignore
         pass
+
     def inc_approve_fail():  # type: ignore
         pass
+
     def inc_reject():  # type: ignore
         pass
+
     def inc_scan_eval():  # type: ignore
         pass
+
     def inc_scan_passed():  # type: ignore
         pass
+
     def inc_scan_blocked():  # type: ignore
         pass
+
     def inc_approvals_created():  # type: ignore
         pass
+
     def set_last_entry_score(_v: float):  # type: ignore
         pass
+
     def set_last_slip_estimate_bps(_v: float):  # type: ignore
         pass
+
     # Stage 6 metrics fallbacks:
     def inc_time_stop_keep():  # type: ignore
         pass
+
     def inc_time_stop_move_be():  # type: ignore
         pass
+
     def inc_struct_sl_applied():  # type: ignore
         pass
 
@@ -101,6 +114,7 @@ try:
     from utils.pretrade_checklist import compute_pretrade_score, estimate_impact_slip_bps  # type: ignore
 except Exception:
     compute_pretrade_score = None  # type: ignore
+
     def estimate_impact_slip_bps(spread_pct: float, atr_pct: float, notional_usdt: float, *, max_bps: float = 25.0) -> float:  # type: ignore
         return 0.0
 
@@ -374,11 +388,6 @@ class ConfirmStore:
     def remove(cls, ticket_id: str) -> None:
         # FIX: גרש לא חוקי תוקן
         cls._items.pop(str(ticket_id), None)
-
-
-# ==================== (Part 2) ====================
-
-import httpx  # keep import in scope for Part 2
 
 # ==================== Shared HTTP and Redis ====================
 try:
@@ -729,6 +738,7 @@ except Exception:
             return s
         h = hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
         return f"{s[:limit - (len(h) + 1)]}_{h}"
+
     def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Optional[str] = None) -> str:
         prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
         sym = str(symbol).upper()
@@ -737,8 +747,6 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
-
-# ==================== (Part 3) ====================
 
 # ==================== Execute trade helpers ====================
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
@@ -928,9 +936,9 @@ async def webhook_whatever(request: Request):
         ok_first = await idem_for_request(body, headers, extra={"route": "/webhook/whatever"})
     except Exception as e:
         logger.warning("idem_for_request failed (permissive allow): %s", e)
-        ok_first = True
-    if not ok_first:
-        return JSONResponse({"ok": True, "skipped": True, "reason": "idem_duplicate"}, status_code=200)
+    else:
+        if not ok_first:
+            return JSONResponse({"ok": True, "skipped": True, "reason": "idem_duplicate"}, status_code=200)
     # TODO: add your single-execution logic here.
     return JSONResponse({"ok": True, "handled_once": True}, status_code=200)
 
@@ -1054,6 +1062,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         price_now = None
         with suppress(Exception):
             price_now = await get_last_price_async(symbol)
+
         def _smart(symbol: str, side: str, price_now: Optional[float], tps: List[Optional[float]]) -> Dict[str, Any]:
             if not price_now:
                 return {}
@@ -1064,6 +1073,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
                     out[f"eta_tp{i}_min"] = max(1, int(dist_bps / max(1, ETA_VELOCITY_WINDOW)))
             out.setdefault("eta_open_min", out.get("eta_tp1_min", 2))
             return out
+
         etas = _smart(symbol, side, price_now, [payload.get("tp1"), payload.get("tp2"), payload.get("tp3")])
         payload.update(etas)
 
@@ -1664,6 +1674,7 @@ def _parse_pause_windows(spec: str) -> List[Tuple[int, int]]:
         if "-" not in p:
             continue
         a, b = [x.strip() for x in p.split("-", 1)]
+
         def _hm(s: str) -> Optional[int]:
             try:
                 hh, mm = s.split(":")
@@ -1673,6 +1684,7 @@ def _parse_pause_windows(spec: str) -> List[Tuple[int, int]]:
             except Exception:
                 return None
             return None
+
         s = _hm(a); e = _hm(b)
         if s is None or e is None:
             continue
@@ -2471,8 +2483,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
-
 
 
 
