@@ -37,7 +37,7 @@ services:
       - key: APP_MODULE
         value: "main:app"
       - key: ULTRATOP_MODE
-        value: "mount"
+        value: "noop"
       - key: ULTRATOP_PREFIX
         value: "/ultra"
       - key: PYTHONPATH
@@ -125,7 +125,7 @@ services:
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
         value: "1"
       - key: REQUIRE_SIGNATURE
-        value: "0"
+        value: "1"
       - key: SIGNED_TS_MAX_SKEW_SEC
         value: "60"
       - key: ANTI_REPLAY_MAX_SKEW_SEC
@@ -824,10 +824,6 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
-
-
-
 
 
 
