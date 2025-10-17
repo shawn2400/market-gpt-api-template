@@ -4,7 +4,6 @@ from __future__ import annotations
 import os, time, math, re
 from contextlib import suppress
 from typing import Any, Dict, List, Tuple, Optional
-from functools import lru_cache
 import time as _t
 
 # =========================
@@ -77,7 +76,7 @@ def _fallback_filters():
     return {"price_tick": float(os.getenv("DEFAULT_PRICE_TICK","0.01")),
             "qty_step":   float(os.getenv("DEFAULT_QTY_STEP","0.001"))}
 
-# TTL cache לפילטרים (ללא תלות ב-LRU בלבד)
+# TTL cache לפילטרים
 _filters_cache: Dict[str, Tuple[float, Dict[str,Any]]] = {}
 
 def _round_step(v: float, step: float) -> float:
@@ -85,7 +84,6 @@ def _round_step(v: float, step: float) -> float:
     return math.floor(v/step + 1e-12) * step
 
 def _qprice(symbol: str, price: float, flt: Dict[str,Any]) -> float:
-    """Fallback quantizer for price if utils.quantize isn't available."""
     step = float(flt.get("price_tick") or 0.0)
     return round(_round_step(price, step), 8) if (ORDER_ROUND_TO_TICK and step>0) else round(price, 8)
 
@@ -287,7 +285,7 @@ def _target_sl_price(cli, symbol: str, side: str, entry: float, last: float, tp1
                 atr_sl = last + atr*atr_mult
                 if (tp1_ok or not TP_BE_ONLY_AFTER_TP1) and entry>0:
                     atr_sl = min(atr_sl, entry*(1.0 - TP_BE_OFFSET_BPS/10000.0))
-                tgt = min(tgt or 1e18, atr_sl)
+                tgt = min(tgt or 1.0e18, atr_sl)
             reason = "atr_trail"
 
     if tgt is None:
@@ -385,7 +383,5 @@ def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Di
             {"cancelled_old_stops": cancelled},
         ]
     }
-
-
 
 
