@@ -6,6 +6,7 @@ from __future__ import annotations
 - קונפיגורציה, קישוט הודעות (BSD), Rate-limit + Dedup
 - שליחה עם/בלי מקלדת
 - Bundling (איגוד הודעות) + פלש
+- Bundling ייעודי ל־TP hits (notify_tp_hit)
 - עזרי זמן/פורמט
 - Auto-Approve policy helper
 - חנות שינויים (Redis/קובץ)
@@ -86,6 +87,55 @@ _dedup_map: Dict[str, float] = {}
 _bundle_items: List[str] = []
 _bundle_task: Optional[asyncio.Task] = None
 _bundle_lock = asyncio.Lock()
+
+# ===================== (NEW) TP-Hits Bundling =====================
+TP_BUNDLE_ENABLE     = os.getenv("TP_BUNDLE_ENABLE", "1").lower() in ("1","true","yes","on")
+TP_BUNDLE_TITLE      = os.getenv("TP_BUNDLE_TITLE", "🎯 TP hits")
+TP_BUNDLE_WINDOW_SEC = int(os.getenv("TP_BUNDLE_WINDOW_SEC", "20"))
+TP_BUNDLE_MAX_ITEMS  = int(os.getenv("TP_BUNDLE_MAX_ITEMS", "20"))
+
+_tp_items: List[str] = []
+_tp_task: Optional[asyncio.Task] = None
+_tp_lock = asyncio.Lock()
+
+async def _flush_tp_bundle() -> None:
+    global _tp_items, _tp_task
+    async with _tp_lock:
+        if not _tp_items:
+            return
+        text = f"{TP_BUNDLE_TITLE}\n" + "\n".join(_tp_items)
+        _tp_items = []
+        _tp_task = None
+    await _tg_send(text)
+
+async def _tp_timer() -> None:
+    try:
+        await asyncio.sleep(max(3, TP_BUNDLE_WINDOW_SEC))
+        await _flush_tp_bundle()
+    except Exception as e:
+        logger.debug({"event":"tp.bundle.timer.failed","err":str(e)})
+
+async def notify_tp_hit(symbol: str, leg: int | str, price: float | str, qty: float | str | None = None) -> None:
+    """
+    מוסיף hit לרשימת TP לאיגוד; שולח באצווה לפי חלון/כמות.
+    """
+    if not TP_BUNDLE_ENABLE:
+        msg = f"🎯 TP{leg} · {symbol} @ <code>{_fmt_num(price, 6)}</code>"
+        if qty not in (None, "", 0, "0", "0.0"):
+            msg += f" · qty <code>{_fmt_num(qty, 4)}</code>"
+        await _tg_send(msg)
+        return
+    line = f"• {symbol} · TP{leg} @ <code>{_fmt_num(price, 6)}</code>"
+    if qty not in (None, "", 0, "0", "0.0"):
+        line += f" · qty <code>{_fmt_num(qty, 4)}</code>"
+    async with _tp_lock:
+        _tp_items.append(line)
+        if len(_tp_items) >= TP_BUNDLE_MAX_ITEMS:
+            await _flush_tp_bundle()
+            return
+        global _tp_task
+        if not _tp_task or _tp_task.done():
+            _tp_task = asyncio.create_task(_tp_timer())
 
 # ===================== Auto-Approval (TRADES) =====================
 TELEGRAM_AUTO_APPROVE = os.getenv("TELEGRAM_AUTO_APPROVE", "0").lower() in ("1","true","yes","on")
@@ -545,6 +595,7 @@ async def route_change_ticket(change: Dict[str, Any]) -> str:
 
 async def send_ops_digest_now() -> None:
     await _flush_bundle()
+    await _flush_tp_bundle()
 
 async def send_eod_report_now(summary: Dict[str, Any]) -> None:
     pnl = summary.get("pnl","—")
@@ -583,7 +634,7 @@ async def ensure_ops_schedulers_started() -> bool:
 __all__ = [
     "BOT_TOKEN","CHAT_ID","API_BASE","PUBLIC_HOST",
     "set_explain_enabled","get_explain_enabled","EXPLAIN_MIN_SCORE",
-    "_tg_send","_tg_send_with_markup","_bundle_add",
+    "_tg_send","_tg_send_with_markup","_bundle_add","notify_tp_hit",
     "_store_change_event","_load_changes_since",
     "_fmt_il","_fmt_usd","_fmt_num","_fmt_pct","_fmt_pct_prob","_fmt_eta","_em",
     "_fmt_side","_fmt_order_type","_tp_legs_to_lines","_try_get_live_price",
@@ -592,7 +643,3 @@ __all__ = [
     "format_change_approval_he","send_change_approval_he","route_change_ticket",
     "send_ops_digest_now","send_eod_report_now","ensure_ops_schedulers_started",
 ]
-
-
-
-
