@@ -9,10 +9,10 @@ router = APIRouter(prefix="", tags=["metrics"])
 # אופציונלי: הגנה ב-Bearer
 _METRICS_BEARER = (os.getenv("METRICS_BEARER") or "").strip()
 _API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
-_REQUIRE_BEARER = os.getenv("PUBLIC_METRICS_REQUIRE_BEARER", "0").lower() in ("1","true","yes","on")
+_REQUIRE_BEARER = os.getenv("PUBLIC_METRICS_REQUIRE_BEARER", "0").lower() in ("1", "true", "yes", "on")
 
 def _auth_ok(auth_header: str) -> bool:
-    # אם לא נדרש Bearer – פתוח
+    # אם לא נדרש Bearer – פתוח (אלא אם הוגדר METRICS_BEARER מפורשות)
     if not (_REQUIRE_BEARER or _METRICS_BEARER):
         return True
     if not (auth_header and auth_header.startswith("Bearer ")):
@@ -32,5 +32,6 @@ async def metrics(authorization: str = Header(default="")):
     body = render_prometheus_text()
     # הפורמט התקני של Prometheus exposition
     return Response(content=body, media_type="text/plain; version=0.0.4; charset=utf-8")
+
 
 
