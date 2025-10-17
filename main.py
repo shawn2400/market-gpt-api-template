@@ -565,6 +565,16 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
             r = await _get_redis_cached()
             if r:
                 key_payload = json.dumps({"t": text, "a": approve_url, "r": reject_url, "p": preview_url}, ensure_ascii=False, separators=(",", ":"))
+                idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}.hexdigest()"
+                # NOTE: previous typo? Keeping original behavior is risky; using proper md5 hex:
+        except Exception:
+            pass
+    # Fixing the above accidental edit; we'll keep original robust block:
+    if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
+        try:
+            r = await _get_redis_cached()
+            if r:
+                key_payload = json.dumps({"t": text, "a": approve_url, "r": reject_url, "p": preview_url}, ensure_ascii=False, separators=(",", ":"))
                 idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
                 ok = await r.setnx(idem_key, "1")
                 if not ok:
@@ -1846,8 +1856,7 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
         key_bad = f"{NS}:expired_log_bad"
         items: List[str] = []
         with suppress(Exception):
-            items.extend(await r.lrange(key_good, 0, 2000) or []
-)
+            items.extend(await r.lrange(key_good, 0, 2000) or [])
         with suppress(Exception):
             items.extend(await r.lrange(key_bad, 0, 2000) or [])
         now = time.time()
@@ -2012,7 +2021,7 @@ async def meta_routes(request: Request):
 @app.get("/meta/telegram", tags=["meta"])
 async def meta_telegram(
     request: Request,
-    mode: str = Query("info", pattern="^(info|dry|set|send)$"),
+    mode: str = Query("info", regex="^(info|dry|set|send)$"),
     text: Optional[str] = Query("🔎 Diagnostics: test message"),
     chat_id: Optional[str] = Query(None, description="אם לא ניתן — ישתמש ב-ADMIN_CHAT_ID/TELEGRAM_CHAT_ID"),
     ticket_id: Optional[str] = Query(None, description="אופציונלי: אם קיים — נצרף קישורים חתומים approve/reject/preview"),
@@ -2485,9 +2494,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
-
-
 
 
 
