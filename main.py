@@ -1177,7 +1177,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
-            row = f"• TP{i}: <code>{req_body[f'tp{i}']}</code>"
+            row = f"• TP{i}: <code>{req_body[f'tp{i]']}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
                 row += f"  ETA:<code>{req_body[f'eta_tp{i}_min']}m</code>"
             if req_body.get(f"prob_tp{i}_pct") is not None:
@@ -1496,7 +1496,7 @@ async def ui_pending(request: Request = None):
     body = (
         "<!doctype html><meta charset='utf-8'>"
         "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.5'>"
-        "<h2 style='margin:0 0 1rem 0'>Pending Approval Tickets</h2>"
+        "<h2 style='margin:0 0 1את 0'>Pending Approval Tickets</h2>"
         "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
         "<thead><tr style='background:#fafafa'><th style='text-align:left;padding:.4rem .6rem'>Ticket</th>"
         "<th style='text-align:left;padding:.4rem .6rem'>Symbol</th>"
@@ -2483,7 +2483,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
 
 
 
