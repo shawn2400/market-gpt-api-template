@@ -6,7 +6,7 @@ import os
 import functools
 import inspect
 from contextlib import asynccontextmanager, contextmanager
-from typing import Dict, Any, Optional, List, Callable, Awaitable
+from typing import Dict, Any, Optional, List, Callable
 
 _START_TIME = time.time()
 _SENT_TELEGRAM = 0
@@ -264,7 +264,7 @@ def observe_http_ctx(name: str = "io", labels: Optional[Dict[str,str]] = None):
     """
     שימוש:
       with observe_http_ctx("binance", {"route":"/scan"}):
-          await cli.get(...)
+          ... IO ...
     מודד latency ושופך להיסטוגרמה הגנרית (דלי נמוך קרדינליות).
     """
     _ = name, labels  # לעתיד
@@ -506,4 +506,3 @@ __all__ = [
     "observe_http_ctx","observe_http_ctx_async","observe_http",
     "observe_callback_rate","observe_be_distance_bps","observe_tp_ladders",
 ]
-
