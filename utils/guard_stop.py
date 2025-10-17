@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os, time, math, re
@@ -84,6 +85,7 @@ def _round_step(v: float, step: float) -> float:
     return math.floor(v/step + 1e-12) * step
 
 def _qprice(symbol: str, price: float, flt: Dict[str,Any]) -> float:
+    """Fallback quantizer for price if utils.quantize isn't available."""
     step = float(flt.get("price_tick") or 0.0)
     return round(_round_step(price, step), 8) if (ORDER_ROUND_TO_TICK and step>0) else round(price, 8)
 
@@ -117,6 +119,7 @@ def _get_filters(cli, symbol: str) -> Dict[str,Any]:
         return data
     return _fallback_filters()
 
+# Optional override via utils.quantize (אם קיים)
 with suppress(Exception):
     from utils.quantize import get_filters as _gf, quantize_price as _qp, quantize_qty as _qq  # type: ignore
     def _get_filters(cli, symbol: str) -> Dict[str,Any]:  # type: ignore
@@ -234,7 +237,7 @@ def _place_stop_native(cli, symbol: str, side: str, stop_px: float, position_sid
         payload["positionSide"] = position_side
     return cli.futures_create_order(**payload)
 
-def _cancel_stops(cli, symbol: str, keep_order_id: Optional[int], kinds=("STOP","TAKE_PROFIT","TRAILING_STOP")) -> int:
+def _cancel_stops(cli, symbol: str, keep_order_id: Optional[int], kinds=("STOP","TAKE_PROFIT","TRAILING_STOP_MARKET")) -> int:
     n=0
     for o in _active_orders(cli, symbol):
         typ=(o.get("type") or "").upper()
@@ -317,6 +320,9 @@ def _decide_mode(cli, symbol: str) -> str:
 def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Dict[str,Any]:
     """
     Ensures an always-on protective SL.
+    - בוחר אוטומטית בין native closePosition לבין כמות מדויקת (reduceOnly) לפי מצב קיים / העדפה.
+    - דוחס מחיר SL עם כימות לטיק.
+    - מנקה סטופים ישנים לאחר פתיחת החדש (למעט ה־orderId החדש).
     """
     if not GUARD_ENSURE_SL:
         return {"ok": False, "symbol": symbol, "reason":"guard_disabled"}
@@ -334,7 +340,10 @@ def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Di
     with suppress(Exception): last = _last_price(cli, symbol)
     flt = _get_filters(cli, symbol)
 
-    mode = prefer_mode or _decide_mode(cli, symbol)  # 'native' | 'quantities'
+    mode = (prefer_mode or "").strip().lower() if prefer_mode else _decide_mode(cli, symbol)  # 'native' | 'quantities'
+    if mode not in ("native","quantities"):
+        mode = _decide_mode(cli, symbol)
+
     orders = _active_orders(cli, symbol)
     nat, qty = _split_native_vs_qty(orders)
     mode_orders = nat if mode=="native" else qty
@@ -344,24 +353,30 @@ def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Di
     target_px, reason = _target_sl_price(cli, symbol, side, entry, last, tp1_ok, current_sl_px, flt)
 
     qty_cover = _qqty(symbol, abs_qty, flt)
-    if qty_cover <= 0: return {"ok": False, "symbol": symbol, "reason":"qty_rounds_zero"}
+    if qty_cover <= 0:
+        return {"ok": False, "symbol": symbol, "reason":"qty_rounds_zero"}
 
+    # אין שינוי מהותי? נשמור על ה-order הקיים
     if current_sl_px is not None:
         tick = float(flt.get("price_tick") or 0.0)
         if tick and abs(target_px - current_sl_px) < (1.0 * tick):
             return {"ok": True, "symbol": symbol, "mode": mode, "actions":[{"skip":"already_protected","current_sl": current_sl_px}]}
 
+    # Place
     if mode=="native":
         new_ord = _place_stop_native(cli, symbol, opp, target_px, pos_side)
     else:
         new_ord = _place_stop_quantities(cli, symbol, opp, qty_cover, target_px, pos_side)
 
     time.sleep(min(0.8, float(os.getenv("ORD_VERIFY_TIMEOUT_MS","800"))/1000.0))
+
+    # Verify
     after = _active_orders(cli, symbol)
     found = any(o.get("orderId")==new_ord.get("orderId") and (o.get("status") or "").upper()=="NEW" for o in after)
     if not found:
         return {"ok": False, "symbol": symbol, "mode": mode, "actions":[{"verify_failed": True}]}
 
+    # Cancel old stops (excluding the new one)
     cancelled = _cancel_stops(cli, symbol, keep_order_id=new_ord.get("orderId"))
     return {
         "ok": True, "symbol": symbol, "mode": mode,
