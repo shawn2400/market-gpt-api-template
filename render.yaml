@@ -405,7 +405,7 @@ services:
         value: "449087907"
       - key: TELEGRAM_CHAT_ID
         value: "449087907"
-      - key: TELEGRAM_ADMINIDS
+      - key: TELEGRAM_ADMIN_IDS
         value: "449087907"
       - key: TELEGRAM_AUTO_WEBHOOK
         value: "1"
@@ -511,7 +511,7 @@ services:
       # ----- Profit-Lock bands -----
       - key: PROFIT_LOCK_STEPS
         value: "1.0,1.5,2.0"
-      # ----- Structural SL (new) -----
+      # ----- Structural SL -----
       - key: STRUCT_SL_ENABLE
         value: "1"
       - key: STRUCT_SL_LOOKBACK
@@ -524,7 +524,7 @@ services:
         value: "5"
       - key: STRUCT_SL_MERGE_MODE
         value: "tight"
-      # ----- Time Stop (new) -----
+      # ----- Time Stop -----
       - key: TIME_STOP_MIN
         value: "20"
       - key: TIME_STOP_KEEP_PROFIT_MIN_PCT
@@ -671,6 +671,39 @@ services:
         value: "1"
       - key: PRICE_PROTECT
         value: "1"
+      # ----- Risk caps/guards (per symbol) -----
+      - key: MAX_LOSS_PER_SYMBOL_USDT
+        value: "150"
+      - key: DAILY_MAX_TRADES_PER_SYMBOL
+        value: "8"
+      - key: CAPS_PER_SYMBOL_WINDOW_SEC
+        value: "3600"
+      - key: THREE_STRIKE_N
+        value: "3"
+      - key: THREE_STRIKE_WINDOW_SEC
+        value: "86400"
+      - key: SAFE_MODE
+        value: "0"
+      # ----- Drawdown & exposure -----
+      - key: EQUITY_USDT
+        value: "5000"
+      - key: EQUITY_ATH_USDT
+        value: "8000"
+      - key: EQUITY_DRAWDOWN_GUARD_PCT
+        value: "25"
+      - key: CORR_CAP_BETA
+        value: "1.6"
+      # ----- Vol targeting / Kelly-lite -----
+      - key: VOL_TARGET_PCT
+        value: "0.015"
+      - key: KELLY_LITE_CAP
+        value: "0.5"
+      # ----- Session rules -----
+      - key: SESSION_RULES
+        value: "02:00-06:00Z=OFF,12:30-13:00Z=REDUCE_50"
+      # ----- Shock gate -----
+      - key: GAP_SHOCK_BPS
+        value: "80"
 
       # ========================= Misc / Storage / Metrics =========================
       - key: METRICS_ENABLE
@@ -773,8 +806,6 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
-
 
 
 
