@@ -34,5 +34,3 @@ async def metrics(authorization: str = Header(default="")):
     return Response(content=body, media_type="text/plain; version=0.0.4; charset=utf-8")
 
 
-
-
