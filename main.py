@@ -325,6 +325,11 @@ TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_
 # HMAC secret for signed links
 HMAC_SECRET = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
 
+# ==== Signed-link paths (DRY & safer) ====
+SIGN_PATH_PREVIEW = "/ops/ui/ticket/signed"
+SIGN_PATH_APPROVE = "/ops/approve/signed"
+SIGN_PATH_REJECT  = "/ops/reject/signed"
+
 # ==================== Security helpers ====================
 def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
     # שדרוג: נסיון לפענח hex באורך 64, ואם נכשל — להשתמש כטקסט רגיל
@@ -523,6 +528,7 @@ async def _public_cache_etag(request: Request, call_next):
         body = b""
         with suppress(Exception):
             body = resp.body if getattr(resp, "body", None) else b""
+        # NOTE: streaming responses will usually have empty body; we skip ETag for them (ok).
         if not body:
             if "vary" not in hdrs_lower:
                 resp.headers["Vary"] = "If-None-Match"
@@ -954,7 +960,8 @@ def _require_bearer(request: Request) -> None:
 def _rows_kv_html(t: Dict[str, Any]) -> str:
     def cv(k, default="—"):
         v = t.get(k, default)
-        return default if v in (None, "", []) else _md_html(str(v))
+        # keep 0/0.0 as valid values; only None / "" / [] become default
+        return default if (v is None or v == "" or v == []) else _md_html(str(v))
     rows = []
     for k in (
         "ticket_id","symbol","side","qty","leverage","position_side","budget","score",
@@ -1166,9 +1173,9 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         set_last_slip_estimate_bps(float(est_bps))
 
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
-    preview_url = _build_signed_link(base, "/ops/ui/ticket/signed", tid, ttl_sec=900, action="preview")
-    approve_url = _build_signed_link(base, "/ops/approve/signed", tid, ttl_sec=900, action="approve")
-    reject_url = _build_signed_link(base, "/ops/reject/signed", tid, ttl_sec=900, action="reject")
+    preview_url = _build_signed_link(base, SIGN_PATH_PREVIEW, tid, ttl_sec=900, action="preview")
+    approve_url = _build_signed_link(base, SIGN_PATH_APPROVE, tid, ttl_sec=900, action="approve")
+    reject_url = _build_signed_link(base, SIGN_PATH_REJECT, tid, ttl_sec=900, action="reject")
 
     lines = [
         "⚠️ <b>Approval Needed</b>",
@@ -1177,7 +1184,8 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
-            row = f"• TP{i}: <code>{req_body[f'tp{i]']}</code>"
+            # FIX: correct f-string indexing
+            row = f"• TP{i}: <code>{req_body[f'tp{i}']}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
                 row += f"  ETA:<code>{req_body[f'eta_tp{i}_min']}m</code>"
             if req_body.get(f"prob_tp{i}_pct") is not None:
@@ -1222,8 +1230,8 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
     return "HYBRID" if os.getenv("TP_LADDER_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on") else "MARKET"
 
 def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLResponse:
-    approve_url = _build_signed_link(base, "/ops/approve/signed", ticket_id, ttl_sec=900, action="approve")
-    reject_url = _build_signed_link(base, "/ops/reject/signed", ticket_id, ttl_sec=900, action="reject")
+    approve_url = _build_signed_link(base, SIGN_PATH_APPROVE, ticket_id, ttl_sec=900, action="approve")
+    reject_url = _build_signed_link(base, SIGN_PATH_REJECT, ticket_id, ttl_sec=900, action="reject")
     body = (
         "<!doctype html><meta charset='utf-8'>"
         "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.45'>"
@@ -1255,9 +1263,9 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     return _render_ticket_html(ticket_id, rec, base)
 
-@router.get("/ops/ui/ticket/signed")
+@router.get(SIGN_PATH_PREVIEW)
 async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
-    if not _verify_signed_params(ticket_id, exp, sig, "/ops/ui/ticket/signed"):
+    if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_PREVIEW):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     rec, _ = await _load_ticket(ticket_id)
     if not rec:
@@ -1278,15 +1286,15 @@ async def reject(ticket_id: str = Query(..., description="ticket_id"), request: 
     _maybe_protect_routes(request)
     return await _reject_core(ticket_id)
 
-@router.get("/ops/approve/signed")
+@router.get(SIGN_PATH_APPROVE)
 async def approve_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
-    if not _verify_signed_params(ticket_id, exp, sig, "/ops/approve/signed"):
+    if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_APPROVE):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _approve_core(ticket_id)
 
-@router.get("/ops/reject/signed")
+@router.get(SIGN_PATH_REJECT)
 async def reject_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
-    if not _verify_signed_params(ticket_id, exp, sig, "/ops/reject/signed"):
+    if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_REJECT):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _reject_core(ticket_id)
 
@@ -1496,7 +1504,7 @@ async def ui_pending(request: Request = None):
     body = (
         "<!doctype html><meta charset='utf-8'>"
         "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.5'>"
-        "<h2 style='margin:0 0 1את 0'>Pending Approval Tickets</h2>"
+        "<h2 style='margin:0 0 1rem 0'>Pending Approval Tickets</h2>"
         "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
         "<thead><tr style='background:#fafafa'><th style='text-align:left;padding:.4rem .6rem'>Ticket</th>"
         "<th style='text-align:left;padding:.4rem .6rem'>Symbol</th>"
@@ -1838,7 +1846,8 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
         key_bad = f"{NS}:expired_log_bad"
         items: List[str] = []
         with suppress(Exception):
-            items.extend(await r.lrange(key_good, 0, 2000) or [])
+            items.extend(await r.lrange(key_good, 0, 2000) or []
+)
         with suppress(Exception):
             items.extend(await r.lrange(key_bad, 0, 2000) or [])
         now = time.time()
@@ -2038,9 +2047,9 @@ async def meta_telegram(
             return {"preview_url": None, "approve_url": None, "reject_url": None}
         base = PUBLIC_HOST or get_internal_base()
         return {
-            "preview_url": _build_signed_link(base, "/ops/ui/ticket/signed", ticket_id, ttl_sec=900, action="preview"),
-            "approve_url": _build_signed_link(base, "/ops/approve/signed", ticket_id, ttl_sec=900, action="approve"),
-            "reject_url": _build_signed_link(base, "/ops/reject/signed", ticket_id, ttl_sec=900, action="reject"),
+            "preview_url": _build_signed_link(base, SIGN_PATH_PREVIEW, ticket_id, ttl_sec=900, action="preview"),
+            "approve_url": _build_signed_link(base, SIGN_PATH_APPROVE, ticket_id, ttl_sec=900, action="approve"),
+            "reject_url": _build_signed_link(base, SIGN_PATH_REJECT, ticket_id, ttl_sec=900, action="reject"),
         }
 
     if mode == "info":
@@ -2114,7 +2123,6 @@ async def meta_telegram(
             except Exception:
                 cid = chat_id
 
-            # (FIX) Python uses 'and' not '&&'
             if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
                 try:
                     r = await _get_redis_cached()
@@ -2369,14 +2377,10 @@ async def _trail_rt_loop():
                                 min_distance_ticks=1
                             )
 
-                # === Best-effort: זיהוי TP1 נלקח (על בסיס הזמנה reduceOnly שמולאה לאחר הפתיחה)
-                # אם נמצא — נחתים את הטיימסטמפ ונרשום metric
+                # === Best-effort: זיהוי TP1 נלקח ...
                 with suppress(Exception):
                     if (sym in app.state.pos_open_ts) and (sym not in app.state.tp1_hit_ts):
-                        # חיפוש היסטוריית הזמנות אחרונות (קליל)
-                        # הערה: אם endpoint לא יחזיר reduceOnly/status, שום דבר לא יקרה — suppress(Exception)
                         orders = client.futures_get_all_orders(symbol=sym, limit=20)
-                        # נסדר מהחדשות לישנות
                         for o in reversed(orders or []):
                             if str(o.get("reduceOnly")).lower() == "true" and str(o.get("status")).upper() == "FILLED":
                                 app.state.tp1_hit_ts[sym] = int(time.time())
@@ -2385,9 +2389,7 @@ async def _trail_rt_loop():
                                 )
                                 break
 
-                # -------- (NEW 2.3) Time-Stop counters (best-effort, only if logic exists) --------
-                # אם קיימות פונקציות should_time_stop/time_stop_decision במודול החיצוני — נספור בהתאם להחלטה.
-                # לא מבצעים כאן שינויי הזמנות כדי לא לשנות התנהגות קיימת (החלק המבצעי כבקשתך נמצא בקטע הקודם אצלך).
+                # -------- Time-Stop counters --------
                 try:
                     if callable(should_time_stop) and callable(time_stop_decision) and TIME_STOP_MIN > 0:
                         entry_time_ms = int((app.state.pos_open_ts.get(sym, int(time.time())) or int(time.time())) * 1000)
@@ -2405,7 +2407,7 @@ async def _trail_rt_loop():
                                     pass
                 except Exception:
                     pass
-                # ---------------------- סוף Time-Stop counters ----------------------
+                # ------------------------------------
 
         except Exception as e:
             logger.debug("trail_rt.loop_error: %s", e)
@@ -2483,11 +2485,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
-
-
-
-
 
 
 
