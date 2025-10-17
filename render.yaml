@@ -6,7 +6,7 @@ services:
     plan: pro
     autoDeploy: false
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /readyz
+    healthCheckPath: /readyz/strict
 
     disk:
       name: data
