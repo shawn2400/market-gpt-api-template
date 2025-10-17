@@ -67,38 +67,27 @@ try:
 except Exception:
     def inc_approve_ok():  # type: ignore
         pass
-
     def inc_approve_fail():  # type: ignore
         pass
-
     def inc_reject():  # type: ignore
         pass
-
     def inc_scan_eval():  # type: ignore
         pass
-
     def inc_scan_passed():  # type: ignore
         pass
-
     def inc_scan_blocked():  # type: ignore
         pass
-
     def inc_approvals_created():  # type: ignore
         pass
-
     def set_last_entry_score(_v: float):  # type: ignore
         pass
-
     def set_last_slip_estimate_bps(_v: float):  # type: ignore
         pass
-
     # Stage 6 metrics fallbacks:
     def inc_time_stop_keep():  # type: ignore
         pass
-
     def inc_time_stop_move_be():  # type: ignore
         pass
-
     def inc_struct_sl_applied():  # type: ignore
         pass
 
@@ -114,7 +103,6 @@ try:
     from utils.pretrade_checklist import compute_pretrade_score, estimate_impact_slip_bps  # type: ignore
 except Exception:
     compute_pretrade_score = None  # type: ignore
-
     def estimate_impact_slip_bps(spread_pct: float, atr_pct: float, notional_usdt: float, *, max_bps: float = 25.0) -> float:  # type: ignore
         return 0.0
 
@@ -391,7 +379,6 @@ class ConfirmStore:
 
     @classmethod
     def remove(cls, ticket_id: str) -> None:
-        # FIX: גרש לא חוקי תוקן
         cls._items.pop(str(ticket_id), None)
 
 # ==================== Shared HTTP and Redis ====================
@@ -560,16 +547,6 @@ def _md_html(s: str) -> str:
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                               reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
     # --- idempotency on Redis to avoid duplicate sends within IDEM_TTL_SEC ---
-    if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
-        try:
-            r = await _get_redis_cached()
-            if r:
-                key_payload = json.dumps({"t": text, "a": approve_url, "r": reject_url, "p": preview_url}, ensure_ascii=False, separators=(",", ":"))
-                idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}.hexdigest()"
-                # NOTE: previous typo? Keeping original behavior is risky; using proper md5 hex:
-        except Exception:
-            pass
-    # Fixing the above accidental edit; we'll keep original robust block:
     if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
         try:
             r = await _get_redis_cached()
@@ -1194,7 +1171,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
-            # FIX: correct f-string indexing
             row = f"• TP{i}: <code>{req_body[f'tp{i}']}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
                 row += f"  ETA:<code>{req_body[f'eta_tp{i}_min']}m</code>"
@@ -2494,7 +2470,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
 
 
 
