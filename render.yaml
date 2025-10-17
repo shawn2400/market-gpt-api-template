@@ -37,7 +37,9 @@ services:
       - key: APP_MODULE
         value: "main:app"
       - key: ULTRATOP_MODE
-        value: "noop"
+        value: "mount"
+      - key: ULTRATOP_PREFIX
+        value: "/ultra"
       - key: PYTHONPATH
         value: "/app"
       - key: WEB_CONCURRENCY
@@ -108,13 +110,12 @@ services:
         value: "1"
       - key: ENABLE_HSTS
         value: "1"
-      # אל תפרסם מסלולי approve/reject לא חתומים — משאירים רק את ה-signed/UI-signed
       - key: SECURITY_PUBLIC_PATHS
-        value: "/ops/ui,/ops/ui/orders,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/meta/telegram,/debug/env,/ultra/readyz,/ultra/readyz/strict,/ultra/metrics,/ultra/meta/version,/ultra/health"
+        value: "/ops/approve-link,/ops/approve,/ops/reject,/ops/approve/signed,/ops/ui,/ops/ui/orders,/ops/ui/ticket,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/ops/manager/health,/ui/dashboard,/health,/health/tp1,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/meta/telegram,/debug/env,/ultra/readyz,/ultra/readyz/strict,/ultra/metrics,/ultra/meta/version,/ultra/health"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
       - key: SECURITY_PROTECTED_PATHS
-        value: "/ops/approve,/ops/reject,/ops/approve/signed,/ops/reject/signed,/webhook/whatever,/guard/smoke/run"
+        value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run"
 
       # ========================= Anti-Replay =========================
       - key: ANTI_REPLAY_ENABLE
@@ -123,8 +124,12 @@ services:
         value: "60"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
         value: "1"
+      - key: REQUIRE_SIGNATURE
+        value: "0"
       - key: SIGNED_TS_MAX_SKEW_SEC
         value: "60"
+      - key: ANTI_REPLAY_MAX_SKEW_SEC
+        value: "120"
       - key: SIGNED_NONCE_TTL_SEC
         value: "120"
       - key: ANTI_REPLAY_SKEW_SEC
@@ -176,7 +181,7 @@ services:
       - key: USE_REDIS_IDEM
         value: "0"
       - key: IDEM_TTL_SEC
-        value: "60"
+        value: "120"
       - key: SETEX_STRICT
         value: "1"
       - key: REDIS_CONNECT_TIMEOUT
@@ -807,12 +812,6 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
-
-
-
-
-
 
 
 
