@@ -5,6 +5,8 @@ import os, time, math, re
 from typing import Any, Dict, Optional, List, Tuple
 from contextlib import suppress
 
+__all__ = ["plan_trade", "execute_trade", "execute_order"]
+
 # ── ENV helpers ───────────────────────────────────────────────────────────────
 def _env_list_floats(name: str, default_csv: str) -> List[float]:
     raw = os.getenv(name, default_csv)
@@ -22,6 +24,7 @@ def _env_list_floats(name: str, default_csv: str) -> List[float]:
 def _env_bool(name: str, default: str = "0") -> bool:
     return (os.getenv(name, default) or "").strip().lower() in ("1", "true", "yes", "on")
 
+# defaults
 DEFAULT_SL_BPS   = _env_list_floats("DEFAULT_SL_BPS",   "80")            # 0.8%
 DEFAULT_TP_BPS   = _env_list_floats("DEFAULT_TP_BPS",   "60,120,200")    # 0.6/1.2/2.0%
 DEFAULT_TP_SPLIT = _env_list_floats("DEFAULT_TP_SPLITS","0.34,0.33,0.33")
@@ -136,7 +139,7 @@ def plan_trade(
     if price <= 0.0:
         with suppress(Exception):
             import requests  # type: ignore
-            base = os.getenv("INTERNAL_BASE", "http://127.0.0.1:10000")
+            base = os.getenv("INTERNAL_BASE", os.getenv("PUBLIC_HOST", "http://127.0.0.1:10000"))
             r = requests.get(f"{base}/price/{symbol}", timeout=2.5)
             if r.ok:
                 price = float(r.json().get("price") or 0.0)
@@ -175,7 +178,7 @@ def _place_market(client, symbol: str, side: str, qty: float, position_side: str
             return {"ok": True, "order": client.futures_create_order(**kw)}
         except Exception as e:
             s = str(e).lower()
-            # טיפול ב-4061: positionSide לא תואם → נסה ללא positionSide ואז עם נגזרת
+            # 4061 positionSide mismatch → retry variants
             if "code=-4061" in s or "position side does not match" in s:
                 with suppress(Exception):
                     kw2 = dict(kw); kw2.pop("positionSide", None)
@@ -184,7 +187,7 @@ def _place_market(client, symbol: str, side: str, qty: float, position_side: str
                     kw3 = dict(kw)
                     kw3["positionSide"] = "LONG" if side.upper()=="BUY" else "SHORT"
                     return {"ok": True, "order": client.futures_create_order(**kw3), "retry": "derived_positionSide"}
-            # 429/418/1003 → backoff
+            # 429/418/-1003 backoff
             if any(code in s for code in ("429", "418", "1003")) and attempt < RETRY_MAX-1:
                 time.sleep((RETRY_BASE_MS/1000.0) * (attempt+1))
                 continue
@@ -192,7 +195,6 @@ def _place_market(client, symbol: str, side: str, qty: float, position_side: str
     return {"ok": False, "error": "place_market_exhausted"}
 
 def _place_stop_market(client, symbol: str, side: str, stop_price: float, reduce_only: bool=True) -> Dict[str, Any]:
-    # STOP_MARKET: opposite side
     opp_side = "SELL" if side.upper()=="BUY" else "BUY"
     kw = dict(
         symbol=symbol, side=opp_side, type="STOP_MARKET",
@@ -205,7 +207,6 @@ def _place_stop_market(client, symbol: str, side: str, stop_price: float, reduce
         return {"ok": False, "error": f"{e}"}
 
 def _place_tp_market(client, symbol: str, side: str, stop_price: float, qty: float) -> Dict[str, Any]:
-    # TAKE_PROFIT_MARKET reduceOnly
     opp_side = "SELL" if side.upper()=="BUY" else "BUY"
     kw = dict(
         symbol=symbol, side=opp_side, type="TAKE_PROFIT_MARKET",
@@ -225,7 +226,7 @@ def execute_trade(
     budget_usd: float,
     *,
     dry_run: bool = True,
-    confirm_first: bool = True,  # לא בשימוש בשכבת shim
+    confirm_first: bool = True,  # kept for signature compatibility
     order_type: str = "MARKET",
     entry_price: Optional[float] = None,
     position_side: Optional[str] = None,
@@ -233,14 +234,11 @@ def execute_trade(
     **kwargs
 ) -> Dict[str, Any]:
     """
-    נקודת כניסה תואמת ל-routes.executor / routes.trade.
-    1) אם יש utils.trade_executor.execute_trade/execute_trade_live נשתמש בהם.
-    2) אחרת:
-       - מחשב qty מסכום (budget_usd*lev)/price
-       - MARKET על הצד המבוקש
-       - מציב SL + TP MARKET (splits) עם reduceOnly.
+    Compatible entry-point for routes.executor / routes.trade.
+    Tries real executors if present, else executes via python-binance;
+    if keys missing → returns a plan (dry-run style).
     """
-    # 1) האצלה אם קיימת שכבת ביצוע פנימית
+    # 1) delegate if internal executors exist
     with suppress(Exception):
         from utils.trade_executor import execute_trade_live as _x  # type: ignore
         return _x(symbol=symbol, side=side, leverage=leverage, budget=budget_usd,
@@ -250,7 +248,7 @@ def execute_trade(
         return _y(symbol=symbol, side=side, leverage=leverage, budget_usd=budget_usd,
                   dry_run=dry_run, order_type=order_type, entry_price=entry_price, quantity=qty, position_side=position_side, **kwargs)
 
-    # 2) shim חי
+    # 2) live shim
     client = _client()
     if client is None:
         plan = plan_trade(symbol, side, leverage, budget_usd, order_type, entry_price, **kwargs)
@@ -262,7 +260,6 @@ def execute_trade(
     if d == 0:
         return {"ok": False, "error": "bad_side"}
 
-    # מחיר/מינונים
     price = float(entry_price or 0.0) or _last_price(client, symbol)
     if price <= 0.0:
         plan = plan_trade(symbol, side, leverage, budget_usd, order_type, entry_price, **kwargs)
@@ -277,12 +274,12 @@ def execute_trade(
         plan["quantity"] = qty_final
         return {"ok": True, "result": dict(plan, dry_run=True)}
 
-    # Leverage
+    # leverage
     lev_res = _ensure_leverage(client, symbol, int(leverage))
     if not lev_res.get("ok"):
         return {"ok": False, "error": "leverage_change_failed", "detail": lev_res}
 
-    # MARKET entry
+    # entry MARKET
     ps = (position_side or ("LONG" if side=="BUY" else "SHORT")).upper()
     mkt = _place_market(client, symbol, side, qty_final, position_side=ps, reduce_only=False)
     if not mkt.get("ok"):
@@ -292,14 +289,12 @@ def execute_trade(
     sl_leg, tp_legs = _build_sl_tp(price, side)
     sl_px = _bn_round_price(float(sl_leg.get("stopPrice") or 0.0), tick) if sl_leg else 0.0
 
-    # חלקי TP לפי splits
+    # TP quantities by splits
     splits = [float(leg.get("split", 0.0)) for leg in tp_legs]
     if not splits or abs(sum(splits) - 1.0) > 1e-3:
-        # Normalize
         sm = sum(s for s in splits if s > 0) or 1.0
         splits = [s / sm for s in (splits if sm else [1.0])]
     tp_qtys = [max(_bn_floor(qty_final * s, step), 0.0) for s in splits]
-    # תקן rounding: ודא שסכום <= qty_final
     over = max(0.0, sum(tp_qtys) - qty_final)
     if over > 0:
         for i in range(len(tp_qtys)-1, -1, -1):
@@ -336,13 +331,11 @@ def execute_trade(
 
 async def execute_order(*args, **kwargs) -> Dict[str, Any]:
     """
-    תאימות: ראוטרים שמצפים ל-utils.binance_trade.execute_order.
-    מספק path ישיר ליצירת הזמנה אם יש client; אחרת skipped.
+    Legacy compatibility: execute an order via python-binance if keys exist.
     """
     client = _client()
     if client is None:
         return {"ok": True, "skipped": True, "reason": "binance_keys_missing"}
-    # נסה להריץ את ההזמנה עם אותם kwargs של futures_create_order
     try:
         from asyncio import to_thread
     except Exception:
@@ -351,7 +344,6 @@ async def execute_order(*args, **kwargs) -> Dict[str, Any]:
         if to_thread:
             res = await to_thread(lambda: client.futures_create_order(**kwargs))
         else:
-            # fallback סינכרוני
             res = client.futures_create_order(**kwargs)
         return {"ok": True, "order": res}
     except Exception as e:
@@ -359,7 +351,6 @@ async def execute_order(*args, **kwargs) -> Dict[str, Any]:
         if any(code in s for code in ("429", "418", "1003")):
             return {"ok": False, "error": "rate_limited_or_banned", "detail": f"{e}"}
         return {"ok": False, "error": f"{e}"}
-
 
 
 
