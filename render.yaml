@@ -172,7 +172,7 @@ services:
 
       # ========================= Redis (incl. TLS) =========================
       - key: REQUIRE_REDIS
-        value: "1"
+        value: "0"            # ← זמני למניעת 503 אם אין Redis פעיל
       - key: CONFIRMSTORE_ENABLE
         value: "1"
       - key: USE_REDIS_IDEM
@@ -380,7 +380,7 @@ services:
       - key: DEFAULT_STAKE_USDT
         value: "50"
 
-      # ========================= Approvals (Gate = Telegram) =========================
+      # ========================= Approvals / Notifications =========================
       - key: APPROVAL_ENABLED
         value: "1"
       - key: REQUIRE_TELEGRAM_APPROVAL
@@ -403,12 +403,15 @@ services:
         value: "0"
       - key: APPROVE_BEFORE_GATE
         value: "1"
+
       - key: CONFIRM_TTL_SEC
         value: "120"
       - key: OPS_TICKET_TTL_SEC
         value: "1800"
       - key: ONLY_TRADE_NOTIFICATIONS
-        value: "1"
+        value: "1"                # ← נשאר דולק רק להודעות טרייד
+      - key: NOTIFY_LEVEL
+        value: "critical"         # ← סינון רמת הודעות כפי שביקשת
       - key: STARTUP_NOTIFY_ENABLE
         value: "0"
       - key: ADMIN_CHAT_ID
@@ -645,7 +648,7 @@ services:
       - key: OPS_DIGEST_INTERVAL_HOURS
         value: "3"
       - key: OPS_HEARTBEAT_ENABLE
-        value: "1"
+        value: "0"             # ← כיבית פעימות/לב לפי בקשה
       - key: OPS_HEARTBEAT_EVERY_MIN
         value: "5"
       - key: HEARTBEAT_HOURS
@@ -845,7 +848,5 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
-
 
 
