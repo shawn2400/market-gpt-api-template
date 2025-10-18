@@ -72,5 +72,3 @@ def legacy_ws_user():
 
 
 
-
-
