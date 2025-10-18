@@ -64,6 +64,8 @@ services:
         value: "30"
       - key: HTTP_MAX_KEEPALIVE
         value: "200"
+      - key: AUTO_RUN
+        value: "1"
 
       # ========================= Base URLs =========================
       - key: PUBLIC_HOST
@@ -129,13 +131,13 @@ services:
       - key: SIGNED_TS_MAX_SKEW_SEC
         value: "60"
       - key: ANTI_REPLAY_MAX_SKEW_SEC
-        value: "120"
+        value: "60"
       - key: SIGNED_NONCE_TTL_SEC
-        value: "120"
+        value: "180"
       - key: ANTI_REPLAY_SKEW_SEC
-        value: "30"
+        value: "60"
       - key: ANTI_REPLAY_NONCE_TTL
-        value: "45"
+        value: "180"
 
       # ========================= Rate Limit (coarse) =========================
       - key: RATE_LIMIT_ENABLE
@@ -177,7 +179,7 @@ services:
       - key: REQUIRE_REDIS
         value: "1"
       - key: CONFIRMSTORE_ENABLE
-        value: "0"
+        value: "1"
       - key: USE_REDIS_IDEM
         value: "1"
       - key: IDEM_TTL_SEC
@@ -272,6 +274,10 @@ services:
         value: "45"
       - key: SUGGEST_CAP_PER_CYCLE
         value: "30"
+      - key: SCAN_AUTOTICKET_ENABLE
+        value: "1"
+      - key: SCAN_NOTIFY_TELEGRAM
+        value: "1"
 
       # ========================= Indicators / Gates =========================
       - key: INDICATOR_INTERVALS
@@ -305,7 +311,7 @@ services:
       - key: ENTRY_SCORE_MODE
         value: "log"
       - key: ENTRY_SCORE_MIN
-        value: "6.5"
+        value: "8.5"
       - key: ENTRY_SCORE_INTERVAL
         value: "15m"
       - key: ENTRY_SCORE_ENFORCE_ON_APPROVE
@@ -365,7 +371,7 @@ services:
       - key: SCAN_CRON_LIMIT
         value: "12"
       - key: SCAN_CRON_MIN_SCORE
-        value: "6.8"
+        value: "8.5"
       - key: SCAN_REARM_SCORE
         value: "6"
       - key: SCAN_DEDUPE_WINDOW_SEC
@@ -827,7 +833,6 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
 
 
 
