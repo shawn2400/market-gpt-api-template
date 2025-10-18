@@ -1,11 +1,11 @@
-# utils/binance_trade.py
 # -*- coding: utf-8 -*-
+# utils/binance_trade.py
 from __future__ import annotations
 import os, time, math, re
 from typing import Any, Dict, Optional, List, Tuple
 from contextlib import suppress
 
-__all__ = ["plan_trade", "execute_trade", "execute_order"]
+__all__ = ["plan_trade", "execute_trade", "execute_order", "unrealized"]
 
 # ── ENV helpers ───────────────────────────────────────────────────────────────
 def _env_list_floats(name: str, default_csv: str) -> List[float]:
@@ -104,6 +104,45 @@ def _last_price(client, symbol: str) -> float:
         t = client.futures_symbol_ticker(symbol=symbol)
         return float(t.get("price") or 0.0)
     return 0.0
+
+# ── PNL/ROE snapshot (fixes “PNL תמיד 0”) ─────────────────────────────────────
+def unrealized(symbol: str) -> Dict[str, Any]:
+    """
+    Pulls USDT-M position info and computes live PnL% and ROE%.
+    Returns {"ok":True, ...} or {"ok":False,"error":...}
+    """
+    c = _client()
+    if c is None:
+        return {"ok": False, "error": "binance_keys_missing"}
+    try:
+        rows = c.futures_position_information(symbol=symbol)
+    except Exception as e:
+        return {"ok": False, "error": f"{e}"}
+    if not rows:
+        return {"ok": True, "empty": True}
+
+    p = rows[0]
+    entry = float(p.get("entryPrice") or 0.0)
+    qty   = float(p.get("positionAmt") or 0.0)
+    mark  = float(p.get("markPrice") or 0.0)
+    lev   = float(p.get("leverage") or 0.0) or 1.0
+    side  = "BUY" if qty > 0 else ("SELL" if qty < 0 else "FLAT")
+
+    d = _side_dir(side)
+    pnl_pct = ((mark - entry) / entry * d * 100.0) if entry > 0 else 0.0
+    roe_pct = pnl_pct * lev
+
+    return {
+        "ok": True,
+        "symbol": symbol,
+        "side": side,
+        "entry": entry,
+        "mark": mark,
+        "qty": qty,
+        "pnl_pct": pnl_pct,
+        "roe_pct": roe_pct,
+        "leverage": lev,
+    }
 
 # ── Planning (SL/TP) ─────────────────────────────────────────────────────────
 def _build_sl_tp(entry: float, side: str) -> tuple[dict, List[dict]]:
