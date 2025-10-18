@@ -300,6 +300,7 @@ services:
         value: "0"
       - key: INDICATORS_SUBSET
         value: ""
+
       # ===== Checklist / Gate =====
       - key: ENTRY_SCORE_MODE
         value: "log"
@@ -321,6 +322,7 @@ services:
         value: "6"
       - key: IMPACT_SLIP_BPS_MAX
         value: "25"
+
       # ----- Sensitivity: spread & volatility -----
       - key: SPREAD_ASSUME_PCT
         value: "0.02"
@@ -330,6 +332,7 @@ services:
         value: "1.2"
       - key: PREFER_HYBRID_DEFAULT
         value: "1"
+
       # ===== Weights (optional tuning) =====
       - key: W_REGIME
         value: "2.0"
@@ -824,8 +827,6 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
-
 
 
 
