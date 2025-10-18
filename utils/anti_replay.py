@@ -1,88 +1,95 @@
 # utils/anti_replay.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, time, hmac, hashlib, json
-from contextlib import suppress
+import os, time, hmac, hashlib, json, threading
 from typing import Optional, Tuple, Any, Dict
+from contextlib import suppress
 
+# Optional Redis (preferred)
 try:
     import redis.asyncio as aioredis  # type: ignore
 except Exception:
     aioredis = None  # type: ignore
 
 _NS = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
-_REDIS_URL = os.getenv("REDIS_URL", "").strip()
+_REDIS_URL = (os.getenv("REDIS_URL") or os.getenv("ALGOGPT_REDIS_URL") or "").strip()
+_SECRET = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
 
-# Feature switch
-_ENABLED = os.getenv("ANTI_REPLAY_ENABLE", "1").lower() in ("1", "true", "yes", "on")
+# Policy
+_ENABLE = os.getenv("ANTI_REPLAY_ENABLE", "1").lower() in ("1", "true", "yes", "on")
+_REQUIRE_SIGNATURE_DEFAULT = os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "0").lower() in ("1", "true", "yes", "on")
+_SKEW_SEC = int(os.getenv("ANTI_REPLAY_SKEW_SEC", "120") or 120)          # ±seconds
+_NONCE_TTL_SEC = int(os.getenv("ANTI_REPLAY_NONCE_TTL_SEC", "600") or 600)
 
-_SKEW_SEC = int(os.getenv("ANTI_REPLAY_SKEW_SEC", "30") or 30)
-_NONCE_TTL = int(os.getenv("ANTI_REPLAY_NONCE_TTL", "45") or 45)
-_REQUIRE = os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "1").lower() in ("1","true","yes","on")
-
-# מפתח חתימה: OPS_SIGN_SECRET או WEBHOOK_HMAC_SECRET
-_SECRET = (os.getenv("OPS_SIGN_SECRET") or os.getenv("WEBHOOK_HMAC_SECRET") or "").strip()
+# Local fallback store (best-effort)
+_mem_lock = threading.Lock()
+_mem_nonces: Dict[str, float] = {}  # key -> expiry_ts
 
 async def _get_redis():
-    if not (_REDIS_URL and aioredis):
+    if not (aioredis and _REDIS_URL):
         return None
     r = getattr(_get_redis, "_r", None)
     if r:
         return r
     r = aioredis.from_url(_REDIS_URL, decode_responses=True)
-    _get_redis._r = r  # type: ignore[attr-defined]
+    setattr(_get_redis, "_r", r)
     return r
 
-def _sha256_hex(b: bytes) -> str:
-    return hashlib.sha256(b).hexdigest()
+def _sha256_hex(data: bytes) -> str:
+    h = hashlib.sha256()
+    h.update(data)
+    return h.hexdigest()
 
-def _sign(payload: str) -> str:
-    key = _SECRET.encode("utf-8")
-    return hmac.new(key, payload.encode("utf-8"), hashlib.sha256).hexdigest()
+def _hmac_hex(secret_hex_or_text: str, payload: bytes) -> str:
+    # Allow 64-hex key or raw utf-8 text key
+    try:
+        key = bytes.fromhex(secret_hex_or_text) if len(secret_hex_or_text) == 64 else secret_hex_or_text.encode("utf-8")
+    except ValueError:
+        key = secret_hex_or_text.encode("utf-8")
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
 
-def _norm_body(body: Any) -> bytes:
-    """
-    נרמול גוף הבקשה לחתימה:
-    - bytes: כמו שהוא
-    - dict/list: JSON יציב (sort_keys, separators)
-    - str: encode utf-8
-    - אחר: str() ואז encode utf-8
-    """
+def _now() -> int:
+    return int(time.time())
+
+def _mem_claim_once(key: str, ttl_sec: int) -> bool:
+    with _mem_lock:
+        now = time.time()
+        # GC small sweep
+        to_del = [k for k, exp in _mem_nonces.items() if exp <= now]
+        for k in to_del:
+            _mem_nonces.pop(k, None)
+        if key in _mem_nonces:
+            return False
+        _mem_nonces[key] = now + ttl_sec
+        return True
+
+def _build_base(route: str, ts: str, nonce: str, body: Any) -> bytes:
+    # Canonical base string for signature (no HTTP method available in current API)
+    # If you later add method/query—append deterministically here.
+    body_bytes: bytes
     if body is None:
-        return b""
-    if isinstance(body, (bytes, bytearray)):
-        return bytes(body)
-    if isinstance(body, (dict, list, tuple)):
+        body_bytes = b""
+    elif isinstance(body, (bytes, bytearray)):
+        body_bytes = bytes(body)
+    elif isinstance(body, str):
+        body_bytes = body.encode("utf-8")
+    else:
         with suppress(Exception):
-            return json.dumps(body, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
-    if isinstance(body, str):
-        return body.encode("utf-8")
-    return str(body).encode("utf-8")
+            return f"{route}|{ts}|{nonce}|{_NS}|{_sha256_hex(json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))}".encode("utf-8")
+        body_bytes = b""
+    return f"{route}|{ts}|{nonce}|{_NS}|{_sha256_hex(body_bytes)}".encode("utf-8")
 
-# in-memory nonce store fallback
-_MEM_NONCES: Dict[str, float] = {}
-
-async def _claim_nonce(nonce: str) -> bool:
-    # Redis אם יש; אחרת in-memory קצר
-    if _REDIS_URL and aioredis:
-        with suppress(Exception):
-            r = await _get_redis()
-            if r:
-                k = f"{_NS}:nonce:{nonce}"
-                ok = await r.setnx(k, "1")
-                if ok:
-                    with suppress(Exception):
-                        await r.expire(k, _NONCE_TTL)
-                return bool(ok)
-    # fallback in-memory
-    now = time.time()
-    # clean
-    for k, ts in list(_MEM_NONCES.items()):
-        if now - ts > _NONCE_TTL:
-            _MEM_NONCES.pop(k, None)
-    if nonce in _MEM_NONCES:
-        return False
-    _MEM_NONCES[nonce] = now
-    return True
+async def _claim_nonce_global(nonce: str, ttl_sec: int) -> bool:
+    # Prefer Redis NX+EX, fallback to memory
+    key = f"{_NS}:anti_replay:nonce:{nonce}"
+    r = await _get_redis()
+    if r:
+        try:
+            ok = await r.set(key, "1", nx=True, ex=int(ttl_sec))
+            return bool(ok)
+        except Exception:
+            pass
+    return _mem_claim_once(key, ttl_sec)
 
 async def verify_request(
     ts_header: Optional[str],
@@ -93,52 +100,58 @@ async def verify_request(
     require_signature: bool = False
 ) -> Tuple[bool, str]:
     """
-    אימות חתימה אנטי-ריפליי:
-    signature = hex(HMAC_SHA256(secret, f"{ts}|{nonce}|{route}|{sha256(body)}"))
-    תנאים:
-      - |now - ts| <= _SKEW_SEC
-      - nonce חד-פעמי עם TTL
-      - אם _REQUIRE או require_signature=True → מחייב כותרות מלאות וחתימה תקפה
-    התנהגות:
-      - אם ANTI_REPLAY_ENABLE=0 → תמיד OK (לוג בלבד)
-      - אם אין SECRET מוגדר → OK רק אם לא חייבים חתימה
+    Returns (ok, reason). If _ENABLE is False -> permissive allow (ok, 'disabled').
+    Policy:
+      - If require_signature or _REQUIRE_SIGNATURE_DEFAULT is True: signature must be present & valid.
+      - Timestamp must be within ±_SKEW_SEC.
+      - Nonce must be unique for _NONCE_TTL_SEC.
+
+    Headers (by caller): ts_header, nonce_header, signature_header (hex SHA256 HMAC).
+    Route: the path string e.g. '/ops/approve'.
     """
-    if not _ENABLED:
-        return (True, "anti_replay_disabled")
+    if not _ENABLE:
+        return True, "disabled"
 
-    must = _REQUIRE or bool(require_signature)
+    # Policy resolve
+    must_sign = require_signature or _REQUIRE_SIGNATURE_DEFAULT
 
-    if not _SECRET:
-        return (not must, "no_secret_configured")
+    # Basic fields
+    ts_s = (ts_header or "").strip()
+    nonce = (nonce_header or "").strip()
+    sig = (signature_header or "").strip()
 
-    if not (ts_header and nonce_header and signature_header):
-        return (not must, "missing_headers")
-
-    # timestamp
+    # TS check
     try:
-        ts = int(ts_header)
+        ts_i = int(ts_s)
     except Exception:
-        return (False, "bad_ts")
-    now = int(time.time())
-    if abs(now - ts) > _SKEW_SEC:
-        return (False, "ts_skew")
+        if must_sign:
+            return False, "bad_ts"
+        else:
+            # soft allow when not required
+            ts_i = _now()
 
-    # nonce (single-use)
-    if not await _claim_nonce(str(nonce_header)):
-        return (False, "nonce_reuse")
+    now = _now()
+    if abs(now - ts_i) > _SKEW_SEC:
+        if must_sign:
+            return False, "ts_skew"
+        # soft allow if not required
+    # Signature check
+    if must_sign:
+        if not (_SECRET and sig and nonce and ts_s):
+            return False, "missing_sig_or_secret"
+        base = _build_base(route, ts_s, nonce, body)
+        expected = _hmac_hex(_SECRET, base)
+        if not hmac.compare_digest(expected, sig):
+            return False, "bad_sig"
 
-    # body hash + signature
-    try:
-        body_bytes = _norm_body(body)
-        body_hash = _sha256_hex(body_bytes)
-        payload = f"{ts}|{nonce_header}|{route}|{body_hash}"
-        expected = _sign(payload)
-        sig = signature_header.strip()
-        ok = hmac.compare_digest(expected, sig)
-        return (ok or (not must), "ok" if ok else "sig_mismatch")
-    except Exception as e:
-        return (False, f"verify_error:{e}")
+    # Nonce claim (prevents replay). If missing nonce and must_sign: block. Otherwise best-effort.
+    if must_sign and not nonce:
+        return False, "missing_nonce"
+    if nonce:
+        claimed = await _claim_nonce_global(nonce, _NONCE_TTL_SEC)
+        if not claimed:
+            return False, "replay"
 
-
+    return True, "ok"
 
 
