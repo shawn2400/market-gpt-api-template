@@ -1,10 +1,10 @@
-# utils/open_trade_manager_state.py
 # -*- coding: utf-8 -*-
+# utils/open_trade_manager_state.py
 from __future__ import annotations
-import time
-import logging
+import time, logging
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional
+from contextlib import suppress
 
 log = logging.getLogger("algogpt.open_trade_manager_state")
 
@@ -25,14 +25,12 @@ except Exception:
         log.info("cancel_if_conflict(shim): %s %s", symbol, side)
 
     def check_minimums(symbol: str, qty: float) -> bool:
-        # minimal sanity: positive qty
         ok = (symbol and (qty or 0) > 0)
         if not ok:
             log.warning("check_minimums(shim) failed: symbol=%s qty=%s", symbol, qty)
         return ok
 
     def place_limit_order_safe(**kw) -> Dict[str, Any]:
-        # Shim just echoes as 'ok' (for bootstrapping the state machine)
         return {"ok": True, "response": {"orderId": f"SIM-LMT-{int(time.time()*1000)}", "echo": kw}}
 
     def place_stop_market_safe(**kw) -> Dict[str, Any]:
@@ -40,6 +38,18 @@ except Exception:
 
     def place_take_profit_safe(**kw) -> Dict[str, Any]:
         return {"ok": True, "response": {"orderId": f"SIM-TP-{int(time.time()*1000)}", "echo": kw}}
+
+# PnL/ROE snapshot (if available)
+with suppress(Exception):
+    from utils.binance_trade import unrealized as pnl_snapshot, _side_dir  # type: ignore
+except Exception:
+    def pnl_snapshot(symbol: str) -> Dict[str, Any]:
+        return {"ok": False, "error": "pnl_snapshot_missing"}
+    def _side_dir(side: str) -> int:
+        s = (side or "").upper()
+        if s in ("BUY","LONG"): return +1
+        if s in ("SELL","SHORT"): return -1
+        return 0
 
 @dataclass
 class TradePlan:
@@ -172,6 +182,30 @@ class TradeStateManager:
             self.state.last_action_ts = now
             return {"ok": True, "state": "EXIT", "reason": "time_stop"}
 
+        # passive (can be extended to trailing/BE logic)
         return {"ok": True, "state": "MANAGE", "note": "idle"}
+
+    # ── Brief status line (he/en mix) ─────────────────────────────────────────
+    def brief_status(self) -> str:
+        """
+        Returns a short he/en mixed status string for chat/telemetry.
+        Example:
+        'BTCUSDT LONG qty=0.001 | PnL=+0.43% (ROE +6.5%) | ETA: TP1~5m TP2~15m TP3~30m'
+        """
+        p = self.plan
+        snap = pnl_snapshot(p.symbol)
+        pnl_s = "PnL=0.00%"
+        roe_s = ""
+        if snap.get("ok") and not snap.get("empty"):
+            pnl_s = f"PnL={snap.get('pnl_pct',0.0):+0.2f}%"
+            roe = snap.get("roe_pct", 0.0)
+            roe_s = f" (ROE {roe:+0.1f}%)"
+        eta = p.meta.get("eta", {"tp1_sec": 300, "tp2_sec": 900, "tp3_sec": 1800})
+        def _mins(s): 
+            try: return f"{int(round(float(s)/60))}m"
+            except Exception: return "?"
+        eta_s = f"ETA: TP1~{_mins(eta.get('tp1_sec',300))} TP2~{_mins(eta.get('tp2_sec',900))} TP3~{_mins(eta.get('tp3_sec',1800))}"
+        return f"{p.symbol} {'LONG' if _side_dir(p.side)>0 else 'SHORT'} qty={p.qty} | {pnl_s}{roe_s} | {eta_s}"
+
 
 
