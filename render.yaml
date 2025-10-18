@@ -640,6 +640,11 @@ services:
         value: "15"
       - key: ANTI_STALE_NUDGE_BPS
         value: "2"
+      # ----- Digest controls (new) -----
+      - key: DIGEST_MAX_LINES_DEFAULT
+        value: "30"
+      - key: DIGEST_SEND_TELEGRAM
+        value: "1"
 
       # ========================= ETA / Defaults =========================
       - key: ETA_SMART_ENABLE
@@ -823,8 +828,6 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
-
 
 
 
