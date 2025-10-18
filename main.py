@@ -1910,6 +1910,14 @@ for mod, tag in (
     ("routes.public_web", "Public Feed"),
     ("routes.ai", "AI"),
     ("routes.metrics", "metrics"),   # <<< /metrics
+
+    # ====== NEW REQUESTED ROUTES (optional, safe include) ======
+    ("routes.trade", "trade"),
+    ("routes.backtest", "backtest"),
+    ("routes.executor", "executor"),
+    ("routes.kpi_mini", "kpi-mini"),
+    ("routes.telegram_bot", "telegram-bot"),
+    ("routes.telegram_webhook", "telegram-webhook"),
 ):
     try:
         module = __import__(mod, fromlist=["router"])
@@ -2470,7 +2478,6 @@ if __name__ == "__main__":
     port = int(os.getenv("PORT", "10000"))
     reload_ = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload_, log_level=LOG_LEVEL.lower())
-
 
 
 
