@@ -12,6 +12,8 @@ from .telegram_notifier_core import (
     EXPLAIN_MIN_SCORE,
     # send helpers
     _tg_send, _tg_send_with_markup, _bundle_add,
+    # (חדש) מסנני שליחה
+    notify_telegram, notify_telegram_with_markup, should_notify,
     # store / digests
     _store_change_event, _load_changes_since,
     # fmt helpers
@@ -39,6 +41,7 @@ except Exception:
 
 # ====== Alias לשמירה על תאימות ישנה (מודולים שעדיין קוראים _send) ======
 async def _send(text: str) -> None:
+    # שומר תאימות — שולח ללא פילטר; ממולץ להעדיף notify_telegram מהיום והלאה
     await _tg_send(text)
 
 # ===================== Callback signing/verification =====================
@@ -198,7 +201,8 @@ class TelegramNotifier:
     async def send_ops_action_result(symbol: str, action_name: str, chat_id: Optional[int] = None) -> None:
         text = f"✅ {symbol} · {action_name} done"
         kb   = _ops_action_kb(symbol)
-        await _tg_send_with_markup(text, kb, chat_id=chat_id)
+        # פעולה אופרטיבית: נסווג kind="ops"
+        await notify_telegram_with_markup(text, kb, level="warning", kind="ops", chat_id=chat_id, dedupe_key=f"ops:{symbol}:{action_name}", cooldown_sec=30)
 
     # ——— new: used by routes/manager.py after ingest ———
     @staticmethod
@@ -245,25 +249,30 @@ async def notify_no_trades(reason: str | None = None, low_scores: Optional[List[
                     lines.append(f"• {b.get('symbol','?')} · s={float(b.get('score',0)):.1f} · side={b.get('side','—')}")
         except Exception:
             pass
-    await _tg_send("\n".join(lines))
+    await notify_telegram("\n".join(lines), level="info", kind="status", dedupe_key="scan:no_trades", cooldown_sec=300)
 
 async def notify_scan_error(reason: str) -> None:
     txt = f"⚠️ <b>Scan error</b>\n<code>{reason}</code>"
-    await _bundle_add(txt.replace("\n", " | "))
+    await notify_telegram(txt.replace("\n", " | "), level="warning", kind="ops", dedupe_key="scan:error", cooldown_sec=60)
 
 async def notify_ops_alert(msg: str) -> None:
-    await _bundle_add(f"🛠 {msg}")
+    await notify_telegram(f"🛠 {msg}", level="warning", kind="ops", dedupe_key=f"ops:{hashlib.sha1(msg.encode()).hexdigest()[:8]}", cooldown_sec=60)
 
 async def notify_sl_tp_update(symbol: str, side: str, kind: str, value: Any) -> None:
     try:
         val = f"{float(value):.4f}"
     except Exception:
         val = str(value)
-    await _tg_send(f"🔧 <b>{symbol}</b> {side} · {kind.upper()} → <code>{val}</code>")
+    await notify_telegram(f"🔧 <b>{symbol}</b> {side} · {kind.upper()} → <code>{val}</code>", level="warning", kind="status", dedupe_key=f"upd:{symbol}:{kind}:{val}", cooldown_sec=60)
 
-async def notify_info(text: str) -> None:  await _tg_send(f"ℹ️ {text}")
-async def notify_error(text: str) -> None: await _tg_send(f"🚨 {text}")
-async def notify_heartbeat() -> None:      await _tg_send("🫀 Heartbeat OK")
+async def notify_info(text: str) -> None:
+    await notify_telegram(f"ℹ️ {text}", level="info", kind="ops", dedupe_key=f"info:{hashlib.sha1(text.encode()).hexdigest()[:8]}", cooldown_sec=60)
+
+async def notify_error(text: str) -> None:
+    await notify_telegram(f"🚨 {text}", level="error", kind="ops", dedupe_key=f"err:{hashlib.sha1(text.encode()).hexdigest()[:8]}", cooldown_sec=60)
+
+async def notify_heartbeat() -> None:
+    await notify_telegram("🫀 Heartbeat OK", level="info", kind="status", dedupe_key="hb", cooldown_sec=600)
 
 async def notify_daily_summary(summary: Dict[str, Any]) -> None:
     pnl = summary.get("pnl", 0.0)
@@ -273,7 +282,7 @@ async def notify_daily_summary(summary: Dict[str, Any]) -> None:
         pnl_fmt = f"{float(pnl):.2f}"
     except Exception:
         pnl_fmt = str(pnl)
-    await _tg_send(f"📘 Daily Summary {t}\nPnL: <b>{pnl_fmt}</b> USDT · trades={n}")
+    await notify_telegram(f"📘 Daily Summary {t}\nPnL: <b>{pnl_fmt}</b> USDT · trades={n}", level="info", kind="ops", dedupe_key=f"eod:{t}", cooldown_sec=600)
 
 # ===================== Webhook Registration =====================
 async def register_webhook() -> bool:
@@ -358,7 +367,7 @@ async def notify_explain_trade(plan: Dict[str, Any]) -> None:
             lines.append(f"Entry {entry:.4f} | SL {sl:.4f} | TP {tp:.4f}")
         except Exception:
             lines.append(f"Entry {entry} | SL {sl} | TP {tp}")
-    await _tg_send("\n".join(lines))
+    await notify_telegram("\n".join(lines), level="info", kind="trade", dedupe_key=f"explain:{sym}:{side0}", cooldown_sec=60)
 
 # ===================== Trade Approval (rich) =====================
 def _entry_score_badge(plan: Dict[str, Any]) -> Optional[str]:
@@ -480,7 +489,8 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
 
     urls = _build_trade_urls(idem, plan)
     kb = _approval_kb_for_trade(idem, ticket_url=urls.get("ticket"))
-    await _tg_send_with_markup("\n".join(lines), kb, chat_id=chat_id)
+    # אישור טרייד — קריטי, וייסווג כ-kind="approve" כדי לעבור מסנן trade-only
+    await notify_telegram_with_markup("\n".join(lines), kb, level="critical", kind="approve", chat_id=chat_id, dedupe_key=f"approve:{idem}", cooldown_sec=5, force=False)
 
 # ===================== Trade lifecycle short notifiers =====================
 async def send_trade_opened(info: Dict[str, Any]) -> None:
@@ -492,9 +502,10 @@ async def send_trade_opened(info: Dict[str, Any]) -> None:
     otype = _fmt_order_type(plan.get("order_type", ""))
     lev = plan.get("leverage", "—")
     kind = (plan.get("trade_kind") or plan.get("mode") or plan.get("market") or "Futures").capitalize()
-    await _tg_send(
+    await notify_telegram(
         f"🟢 <b>Opened</b> · <b>{kind}</b>\n"
-        f"{s} {side} · qty <code>{qty}</code> · ~<code>{_fmt_num(price,4)}</code> · {otype} · lev <b>{lev}</b>"
+        f"{s} {side} · qty <code>{qty}</code> · ~<code>{_fmt_num(price,4)}</code> · {otype} · lev <b>{lev}</b>",
+        level="critical", kind="open", dedupe_key=f"open:{s}:{int(time.time()//60)}", cooldown_sec=30
     )
 
 async def send_trade_update(info: Dict[str, Any]) -> None:
@@ -504,7 +515,7 @@ async def send_trade_update(info: Dict[str, Any]) -> None:
     tp = _tp_legs_to_lines(plan.get("tp"))
     sl = (plan.get("sl") or {}).get("stopPrice")
     parts = [f"📈 <b>Update</b> {s} {side}", *tp, f"🛡 SL: <code>{_fmt_num(sl,4)}</code>"]
-    await _tg_send("\n".join(parts))
+    await notify_telegram("\n".join(parts), level="warning", kind="status", dedupe_key=f"upd:{s}:{hashlib.sha1(json.dumps(plan, sort_keys=True, default=str).encode()).hexdigest()[:8]}", cooldown_sec=45)
 
 async def send_trade_closed(info: Dict[str, Any]) -> None:
     plan = info.get("plan") or {}
@@ -550,7 +561,7 @@ async def send_trade_closed(info: Dict[str, Any]) -> None:
             lines.append(f"🏁 Overall: <b>{int(float(overal))}/10</b>")
         except Exception:
             pass
-    await _tg_send("\n".join(lines))
+    await notify_telegram("\n".join(lines), level="critical", kind="close", dedupe_key=f"close:{s}:{int(time.time()//60)}", cooldown_sec=30)
 
 # ===================== Change Tickets (re-exports) =====================
 from .telegram_notifier_core import (
@@ -571,9 +582,10 @@ __all__ = [
     "should_auto_approve_trade",
     "make_callback", "verify_callback_data", "TelegramNotifier",
     "build_ticket_buttons",
+    # חדש:
+    "notify_telegram", "notify_telegram_with_markup", "should_notify",
     "_send",
 ]
-
 
 
 
