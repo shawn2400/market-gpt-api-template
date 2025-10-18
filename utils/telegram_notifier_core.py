@@ -23,7 +23,7 @@ import logging
 import hashlib
 import hmac
 import json
-from typing import Any, Dict, Optional, List, Tuple, Sequence
+from typing import Any, Dict, Optional, List, Sequence
 from datetime import datetime, timezone, timedelta
 from urllib.parse import urlencode, quote
 
@@ -253,6 +253,7 @@ def _maybe_route_ws_ttl(text: str) -> bool:
             asyncio.create_task(_store_change_event({"kind": "ws_ttl_stale", "text": text, "ts": _now()}))
         except Exception:
             pass
+    # החזר True כשבולע את ההודעה כדי לא לשלוח לטלגרם
         return True
     return False
 
@@ -734,8 +735,8 @@ __all__ = [
     "get_btc_anchor_summary",
     "format_change_approval_he","send_change_approval_he","route_change_ticket",
     "send_ops_digest_now","send_eod_report_now","ensure_ops_schedulers_started",
-    # חדש:
     "notify_telegram","notify_telegram_with_markup","should_notify",
 ]
+
 
 
