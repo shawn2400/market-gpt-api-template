@@ -12,6 +12,8 @@ from __future__ import annotations
 - חנות שינויים (Redis/קובץ)
 - דיכוי התראות WS TTL כברירת מחדל (לדוח EOD)
 - Heartbeat שעה־שעה ללא ENV
+- (חדש) מסנן רמות NOTIFY_LEVEL + ONLY_TRADE_NOTIFICATIONS
+- (חדש) notify_telegram / notify_telegram_with_markup עם dedupe_key ו-cooldown
 """
 
 import os
@@ -254,6 +256,52 @@ def _maybe_route_ws_ttl(text: str) -> bool:
         return True
     return False
 
+# ===================== (NEW) Level filter + trade-only =====================
+_NOTIFY_LEVEL = (os.getenv("NOTIFY_LEVEL") or "info").strip().lower()
+_ONLY_TRADE   = (os.getenv("ONLY_TRADE_NOTIFICATIONS") or "0").strip().lower() in ("1","true","yes","on")
+
+_LEVELS = {
+    "silent":   0,
+    "info":     10,
+    "warning":  20,
+    "error":    30,
+    "critical": 40,
+}
+
+_TRADE_KINDS = {
+    "trade","open","close","sl","tp","be","trail","status",
+    "risk","rr","approve","filled","partial","manager","eta",
+}
+
+def _level_to_num(level: str | None) -> int:
+    return _LEVELS.get((level or "info").lower(), 10)
+
+def _threshold() -> int:
+    return _level_to_num(_NOTIFY_LEVEL)
+
+def _kind_allowed(kind: str | None) -> bool:
+    if not _ONLY_TRADE:
+        return True
+    k = (kind or "").lower()
+    return k in _TRADE_KINDS
+
+def should_notify(level: str = "info", kind: str = "misc") -> bool:
+    """בודק אם מותר לשגר לפי הסף וה־kind."""
+    return _level_to_num(level) >= _threshold() and _kind_allowed(kind)
+
+# אנטי-ספאם מבוסס מפתח לוגי (לצד ה-dedup הטקסטואלי)
+_COOLDOWNS: Dict[str, float] = {}
+
+def _cooldown_ok(key: Optional[str], cooldown_sec: int) -> bool:
+    if not key or cooldown_sec <= 0:
+        return True
+    now = _now()
+    last = _COOLDOWNS.get(key, 0.0)
+    if now - last < cooldown_sec:
+        return False
+    _COOLDOWNS[key] = now
+    return True
+
 # ===================== Low-level send =====================
 async def _http_send(text: str, chat_id: Optional[int] = None) -> None:
     if _maybe_route_ws_ttl(text):
@@ -330,6 +378,50 @@ async def _tg_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_id:
             loop = asyncio.new_event_loop()
             loop.run_until_complete(_http_send_with_markup(text, reply_markup, chat_id=chat_id))
             loop.close()
+
+# ===================== (NEW) Filtered high-level send =====================
+async def notify_telegram(
+    text: str,
+    *,
+    level: str = "info",
+    kind: str = "misc",
+    chat_id: Optional[int | str] = None,
+    parse_mode: Optional[str] = "HTML",
+    dedupe_key: Optional[str] = None,
+    cooldown_sec: int = 300,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """
+    שליחה עם פילטר רמות + trade-only + אנטי-ספאם מפתח-לוגי.
+    """
+    if not force and not should_notify(level, kind):
+        return {"ok": True, "skipped": True, "reason": "filtered", "threshold": _NOTIFY_LEVEL, "level": level, "kind": kind}
+    if not _cooldown_ok(dedupe_key, cooldown_sec):
+        return {"ok": True, "skipped": True, "reason": "cooldown", "key": dedupe_key}
+    # parse_mode לא משמש ב-low-level (מוגדר כבר ל-HTML), אבל שומרים תאימות חתימה
+    await _tg_send(text, chat_id=int(chat_id) if isinstance(chat_id, str) and chat_id.isdigit() else chat_id)  # type: ignore[arg-type]
+    return {"ok": True}
+
+async def notify_telegram_with_markup(
+    text: str,
+    reply_markup: Dict[str, Any],
+    *,
+    level: str = "info",
+    kind: str = "misc",
+    chat_id: Optional[int | str] = None,
+    dedupe_key: Optional[str] = None,
+    cooldown_sec: int = 300,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """
+    שליחה עם מקלדת + פילטר רמות ו-antispam.
+    """
+    if not force and not should_notify(level, kind):
+        return {"ok": True, "skipped": True, "reason": "filtered", "threshold": _NOTIFY_LEVEL, "level": level, "kind": kind}
+    if not _cooldown_ok(dedupe_key, cooldown_sec):
+        return {"ok": True, "skipped": True, "reason": "cooldown", "key": dedupe_key}
+    await _tg_send_with_markup(text, reply_markup, chat_id=int(chat_id) if isinstance(chat_id, str) and chat_id.isdigit() else chat_id)  # type: ignore[arg-type]
+    return {"ok": True}
 
 # ===================== Bundling helpers =====================
 async def _flush_bundle() -> None:
@@ -642,4 +734,8 @@ __all__ = [
     "get_btc_anchor_summary",
     "format_change_approval_he","send_change_approval_he","route_change_ticket",
     "send_ops_digest_now","send_eod_report_now","ensure_ops_schedulers_started",
+    # חדש:
+    "notify_telegram","notify_telegram_with_markup","should_notify",
 ]
+
+
