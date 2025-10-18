@@ -13,7 +13,7 @@ services:
       ALERTS_INGEST_HMAC_SECRET: "${ALERTS_INGEST_HMAC_SECRET:-}"
       ALERTS_INGEST_HMAC_KEY_IS_HEX: "${ALERTS_INGEST_HMAC_KEY_IS_HEX:-1}"
 
-      # --- RL flags + ערכי ברירת מחדל מקומיים ---
+      # --- Rate Limit flags + ערכי ברירת מחדל מקומיים ---
       RATE_LIMIT_ENABLE: "${RATE_LIMIT_ENABLE:-1}"
       RL_FAIL_OPEN: "${RL_FAIL_OPEN:-0}"
       RATE_LIMIT_BACKEND: "${RATE_LIMIT_BACKEND:-redis}"
@@ -31,17 +31,21 @@ services:
         --worker-class uvicorn.workers.UvicornWorker
         --workers ${WEB_CONCURRENCY:-1}
         --bind 0.0.0.0:${PORT:-10000}
-        --timeout ${GUNICORN_TIMEOUT:-120}
-        --graceful-timeout 30
-        --keep-alive 5"
+        --timeout ${GUNICORN_TIMEOUT:-180}
+        --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-45}
+        --keep-alive ${GUNICORN_KEEPALIVE:-30}"
     healthcheck:
-      test: ["CMD-SHELL", "[ -x /app/health_full.sh ] && /app/health_full.sh || curl -fsS http://127.0.0.1:${PORT:-10000}/readyz || exit 1"]
+      test: ["CMD-SHELL", "[ -x /app/health_full.sh ] && /app/health_full.sh || curl -fsS http://127.0.0.1:${PORT:-10000}/readyz/strict || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 10
       start_period: 20s
     volumes:
       - algodata:/app/data
+      # סטטי (אם קיים) — בטוח לקריאה בלבד:
+      - ./static:/app/static:ro
+      # קונפיג nginx (אם אתה רוצה שגם nginx ישתמש באותו קובץ):
+      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
     deploy:
       resources:
         limits:
@@ -96,6 +100,7 @@ services:
     restart: always
     ports:
       - "6379:6379"
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "notice"]
     volumes:
       - redis_data:/data
     healthcheck:
@@ -210,7 +215,7 @@ services:
       LOGS_DIRECTORIES: /var/lib/docker/containers
       LOGROTATE_CRONSCHEDULE: "0 */6 * * *"
       LOGROTATE_COPIES: "5"
-      LOGROTATE_SIZE: 100M
+      LOGROTATE_SIZE: "100M"
 
 volumes:
   redis_data:
@@ -218,10 +223,6 @@ volumes:
   grafana_data:
   algodata:
   backup_data:
-
-
-
-
 
 
 
