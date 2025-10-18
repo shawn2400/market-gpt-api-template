@@ -4,11 +4,11 @@ import os, time, logging, json
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel, Field, validator, root_validator, conlist, confloat, constr
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 from contextlib import suppress
 
 log = logging.getLogger("algogpt.public_snapshot")
-router = APIRouter(prefix="/public/snapshot", tags=["Public Feed"])
+router = APIRouter(prefix="/public", tags=["Public Feed"])
 
 # ===== Bearer ACTION =====
 _ACTION_TOKENS: List[str] = []
@@ -70,12 +70,10 @@ class SnapshotIn(BaseModel):
 
     @root_validator
     def _ensure_sl_tp(cls, vals):
-        # לא מחייב SL/TP, אבל אם הגיעו—שיהיו הגיוניים ביחס ל־entry אם קיים
         entry = vals.get("entry")
         sl = vals.get("sl")
         tp = vals.get("tp") or []
         side = vals.get("side")
-
         if entry and sl:
             if side == "LONG" and sl.stopPrice >= entry:
                 raise ValueError("SL must be below entry for LONG")
@@ -89,13 +87,8 @@ class SnapshotIn(BaseModel):
                     raise ValueError(f"TP{i} must be below entry for SHORT")
         return vals
 
-class SnapshotOut(BaseModel):
-    ok: bool
-    stored: Dict[str, Any]
-
-# ===== Helpers =====
+# ===== helpers =====
 async def _persist(symbol: str, payload: Dict[str, Any]) -> None:
-    # Redis אם קיים, אחרת זיכרון. בלי כתיבה לקבצים.
     if _redis:
         try:
             key = f"{REDIS_KEY}:{symbol}"
@@ -105,11 +98,41 @@ async def _persist(symbol: str, payload: Dict[str, Any]) -> None:
             log.debug("public_snapshot.redis_failed: %s", e)
     _SNAPSHOTS[symbol] = payload
 
-# ===== Routes =====
-@router.post("/upsert", response_model=SnapshotOut, summary="Upsert public trade snapshot (ACTION Bearer)")
+async def _load(symbol: str) -> Optional[Dict[str, Any]]:
+    key = symbol.upper()
+    if key in _SNAPSHOTS:
+        return _SNAPSHOTS[key]
+    if _redis:
+        try:
+            raw = await _redis.get(f"{REDIS_KEY}:{key}")
+            if raw:
+                return json.loads(raw)
+        except Exception:
+            pass
+    return None
+
+def _fmt_short_he(snap: Dict[str, Any]) -> str:
+    sym = snap.get("symbol","—")
+    side = {"LONG":"לונג 🟢","SHORT":"שורט 🔴"}.get(str(snap.get("side","")).upper(),"—")
+    entry = snap.get("entry")
+    sl = (snap.get("sl") or {}).get("stopPrice")
+    tp = snap.get("tp") or []
+    tp_txt = " | ".join([f"TP{i+1}:{t.get('price')}" for i,t in enumerate(tp[:3])]) if tp else "TP: —"
+    return f"{sym} · {side} · כניסה {entry or '—'} · SL {sl or '—'} · {tp_txt}"
+
+def _fmt_short_en(snap: Dict[str, Any]) -> str:
+    sym = snap.get("symbol","—")
+    side = {"LONG":"LONG 🟢","SHORT":"SHORT 🔴"}.get(str(snap.get("side","")).upper(),"—")
+    entry = snap.get("entry")
+    sl = (snap.get("sl") or {}).get("stopPrice")
+    tp = snap.get("tp") or []
+    tp_txt = " | ".join([f"TP{i+1}:{t.get('price')}" for i,t in enumerate(tp[:3])]) if tp else "TP: —"
+    return f"{sym} · {side} · entry {entry or '—'} · SL {sl or '—'} · {tp_txt}"
+
+# ===== routes =====
+@router.post("/snapshot/upsert", summary="Upsert public trade snapshot (ACTION Bearer)")
 async def upsert_snapshot(body: SnapshotIn, request: Request):
     _require_action_bearer(request)
-
     now = int(time.time())
     payload = {
         "symbol": body.symbol,
@@ -122,20 +145,32 @@ async def upsert_snapshot(body: SnapshotIn, request: Request):
         "ts": now,
     }
     await _persist(body.symbol, payload)
+    return {"ok": True, "stored": payload}
 
-    return SnapshotOut(ok=True, stored=payload)  # pydantic -> dict אוטומטי
-
-# אופציונלי: GET קטן לבדיקה ידנית (ללא Bearer; קריאה בלבד)
-@router.get("/inspect", summary="Inspect last snapshot (readonly)", response_model=Dict[str, Any])
+@router.get("/snapshot/inspect", summary="Inspect last snapshot (readonly)")
 async def inspect(symbol: Symbol):
-    key = symbol.upper()
-    if key in _SNAPSHOTS:
-        return {"ok": True, "source": "memory", "data": _SNAPSHOTS[key]}
-    if _redis:
-        try:
-            raw = await _redis.get(f"{REDIS_KEY}:{key}")
-            if raw:
-                return {"ok": True, "source": "redis", "data": json.loads(raw)}
-        except Exception:
-            pass
-    raise HTTPException(status_code=404, detail="not_found")
+    data = await _load(symbol)
+    if not data:
+        raise HTTPException(status_code=404, detail="not_found")
+    return {"ok": True, "data": data}
+
+@router.get("/trade/status", summary="Human short trade status (he/en, readonly)")
+async def trade_status(symbol: Optional[Symbol] = None, lang: Optional[str] = "he"):
+    # אם לא הועבר symbol – קח אחרון מהזיכרון (אם קיים)
+    data: Optional[Dict[str, Any]] = None
+    if symbol:
+        data = await _load(symbol)
+    else:
+        # קח אחרון לפי ts
+        if _SNAPSHOTS:
+            last = max(_SNAPSHOTS.values(), key=lambda d: d.get("ts", 0))
+            data = last
+        elif _redis:
+            # אופציונלי: אם יש known set/list – דלג; כאן נשאר מינימלי
+            data = None
+    if not data:
+        raise HTTPException(status_code=404, detail="no_snapshot")
+
+    msg = _fmt_short_en(data) if str(lang).lower().startswith("en") else _fmt_short_he(data)
+    return PlainTextResponse(msg, status_code=200, headers={"Cache-Control": "no-store"})
+
