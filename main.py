@@ -1,4 +1,4 @@
-# main.py
+# רוץ MAIN- # main.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -1177,7 +1177,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
-            row = f"• TP{i}: <code>{req_body[f'tp{i}']}</code>"
+            row = f"• TP{i}: <code>{req_body[f'tp{i]']}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
                 row += f"  ETA:<code>{req_body[f'eta_tp{i}_min']}m</code>"
             if req_body.get(f"prob_tp{i}_pct") is not None:
@@ -1937,6 +1937,7 @@ for mod, tag in (
     ("routes.kpi_mini", "kpi-mini"),
     ("routes.telegram_bot", "telegram-bot"),
     ("routes.telegram_webhook", "telegram-webhook"),
+    # קיימים בלופ
 ):
     try:
         module = __import__(mod, fromlist=["router"])
@@ -1951,6 +1952,19 @@ try:
     logger.info("public_trade_status router mounted")
 except Exception as e:
     logger.warning("routes.public_trade_status router not loaded: %s", e)
+
+# --- Status router (ADDED) ---
+try:
+    from routes.status import router as status_router
+    app.include_router(status_router, tags=["status"])
+    logger.info("status router mounted")
+except Exception as e:
+    logger.warning("routes.status router not loaded: %s", e)
+
+# >>>>>> ADDED AS REQUESTED <<<<<<
+from routes.public_snapshot import router as snapshot_router
+app.include_router(snapshot_router)
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 app.include_router(router)
 
@@ -2467,11 +2481,6 @@ async def _on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower(), reload=False)
-
-
-
-
-
 
 
 
