@@ -1,13 +1,18 @@
 # routes/health.py
 from __future__ import annotations
-import os, time, logging, sqlite3, socket
+import os, time, logging, sqlite3
 from contextlib import suppress
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Tuple
 from fastapi import APIRouter, Response, Request, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-router = APIRouter(prefix="/health", tags=["Health"])
 log = logging.getLogger("algogpt.health")
+
+# ---------------------------
+# Routers: /health/*  +  /readyz/* (root, ללא prefix)
+# ---------------------------
+router = APIRouter(prefix="/health", tags=["Health"])
+probe  = APIRouter(tags=["Health"])  # שורש: /readyz/...
 
 # --- Optional AI healthcheck (best-effort) ---
 _ai_check_async = None
@@ -39,6 +44,7 @@ def _base_headers() -> Dict[str, str]:
         "Last-Modified": time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime()),
     }
 
+# ------------- /health basic -------------
 @router.get("", summary="Health Root")
 async def root():
     return {"ok": True, "service": "AlgoGPT"}
@@ -104,21 +110,21 @@ async def health_tp1_now(request: Request, symbols: Optional[str] = None):
         log.warning("health_tp1 failed: %s", e)
         return JSONResponse({"ok": False, "error": str(e)}, headers=_base_headers(), status_code=200)
 
-# ---------------- Readiness (low-overhead) ----------------
+# ------------- Readiness deps (with REQUIRE_REDIS) -------------
 
-# ENV toggles / endpoints
 _BINANCE_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 _READINESS_BINANCE = os.getenv("READINESS_CHECK_BINANCE", "1").lower() in ("1","true","yes","on")
 _READINESS_REDIS   = os.getenv("READINESS_CHECK_REDIS", "1").lower() in ("1","true","yes","on")
 _READINESS_SQLITE  = os.getenv("READINESS_CHECK_SQLITE", "0").lower() in ("1","true","yes","on")
 _SQLITE_PATH       = os.getenv("SQLITE_PATH", "").strip()
 _REDIS_URL         = os.getenv("REDIS_URL", "").strip()
+_REQUIRE_REDIS     = os.getenv("REQUIRE_REDIS", "0").lower() in ("1","true","yes","on")
 
 async def _check_binance(timeout: float = 2.5) -> Tuple[bool, str]:
     if not _READINESS_BINANCE:
         return True, "skipped"
     try:
-        import httpx  # local import to keep cold-start light
+        import httpx
         url = f"{_BINANCE_BASE}/fapi/v1/ping"
         async with httpx.AsyncClient(timeout=timeout) as cli:
             r = await cli.get(url)
@@ -129,13 +135,16 @@ async def _check_binance(timeout: float = 2.5) -> Tuple[bool, str]:
         return False, f"err:{e}"
 
 async def _check_redis(timeout: float = 1.0) -> Tuple[bool, str]:
-    if not _READINESS_REDIS or not _REDIS_URL:
+    # אם Redis לא “נדרש” – מדלגים על הכשלה (גם אם READINESS_CHECK_REDIS=1)
+    if not _REQUIRE_REDIS:
         return True, "skipped"
+    if not _READINESS_REDIS or not _REDIS_URL:
+        return False, "missing_url" if _REDDIS_URL else "disabled"  # type: ignore[name-defined]
+
     try:
         import asyncio
         import redis.asyncio as aioredis  # type: ignore
         r = aioredis.from_url(_REDIS_URL, decode_responses=True, socket_timeout=timeout)
-        # PING with short timeout
         async def _ping():
             await r.ping()
         await asyncio.wait_for(_ping(), timeout=timeout + 0.25)
@@ -160,7 +169,6 @@ def _check_sqlite() -> Tuple[bool, str]:
 
 @router.get("/readiness", summary="Dependency readiness (Redis/Binance/DB)")
 async def readiness():
-    # run the lightweight checks
     ok_bin, why_bin = await _check_binance()
     ok_rd,  why_rd  = await _check_redis()
     ok_sql, why_sql = _check_sqlite()
@@ -170,11 +178,36 @@ async def readiness():
         "binance": {"ok": ok_bin, "detail": why_bin},
         "redis":   {"ok": ok_rd,  "detail": why_rd},
         "sqlite":  {"ok": ok_sql, "detail": why_sql, "path": _SQLITE_PATH or None},
+        "require_redis": _REQUIRE_REDIS,
     }
     code = 200 if overall else 503
     return JSONResponse({"ok": overall, "deps": detail}, status_code=code, headers=_base_headers())
 
-# ---------------- Meta & Prometheus ----------------
+# ------------- /readyz (ללא prefix) עבור Render -------------
+
+@probe.get("/readyz", include_in_schema=False)
+async def readyz_light():
+    # בדיקת "חיה": קלילה ומהירה
+    return JSONResponse({"ok": True, "service": "AlgoGPT"}, headers=_base_headers())
+
+@probe.get("/readyz/strict", include_in_schema=False)
+async def readyz_strict():
+    # שמור זהה ל-/health/readiness עבור ברירת המחדל של Render
+    ok_bin, why_bin = await _check_binance()
+    ok_rd,  why_rd  = await _check_redis()
+    ok_sql, why_sql = _check_sqlite()
+
+    overall = ok_bin and ok_rd and ok_sql
+    detail = {
+        "binance": {"ok": ok_bin, "detail": why_bin},
+        "redis":   {"ok": ok_rd,  "detail": why_rd},
+        "sqlite":  {"ok": ok_sql, "detail": why_sql, "path": _SQLITE_PATH or None},
+        "require_redis": _REQUIRE_REDIS,
+    }
+    code = 200 if overall else 503
+    return JSONResponse({"ok": overall, "deps": detail}, status_code=code, headers=_base_headers())
+
+# ------------- Meta & Prometheus -------------
 @router.get("/meta", summary="Service meta snapshot")
 async def meta():
     if not _metrics_available:
@@ -199,5 +232,4 @@ async def metrics():
         text = ""
     return PlainTextResponse(text, status_code=200,
                              headers={"Content-Type": "text/plain; version=0.0.4", **_base_headers()})
-
 
