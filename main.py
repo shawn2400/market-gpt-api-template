@@ -1944,6 +1944,14 @@ for mod, tag in (
     except Exception as e:
         logger.warning("%s router not loaded: %s", mod, e)
 
+# --- Public Trade Status router (safe import & mount) ---
+try:
+    from routes.public_trade_status import router as public_trade_status_router
+    app.include_router(public_trade_status_router, tags=["public-trade-status"])
+    logger.info("public_trade_status router mounted")
+except Exception as e:
+    logger.warning("routes.public_trade_status router not loaded: %s", e)
+
 app.include_router(router)
 
 # ==================== Meta & Diagnostics ====================
@@ -2162,6 +2170,13 @@ async def meta_telegram(
             return {"ok": bool(res.get("ok")), "result": res, "used_chat_id": ADMIN_CHAT_ID, "links": links}
     except Exception as e:
         return {"ok": False, "error": f"send_failed: {e}"}
+
+# ==================== HTTPException handler (new) ====================
+from fastapi.exceptions import HTTPException as FastAPIHTTPException
+
+@app.exception_handler(FastAPIHTTPException)
+async def http_exc_handler(request: Request, exc: FastAPIHTTPException):
+    return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.detail})
 
 # ==================== Global error handler ====================
 @app.exception_handler(Exception)
@@ -2452,8 +2467,6 @@ async def _on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower(), reload=False)
-
-
 
 
 
