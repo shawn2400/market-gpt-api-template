@@ -172,7 +172,7 @@ services:
 
       # ========================= Redis (incl. TLS) =========================
       - key: REQUIRE_REDIS
-        value: "0"            # ← זמני למניעת 503 אם אין Redis פעיל
+        value: "0"            # זמני: לא להפיל /readyz/strict אם אין Redis
       - key: CONFIRMSTORE_ENABLE
         value: "1"
       - key: USE_REDIS_IDEM
@@ -409,9 +409,9 @@ services:
       - key: OPS_TICKET_TTL_SEC
         value: "1800"
       - key: ONLY_TRADE_NOTIFICATIONS
-        value: "1"                # ← נשאר דולק רק להודעות טרייד
+        value: "1"
       - key: NOTIFY_LEVEL
-        value: "critical"         # ← סינון רמת הודעות כפי שביקשת
+        value: "critical"
       - key: STARTUP_NOTIFY_ENABLE
         value: "0"
       - key: ADMIN_CHAT_ID
@@ -648,7 +648,7 @@ services:
       - key: OPS_DIGEST_INTERVAL_HOURS
         value: "3"
       - key: OPS_HEARTBEAT_ENABLE
-        value: "0"             # ← כיבית פעימות/לב לפי בקשה
+        value: "0"
       - key: OPS_HEARTBEAT_EVERY_MIN
         value: "5"
       - key: HEARTBEAT_HOURS
