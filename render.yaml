@@ -122,21 +122,11 @@ services:
       # ========================= Anti-Replay =========================
       - key: ANTI_REPLAY_ENABLE
         value: "1"
-      - key: ANTI_REPLAY_WINDOW_SEC
-        value: "60"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
         value: "1"
-      - key: REQUIRE_SIGNATURE
-        value: "1"
-      - key: SIGNED_TS_MAX_SKEW_SEC
-        value: "60"
-      - key: ANTI_REPLAY_MAX_SKEW_SEC
-        value: "60"
-      - key: SIGNED_NONCE_TTL_SEC
-        value: "180"
       - key: ANTI_REPLAY_SKEW_SEC
         value: "60"
-      - key: ANTI_REPLAY_NONCE_TTL
+      - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
 
       # ========================= Rate Limit (coarse) =========================
@@ -833,7 +823,6 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
 
 
 
