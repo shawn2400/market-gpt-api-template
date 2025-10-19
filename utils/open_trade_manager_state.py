@@ -39,16 +39,18 @@ except Exception:
     def place_take_profit_safe(**kw) -> Dict[str, Any]:
         return {"ok": True, "response": {"orderId": f"SIM-TP-{int(time.time()*1000)}", "echo": kw}}
 
-# PnL/ROE snapshot (if available)
-with suppress(Exception):
+# PnL/ROE snapshot (if available) — תיקון try/except תקין
+try:
     from utils.binance_trade import unrealized as pnl_snapshot, _side_dir  # type: ignore
 except Exception:
     def pnl_snapshot(symbol: str) -> Dict[str, Any]:
         return {"ok": False, "error": "pnl_snapshot_missing"}
     def _side_dir(side: str) -> int:
         s = (side or "").upper()
-        if s in ("BUY","LONG"): return +1
-        if s in ("SELL","SHORT"): return -1
+        if s in ("BUY", "LONG"):
+            return +1
+        if s in ("SELL", "SHORT"):
+            return -1
         return 0
 
 @dataclass
@@ -201,11 +203,16 @@ class TradeStateManager:
             roe = snap.get("roe_pct", 0.0)
             roe_s = f" (ROE {roe:+0.1f}%)"
         eta = p.meta.get("eta", {"tp1_sec": 300, "tp2_sec": 900, "tp3_sec": 1800})
-        def _mins(s): 
-            try: return f"{int(round(float(s)/60))}m"
-            except Exception: return "?"
-        eta_s = f"ETA: TP1~{_mins(eta.get('tp1_sec',300))} TP2~{_mins(eta.get('tp2_sec',900))} TP3~{_mins(eta.get('tp3_sec',1800))}"
+        def _mins(s):
+            try:
+                return f"{int(round(float(s)/60))}m"
+            except Exception:
+                return "?"
+        eta_s = (
+            f"ETA: TP1~{_mins(eta.get('tp1_sec',300))} "
+            f"TP2~{_mins(eta.get('tp2_sec',900))} "
+            f"TP3~{_mins(eta.get('tp3_sec',1800))}"
+        )
         return f"{p.symbol} {'LONG' if _side_dir(p.side)>0 else 'SHORT'} qty={p.qty} | {pnl_s}{roe_s} | {eta_s}"
-
 
 
