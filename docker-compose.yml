@@ -9,17 +9,6 @@ services:
       - "${PORT:-10000}:${PORT:-10000}"
     env_file:
       - .env
-    environment:
-      ALERTS_INGEST_HMAC_SECRET: "${ALERTS_INGEST_HMAC_SECRET:-}"
-      ALERTS_INGEST_HMAC_KEY_IS_HEX: "${ALERTS_INGEST_HMAC_KEY_IS_HEX:-1}"
-
-      # --- Rate Limit flags + ערכי ברירת מחדל מקומיים ---
-      RATE_LIMIT_ENABLE: "${RATE_LIMIT_ENABLE:-1}"
-      RL_FAIL_OPEN: "${RL_FAIL_OPEN:-0}"
-      RATE_LIMIT_BACKEND: "${RATE_LIMIT_BACKEND:-redis}"
-      SCAN_RL_LIMIT: "${SCAN_RL_LIMIT:-120}"
-      SCAN_RL_WINDOW: "${SCAN_RL_WINDOW:-60}"
-
     depends_on:
       redis:
         condition: service_healthy
@@ -42,10 +31,7 @@ services:
       start_period: 20s
     volumes:
       - algodata:/app/data
-      # סטטי (אם קיים) — בטוח לקריאה בלבד:
       - ./static:/app/static:ro
-      # קונפיג nginx (אם אתה רוצה שגם nginx ישתמש באותו קובץ):
-      - ./config/nginx.conf:/etc/nginx/nginx.conf:ro
     deploy:
       resources:
         limits:
@@ -75,6 +61,44 @@ services:
       retries: 5
     volumes:
       - algodata:/app/data
+
+  # Sidecar: מועמדים חיים + הודעות לטלגרם (NOW/TOPK)
+  live-candidates:
+    image: alpine:3.20
+    container_name: algogpt_live_candidates
+    restart: always
+    env_file:
+      - .env
+    depends_on:
+      algogpt:
+        condition: service_healthy
+    entrypoint: ["/bin/sh","-lc"]
+    command: |
+      set -e
+      apk add --no-cache curl jq
+      echo "Live candidates sidecar started"
+      while :; do
+        # NOW
+        NOW=$(curl -sS "${PUBLIC_HOST}/scan/public-now?exchange=binance_futures&k=10" | \
+              jq -r '"📈 Candidates NOW:\n" + ( .items[0:10] | map("• " + .symbol + " " + (.side // "N/A") + " s=" + ((.score|tostring) // "?") ) | join("\n"))' || true)
+        if [ -n "$NOW" ]; then
+          curl -sS -H "Authorization: Bearer ${API_BEARER_TOKEN}" \
+            --get --data-urlencode "mode=send" --data-urlencode "text=${NOW}" \
+            "${PUBLIC_HOST}/meta/telegram" >/dev/null 2>&1 || true
+        fi
+
+        # TOPK (כל 5 דק')
+        if [ $((`date +%s` % 300)) -lt 10 ]; then
+          TOPK=$(curl -sS "${PUBLIC_HOST}/scan/public-topk?exchange=binance_futures&k=${PUBLIC_TOPK_DIGEST_K:-5}&min_score=${PUBLIC_TOPK_DIGEST_MIN_SCORE:-7}" | \
+                 jq -r '"⭐ TOPK:\n" + ( .items | map("• " + .symbol + " " + (.side // "N/A") + " s=" + ((.score|tostring) // "?") ) | join("\n"))' || true)
+          if [ -n "$TOPK" ]; then
+            curl -sS -H "Authorization: Bearer ${API_BEARER_TOKEN}" \
+              --get --data-urlencode "mode=send" --data-urlencode "text=${TOPK}" \
+              "${PUBLIC_HOST}/meta/telegram" >/dev/null 2>&1 || true
+          fi
+        fi
+        sleep 180
+      done
 
   nginx:
     image: nginx:stable-alpine
@@ -114,8 +138,8 @@ services:
     container_name: watchtower
     restart: unless-stopped
     environment:
-      WATCHTOWER_CLEANUP: "true"
-      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"        # תקין
+      WATCHTOWER_LABEL_ENABLE: "true"   # תקין
       WATCHTOWER_SCHEDULE: "0 0 * * * *"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -181,9 +205,9 @@ services:
     ports:
       - "3000:3000"
     environment:
-      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
-      GF_USERS_DEFAULT_THEME: light
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}       # תקין
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin} # תקין
+      GF_USERS_DEFAULT_THEME: light                              # תקין
     volumes:
       - grafana_data:/var/lib/grafana
       - ./monitoring/grafana/datasource.yml:/etc/grafana/provisioning/datasources/datasource.yml:ro
@@ -191,7 +215,7 @@ services:
       - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards:ro
 
   sqlite_backup:
-    image: alpine:3.19
+    image: alpine:3.20
     container_name: sqlite_backup
     restart: unless-stopped
     depends_on:
@@ -202,7 +226,9 @@ services:
       - backup_data:/backups
       - ./backup/backup.sh:/usr/local/bin/backup.sh:ro
     command: >
-      /bin/sh -c 'echo "15 3 * * * /usr/local/bin/backup.sh >/dev/null 2>&1" | crontab - && crond -f -L /dev/stdout'
+      /bin/sh -lc 'chmod +x /usr/local/bin/backup.sh;
+      echo "15 3 * * * /usr/local/bin/backup.sh >/dev/null 2>&1" | crontab - &&
+      crond -f -L /dev/stdout'
 
   logrotate:
     image: blacklabelops/logrotate
@@ -212,10 +238,10 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers
       - ./monitoring/logrotate.d:/etc/logrotate.d
     environment:
-      LOGS_DIRECTORIES: /var/lib/docker/containers
-      LOGROTATE_CRONSCHEDULE: "0 */6 * * *"
-      LOGROTATE_COPIES: "5"
-      LOGROTATE_SIZE: "100M"
+      LOGS_DIRECTORIES: /var/lib/docker/containers   # תקין
+      LOGROTATE_CRONSCHEDULE: "0 */6 * * *"          # תקין
+      LOGROTATE_COPIES: "5"                          # תקין
+      LOGROTATE_SIZE: "100M"                         # תקין
 
 volumes:
   redis_data:
@@ -223,7 +249,6 @@ volumes:
   grafana_data:
   algodata:
   backup_data:
-
 
 
 
