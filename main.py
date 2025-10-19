@@ -17,6 +17,7 @@ import threading
 import math
 from contextlib import suppress
 from typing import Any, Dict, List, Optional, Callable, Tuple, Union
+from fastapi import Form  # for POST confirm endpoints
 
 # --- soft shim so routes.position_ops can import even if utils.anti_replay is missing ---
 import sys, types  # noqa: E402
@@ -25,8 +26,9 @@ if "utils.anti_replay" not in sys.modules:
 
     def verify_request(ts_header: Optional[str], nonce_header: Optional[str], signature_header: Optional[str],
                        route: str, body: Any, require_signature: bool = False) -> Tuple[bool, str]:
-        # permissive default; real verification lives in utils.anti_replay if present
-        return True, "ok"
+        # safer default: fail-closed unless explicitly allowed
+        allow = os.getenv("ALLOW_MISSING_ANTI_REPLAY", "0").lower() in ("1", "true", "yes", "on")
+        return (True, "ok") if allow else (False, "anti_replay_module_missing")
 
     _m.verify_request = verify_request  # type: ignore[attr-defined]
     sys.modules["utils.anti_replay"] = _m
@@ -37,7 +39,9 @@ try:
     from utils.idempotency import idem_for_request  # type: ignore
 except Exception:
     async def idem_for_request(body: bytes, headers: Dict[str, str], extra: Optional[Dict[str, Any]] = None) -> bool:  # type: ignore
-        return True
+        # safer default: fail-closed unless explicitly allowed
+        allow = os.getenv("ALLOW_MISSING_IDEMPOTENCY", "0").lower() in ("1", "true", "yes", "on")
+        return True if allow else False
 # ----------------------------------------------------------------------------------------
 
 import httpx
@@ -335,11 +339,10 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
 
 def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600, action: Optional[str] = None) -> str:
     if not HMAC_SECRET:
+        # Harden: never emit approve/reject links when not signing
+        if action in ("approve", "reject"):
+            return ""
         route = "/ops/ui/ticket"
-        if action == "approve":
-            route = "/ops/approve"
-        elif action == "reject":
-            route = "/ops/reject"
         sep = "&" if "?" in route else "?"
         return f"{base}{route}{sep}ticket_id={ticket_id}"
     exp = int(time.time()) + int(ttl_sec)
@@ -1238,6 +1241,33 @@ def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLR
     )
     return HTMLResponse(body)
 
+# ===== Idempotency guard for approve/reject (atomic) =====
+async def _try_mark_decided(ticket_id: str, decision: str, ttl: int = 30) -> bool:
+    """
+    Prevent duplicate handling of approve/reject by racing clicks/retries.
+    Returns True if this is the first handler; False if already handled.
+    """
+    if not (aioredis and REDIS_URL):
+        # in-memory best-effort
+        bucket = getattr(app.state, "_decided_mem", None)
+        if bucket is None:
+            bucket = {}
+            app.state._decided_mem = bucket
+        key = f"{ticket_id}:{decision}"
+        if bucket.get(key):
+            return False
+        bucket[key] = time.time()
+        return True
+    r = await _get_redis_cached()
+    if not r:
+        return True
+    key = f"{NS}:decided:{ticket_id}:{decision}"
+    ok = await r.setnx(key, "1")
+    if ok:
+        with suppress(Exception):
+            await r.expire(key, ttl)
+    return bool(ok)
+
 @router.get("/ops/ui/ticket")
 async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     _require_bearer(request)
@@ -1276,14 +1306,47 @@ async def reject(ticket_id: str = Query(..., description="ticket_id"), request: 
     _maybe_protect_routes(request)
     return await _reject_core(ticket_id)
 
+# ===== Confirm GET -> POST flow for signed approve/reject =====
 @router.get(SIGN_PATH_APPROVE)
-async def approve_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
+async def approve_signed_confirm(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
+    if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_APPROVE):
+        raise HTTPException(status_code=401, detail="Bad or expired signature")
+    return HTMLResponse(
+        "<!doctype html><meta charset='utf-8'>"
+        "<body style='font-family:sans-serif;max-width:720px;margin:3rem auto'>"
+        "<h3>Confirm Approve</h3>"
+        "<form method='post' action='/ops/approve/signed'>"
+        f"<input type='hidden' name='ticket_id' value='{_md_html(ticket_id)}'/>"
+        f"<input type='hidden' name='exp' value='{_md_html(exp)}'/>"
+        f"<input type='hidden' name='sig' value='{_md_html(sig)}'/>"
+        "<button style='padding:.6rem 1rem;background:#16a34a;color:#fff;border:0;border-radius:8px'>Approve</button>"
+        "</form></body>"
+    )
+
+@router.post(SIGN_PATH_APPROVE)
+async def approve_signed_post(ticket_id: str = Form(...), exp: str = Form(...), sig: str = Form(...)):
     if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_APPROVE):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _approve_core(ticket_id)
 
 @router.get(SIGN_PATH_REJECT)
-async def reject_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
+async def reject_signed_confirm(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
+    if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_REJECT):
+        raise HTTPException(status_code=401, detail="Bad or expired signature")
+    return HTMLResponse(
+        "<!doctype html><meta charset='utf-8'>"
+        "<body style='font-family:sans-serif;max-width:720px;margin:3rem auto'>"
+        "<h3>Confirm Reject</h3>"
+        "<form method='post' action='/ops/reject/signed'>"
+        f"<input type='hidden' name='ticket_id' value='{_md_html(ticket_id)}'/>"
+        f"<input type='hidden' name='exp' value='{_md_html(exp)}'/>"
+        f"<input type='hidden' name='sig' value='{_md_html(sig)}'/>"
+        "<button style='padding:.6rem 1rem;background:#dc2626;color:#fff;border:0;border-radius:8px'>Reject</button>"
+        "</form></body>"
+    )
+
+@router.post(SIGN_PATH_REJECT)
+async def reject_signed_post(ticket_id: str = Form(...), exp: str = Form(...), sig: str = Form(...)):
     if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_REJECT):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _reject_core(ticket_id)
@@ -1362,6 +1425,13 @@ async def _approve_core(ticket_id: str):
             logger.warning("checklist_gate_failed (permissive allow): %s", e)
     # --- סוף ה-Checklist Gate ---
 
+    # Idem guard: avoid double handling of the same ticket
+    first = await _try_mark_decided(ticket_id, "approve")
+    if not first:
+        with suppress(Exception):
+            await _send_telegram_html(f"ℹ️ <b>Approve Duplicate</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• Skipped duplicate.")
+        return _html("⚠️ בקשה זהה כבר טופלה.")
+
     t2 = await _apply_auto_qty_on_ticket_async(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
@@ -1410,6 +1480,8 @@ async def _approve_core(ticket_id: str):
             logger.warning("smart_manage_trigger_failed: %s", e)
     with suppress(Exception):
         sym, side, qty = ticket.get("symbol", ""), ticket.get("side", ""), ticket.get("qty", "")
+        # brief error summary instead of full exec payload
+        err_brief = exec_res.get("error") or exec_res.get("primary_error") or exec_res.get("detail") or "unknown_error"
         msg = (
             f"✅ <b>Approved</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
             f"• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n• Flow: <code>{flow}</code>\n— — —\nבוצע והועבר לניהול."
@@ -1417,7 +1489,7 @@ async def _approve_core(ticket_id: str):
             else
             f"⚠️ <b>Approve Failed</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
             f"• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n• Flow: <code>{flow}</code>\n— — —\n"
-            f"שגיאה: <code>{_md_html(json.dumps(exec_res, ensure_ascii=False))}</code>"
+            f"שגיאה: <code>{_md_html(str(err_brief))}</code>"
         )
         await _send_telegram_html(msg)
     await _delete_ticket(ticket_id, source, final_status=ok)
@@ -1427,6 +1499,13 @@ async def _reject_core(ticket_id: str):
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור/דחייה.")
+
+    # Idem guard
+    first = await _try_mark_decided(ticket_id, "reject")
+    if not first:
+        with suppress(Exception):
+            await _send_telegram_html(f"ℹ️ <b>Reject Duplicate</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• Skipped duplicate.")
+        return _html("⚠️ בקשה זהה כבר טופלה.")
 
     try:
         inc_reject()
@@ -1922,7 +2001,7 @@ try:
 except Exception as e:
     logger.warning("routes.position_ops not loaded (direct): %s", e)
 
-# 2) לולאת POSSIBLE_ROUTES דינמית – מבוססת הרשימה מהודעתך (נוקתה לשמות מודולים)
+# 2) לולאת POSSIBLE_ROUTES דינמית
 POSSIBLE_ROUTES = [
     "executors","notify_hooks","admin","admin_control","ai_analyze","analytics","anchor","auto_trade",
     "binance_status","calibration","context","dashboard","dashboard_live","debug","debug_auth","debug_binance",
@@ -1941,10 +2020,9 @@ for name in POSSIBLE_ROUTES:
         if hasattr(mod, "router"):
             app.include_router(mod.router)
     except Exception:
-        # מתעלמים ממודולים שעדיין לא קיימים/שבורים
         pass
 
-# 3) לולאת include "ידועה" עם תגיות
+# 3) include "ידועה" עם תגיות
 for mod, tag in (
     ("routes.manager", "manager"),
     ("routes.price", "price"),
@@ -2134,13 +2212,11 @@ async def meta_telegram(
             return {"ok": False, "error": f"dry_run_failed: {e}"}
 
     if mode == "set":
-        if not TELEGRAM_SEND_ENABLE:
-            return {"ok": True, "skipped": True, "reason": "disabled"}
-        host = PUBLIC_HOST
-        secret = TELEGRAM_WEBHOOK_SECRET
-        if not (host and secret):
-            return {"ok": False, "error": "missing_host_or_secret", "need": {"PUBLIC_HOST": bool(host), "TELEGRAM_WEBHOOK_SECRET": bool(secret)}}
         try:
+            secret = TELEGRAM_WEBHOOK_SECRET
+            host = PUBLIC_HOST
+            if not (secret and host):
+                return {"ok": False, "error": "host_or_secret_missing"}
             r = await cli.post(
                 f"https://api.telegram.org/bot{token}/setWebhook",
                 json={
@@ -2159,69 +2235,47 @@ async def meta_telegram(
             return {"ok": False, "error": str(e)}
 
     # mode == "send"
-    try:
-        if not TELEGRAM_SEND_ENABLE:
-            return {"ok": True, "skipped": True, "reason": "disabled"}
+    if not TELEGRAM_SEND_ENABLE:
+        return {"ok": True, "skipped": True, "reason": "disabled"}
 
-        msg_text = text or "🔎 Diagnostics: test message"
-        links = _maybe_links()
-        if chat_id:
+    msg_text = text or "🔎 Diagnostics: test message"
+    links = _maybe_links()
+    if chat_id:
+        try:
+            cid: Any = int(chat_id) if str(chat_id).isdigit() else chat_id
+        except Exception:
+            cid = chat_id
+
+        if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
             try:
-                cid: Any = int(chat_id) if str(chat_id).isdigit() else chat_id
-            except Exception:
-                cid = chat_id
+                r = await _get_redis_cached()
+                if r:
+                    key_payload = json.dumps({"t": msg_text, "cid": cid, "links": links}, ensure_ascii=False, separators=(",", ":"))
+                    idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
+                    ok = await r.setnx(idem_key, "1")
+                    if not ok:
+                        return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
+                    with suppress(Exception):
+                        await r.expire(idem_key, int(IDEM_TTL_SEC))
+            except Exception as e:
+                logger.debug("telegram_idem_warning(send): %s", e)
 
-            if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
-                try:
-                    r = await _get_redis_cached()
-                    if r:
-                        key_payload = json.dumps({"t": msg_text, "cid": cid, "links": links}, ensure_ascii=False, separators=(",", ":"))
-                        idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
-                        ok = await r.setnx(idem_key, "1")
-                        if not ok:
-                            return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
-                        with suppress(Exception):
-                            await r.expire(idem_key, int(IDEM_TTL_SEC))
-                except Exception as e:
-                    logger.debug("telegram_idem_warning(send): %s", e)
-
-            payload = {
-                "chat_id": cid,
-                "text": msg_text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            }
-            kb = []
-            if links.get("preview_url"):
-                kb.append({"text": "👁 Preview", "url": links["preview_url"]})
-            if links.get("approve_url"):
-                kb.append({"text": "✅ Approve", "url": links["approve_url"]})
-            if links.get("reject_url"):
-                kb.append({"text": "❌ Reject", "url": links["reject_url"]})
-            if kb:
-                payload["reply_markup"] = {"inline_keyboard": [kb]}
-
+        try:
             r = await cli.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                json=payload,
+                json={"chat_id": cid, "text": msg_text, "parse_mode": "HTML", "disable_web_page_preview": True, **{k: v for k, v in links.items() if v}},
                 timeout=httpx.Timeout(10.0),
             )
             data = {}
             with suppress(Exception):
                 data = r.json()
-            return {"ok": (r.status_code == 200 and data.get("ok") is True), "status": r.status_code, "result": data, "used_chat_id": cid, "links": links}
-        else:
-            res = await _send_telegram_html(
-                msg_text,
-                approve_url=links.get("approve_url"),
-                reject_url=links.get("reject_url"),
-                preview_url=links.get("preview_url"),
-            )
-            return {"ok": bool(res.get("ok")), "result": res, "used_chat_id": ADMIN_CHAT_ID, "links": links}
-    except Exception as e:
-        return {"ok": False, "error": f"send_failed: {e}"}
+            return {"ok": (r.status_code == 200 and data.get("ok") is True), "status": r.status_code, "result": data}
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
 
-# ==================== HTTPException handler (new) ====================
+    return {"ok": False, "error": "bad_mode"}
+
+# ==================== Error handlers ====================
 from fastapi.exceptions import HTTPException as FastAPIHTTPException
 
 @app.exception_handler(FastAPIHTTPException)
@@ -2239,257 +2293,7 @@ async def global_exception_handler(request: Request, exc: Exception):
         payload["detail"] = str(exc)
     return JSONResponse(status_code=500, content=payload)
 
-# -------- Continuous open-trade reporting (helpers) ----------
-OPEN_TRADE_REPORT_ENABLE = os.getenv("OPEN_TRADE_REPORT_ENABLE", "1").lower() in ("1", "true", "yes", "on")
-OPEN_TRADE_REPORT_INTERVAL_SEC = int(os.getenv("OPEN_TRADE_REPORT_INTERVAL_SEC", "60") or 60)
-FINAL_TRADE_SUMMARY_ENABLE = os.getenv("FINAL_TRADE_SUMMARY_ENABLE", "1").lower() in ("1", "true", "yes", "on")
-
-def _pnl_pct(entry: float, price_now: float, side_txt: str) -> float:
-    if entry <= 0 or price_now <= 0:
-        return 0.0
-    diff = (price_now - entry) / entry * 100.0
-    return diff if side_txt == "BUY" else -diff
-
-def _update_track_state(sym: str, side: str, entry: float, price_now: float, qty_abs: float) -> Dict[str, Any]:
-    st = app.state.pos_track.get(sym) or {}
-    st.setdefault("entry", float(entry))
-    st.setdefault("side", side)
-    st["qty"] = float(qty_abs)
-    st["last"] = float(price_now)
-    st["pnl_pct"] = _pnl_pct(float(entry), float(price_now), side)
-    if side == "BUY":
-        st["high"] = max(float(st.get("high", entry)), float(price_now))
-        st["low"] = min(float(st.get("low", entry)), float(price_now))
-    else:
-        st["high"] = max(float(st.get("high", entry)), float(price_now))
-        st["low"] = min(float(st.get("low", entry)), float(price_now))
-    app.state.pos_track[sym] = st
-    return st
-
-async def _send_open_trade_report(sym: str, side: str, qty: float, entry: float, price_now: float, st: Dict[str, Any]) -> None:
-    if not TELEGRAM_SEND_ENABLE:
-        return
-    pnl = _pnl_pct(entry, price_now, side)
-    hi = float(st.get("high", price_now))
-    lo = float(st.get("low", price_now))
-    msg = (
-        "📊 <b>Open Trade</b>\n"
-        f"• <b>{_md_html(sym)}</b> {_md_html(side)} qty=<code>{qty}</code>\n"
-        f"• Entry=<code>{entry:.6g}</code> Now=<code>{price_now:.6g}</code> PnL=<code>{pnl:+.2f}%</code>\n"
-        f"• Range: <code>low={lo:.6g} / high={hi:.6g}</code>\n"
-        "— — —\n"
-        "דוח מצב ביניים."
-    )
-    await _send_telegram_html(msg)
-
-async def _send_final_trade_summary(sym: str, side: str, qty: float, entry: float, exit_price: float, st: Dict[str, Any]) -> None:
-    if not TELEGRAM_SEND_ENABLE:
-        return
-    pnl = _pnl_pct(entry, exit_price, side)
-    hi = float(st.get("high", entry))
-    lo = float(st.get("low", entry))
-    dur = 0
-    with suppress(Exception):
-        if sym in app.state.pos_open_ts:
-            dur = max(0, int(time.time()) - int(app.state.pos_open_ts.get(sym, time.time())))
-    msg = (
-        "🧾 <b>Trade Summary</b>\n"
-        f"• <b>{_md_html(sym)}</b> {_md_html(side)} qty=<code>{qty}</code>\n"
-        f"• Entry=<code>{entry:.6g}</code> Exit=<code>{exit_price:.6g}</code> PnL=<code>{pnl:+.2f}%</code>\n"
-        f"• Session range: <code>low={lo:.6g} / high={hi:.6g}</code>\n"
-        f"• Duration: <code>{dur//60}m</code>\n"
-        "— — —\n"
-        "סיכום עסקה."
-    )
-    await _send_telegram_html(msg)
-
-# -------- NEW: Background real-time trailing manager ----------
-async def _trail_rt_loop():
-    if not TRAIL_RT_ENABLE:
-        return
-    try:
-        from binance.client import Client  # type: ignore
-    except Exception as e:
-        logger.warning("trail_rt: binance client missing: %s", e)
-        return
-    api_key = os.getenv("BINANCE_API_KEY", "").strip()
-    api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
-    if not (api_key and api_sec):
-        logger.warning("trail_rt: missing binance keys")
-        return
-
-    client = Client(api_key, api_sec)
-    _align_position_mode(client)
-
-    async def _symbols_to_check() -> List[str]:
-        if TRAIL_RT_WATCH:
-            return TRAIL_RT_WATCH[:TRAIL_RT_MAX_SYMBOLS]
-        out: List[str] = []
-        with suppress(Exception):
-            def _acc_positions():
-                acc = client.futures_account()
-                return acc.get('positions', [])
-            infos = await asyncio.to_thread(_acc_positions)
-            for p in infos:
-                try:
-                    amt = float(p.get("positionAmt") or 0.0)
-                    if abs(amt) > 0:
-                        out.append(str(p.get("symbol")))
-                except Exception:
-                    continue
-        if not out:
-            return WATCHLIST[:TRAIL_RT_MAX_SYMBOLS]
-        uniq: List[str] = []
-        for s in out:
-            if s and s not in uniq:
-                uniq.append(s)
-        return uniq[:TRAIL_RT_MAX_SYMBOLS]
-
-    while True:
-        try:
-            if _in_pause_window_utc():
-                await asyncio.sleep(max(3, TRAIL_RT_INTERVAL_SEC))
-                continue
-
-            syms = await _symbols_to_check()
-
-            for sym in syms:
-                pos_amt = 0.0
-                side_txt = None
-                entry_price = 0.0
-                with suppress(Exception):
-                    infos = await asyncio.to_thread(lambda: client.futures_position_information(symbol=sym))
-                    for p in infos:
-                        amt = float(p.get("positionAmt") or 0.0)
-                        if abs(amt) > 0:
-                            pos_amt = amt
-                            entry_price = float(p.get("entryPrice") or 0.0)
-                            side_txt = "BUY" if amt > 0 else "SELL"
-                            break
-
-                if side_txt and abs(pos_amt) > 0:
-                    with suppress(Exception):
-                        if sym not in app.state.pos_open_ts:
-                            app.state.pos_open_ts[sym] = int(time.time())
-                            app.state.tp1_hit_ts.pop(sym, None)
-                else:
-                    with suppress(Exception):
-                        app.state.pos_track.pop(sym, None)
-                        app.state.pos_last_report_ts.pop(sym, None)
-                    continue
-
-                px_now = entry_price
-                with suppress(Exception):
-                    t = await asyncio.to_thread(lambda: client.futures_symbol_ticker(symbol=sym))
-                    if t and "price" in t:
-                        px_now = float(t["price"]) or px_now
-                if px_now <= 0:
-                    continue
-
-                kl = []
-                with suppress(Exception):
-                    kl = await asyncio.to_thread(lambda: client.futures_klines(symbol=sym, interval="1m", limit=60))
-                ind = _compute_indicators_from_klines(kl or [], period=14)
-                atr = float(ind.get("atr") or 0.0)
-                adx = float(ind.get("adx") or 0.0)
-                atr_pct = (atr / px_now) if px_now > 0 else 0.0  # FRACTION here by design
-
-                if AUTO_TRAIL_ADX_MIN > 0 and adx < AUTO_TRAIL_ADX_MIN:
-                    continue
-                if AUTO_TRAIL_ATRPCT_MAX > 0 and atr_pct > AUTO_TRAIL_ATRPCT_MAX:
-                    continue
-
-                cb = (atr * TRAIL_RT_ATR_MULT / px_now) * 100.0 if px_now > 0 else 0.5
-                cb = max(TRAIL_RT_MIN_CALLBACK, min(TRAIL_RT_MAX_CALLBACK, cb))
-                cb = round(cb, 1)
-
-                existing = None
-                with suppress(Exception):
-                    oo = await asyncio.to_thread(lambda: client.futures_get_open_orders(symbol=sym))
-                    for o in oo or []:
-                        if o.get("type") == "TRAILING_STOP_MARKET":
-                            existing = o
-                            break
-
-                need_place = False
-                need_adjust = False
-                if not existing:
-                    need_place = True
-                else:
-                    ex_cb = None
-                    with suppress(Exception):
-                        ex_cb = float(existing.get("callbackRate"))
-                    if ex_cb is None or abs(ex_cb - cb) >= TRAIL_RT_ADJUST_THRESHOLD:
-                        need_adjust = True
-
-                if need_adjust:
-                    with suppress(Exception):
-                        await asyncio.to_thread(lambda: client.futures_cancel_order(symbol=sym, orderId=existing.get("orderId")))  # type: ignore[arg-type]
-                    need_place = True
-
-                if need_place:
-                    kwargs = dict(
-                        symbol=sym,
-                        side=("SELL" if side_txt == "BUY" else "BUY"),
-                        type="TRAILING_STOP_MARKET",
-                        callbackRate=cb,
-                        reduceOnly=True,
-                        workingType=TRAIL_RT_PRICE_SRC,
-                        newClientOrderId=build_client_order_id(sym, ("SELL" if side_txt == "BUY" else "BUY"), role="TRAIL@RT"),
-                    )
-                    with suppress(Exception):
-                        await asyncio.to_thread(lambda: client.futures_create_order(**kwargs))
-
-                # optional TP maintenance hooks (best-effort)
-                if maybe_merge_close_tps:
-                    tick, _step = await asyncio.to_thread(lambda: _get_filters(client, sym))
-                    with suppress(Exception):
-                        maybe_merge_close_tps(client, sym, tick=tick, tick_band=TP_MERGE_TICK_BAND)
-
-                last_planned: List[Dict[str, float]] = []
-                with suppress(Exception):
-                    ro = await asyncio.to_thread(lambda: client.futures_get_open_orders(symbol=sym))
-                    for o in ro or []:
-                        if str(o.get("type")) == "LIMIT" and str(o.get("reduceOnly")).lower() == "true":
-                            last_planned.append({
-                                "price": float(o.get("price")),
-                                "qty": float(o.get("origQty") or 0.0)
-                            })
-                if maybe_rearm_on_bounce and last_planned:
-                    with suppress(Exception):
-                        tick_for_rearm = (await asyncio.to_thread(lambda: _get_filters(client, sym)))[0]
-                        maybe_rearm_on_bounce(
-                            client, sym, side_txt=side_txt, price_now=px_now,
-                            last_planned_tps=last_planned, tick=tick_for_rearm,
-                            rearm_tick=TP_REARM_TICK
-                        )
-
-                opened_at = getattr(app.state, "pos_open_ts", {}).get(sym)
-                tp1_at = getattr(app.state, "tp1_hit_ts", {}).get(sym)
-                if opened_at and (not tp1_at):
-                    elapsed_min = (int(time.time()) - int(opened_at)) / 60.0
-                    if elapsed_min >= ANTI_STALE_MIN and anti_stale_nudge:
-                        with suppress(Exception):
-                            tick_for_nudge = (await asyncio.to_thread(lambda: _get_filters(client, sym)))[0]
-                            anti_stale_nudge(
-                                client, sym, side_txt=side_txt, tick=tick_for_nudge,
-                                nudge_bps=ANTI_STALE_NUDGE_BPS
-                            )
-
-                st = _update_track_state(sym, side_txt, entry_price, px_now, abs(pos_amt))
-
-                now_ts = int(time.time())
-                last_ts = int(app.state.pos_last_report_ts.get(sym, 0))
-                if OPEN_TRADE_REPORT_ENABLE and (now_ts - last_ts >= OPEN_TRADE_REPORT_INTERVAL_SEC):
-                    app.state.pos_last_report_ts[sym] = now_ts
-                    await _send_open_trade_report(sym, side_txt, abs(pos_amt), entry_price, px_now, st)
-
-            await asyncio.sleep(max(3, TRAIL_RT_INTERVAL_SEC))
-        except Exception as e:
-            logger.debug("trail_rt_loop_error: %s", e)
-            await asyncio.sleep(max(3, TRAIL_RT_INTERVAL_SEC))
-
-# ==================== Startup & lifespan ====================
+# ==================== Startup/Shutdown ====================
 @app.on_event("startup")
 async def _on_startup():
     app.state.boot_ts = time.time()
@@ -2512,12 +2316,28 @@ async def _on_shutdown():
         task = getattr(app.state, "trail_task", None)
         if task:
             task.cancel()
+            with suppress(Exception):
+                await task
+    # Close shared clients
+    with suppress(Exception):
+        cli = getattr(app.state, "shared_async_client", None)
+        if cli and not cli.is_closed:
+            await cli.aclose()
+    with suppress(Exception):
+        r = getattr(app.state, "redis", None)
+        if r:
+            await r.close()
+
+# (placeholder) trailing loop if exists elsewhere
+async def _trail_rt_loop():
+    # no-op placeholder if external implementation is absent
+    while False:
+        await asyncio.sleep(1)
 
 # ============== Uvicorn entry (optional) ==============
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower(), reload=False)
-
 
 
 
