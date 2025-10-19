@@ -45,9 +45,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     APP_VERSION=${APP_VERSION} \
     ALGOGPT_VERSION=${APP_VERSION}
 
-# ספריות זמן־ריצה נחוצות (OpenBLAS/PNG/JPEG למספריות מדעיות ו־matplotlib)
+# ספריות זמן־ריצה נחוצות
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
-    curl tini ca-certificates tzdata git \
+    bash curl tini ca-certificates tzdata git \
     libopenblas0-openmp liblapack3 \
     libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
     procps psmisc \
@@ -61,13 +61,18 @@ COPY --from=builder /install /usr/local
 RUN useradd -ms /bin/bash appuser
 
 WORKDIR /app
+# העתקת קוד האפליקציה
 COPY . .
+
+# ודא שהסקריפט של ההלפרים מועתק ומרושיין להרצה
+# אם אין לך את הקובץ בריפו – הוסף אותו לפי התוכן שקיבלת (ללא jq)
+COPY algo_helpers.sh /app/algo_helpers.sh
+RUN chmod +x /app/algo_helpers.sh
 
 # כתיבת גרסה לקובץ (fallback ל-/meta/version)
 RUN printf "%s\n" "${APP_VERSION}" > /app/VERSION || true
 
-# קבצים משלימים שה־CMD משתמש בהם (אם לא הועתקו ע״י COPY לעיל)
-# (ניצור ברירת־מחדל בטוחה כדי למנוע שגיאה אם חסר)
+# קבצי ברירת־מחדל שנחוצים ל־CMD
 RUN test -f /app/gunicorn_conf.py || printf "%s\n" "\
 bind = '0.0.0.0:' + str(__import__('os').environ.get('PORT', '10000'))\n\
 worker_class = 'uvicorn.workers.UvicornWorker'\n\
@@ -96,6 +101,19 @@ RUN mkdir -p /app/static /app/logs /app/data /app/.cache \
  && chmod 755 /app/static /app/logs /app/.cache /app/data || true \
  && chown -R appuser:appuser /app \
  && (find /usr/local /app -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true)
+
+# טעינה אוטומטית של ההלפרים לכל סשן shell של appuser
+RUN printf "%s\n" "\
+# === Algo helpers auto-load ===\n\
+if [ -f /app/algo_helpers.sh ]; then\n\
+  . /app/algo_helpers.sh\n\
+fi\n" >> /home/appuser/.bashrc \
+ && printf "%s\n" "\
+# === Algo helpers auto-load ===\n\
+if [ -f /app/algo_helpers.sh ]; then\n\
+  . /app/algo_helpers.sh\n\
+fi\n" >> /home/appuser/.profile \
+ && chown appuser:appuser /home/appuser/.bashrc /home/appuser/.profile
 
 USER appuser
 
