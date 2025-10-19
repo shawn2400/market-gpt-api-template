@@ -1,17 +1,23 @@
 # routes/public_snapshot.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import os
-from typing import Any, Dict, Optional
-from fastapi import APIRouter, Header, HTTPException, Body, Query
-from fastapi.responses import JSONResponse
 
-from utils.snapshot_store import upsert_snapshot, get_snapshot, list_symbols, touch_symbol
+import json
+import os
+import time
+from typing import Any, Dict, Optional
+
+from fastapi import APIRouter, Body, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/public/snapshot", tags=["Public Feed"])
 
 # Bearer ACTION (כתיבה)
 _ACTION = (os.getenv("API_BEARER_TOKEN_ACTION") or "").strip()
 _REQUIRE_ACTION = os.getenv("PUBLIC_SNAPSHOT_REQUIRE_ACTION", "1").lower() in ("1","true","yes","on")
+
+SNAP_DIR = os.getenv("PUBLIC_SNAPSHOT_DIR", "static/cache")
+SNAP_FILE = os.path.join(SNAP_DIR, "public_snapshots.jsonl")
 
 def _check_action_bearer(authorization: Optional[str]) -> None:
     if not _REQUIRE_ACTION:
@@ -31,42 +37,32 @@ def _validate_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise HTTPException(status_code=422, detail="symbol required")
     if side not in ("LONG", "SHORT", "L", "S", ""):
         raise HTTPException(status_code=422, detail="bad side")
-    # normalize
     if side == "L":
         side = "LONG"
     if side == "S":
         side = "SHORT"
 
-    # optional numeric coercions
     def _coerce_float(x):
         try:
             return float(x)
         except Exception:
             return None
 
-    clean: Dict[str, Any] = {
-        "symbol": sym,
-        "side": side or None,
-    }
+    clean: Dict[str, Any] = {"symbol": sym, "side": side or None}
     for k in ("score", "entry", "now", "pnl"):
         if k in payload:
             v = _coerce_float(payload.get(k))
             if v is not None:
                 clean[k] = v
-
-    # sl/tp as-is (basic shape)
     if "sl" in payload:
         clean["sl"] = payload["sl"]
     if "tp" in payload:
         if isinstance(payload["tp"], list):
-            clean["tp"] = payload["tp"][:6]  # small cap to stay safe
+            clean["tp"] = payload["tp"][:6]
         else:
             raise HTTPException(status_code=422, detail="tp must be list")
-
-    # meta/extra
     if "meta" in payload and isinstance(payload["meta"], dict):
         clean["meta"] = payload["meta"]
-
     return clean
 
 @router.post("/upsert", summary="Upsert public snapshot (ACTION bearer)")
@@ -76,18 +72,44 @@ async def snapshot_upsert(
 ):
     _check_action_bearer(authorization)
     clean = _validate_snapshot(body)
-    snap = await upsert_snapshot(clean)
-    await touch_symbol(clean["symbol"])
-    return JSONResponse({"ok": True, "snapshot": snap})
+    os.makedirs(SNAP_DIR, exist_ok=True)
+    rec = {"ts": int(time.time()), **clean}
+    with open(SNAP_FILE, "a", encoding="utf-8") as f:
+        f.write(json.dumps(rec, ensure_ascii=False) + "\n")
+    return JSONResponse({"ok": True, "snapshot": rec, "path": SNAP_FILE})
 
 @router.get("/inspect", summary="Inspect snapshot for a symbol")
 async def snapshot_inspect(symbol: str = Query(...)):
-    snap = await get_snapshot(symbol)
-    if not snap:
+    if not os.path.exists(SNAP_FILE):
         raise HTTPException(status_code=404, detail="not found")
-    return JSONResponse({"ok": True, "snapshot": snap})
+    last = None
+    with open(SNAP_FILE, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                j = json.loads(line)
+                if (j.get("symbol") or "").upper() == symbol.upper():
+                    last = j
+            except Exception:
+                continue
+    if not last:
+        raise HTTPException(status_code=404, detail="not found")
+    return JSONResponse({"ok": True, "snapshot": last})
 
 @router.get("/symbols", summary="List symbols with snapshot (best-effort)")
 async def snapshot_symbols():
-    syms = await list_symbols()
-    return {"ok": True, "symbols": syms}
+    syms = set()
+    if os.path.exists(SNAP_FILE):
+        with open(SNAP_FILE, "r", encoding="utf-8") as f:
+            for line in f:
+                try:
+                    j = json.loads(line)
+                    s = (j.get("symbol") or "").upper()
+                    if s:
+                        syms.add(s)
+                except Exception:
+                    continue
+    return {"ok": True, "symbols": sorted(list(syms))}
+
