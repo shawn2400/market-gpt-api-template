@@ -1,5 +1,5 @@
 
-main_code = r'''# -*- coding: utf-8 -*-
+main.py r'''# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os
