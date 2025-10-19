@@ -135,6 +135,9 @@ def _fallback_filters() -> Dict[str, Any]:
     return {
         "price_tick": float(os.getenv("DEFAULT_PRICE_TICK", "0.01")),
         "qty_step": float(os.getenv("DEFAULT_QTY_STEP", "0.001")),
+        # מוסיפים גם בשם שמצופה ע״י utils/quantize.py:
+        "tick": float(os.getenv("DEFAULT_PRICE_TICK", "0.01")),
+        "step": float(os.getenv("DEFAULT_QTY_STEP", "0.001")),
     }
 
 def _round_step(v: float, step: float) -> float:
@@ -142,20 +145,47 @@ def _round_step(v: float, step: float) -> float:
         return v
     return math.floor(v / step + 1e-12) * step
 
+# עטיפות שמיישרות חתימות מול utils.quantize (px, filters) / (qty, filters)
+with suppress(Exception):
+    from utils.quantize import quantize_price as _qp, quantize_qty as _qq  # type: ignore
+else:
+    _qp = None  # type: ignore
+    _qq = None  # type: ignore
+
+def _normalize_filters_for_utils(flt: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not isinstance(flt, dict):
+        return _fallback_filters()
+    tick = flt.get("tick", flt.get("price_tick"))
+    step = flt.get("step", flt.get("qty_step"))
+    out = dict(flt)
+    if tick is not None:
+        out["tick"] = float(tick)
+    if step is not None:
+        out["step"] = float(step)
+    # שמירה על תאימות עם הקוד המקומי
+    if "price_tick" not in out and "tick" in out:
+        out["price_tick"] = float(out["tick"])
+    if "qty_step" not in out and "step" in out:
+        out["qty_step"] = float(out["step"])
+    return out
+
 def _quantize_price(symbol: str, price: float, flt: Dict[str, Any]) -> float:
-    step = float(flt.get("price_tick", 0.0) or 0.0)
+    f = _normalize_filters_for_utils(flt)
+    if _qp:
+        # utils.quantize.quantize_price(px, filters, direction="down")
+        return _qp(price, f)  # type: ignore[call-arg]
+    # fallback פנימי אם אין utils
+    step = float(f.get("price_tick", 0.0) or 0.0)
     return round(_round_step(price, step), 8) if step > 0 else round(price, 8)
 
 def _quantize_qty(symbol: str, qty: float, flt: Dict[str, Any]) -> float:
-    step = float(flt.get("qty_step", 0.0) or 0.0)
+    f = _normalize_filters_for_utils(flt)
+    if _qq:
+        # utils.quantize.quantize_qty(qty, filters)
+        return _qq(qty, f)  # type: ignore[call-arg]
+    # fallback פנימי אם אין utils
+    step = float(f.get("qty_step", 0.0) or 0.0)
     return round(_round_step(qty, step), 8) if step > 0 else round(qty, 8)
-
-with suppress(Exception):
-    from utils.quantize import quantize_price as _qp, quantize_qty as _qq  # type: ignore
-    def _quantize_price(symbol: str, price: float, flt: Dict[str, Any]) -> float:  # type: ignore
-        return _qp(symbol, price, flt)
-    def _quantize_qty(symbol: str, qty: float, flt: Dict[str, Any]) -> float:  # type: ignore
-        return _qq(symbol, qty, flt)
 
 # =========================
 # Binance client (soft)
@@ -224,7 +254,13 @@ def _get_filters(client, symbol: str) -> Dict[str, Any]:
                     if ft == "LOT_SIZE":
                         with suppress(Exception):
                             qty_step = float(f.get("stepSize") or 0.0)
-                out = {"price_tick": price_tick or 0.0, "qty_step": qty_step or 0.0}
+                out = {
+                    "price_tick": price_tick or 0.0,
+                    "qty_step": qty_step or 0.0,
+                }
+                # מוסיפים גם tick/step לטובת utils.quantize
+                out["tick"] = out["price_tick"]
+                out["step"] = out["qty_step"]
                 return out if (out["price_tick"] or out["qty_step"]) else _fallback_filters()
     except Exception:
         pass
@@ -1054,6 +1090,7 @@ def manage_once(
                     )
 
     return _ok(symbol=symbol, be=be_res, tp=tp_res, trail=tr_res)
+
 
 
 
