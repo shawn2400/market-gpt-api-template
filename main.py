@@ -427,6 +427,7 @@ async def _security_headers(request: Request, call_next):
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
+    resp.headers.setdefault("Permissions-Policy", "interest-cohort=()")
     if os.getenv("ENABLE_HSTS", "0").lower() in ("1", "true", "yes", "on"):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
     return resp
@@ -457,7 +458,7 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
     rec = bucket.get(key)
     if not rec or (now - rec["start"]) >= window_sec:
         bucket[key] = {"start": now, "count": 1}
-        # GC: ננקה מפתחות ישנים כדי לא לגדול בלי סוף
+        # GC
         with suppress(Exception):
             stale = [k for k, v in bucket.items() if (now - v.get("start", now)) >= window_sec * 4]
             for sk in stale:
@@ -1177,7 +1178,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
-            row = f"• TP{i}: <code>{req_body[f'tp{i]']}</code>"
+            row = f"• TP{i}: <code>{req_body[f'tp{i}']}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
                 row += f"  ETA:<code>{req_body[f'eta_tp{i}_min']}m</code>"
             if req_body.get(f"prob_tp{i}_pct") is not None:
@@ -1547,7 +1548,7 @@ PROFILE_EXTREME_SPLITS = [float(x) for x in (os.getenv("PROFILE_EXTREME_SPLITS",
 PROFILE_EXTREME_ATR_MULT = float(os.getenv("PROFILE_EXTREME_ATR_MULT", "1.6"))
 
 ADX_EXTREME_MIN = float(os.getenv("ADX_EXTREME_MIN", "28"))
-ATRPCT_EXTREME_MIN = float(os.getenv("ATRPCT_EXTREME_MIN", "0.007"))
+ATRPCT_EXTREME_MIN = float(os.getenv("ATRPCT_EXTREME_MIN", "0.7"))  # 0.7%
 
 def _wilder_smooth(values: List[float], period: int) -> List[float]:
     if not values or period <= 0 or len(values) < period:
@@ -1662,7 +1663,7 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
     price = float(indicators.get("price") or 0.0)
     atr = float(indicators.get("atr") or 0.0)
     adx = float(indicators.get("adx") or 0.0)
-    atr_pct = (atr / price) if price > 0 else 0.0
+    atr_pct = (atr / price) * 100.0 if price > 0 else 0.0  # percent
 
     use_extreme = PROFILE_AUTO_SELECT and ((adx >= ADX_EXTREME_MIN) or (atr_pct >= ATRPCT_EXTREME_MIN))
     profile_name = "EXTREME" if use_extreme else "BASE"
@@ -1834,7 +1835,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
             "adx": round(float(indicators.get("adx", 0.0)), 2),
             "atr": float(indicators.get("atr", 0.0)),
             "price": float(indicators.get("price", 0.0)),
-            "atr_pct": round(float(indicators.get("atr", 0.0)) / float(indicators.get("price", 1.0)), 6) if indicators.get("price", 0.0) else 0.0,
+            "atr_pct": round((float(indicators.get("atr", 0.0)) / float(indicators.get("price", 1.0))) * 100.0, 6) if indicators.get("price", 0.0) else 0.0,
             "thresholds": {"ADX_EXTREME_MIN": ADX_EXTREME_MIN, "ATRPCT_EXTREME_MIN": ATRPCT_EXTREME_MIN},
         },
     }
@@ -1962,8 +1963,12 @@ except Exception as e:
     logger.warning("routes.status router not loaded: %s", e)
 
 # >>>>>> ADDED AS REQUESTED <<<<<<
-from routes.public_snapshot import router as snapshot_router
-app.include_router(snapshot_router)
+try:
+    from routes.public_snapshot import router as snapshot_router
+    app.include_router(snapshot_router)
+    logger.info("public_snapshot router mounted")
+except Exception as e:
+    logger.warning("routes.public_snapshot router not loaded: %s", e)
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 app.include_router(router)
@@ -2356,7 +2361,7 @@ async def _trail_rt_loop():
                 ind = _compute_indicators_from_klines(kl or [], period=14)
                 atr = float(ind.get("atr") or 0.0)
                 adx = float(ind.get("adx") or 0.0)
-                atr_pct = (atr / px_now) if px_now > 0 else 0.0
+                atr_pct = (atr / px_now) if px_now > 0 else 0.0  # FRACTION here by design
 
                 if AUTO_TRAIL_ADX_MIN > 0 and adx < AUTO_TRAIL_ADX_MIN:
                     continue
@@ -2481,9 +2486,6 @@ async def _on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower(), reload=False)
-
-
-
 
 
 
