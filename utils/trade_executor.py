@@ -103,24 +103,19 @@ try:
     from utils.risk_checker import pre_trade_risk_check, RISK_CHECK_ENABLE
 except Exception:
     RISK_CHECK_ENABLE = False
-
     def pre_trade_risk_check(*args, **kwargs):
         return {"ok": True, "score": 100.0, "reasons": ["risk_module_missing"], "metrics": {}}
 
 try:
     from utils.approvals import ConfirmStore, send_confirm_request, require_approval
 except Exception:
-    class ConfirmStore:
-        pass
-
-    def send_confirm_request(*args, **kwargs):
-        return None
-
-    def require_approval(plan: Dict[str, Any]) -> bool:
-        return False
+    class ConfirmStore: ...
+    def send_confirm_request(*args, **kwargs): return None
+    def require_approval(plan: Dict[str, Any]) -> bool: return False
 
 log = logging.getLogger("algogpt.trade_executor")
 
+# ==== Runtime toggles (env) ====
 SL_DYNAMIC_ENABLE = os.getenv("SL_DYNAMIC_ENABLE", "1").lower() in ("1", "true", "yes", "on")
 SL_ATR_MULT = float(os.getenv("SL_ATR_MULT", "0.6"))
 SL_TRAIL_ENABLE = os.getenv("SL_TRAIL_ENABLE", "1").lower() in ("1", "true", "yes", "on")
@@ -136,7 +131,10 @@ TP_BE_OFFSET_BPS = float(os.getenv("TP_BE_OFFSET_BPS", "8"))
 BE_GUARD_ENABLE = os.getenv("BE_GUARD_ENABLE", "1").lower() in ("1", "true", "yes", "on")
 BE_GUARD_EVERY_SEC = int(os.getenv("BE_GUARD_EVERY_SEC", "30"))
 TP1_TAGS_ENV = [t.strip() for t in (os.getenv("TP1_TAGS", "") or "").split(",") if t.strip()]
-
+# NEW: explicit SL kind (STOP vs STOP_MARKET)
+SL_KIND = (os.getenv("SL_KIND", "STOP") or "STOP").upper()
+# NEW: cap overshoot when lifting to minNotional (default 5%)
+MIN_NOTIONAL_OVERSHOOT_MAX_PCT = float(os.getenv("MIN_NOTIONAL_OVERSHOOT_MAX_PCT", "5.0"))
 
 async def _tg_send(text: str) -> Dict[str, Any]:
     chat_id = int(os.getenv("TRADE_LOG_CHAT_ID") or TELEGRAM_CHAT_ID or 0)
@@ -152,17 +150,18 @@ async def _tg_send(text: str) -> Dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=12.0) as cli:
             r = await cli.post(f"https://api.telegram.org/bot{token}/sendMessage", json=payload)
-        return r.json()
+        j = r.json()
+        if not j.get("ok"):
+            log.debug("telegram_send_not_ok: %s", j)
+        return j
     except Exception as e:
         log.warning("telegram_send_failed: %s", e)
         return {"ok": False, "error": str(e)}
-
 
 def _coid(kind: str, sym: str, side: str) -> str:
     prefix = (ORDER_ID_PREFIX or "ALG").strip()
     ts = int(time.time() * 1000)
     return f"{prefix}_{kind}_{sym}_{side}_{ts}"
-
 
 def _ensure_runtime_position_mode() -> None:
     mode = (os.getenv("POSITION_MODE_OVERRIDE", "") or "").strip().lower()
@@ -178,7 +177,6 @@ def _ensure_runtime_position_mode() -> None:
     except Exception as e:
         log.warning("align_position_mode_failed: %s", e)
 
-
 def _order_matches(
     o: Dict[str, Any],
     *,
@@ -190,15 +188,21 @@ def _order_matches(
     eff_ps: str,
     expect_ro: bool,
 ) -> bool:
+    """
+    Relaxed to avoid false negatives:
+    - If eff_ps == "BOTH": do NOT fail just because API returned positionSide.
+    - Price equality skipped for *_MARKET stop/TP kinds.
+    """
     try:
         if str(o.get("type", "")).upper() != typ:
             return False
         if str(o.get("side", "")).upper() != side:
             return False
-        if eff_ps != "BOTH" and str(o.get("positionSide", "")).upper() != eff_ps:
-            return False
-        if eff_ps == "BOTH" and ("positionSide" in o):
-            return False
+        pos_side_in_order = str(o.get("positionSide", "")).upper()
+        if eff_ps != "BOTH":
+            if pos_side_in_order != eff_ps:
+                return False
+        # if eff_ps == BOTH -> don't fail if API returns positionSide unexpectedly
         if expect_ro:
             ro = o.get("reduceOnly")
             if ro not in (True, "true", 1):
@@ -228,7 +232,6 @@ def _order_matches(
     except Exception:
         return False
 
-
 def _place_close_order_hardened(
     args: Dict[str, Any],
     *,
@@ -251,8 +254,7 @@ def _place_close_order_hardened(
         except Exception as e:
             msg = str(e).lower()
             if ("reduceonly" in msg or "-1106" in msg or "reduce only" in msg) and "reduceOnly" in args:
-                a2 = dict(args)
-                a2.pop("reduceOnly", None)
+                a2 = dict(args); a2.pop("reduceOnly", None)
                 return {"ok": True, "response": place_fn(**a2)}
             raise
     backoff = 0.35
@@ -263,19 +265,16 @@ def _place_close_order_hardened(
         except Exception as e:
             msg = str(e).lower()
             if ("reduceonly" in msg or "-1106" in msg or "reduce only" in msg) and "reduceOnly" in args:
-                a2 = dict(args)
-                a2.pop("reduceOnly", None)
+                a2 = dict(args); a2.pop("reduceOnly", None)
                 try:
                     resp = place_fn(**a2)
                 except Exception as e2:
                     last_err = f"place_failed(ro_fallback): {e2}"
-                    time.sleep(backoff)
-                    backoff = min(1.5, backoff * 1.6)
+                    time.sleep(backoff); backoff = min(1.5, backoff * 1.6)
                     continue
             else:
                 last_err = f"place_failed: {e}"
-                time.sleep(backoff)
-                backoff = min(1.5, backoff * 1.6)
+                time.sleep(backoff); backoff = min(1.5, backoff * 1.6)
                 continue
         oid = str(resp.get("orderId") or "")
         ok = False
@@ -299,15 +298,12 @@ def _place_close_order_hardened(
             return {"ok": True, "response": resp}
         with suppress(Exception):
             cancel_fn(sym, oid)
-        time.sleep(backoff)
-        backoff = min(1.5, backoff * 1.6)
+        time.sleep(backoff); backoff = min(1.5, backoff * 1.6)
     return {"ok": False, "error": last_err or "verify_mismatch_after_place"}
-
 
 def _side_norm(side: str) -> str:
     s = (side or "").upper()
     return "BUY" if s in ("BUY", "LONG") else "SELL"
-
 
 def _maybe_price(sym: str, prefer_mark: bool = True) -> Optional[float]:
     v = None
@@ -317,7 +313,6 @@ def _maybe_price(sym: str, prefer_mark: bool = True) -> Optional[float]:
         v = get_price_coalesced(sym) or get_price(sym) or futures_mark_price(sym)
     return v
 
-
 def _ensure_qty(
     sym: str,
     qty: Optional[float],
@@ -326,34 +321,44 @@ def _ensure_qty(
     price: Optional[float],
     leverage: Optional[float],
 ) -> Tuple[str, float]:
+    """
+    Enforce minNotional but cap overshoot vs raw calc (default ≤ 5%).
+    """
     if qty is None or qty <= 0:
         if not (budget_usdt and price and leverage and leverage > 0):
             raise ValueError("qty_missing_and_no_budget")
         raw = (float(budget_usdt) * float(leverage)) / float(price)
         qf = max(0.0, raw)
+        q_raw = _q_qty(sym, qf)
     else:
         qf = float(qty)
-    q_str = _q_qty(sym, qf)
-    q_str = _ensure_min_notional(sym, float(price or 0.0), q_str)
-    try:
-        qf2 = float(q_str)
-    except Exception:
-        qf2 = qf
-    if qf2 <= 0:
-        raise ValueError("qty_non_positive_after_quantize")
-    return q_str, qf2
+        q_raw = _q_qty(sym, qf)
 
+    q_min = _ensure_min_notional(sym, float(price or 0.0), q_raw)
+    q_min_f = float(q_min)
+
+    # overshoot guard (vs. raw notional)
+    try:
+        p = float(price or 0.0)
+        not_raw = p * float(q_raw)
+        not_min = p * q_min_f
+        if not_raw > 0 and (not_min - not_raw) / not_raw * 100.0 > MIN_NOTIONAL_OVERSHOOT_MAX_PCT:
+            raise ValueError("min_notional_overshoot")
+    except Exception:
+        pass
+
+    if q_min_f <= 0:
+        raise ValueError("qty_non_positive_after_quantize")
+    return q_min, q_min_f
 
 def _approve_if_needed(idem: _Idem, plan: Dict[str, Any]) -> None:
-    if not require_approval(plan):
-        return
-    ttl = int(plan.get("confirm_ttl_sec") or CONFIRM_TTL_SEC or 600)
-    send_confirm_request(idem, plan, ttl=ttl)
-
+    # Enforce global approval toggle OR per-plan requirement
+    if ENFORCE_APPROVAL_ALWAYS or require_approval(plan):
+        ttl = int(plan.get("confirm_ttl_sec") or CONFIRM_TTL_SEC or 600)
+        send_confirm_request(idem, plan, ttl=ttl)
 
 def _tp_side(side_entry: str) -> str:
     return "SELL" if side_entry.upper() == "BUY" else "BUY"
-
 
 def _place_tp_sl_for_position(
     symbol: str,
@@ -365,32 +370,48 @@ def _place_tp_sl_for_position(
     *,
     eff_position_side: str,
     client_tag: str,
+    tp_order_kind: str = None,
+    sl_order_kind: str = None,
 ) -> Dict[str, Any]:
+    """
+    Branch TP/SL kinds:
+      TP: TAKE_PROFIT vs TAKE_PROFIT_MARKET
+      SL: STOP vs STOP_MARKET
+    """
+    tp_kind = (tp_order_kind or LADDER_TP_KIND or "TAKE_PROFIT").upper()
+    sl_kind = (sl_order_kind or SL_KIND or "STOP").upper()
+    tp_is_mkt = tp_kind == "TAKE_PROFIT_MARKET"
+    sl_is_mkt = sl_kind == "STOP_MARKET"
+
     results: Dict[str, Any] = {"tp": [], "sl": None}
     close_side = _tp_side(side_entry)
+
     for i, leg in enumerate(tp_targets, start=1):
         px = float(leg["price"])
         part_qty_str = _q_qty(symbol, float(leg["qty"]))
         args = {
             "symbol": symbol.upper(),
             "side": close_side,
-            "type": "TAKE_PROFIT",
+            "type": tp_kind,
             "reduceOnly": True,
             "quantity": part_qty_str,
-            "price": _q_price(symbol, px),
-            "stopPrice": _q_price(symbol, px),
-            "timeInForce": "GTC",
+            "stopPrice": _q_price(symbol, px),  # both kinds use stopPrice
+            "timeInForce": None if tp_is_mkt else "GTC",
+            "price": None if tp_is_mkt else _q_price(symbol, px),
             "newClientOrderId": _coid(f"TP{i}", symbol, close_side) if ORDER_ID_PREFIX else None,
         }
+        # remove None keys
+        args = {k: v for k, v in args.items() if v is not None}
         if eff_position_side != "BOTH":
             args["positionSide"] = eff_position_side
+
         res = _place_close_order_hardened(
             args,
             sym=symbol,
-            typ="TAKE_PROFIT",
+            typ=tp_kind,
             qty_str=part_qty_str,
-            stop_str=args["stopPrice"],
-            price_str=args["price"],
+            stop_str=args.get("stopPrice"),
+            price_str=args.get("price"),
             side=close_side,
             eff_ps=eff_position_side,
             expect_ro=True,
@@ -399,28 +420,31 @@ def _place_tp_sl_for_position(
             cancel_fn=futures_cancel_order,
         )
         results["tp"].append(res)
+
     if sl_target and float(sl_target.get("price") or 0.0) > 0:
         sl_px = float(sl_target["price"])
         sl_args = {
             "symbol": symbol.upper(),
             "side": close_side,
-            "type": "STOP",
+            "type": sl_kind,
             "reduceOnly": True,
             "quantity": qty_str,
-            "price": _q_price(symbol, sl_px),
-            "stopPrice": _q_price(symbol, sl_px),
-            "timeInForce": "GTC",
+            "stopPrice": _q_price(symbol, sl_px),  # both kinds use stopPrice
+            "timeInForce": None if sl_is_mkt else "GTC",
+            "price": None if sl_is_mkt else _q_price(symbol, sl_px),
             "newClientOrderId": _coid("SL", symbol, close_side) if ORDER_ID_PREFIX else None,
         }
+        sl_args = {k: v for k, v in sl_args.items() if v is not None}
         if eff_position_side != "BOTH":
             sl_args["positionSide"] = eff_position_side
+
         sl_res = _place_close_order_hardened(
             sl_args,
             sym=symbol,
-            typ="STOP",
+            typ=sl_kind,
             qty_str=qty_str,
-            stop_str=sl_args["stopPrice"],
-            price_str=sl_args["price"],
+            stop_str=sl_args.get("stopPrice"),
+            price_str=sl_args.get("price"),
             side=close_side,
             eff_ps=eff_position_side,
             expect_ro=True,
@@ -429,8 +453,8 @@ def _place_tp_sl_for_position(
             cancel_fn=futures_cancel_order,
         )
         results["sl"] = sl_res
-    return results
 
+    return results
 
 def _place_hybrid_entry(
     symbol: str,
@@ -460,27 +484,33 @@ def _place_hybrid_entry(
     place_res = futures_create_order(**limit_args)
     oid = place_res.get("orderId")
     out: Dict[str, Any] = {"entry_limit": place_res}
+
     t0 = time.time()
     while True:
         if (time.time() - t0) >= int(escalate_after_s):
             break
         time.sleep(0.4)
+
     if oid is not None and HYBRID_HARD_CANCEL_ENABLE:
         try:
             futures_cancel_order(symbol.upper(), oid)
             for _ in range(HYBRID_CANCEL_CONFIRM_TRIES):
                 time.sleep(HYBRID_CANCEL_CONFIRM_SLEEP_MS / 1000.0)
                 oo = get_all_orders(symbol.upper(), limit=20) or []
-                still = next(
-                    (o for o in oo if str(o.get("orderId")) == str(oid) and (o.get("status", "")).upper() == "NEW"),
-                    None,
-                )
+                still = next((o for o in oo if str(o.get("orderId")) == str(oid)), None)
                 if not still:
+                    break
+                st = (still.get("status", "")).upper()
+                if st in ("CANCELED", "FILLED"):
+                    break
+                if st != "NEW":
                     break
         except Exception as e:
             log.warning("hybrid_cancel_limit_failed: %s", e)
+
     ref_px = float(_maybe_price(symbol) or entry_ref_px)
     _ = _offset_bps(ref_px, ESCALATE_SLIP_BPS if side_u == "BUY" else -ESCALATE_SLIP_BPS)
+
     mkt_args = {
         "symbol": symbol.upper(),
         "side": side_u,
@@ -492,7 +522,6 @@ def _place_hybrid_entry(
         mkt_args["positionSide"] = eff_position_side
     out["entry_market"] = futures_create_order(**mkt_args)
     return out
-
 
 def _place_direct_entry(
     symbol: str,
@@ -537,14 +566,12 @@ def _place_direct_entry(
     else:
         raise ValueError(f"unsupported_order_type:{order_type}")
 
-
 def _compute_dynamic_sl_price(side: str, ref_price: float, atr_val: Optional[float], *, atr_mult: float) -> Optional[float]:
     if not (atr_val and atr_val > 0.0):
         return None
     if side.upper() == "BUY":
         return max(1e-12, ref_price - atr_mult * atr_val)
     return max(1e-12, ref_price + atr_mult * atr_val)
-
 
 def _maybe_breakeven_after_tp1(
     plan: Dict[str, Any],
@@ -568,23 +595,25 @@ def _maybe_breakeven_after_tp1(
     args = {
         "symbol": symbol.upper(),
         "side": close_side,
-        "type": "STOP",
+        "type": SL_KIND,  # keep BE as same SL kind (STOP/STOP_MARKET)
         "reduceOnly": True,
         "quantity": qty_str,
-        "price": _q_price(symbol, float(be_px)),
         "stopPrice": _q_price(symbol, float(be_px)),
-        "timeInForce": "GTC",
+        "timeInForce": None if SL_KIND == "STOP_MARKET" else "GTC",
+        "price": None if SL_KIND == "STOP_MARKET" else _q_price(symbol, float(be_px)),
         "newClientOrderId": _coid("SL_BE", symbol, close_side) if ORDER_ID_PREFIX else None,
     }
+    args = {k: v for k, v in args.items() if v is not None}
     if eff_position_side != "BOTH":
         args["positionSide"] = eff_position_side
+
     res = _place_close_order_hardened(
         args,
         sym=symbol,
-        typ="STOP",
+        typ=SL_KIND,
         qty_str=qty_str,
-        stop_str=args["stopPrice"],
-        price_str=args["price"],
+        stop_str=args.get("stopPrice"),
+        price_str=args.get("price"),
         side=close_side,
         eff_ps=eff_position_side,
         expect_ro=True,
@@ -594,7 +623,6 @@ def _maybe_breakeven_after_tp1(
     )
     return res
 
-
 def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
     t0 = time.time()
     symbol = str(plan.get("symbol") or "").upper().strip()
@@ -603,17 +631,17 @@ def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
     side_in = _normalize_entry_side(plan.get("side"))
     if side_in not in ("BUY", "SELL"):
         return {"ok": False, "error": "invalid_side"}
+
     _ensure_runtime_position_mode()
+
     try:
         kl = _fetch_klines_raw(symbol, "15m", limit=120)
     except Exception:
         kl = None
-    with suppress(Exception):
-        adx = _adx_from_klines(kl) if kl else 0.0
-    with suppress(Exception):
-        atr = _atr_from_klines(kl) if kl else 0.0
-    adx = float(locals().get("adx", 0.0))
-    atr = float(locals().get("atr", 0.0))
+    with suppress(Exception): adx = _adx_from_klines(kl) if kl else 0.0
+    with suppress(Exception): atr = _atr_from_klines(kl) if kl else 0.0
+    adx = float(locals().get("adx", 0.0)); atr = float(locals().get("atr", 0.0))
+
     quality = float(plan.get("score") or plan.get("quality") or QUALITY_DEFAULT)
     ok, reason_bad = _quality_gate(
         quality=quality,
@@ -626,8 +654,10 @@ def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
     )
     if not ok:
         return {"ok": False, "error": "quality_gate_failed", "detail": reason_bad}
+
     idem = _Idem(prefix="trade", ttl=IDEMPOTENCY_TTL_SEC)
     _approve_if_needed(idem, plan)
+
     leverage = _choose_leverage(
         symbol,
         float(adx),
@@ -640,15 +670,18 @@ def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
         set_leverage(symbol, int(leverage))
     except Exception as e:
         log.warning("set_leverage_failed %s lev=%s: %s", symbol, leverage, e)
+
     entry_ref_px = float(plan.get("entry_price") or plan.get("price") or (get_price_coalesced(symbol) or 0.0))
     if not entry_ref_px:
         p = _maybe_price(symbol)
         entry_ref_px = float(p or 0.0)
     if entry_ref_px <= 0:
         return {"ok": False, "error": "no_price_available"}
+
     dyn_budget = _choose_budget_dynamic(get_budget_usdt, quality=quality, price=entry_ref_px, symbol=symbol)
     if dyn_budget is None:
         dyn_budget = get_budget_usdt(symbol, quality=quality, atr=atr, price=entry_ref_px)
+
     qty_str, qty_f = _ensure_qty(
         symbol,
         qty=plan.get("qty"),
@@ -656,10 +689,12 @@ def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
         price=entry_ref_px,
         leverage=leverage,
     )
+
     eff_ps = _effective_position_side(
         plan.get("position_side") or _pos_side_for_entry(side_in),
         hedge_runtime=_is_hedge_mode_runtime(),
     )
+
     order_type = str(plan.get("order_type") or plan.get("entry_type") or "MARKET").upper()
     if order_type == "HYBRID":
         entry_res = _place_hybrid_entry(
@@ -679,12 +714,12 @@ def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
             side_in,
             qty_str,
             entry_price=float(plan.get("limit_price") or plan.get("entry_price") or entry_ref_px)
-            if order_type == "LIMIT"
-            else None,
+            if order_type == "LIMIT" else None,
             order_type=order_type,
             eff_position_side=eff_ps,
             client_tag="DIR",
         )
+
     targets = _compute_tp_sl_targets(
         symbol=symbol,
         side=side_in,
@@ -702,10 +737,12 @@ def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
         atr_abs=atr,
         stop_band_bps=STOP_BAND_BPS,
     )
+
     if SL_DYNAMIC_ENABLE and atr and not targets.get("sl"):
         dyn_sl = _compute_dynamic_sl_price(side_in, entry_ref_px, atr, atr_mult=SL_ATR_MULT)
         if dyn_sl:
             targets["sl"] = {"price": dyn_sl, "qty": qty_f}
+
     tpsl_res = _place_tp_sl_for_position(
         symbol=symbol,
         side_entry=side_in,
@@ -715,7 +752,10 @@ def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
         sl_target=targets.get("sl"),
         eff_position_side=eff_ps,
         client_tag="CLS",
+        tp_order_kind=LADDER_TP_KIND,
+        sl_order_kind=SL_KIND,
     )
+
     be_res = None
     with suppress(Exception):
         be_res = _maybe_breakeven_after_tp1(
@@ -726,6 +766,7 @@ def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
             eff_position_side=eff_ps,
             qty_str=qty_str,
         )
+
     trail_enable = bool(plan.get("trail_enable", TRAIL_ENABLE_DEFAULT))
     trail_cb_pct = None
     if trail_enable:
@@ -739,9 +780,11 @@ def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
             )
         except Exception as e:
             log.warning("trail_compute_failed: %s", e)
+
     with suppress(Exception):
         if "ensure_protective_stop" in globals():
             ensure_protective_stop(symbol, side_in, qty_str, eff_ps, entry_ref_px, targets.get("sl"))
+
     elapsed = time.time() - t0
     return {
         "ok": True,
@@ -759,7 +802,6 @@ def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
         },
         "elapsed_sec": round(elapsed, 3),
     }
-
 
 def _safe_close_position(symbol: str, side_opened: str, qty: float, *, eff_position_side: str) -> Dict[str, Any]:
     close_side = _tp_side(side_opened)
@@ -780,13 +822,12 @@ def _safe_close_position(symbol: str, side_opened: str, qty: float, *, eff_posit
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-
 async def execute_trade_live_async(plan: Dict[str, Any]) -> Dict[str, Any]:
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, execute_trade_live, plan)
 
-
 __all__ = ["execute_trade_live", "execute_trade_live_async", "_safe_close_position"]
+
 
 
 
