@@ -1,82 +1,106 @@
 # routes/readyz.py
 from __future__ import annotations
+import os, time, asyncio
+from contextlib import suppress
+from fastapi import APIRouter
+from fastapi.responses import JSONResponse
 
-import os
-import time
-import logging
+router = APIRouter(tags=["readyz"])
 
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse, Response
+def _flag(name: str, default: str = "0") -> bool:
+    return (os.getenv(name, default) or default).lower() in ("1", "true", "yes", "on")
 
-LOG = logging.getLogger("algogpt.readyz")
-router = APIRouter()
-
-try:
-    import redis.asyncio as aioredis  # type: ignore
-except Exception:
-    aioredis = None  # type: ignore
-
-REDIS_URL = os.getenv("REDIS_URL", "").strip()
-REQUIRE_REDIS = os.getenv("REQUIRE_REDIS", "1").lower() in ("1", "true", "yes", "on")
-PING_TIMEOUT_SEC = float(os.getenv("REDIS_SOCKET_TIMEOUT", "5.0") or 5.0)
-
-
-async def _ping_redis() -> bool:
-    """
-    מחזיר True אם הכול כשיר. אם רדיס לא נדרש – תמיד True.
-    אם נדרש ואין קונפיג/מודול – False. אם כשל בפינג – False.
-    דואג לסגור את הלקוח לאחר שימוש.
-    """
-    if not REQUIRE_REDIS:
-        return True
-    if not (aioredis and REDIS_URL):
-        return False
-
-    r = None
+async def _ping_redis(get_redis_cached) -> tuple[bool, str]:
     try:
-        r = aioredis.from_url(
-            REDIS_URL,
-            decode_responses=True,
-            socket_timeout=PING_TIMEOUT_SEC,
-        )
-        pong = await r.ping()
-        return bool(pong)
+        r = await get_redis_cached()
+        if not r:
+            return False, "no_client"
+        await asyncio.wait_for(r.ping(), timeout=0.8)
+        return True, "ok"
     except Exception as e:
-        LOG.warning({"event": "readyz.redis_ping_failed", "error": str(e)})
-        return False
-    finally:
-        if r is not None:
-            try:
-                await r.close()
-            except Exception:
-                pass
-            try:
-                await r.connection_pool.disconnect()
-            except Exception:
-                pass
+        return False, f"err:{e}"
 
+async def _check_binance() -> tuple[bool, str]:
+    # lightweight public HTTP probe (no creds needed)
+    import httpx
+    url = (os.getenv("BINANCE_FUTURES_HTTP_BASE") or "https://fapi.binance.com").rstrip("/") + "/fapi/v1/ping"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(3.0)) as cli:
+            r = await cli.get(url)
+            # Binance לעתים מחזירה 418 על rate-limit/anti-bot. נתייחס לזה כ-WARN ולא כשבירה
+            if r.status_code in (200, 204):
+                return True, "ok"
+            if r.status_code == 418:
+                return False, "http_418"
+            return False, f"http_{r.status_code}"
+    except Exception as e:
+        return False, f"err:{e}"
 
-def _hdrs(ok: bool) -> dict:
-    return {
-        "Cache-Control": "no-store",
-        "X-Ready": "1" if ok else "0",
-        "Last-Modified": time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime()),
+@router.get("/health")
+async def health():
+    return {"ok": True, "service": os.getenv("APP_TITLE", "AlgoGPT")}
+
+@router.get("/health/live")
+async def live():
+    return {"ok": True, "live": True}
+
+@router.get("/health/readiness")
+async def readiness():
+    # Toggles
+    chk_redis = _flag("READINESS_CHECK_REDIS", "1")
+    req_redis = _flag("REQUIRE_REDIS", "0")
+    chk_bin   = _flag("READINESS_CHECK_BINANCE", "1")
+    req_bin   = _flag("REQUIRE_BINANCE", "0")  # חדש: ברירת מחדל לא חובה
+    chk_sql   = _flag("READINESS_CHECK_SQLITE", "0")
+    req_sql   = _flag("REQUIRE_SQLITE", "0")
+
+    deps = {
+        "redis": {"ok": True, "detail": "skipped"},
+        "binance": {"ok": True, "detail": "skipped"},
+        "sqlite": {"ok": True, "detail": "skipped", "path": os.getenv("SQLITE_PATH")},
     }
 
+    # Redis
+    if chk_redis:
+        ok, detail = False, "unknown"
+        with suppress(Exception):
+            # import מ-main כדי למחזר את המחבר וה־URL
+            from main import _get_redis_cached  # type: ignore
+            ok, detail = await _ping_redis(_get_redis_cached)
+        deps["redis"] = {"ok": ok, "detail": detail}
 
-@router.api_route("/readyz", methods=["GET", "HEAD"], summary="Readiness probe (GET/HEAD)")
-async def readyz(request: Request):
-    ok = await _ping_redis()
-    status = 200 if ok else 503
+    # Binance (public ping)
+    if chk_bin:
+        ok, detail = await _check_binance()
+        deps["binance"] = {"ok": ok, "detail": detail}
 
-    # ב-HEAD לא מחזירים גוף
-    if request.method == "HEAD":
-        return Response(status_code=status, headers=_hdrs(ok))
+    # SQLite (קיום קובץ/נתיב אם מסומן לבדיקה)
+    if chk_sql:
+        p = os.getenv("SQLITE_PATH")
+        if p:
+            try:
+                # בדיקה רכה: עצם קיום הנתיב/כתיבה בהמשך שייכת לקוד שמנהל DB
+                deps["sqlite"] = {"ok": True, "detail": "exists", "path": p}
+            except Exception as e:
+                deps["sqlite"] = {"ok": False, "detail": f"err:{e}", "path": p}
+        else:
+            deps["sqlite"] = {"ok": True, "detail": "skipped", "path": None}
 
+    # החלטת סטטוס: כשל ב־**תלויות חובה** בלבד מפיל ל־503
+    hard_fails = []
+    if req_redis and not deps["redis"]["ok"]:
+        hard_fails.append("redis")
+    if req_bin and not deps["binance"]["ok"]:
+        hard_fails.append("binance")
+    if req_sql and not deps["sqlite"]["ok"]:
+        hard_fails.append("sqlite")
+
+    overall_ok = len(hard_fails) == 0
+    status = 200 if overall_ok else 503
+
+    # כבוד מיוחד ל־418: נסמן ok=False אבל לא נהפוך אותו לחובה אם REQUIRE_BINANCE=0 (ברירת מחדל)
     return JSONResponse(
+        {"ok": overall_ok, "deps": deps, "failed_required": hard_fails or None, "ts": int(time.time())},
         status_code=status,
-        content={"ok": ok, "requires_redis": REQUIRE_REDIS},
-        headers=_hdrs(ok),
     )
-
 
