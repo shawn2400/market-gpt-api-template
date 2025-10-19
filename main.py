@@ -1,4 +1,3 @@
-# main.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -317,7 +316,12 @@ ETA_VELOCITY_WINDOW = int(os.getenv("ETA_VELOCITY_WINDOW", "30"))
 TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1")).split(",") if t.strip()]
 
 # HMAC secret for signed links
-HMAC_SECRET = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
+HMAC_SECRET = (
+    os.getenv("HMAC_SECRET") or
+    os.getenv("WEBHOOK_HMAC_SECRET") or
+    os.getenv("OPS_SIGN_SECRET") or
+    ""
+).strip()
 
 # ==== Signed-link paths (DRY & safer) ====
 SIGN_PATH_PREVIEW = "/ops/ui/ticket/signed"
@@ -1224,15 +1228,25 @@ def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
 
 def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLResponse:
     approve_url = _build_signed_link(base, SIGN_PATH_APPROVE, ticket_id, ttl_sec=900, action="approve")
-    reject_url = _build_signed_link(base, SIGN_PATH_REJECT, ticket_id, ttl_sec=900, action="reject")
+    reject_url  = _build_signed_link(base, SIGN_PATH_REJECT,  ticket_id, ttl_sec=900, action="reject")
+
+    # Render buttons only if we have signed URLs (i.e., HMAC secret present)
+    btns: List[str] = []
+    if approve_url:
+        btns.append(
+            f"<a href='{approve_url}' style='display:inline-block;padding:.6rem 1rem;background:#16a34a;color:#fff;border-radius:9px;text-decoration:none'>✅ Approve</a>"
+        )
+    if reject_url:
+        btns.append(
+            f"<a href='{reject_url}' style='display:inline-block;padding:.6rem 1rem;background:#dc2626;color:#fff;border-radius:9px;text-decoration:none;margin-left:.6rem'>❌ Reject</a>"
+        )
+    buttons_html = "".join(btns) if btns else "<div style='color:#777'>Signed actions are disabled (no HMAC secret).</div>"
+
     body = (
         "<!doctype html><meta charset='utf-8'>"
         "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.45'>"
         f"<h2 style='margin:0 0 1rem 0'>Ticket Preview · <code>{_md_html(ticket_id)}</code></h2>"
-        "<div style='margin:.5rem 0 1rem 0'>"
-        f"<a href='{approve_url}' style='display:inline-block;padding:.6rem 1rem;background:#16a34a;color:#fff;border-radius:9px;text-decoration:none'>✅ Approve</a>"
-        f"<a href='{reject_url}' style='display:inline-block;padding:.6rem 1rem;background:#dc2626;color:#fff;border-radius:9px;text-decoration:none;margin-left:.6rem'>❌ Reject</a>"
-        "</div>"
+        f"<div style='margin:.5rem 0 1rem 0'>{buttons_html}</div>"
         "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
         f"{_rows_kv_html(rec)}"
         "</table>"
@@ -1308,14 +1322,21 @@ async def reject(ticket_id: str = Query(..., description="ticket_id"), request: 
 
 # ===== Confirm GET -> POST flow for signed approve/reject =====
 @router.get(SIGN_PATH_APPROVE)
-async def approve_signed_confirm(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
+async def approve_signed_confirm(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
     if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_APPROVE):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
+    # build action via url_for (reverse-proxy safe)
+    action = "/ops/approve/signed"
+    try:
+        if request is not None:
+            action = request.url_for("approve_signed_post")
+    except Exception:
+        pass
     return HTMLResponse(
         "<!doctype html><meta charset='utf-8'>"
         "<body style='font-family:sans-serif;max-width:720px;margin:3rem auto'>"
         "<h3>Confirm Approve</h3>"
-        "<form method='post' action='/ops/approve/signed'>"
+        f"<form method='post' action='{_md_html(action)}'>"
         f"<input type='hidden' name='ticket_id' value='{_md_html(ticket_id)}'/>"
         f"<input type='hidden' name='exp' value='{_md_html(exp)}'/>"
         f"<input type='hidden' name='sig' value='{_md_html(sig)}'/>"
@@ -1330,14 +1351,20 @@ async def approve_signed_post(ticket_id: str = Form(...), exp: str = Form(...), 
     return await _approve_core(ticket_id)
 
 @router.get(SIGN_PATH_REJECT)
-async def reject_signed_confirm(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
+async def reject_signed_confirm(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
     if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_REJECT):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
+    action = "/ops/reject/signed"
+    try:
+        if request is not None:
+            action = request.url_for("reject_signed_post")
+    except Exception:
+        pass
     return HTMLResponse(
         "<!doctype html><meta charset='utf-8'>"
         "<body style='font-family:sans-serif;max-width:720px;margin:3rem auto'>"
         "<h3>Confirm Reject</h3>"
-        "<form method='post' action='/ops/reject/signed'>"
+        f"<form method='post' action='{_md_html(action)}'>"
         f"<input type='hidden' name='ticket_id' value='{_md_html(ticket_id)}'/>"
         f"<input type='hidden' name='exp' value='{_md_html(exp)}'/>"
         f"<input type='hidden' name='sig' value='{_md_html(sig)}'/>"
@@ -2338,7 +2365,6 @@ async def _trail_rt_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower(), reload=False)
-
 
 
 
