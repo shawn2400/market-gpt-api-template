@@ -1913,6 +1913,38 @@ async def telegram_ping():
     return {"ok": True, "ts": int(time.time())}
 
 # ==================== Optional routers include ====================
+
+# 1) include_router בטוחה ל-position_ops אם קיים
+try:
+    from routes import position_ops as _pos_ops
+    app.include_router(_pos_ops.router, tags=["position-ops"])
+    logger.info("routes.position_ops mounted (direct)")
+except Exception as e:
+    logger.warning("routes.position_ops not loaded (direct): %s", e)
+
+# 2) לולאת POSSIBLE_ROUTES דינמית – מבוססת הרשימה מהודעתך (נוקתה לשמות מודולים)
+POSSIBLE_ROUTES = [
+    "executors","notify_hooks","admin","admin_control","ai_analyze","analytics","anchor","auto_trade",
+    "binance_status","calibration","context","dashboard","dashboard_live","debug","debug_auth","debug_binance",
+    "debug_env","debug_hmac","decision","executor_control","executor_extra","executor_status","executors_grid_export",
+    "export","grid","guard_smoke","health_compat","indicators","indicators_extra","locked_report","manage_state","market",
+    "market_extra","multi_scan","news","ops_approval","ops_approve","ops_guard","ops_ticket","order_modify","orderbook",
+    "orderflow","orders","orders_utils","pnl","portfolio","precision","provider_cryptopanic","public_feed","reconcile",
+    "review_analytics","risk","risk_tools","root","root_aliases","rpc","scan_now_alias","scan_public","scheduler_ai",
+    "snapshot","state","strategy","system_autopilot","telegram","telegram_callbacks","telegram_fallback","telegram_ping",
+    "telegram_push_status","telegram_webhook_secure","trade_approvals","trade_autoscale","trade_sink","ui","ui_grid",
+    "utils","ws","ws_health","ws_stream","ws_user_status","ws_user_stream",
+]
+for name in POSSIBLE_ROUTES:
+    try:
+        mod = __import__(f"routes.{name}", fromlist=["router"])
+        if hasattr(mod, "router"):
+            app.include_router(mod.router)
+    except Exception:
+        # מתעלמים ממודולים שעדיין לא קיימים/שבורים
+        pass
+
+# 3) לולאת include "ידועה" עם תגיות
 for mod, tag in (
     ("routes.manager", "manager"),
     ("routes.price", "price"),
@@ -1938,7 +1970,6 @@ for mod, tag in (
     ("routes.kpi_mini", "kpi-mini"),
     ("routes.telegram_bot", "telegram-bot"),
     ("routes.telegram_webhook", "telegram-webhook"),
-    # קיימים בלופ
 ):
     try:
         module = __import__(mod, fromlist=["router"])
@@ -2486,7 +2517,6 @@ async def _on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower(), reload=False)
-
 
 
 
