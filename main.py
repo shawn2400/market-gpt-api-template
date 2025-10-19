@@ -1,4 +1,4 @@
- # main.py
+# main.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -2486,8 +2486,6 @@ async def _on_shutdown():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower(), reload=False)
-
-
 
 
 
