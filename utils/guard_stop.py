@@ -128,14 +128,12 @@ with suppress(Exception):
     _gf_fn = _gf_fn0
 
 def _map_utils_to_local(f: Dict[str,Any]) -> Dict[str,Any]:
-    # ממפה dict של utils.quantize (tick/step) למבנה המקומי (price_tick/qty_step)
     return {
         "price_tick": float(f.get("tick", 0.0) or 0.0),
         "qty_step": float(f.get("step", 0.0) or 0.0),
     }
 
 def _map_local_to_utils(f: Dict[str,Any]) -> Dict[str,Any]:
-    # local -> utils
     return {
         "tick": float(f.get("price_tick", 0.0) or 0.0),
         "step": float(f.get("qty_step", 0.0) or 0.0),
@@ -146,7 +144,6 @@ def _get_filters(cli, symbol: str) -> Dict[str,Any]:
         return _get_filters_local(cli, symbol)
     try:
         f = _gf_fn(cli, symbol) or {}
-        # utils מחזיר tick/step
         return _map_utils_to_local(f)
     except Exception:
         return _get_filters_local(cli, symbol)
@@ -154,7 +151,6 @@ def _get_filters(cli, symbol: str) -> Dict[str,Any]:
 def _qprice(symbol: str, price: float, flt: Dict[str,Any]) -> float:
     if _qp_fn is None:
         return _qprice_local(symbol, price, flt)
-    # נסה חתימת (symbol, price, filters); אחרת (price, filters)
     try:
         return float(_qp_fn(symbol, price, _map_local_to_utils(flt)))  # type: ignore[misc]
     except TypeError:
@@ -378,12 +374,12 @@ def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Di
         return {"ok": False, "symbol": symbol, "reason":"no_position", "error": str(e)}
 
     opp = "SELL" if side=="BUY" else "BUY"
-    pos_side = _effective_position_side(side)  # positionSide עבור פקודת סגירה
+    pos_side = _effective_position_side(side)
     last = 0.0
     with suppress(Exception): last = _last_price(cli, symbol)
     flt = _get_filters(cli, symbol)
 
-    mode = (prefer_mode or "").strip().lower() if prefer_mode else _decide_mode(cli, symbol)  # 'native' | 'quantities'
+    mode = (prefer_mode or "").strip().lower() if prefer_mode else _decide_mode(cli, symbol)
     if mode not in ("native","quantities"):
         mode = _decide_mode(cli, symbol)
 
