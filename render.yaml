@@ -174,7 +174,7 @@ services:
 
       # ========================= Redis (incl. TLS) =========================
       - key: REQUIRE_REDIS
-        value: "0"
+        value: "1"
       - key: CONFIRMSTORE_ENABLE
         value: "1"
       - key: USE_REDIS_IDEM
@@ -384,7 +384,7 @@ services:
         value: "50"
 
       # ========================= Approvals / Notifications =========================
-      # >>> דרוש אישור בטלגרם לפתיחה; אחרי אישור – הכל אוטומטי <<<
+      # >>> דרוש אישור בטלגרם לפתיחה; אחרי אישור – ניהול אוטומטי <<<
       - key: APPROVAL_ENABLED
         value: "1"
       - key: REQUIRE_TELEGRAM_APPROVAL
@@ -392,8 +392,10 @@ services:
       - key: AUTO_OPEN_ON_APPROVE
         value: "1"
 
-      # לא לחסום ניהול שוטף אחרי האישור (מאפשר ל-Manager לכתוב פקודות)
+      # לא לחסום ניהול שוטף אחרי האישור
       - key: SINK_ENFORCE_APPROVALS
+        value: "0"
+      - key: APPROVE_BEFORE_GATE
         value: "0"
 
       - key: APPROVAL_REQUIRE_WATCHLIST
@@ -408,9 +410,6 @@ services:
         value: "1"
       - key: APPROVAL_DUP_COOLDOWN_SEC
         value: "0"
-      # אשר לפני gate (בדיקות/תנאים), אך הניהול לאחר אישור הוא אוטומטי
-      - key: APPROVE_BEFORE_GATE
-        value: "1"
 
       - key: CONFIRM_TTL_SEC
         value: "120"
@@ -859,6 +858,4 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
-
 
