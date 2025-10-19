@@ -30,8 +30,10 @@ services:
       - key: SERVICE_INSTANCE
         value: "algogpt-prod"
 
+      # <<< שינוי: hybrid לניהול אוטומטי >>>
       - key: MODE
-        value: "run"
+        value: "hybrid"
+
       - key: PORT
         value: "10000"
       - key: APP_MODULE
@@ -43,7 +45,7 @@ services:
       - key: PYTHONPATH
         value: "/app"
 
-      # Gunicorn/Uvicorn – שמרני (מונע הצפות חיבורים)
+      # Gunicorn/Uvicorn – שמרני
       - key: WEB_CONCURRENCY
         value: "1"
       - key: GUNICORN_TIMEOUT
@@ -331,6 +333,8 @@ services:
         value: "0.05"
       - key: VOLATILITY_GATE_ATRPCT
         value: "1.2"
+
+      # <<< ברירת מחדל היברידית >>>
       - key: PREFER_HYBRID_DEFAULT
         value: "1"
 
@@ -381,14 +385,15 @@ services:
         value: "50"
 
       # ========================= Approvals / Notifications =========================
+      # <<< לא לאלץ אישור טלגרם לניהול >>>
       - key: APPROVAL_ENABLED
         value: "1"
       - key: REQUIRE_TELEGRAM_APPROVAL
-        value: "1"
+        value: "0"
       - key: AUTO_OPEN_ON_APPROVE
         value: "1"
       - key: SINK_ENFORCE_APPROVALS
-        value: "1"
+        value: "0"
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
       - key: APPROVAL_RR_MIN
@@ -401,8 +406,10 @@ services:
         value: "1"
       - key: APPROVAL_DUP_COOLDOWN_SEC
         value: "0"
+
+      # <<< לא לאכוף "אשר לפני שער" >>>
       - key: APPROVE_BEFORE_GATE
-        value: "1"
+        value: "0"
 
       - key: CONFIRM_TTL_SEC
         value: "120"
@@ -467,7 +474,7 @@ services:
       - key: POST_ONLY
         value: "1"
 
-      # ===== REST pacing / backoff (נגד -1003) =====
+      # ===== REST pacing / backoff =====
       - key: REST_COOLDOWN_SEC
         value: "10"
       - key: RETRY_MAX
@@ -520,10 +527,13 @@ services:
         value: "0"
       - key: STREAM_TP_BE
         value: "1"
+
+      # <<< לא לקשור סולם/סמארט לאישור >>>
       - key: TP_LADDER_ON_APPROVE
-        value: "1"
+        value: "0"
       - key: SMART_MANAGE_ON_APPROVE
-        value: "1"
+        value: "0"
+
       - key: SMART_MANAGE_BE_OFFSET_BPS
         value: "5"
       - key: SMART_MANAGE_PCTS
@@ -538,15 +548,12 @@ services:
         value: "1"
       - key: TP_MAX_LADDERS
         value: "3"
-      # ----- Merge & Rearm -----
       - key: TP_MERGE_TICK_BAND
         value: "1"
       - key: TP_REARM_TICK
         value: "1"
-      # ----- Profit-Lock bands -----
       - key: PROFIT_LOCK_STEPS
         value: "1.0,1.5,2.0"
-      # ----- Structural SL -----
       - key: STRUCT_SL_ENABLE
         value: "1"
       - key: STRUCT_SL_LOOKBACK
@@ -559,14 +566,12 @@ services:
         value: "5"
       - key: STRUCT_SL_MERGE_MODE
         value: "tight"
-      # ----- Time Stop -----
       - key: TIME_STOP_MIN
         value: "20"
       - key: TIME_STOP_KEEP_PROFIT_MIN_PCT
         value: "0.5"
       - key: PROFILE_BASE_BE_BPS
         value: "5"
-      # ----- Trailing & BE -----
       - key: TRAIL_ENABLE
         value: "1"
       - key: TRAIL_ATR_MULT
@@ -615,8 +620,11 @@ services:
       # ========================= Real-time Trailing (RT loop) =========================
       - key: TRAIL_RT_ENABLE
         value: "1"
+
+      # <<< האטה כדי לא לגעת ב־-1003 >>>
       - key: TRAIL_RT_INTERVAL_SEC
         value: "20"
+
       - key: TRAIL_RT_ATR_MULT
         value: "1.6"
       - key: TRAIL_RT_MIN_CALLBACK
@@ -661,12 +669,10 @@ services:
         value: "2"
       - key: HEARTBEAT_MIN_SCORE
         value: "6"
-      # ----- Anti-stale (no TP1 window) -----
       - key: ANTI_STALE_MIN
         value: "15"
       - key: ANTI_STALE_NUDGE_BPS
         value: "2"
-      # ----- Digest controls (new) -----
       - key: DIGEST_MAX_LINES_DEFAULT
         value: "30"
       - key: DIGEST_SEND_TELEGRAM
@@ -725,7 +731,6 @@ services:
         value: "1"
       - key: PRICE_PROTECT
         value: "1"
-      # ----- Risk caps/guards (per symbol) -----
       - key: MAX_LOSS_PER_SYMBOL_USDT
         value: "150"
       - key: DAILY_MAX_TRADES_PER_SYMBOL
@@ -738,7 +743,6 @@ services:
         value: "86400"
       - key: SAFE_MODE
         value: "0"
-      # ----- Drawdown & exposure -----
       - key: EQUITY_USDT
         value: "5000"
       - key: EQUITY_ATH_USDT
@@ -747,15 +751,12 @@ services:
         value: "25"
       - key: CORR_CAP_BETA
         value: "1.6"
-      # ----- Vol targeting / Kelly-lite -----
       - key: VOL_TARGET_PCT
         value: "0.015"
       - key: KELLY_LITE_CAP
         value: "0.5"
-      # ----- Session rules -----
       - key: SESSION_RULES
         value: "02:00-06:00Z=OFF,12:30-13:00Z=REDUCE_50"
-      # ----- Shock gate -----
       - key: GAP_SHOCK_BPS
         value: "80"
 
@@ -782,8 +783,11 @@ services:
         value: "1"
       - key: TRADE_MANAGER_ENABLE
         value: "1"
+
+      # <<< האטתי כדי להוריד עומס >>>
       - key: MANAGER_INTERVAL_SEC
-        value: "15"
+        value: "30"
+
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
@@ -796,8 +800,10 @@ services:
         value: "3,6,12"
       - key: AUTO_TP_SPLITS
         value: "0.278,0.333,0.389"
+
+      # <<< כאן שינוי: הפולינג ברירת מחדל ל־45 שניות >>>
       - key: AUTO_POLL_SEC
-        value: "8"
+        value: "45"
 
       # (Optional) BTC-Gate
       - key: BTC_GATE_ENABLE
@@ -860,3 +866,4 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
+
