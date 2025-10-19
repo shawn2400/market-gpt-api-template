@@ -2,17 +2,12 @@
 from __future__ import annotations
 import os, time, logging, sqlite3
 from contextlib import suppress
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Any, Tuple
 from fastapi import APIRouter, Response, Request, HTTPException
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-log = logging.getLogger("algogpt.health")
-
-# ---------------------------
-# Routers: /health/*  +  /readyz/* (root, ללא prefix)
-# ---------------------------
 router = APIRouter(prefix="/health", tags=["Health"])
-probe  = APIRouter(tags=["Health"])  # שורש: /readyz/...
+log = logging.getLogger("algogpt.health")
 
 # --- Optional AI healthcheck (best-effort) ---
 _ai_check_async = None
@@ -34,9 +29,42 @@ with suppress(Exception):
     from utils.metrics_tracker import get_metrics_snapshot, render_prometheus_text  # type: ignore
     _metrics_available = True
 
+# --- Telegram notifier (best-effort) ---
+_notify_available = False
+with suppress(Exception):
+    from utils.telegram_notifier_core import notify_telegram  # type: ignore
+    _notify_available = True
+
+# ---------- Config ----------
 WATCHLIST = [s.strip().upper() for s in (os.getenv("WATCHLIST", "") or "").split(",") if s.strip()] \
             or ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "NEARUSDT"]
 TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1")).split(",") if t.strip()]
+
+# Readiness toggles
+_BINANCE_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
+_READINESS_BINANCE = os.getenv("READINESS_CHECK_BINANCE", "1").lower() in ("1","true","yes","on")
+_READINESS_REDIS   = os.getenv("READINESS_CHECK_REDIS", "1").lower() in ("1","true","yes","on")
+_READINESS_SQLITE  = os.getenv("READINESS_CHECK_SQLITE", "0").lower() in ("1","true","yes","on")
+_SQLITE_PATH       = os.getenv("SQLITE_PATH", "").strip()
+_REDIS_URL         = os.getenv("REDIS_URL", "").strip()
+
+# Alerts
+_HEALTH_ALERTS_ENABLE       = os.getenv("HEALTH_ALERTS_ENABLE", "1").lower() in ("1","true","yes","on")
+_HEALTH_ALERTS_COOLDOWN_SEC = int(os.getenv("HEALTH_ALERTS_COOLDOWN_SEC", "120"))
+_HEALTH_ALERTS_KIND         = os.getenv("HEALTH_ALERTS_KIND", "status")
+_HEALTH_ALERTS_LEVEL        = os.getenv("HEALTH_ALERTS_LEVEL", "critical")
+
+# Fail grace (don’t page for a single flap)
+_READINESS_FAIL_GRACE_SEC   = int(os.getenv("READINESS_FAIL_GRACE_SEC", "5"))
+
+# Soft self-heal retries
+_BINANCE_RETRY_ON_FAIL      = int(os.getenv("READINESS_BINANCE_RETRY", "1"))
+_REDIS_RETRY_ON_FAIL        = int(os.getenv("READINESS_REDIS_RETRY", "1"))
+
+# ---------- State for change-detection / cooldown ----------
+_last_overall_ok: Optional[bool] = None
+_last_alert_ts: float = 0.0
+_first_fail_seen_ts: float = 0.0
 
 def _base_headers() -> Dict[str, str]:
     return {
@@ -44,7 +72,6 @@ def _base_headers() -> Dict[str, str]:
         "Last-Modified": time.strftime("%a, %d %b %Y %H:%M:%S GMT", time.gmtime()),
     }
 
-# ------------- /health basic -------------
 @router.get("", summary="Health Root")
 async def root():
     return {"ok": True, "service": "AlgoGPT"}
@@ -70,7 +97,6 @@ async def strategy_version():
 
 @router.get("/ai", summary="AI Health")
 async def ai():
-    # prefer async healthcheck if available; fallback to sync
     if _ai_check_async:
         try:
             result = await _ai_check_async()  # type: ignore
@@ -100,7 +126,6 @@ async def health_tp1_now(request: Request, symbols: Optional[str] = None):
         raise HTTPException(status_code=400, detail="no symbols")
 
     try:
-        # אם קיימת בדיקת תגים – העדף, אחרת quick-check
         if 'health_check_tp1_tags' in globals():
             res = health_check_tp1_tags(sym_list, TP1_TAGS)  # type: ignore
         else:
@@ -110,16 +135,7 @@ async def health_tp1_now(request: Request, symbols: Optional[str] = None):
         log.warning("health_tp1 failed: %s", e)
         return JSONResponse({"ok": False, "error": str(e)}, headers=_base_headers(), status_code=200)
 
-# ------------- Readiness deps (with REQUIRE_REDIS) -------------
-
-_BINANCE_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
-_READINESS_BINANCE = os.getenv("READINESS_CHECK_BINANCE", "1").lower() in ("1","true","yes","on")
-_READINESS_REDIS   = os.getenv("READINESS_CHECK_REDIS", "1").lower() in ("1","true","yes","on")
-_READINESS_SQLITE  = os.getenv("READINESS_CHECK_SQLITE", "0").lower() in ("1","true","yes","on")
-_SQLITE_PATH       = os.getenv("SQLITE_PATH", "").strip()
-_REDIS_URL         = os.getenv("REDIS_URL", "").strip()
-_REQUIRE_REDIS     = os.getenv("REQUIRE_REDIS", "0").lower() in ("1","true","yes","on")
-
+# ---------------- Readiness (low-overhead) ----------------
 async def _check_binance(timeout: float = 2.5) -> Tuple[bool, str]:
     if not _READINESS_BINANCE:
         return True, "skipped"
@@ -135,12 +151,8 @@ async def _check_binance(timeout: float = 2.5) -> Tuple[bool, str]:
         return False, f"err:{e}"
 
 async def _check_redis(timeout: float = 1.0) -> Tuple[bool, str]:
-    # אם Redis לא “נדרש” – מדלגים על הכשלה (גם אם READINESS_CHECK_REDIS=1)
-    if not _REQUIRE_REDIS:
-        return True, "skipped"
     if not _READINESS_REDIS or not _REDIS_URL:
-        return False, "missing_url" if _REDDIS_URL else "disabled"  # type: ignore[name-defined]
-
+        return True, "skipped"
     try:
         import asyncio
         import redis.asyncio as aioredis  # type: ignore
@@ -167,47 +179,96 @@ def _check_sqlite() -> Tuple[bool, str]:
     except Exception as e:
         return False, f"err:{e}"
 
+async def _readiness_once() -> Tuple[bool, Dict[str, Any]]:
+    ok_bin, why_bin = await _check_binance()
+    if not ok_bin and _BINANCE_RETRY_ON_FAIL > 0:
+        # soft retry once
+        ok2, why2 = await _check_binance(timeout=2.0)
+        if ok2:
+            ok_bin, why_bin = ok2, f"ok_after_retry({why_bin})"
+
+    ok_rd,  why_rd  = await _check_redis()
+    if not ok_rd and _REDIS_RETRY_ON_FAIL > 0:
+        ok2, why2 = await _check_redis(timeout=0.8)
+        if ok2:
+            ok_rd, why_rd = ok2, f"ok_after_retry({why_rd})"
+
+    ok_sql, why_sql = _check_sqlite()
+
+    detail = {
+        "binance": {"ok": ok_bin, "detail": why_bin},
+        "redis":   {"ok": ok_rd,  "detail": why_rd},
+        "sqlite":  {"ok": ok_sql, "detail": why_sql, "path": _SQLITE_PATH or None},
+    }
+    overall = ok_bin and ok_rd and ok_sql
+    return overall, detail
+
+async def _maybe_alert_on_change(now: float, overall: bool, detail: Dict[str, Any]) -> None:
+    global _last_overall_ok, _last_alert_ts, _first_fail_seen_ts
+
+    if not _HEALTH_ALERTS_ENABLE or not _notify_available:
+        _last_overall_ok = overall
+        return
+
+    # שינוי מצב?
+    changed = (_last_overall_ok is None) or (overall != _last_overall_ok)
+
+    if overall:
+        # התאוששות
+        if changed and (now - _last_alert_ts) >= _HEALTH_ALERTS_COOLDOWN_SEC:
+            _last_alert_ts = now
+            _first_fail_seen_ts = 0.0
+            await notify_telegram(
+                f"✅ readiness OK · deps: { {k:('ok' if v.get('ok') else v.get('detail')) for k,v in detail.items()} }",
+                level=_HEALTH_ALERTS_LEVEL, kind=_HEALTH_ALERTS_KIND,
+                cooldown_sec=_HEALTH_ALERTS_COOLDOWN_SEC, dedupe_key="readiness_ok"
+            )
+        _last_overall_ok = True
+        return
+
+    # overall=False — רשום זמן כשל ראשון (גרייס) ו/או שלח התראה
+    if _first_fail_seen_ts == 0.0:
+        _first_fail_seen_ts = now
+        _last_overall_ok = False
+        return
+
+    if (now - _first_fail_seen_ts) < _READINESS_FAIL_GRACE_SEC:
+        # מחכים מעט כדי לא לצפצף על פליק קצר
+        _last_overall_ok = False
+        return
+
+    if changed or (now - _last_alert_ts) >= _HEALTH_ALERTS_COOLDOWN_SEC:
+        _last_alert_ts = now
+        failing = {k: v for k, v in detail.items() if not v.get("ok")}
+        await notify_telegram(
+            f"⚠️ readiness FAIL · failing={ {k:v.get('detail') for k,v in failing.items()} }",
+            level=_HEALTH_ALERTS_LEVEL, kind=_HEALTH_ALERTS_KIND,
+            cooldown_sec=_HEALTH_ALERTS_COOLDOWN_SEC, dedupe_key="readiness_fail"
+        )
+
+    _last_overall_ok = False
+
 @router.get("/readiness", summary="Dependency readiness (Redis/Binance/DB)")
 async def readiness():
-    ok_bin, why_bin = await _check_binance()
-    ok_rd,  why_rd  = await _check_redis()
-    ok_sql, why_sql = _check_sqlite()
-
-    overall = ok_bin and ok_rd and ok_sql
-    detail = {
-        "binance": {"ok": ok_bin, "detail": why_bin},
-        "redis":   {"ok": ok_rd,  "detail": why_rd},
-        "sqlite":  {"ok": ok_sql, "detail": why_sql, "path": _SQLITE_PATH or None},
-        "require_redis": _REQUIRE_REDIS,
-    }
+    now = time.time()
+    overall, detail = await _readiness_once()
+    await _maybe_alert_on_change(now, overall, detail)
     code = 200 if overall else 503
     return JSONResponse({"ok": overall, "deps": detail}, status_code=code, headers=_base_headers())
 
-# ------------- /readyz (ללא prefix) עבור Render -------------
-
-@probe.get("/readyz", include_in_schema=False)
-async def readyz_light():
-    # בדיקת "חיה": קלילה ומהירה
-    return JSONResponse({"ok": True, "service": "AlgoGPT"}, headers=_base_headers())
-
-@probe.get("/readyz/strict", include_in_schema=False)
+# -------- Strict endpoint for Render health check --------
+@router.get("/readyz/strict", include_in_schema=False)
+@router.get("/../readyz/strict", include_in_schema=False)  # allow mounting under root by healthCheckPath
 async def readyz_strict():
-    # שמור זהה ל-/health/readiness עבור ברירת המחדל של Render
-    ok_bin, why_bin = await _check_binance()
-    ok_rd,  why_rd  = await _check_redis()
-    ok_sql, why_sql = _check_sqlite()
+    # אותו מנגנון, אבל טקסט קצר וסטטוס בלבד
+    now = time.time()
+    overall, detail = await _readiness_once()
+    await _maybe_alert_on_change(now, overall, detail)
+    if overall:
+        return PlainTextResponse("ok", status_code=200, headers=_base_headers())
+    return PlainTextResponse("fail", status_code=503, headers=_base_headers())
 
-    overall = ok_bin and ok_rd and ok_sql
-    detail = {
-        "binance": {"ok": ok_bin, "detail": why_bin},
-        "redis":   {"ok": ok_rd,  "detail": why_rd},
-        "sqlite":  {"ok": ok_sql, "detail": why_sql, "path": _SQLITE_PATH or None},
-        "require_redis": _REQUIRE_REDIS,
-    }
-    code = 200 if overall else 503
-    return JSONResponse({"ok": overall, "deps": detail}, status_code=code, headers=_base_headers())
-
-# ------------- Meta & Prometheus -------------
+# ---------------- Meta & Prometheus ----------------
 @router.get("/meta", summary="Service meta snapshot")
 async def meta():
     if not _metrics_available:
@@ -232,4 +293,3 @@ async def metrics():
         text = ""
     return PlainTextResponse(text, status_code=200,
                              headers={"Content-Type": "text/plain; version=0.0.4", **_base_headers()})
-
