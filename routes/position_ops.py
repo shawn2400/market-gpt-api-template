@@ -1,4 +1,5 @@
 # routes/position_ops.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import os
@@ -162,7 +163,6 @@ def _normalize_filters_for_utils(flt: Optional[Dict[str, Any]]) -> Dict[str, Any
         out["tick"] = float(tick)
     if step is not None:
         out["step"] = float(step)
-    # keep compatibility with local code
     if "price_tick" not in out and "tick" in out:
         out["price_tick"] = float(out["tick"])
     if "qty_step" not in out and "step" in out:
@@ -172,18 +172,14 @@ def _normalize_filters_for_utils(flt: Optional[Dict[str, Any]]) -> Dict[str, Any
 def _quantize_price(symbol: str, price: float, flt: Dict[str, Any]) -> float:
     f = _normalize_filters_for_utils(flt)
     if _qp:
-        # utils.quantize.quantize_price(px, filters, direction="down")
         return _qp(price, f)  # type: ignore[call-arg]
-    # local fallback
     step = float(f.get("price_tick", 0.0) or 0.0)
     return round(_round_step(price, step), 8) if step > 0 else round(price, 8)
 
 def _quantize_qty(symbol: str, qty: float, flt: Dict[str, Any]) -> float:
     f = _normalize_filters_for_utils(flt)
     if _qq:
-        # utils.quantize.quantize_qty(qty, filters)
         return _qq(qty, f)  # type: ignore[call-arg]
-    # local fallback
     step = float(f.get("qty_step", 0.0) or 0.0)
     return round(_round_step(qty, step), 8) if step > 0 else round(qty, 8)
 
@@ -258,7 +254,6 @@ def _get_filters(client, symbol: str) -> Dict[str, Any]:
                     "price_tick": price_tick or 0.0,
                     "qty_step": qty_step or 0.0,
                 }
-                # also tick/step for utils.quantize
                 out["tick"] = out["price_tick"]
                 out["step"] = out["qty_step"]
                 return out if (out["price_tick"] or out["qty_step"]) else _fallback_filters()
@@ -272,7 +267,7 @@ def _get_filters(client, symbol: str) -> Dict[str, Any]:
 def _fetch_position_side_qty_entry(client, symbol: str) -> Tuple[str, float, float]:
     infos = client.futures_position_information(symbol=symbol) or []
     if not infos:
-        raise HTTPException(status_code=404, detail="No position information")
+        raise HTTPException(status_code=404, detail="No position information")  # FastAPI imported at top
     pos = infos[0]
     qty = float(pos.get("positionAmt") or 0.0)
     ep = float(pos.get("entryPrice") or 0.0)
@@ -292,8 +287,8 @@ def _cancel_open_conditional(client, symbol: str,
     for o in client.futures_get_open_orders(symbol=symbol.upper()) or []:
         typ = (o.get("type") or "").upper()
         should = (typ in kinds) if strict else (typ in kinds or "STOP" in typ or "TAKE_PROFIT" in typ)
-        if should:
-            with suppress(Exception):
+        with suppress(Exception):
+            if should:
                 client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
                 n += 1
     return n
@@ -346,7 +341,6 @@ def _is_approved(symbol: str) -> bool:
     if not REQUIRE_TG_APPROVAL:
         return True
     sym = symbol.upper()
-    # 1) Redis candidates (support several key shapes)
     r = _get_redis_soft()
     if r:
         keys = [
@@ -361,7 +355,6 @@ def _is_approved(symbol: str) -> bool:
                     return True
             except Exception:
                 pass
-    # 2) in-memory fallback (for tests)
     ts = _approved_mem.get(sym)
     if ts and (time.time() - ts) < float(os.getenv("CONFIRM_TTL_SEC", "120") or 120):
         return True
@@ -380,6 +373,24 @@ def auto_mock_approve(
         raise HTTPException(status_code=422, detail="missing symbol")
     _approved_mem[symbol] = time.time()
     return _ok(symbol=symbol, approved=True, via="memory")
+
+# =========================
+# NEW: manage-once (stub / hook)
+# =========================
+@router.post("/manage-once")
+def manage_once(
+    payload: Dict[str, Any] = Body(..., example={"symbol":"BTCUSDT","action":"manage","params":{"tighten":True}}),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    action = (payload.get("action") or "manage").strip().lower()
+    params = payload.get("params") or {}
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+    # חיבור עתידי ל-trade_manager.manage_open_trades(*)
+    return _ok(symbol=symbol, action=action, queued=True, params=params)
 
 # =========================
 # Public endpoints: status / be / trail / tp...
@@ -807,96 +818,6 @@ def close_fraction(
     res = _ok(symbol=symbol, side=side, closed_qty=part)
     _maybe_notify(symbol, "close", res)
     return res
-
-# =========================
-# INTERNAL: TP ladder as LIMIT reduceOnly (alt impl)
-# =========================
-def _place_tp_ladder_limits(client, symbol: str, side: str, qty: float, entry: float,
-                            pcts: List[float], splits: List[float]) -> Dict[str, Any]:
-    if len(pcts) != len(splits):
-        return _err("tp_ladder_bad_args", detail="pcts and splits length mismatch")
-    if abs(sum(splits) - 1.0) > 1e-6:
-        s = sum(splits)
-        if s <= 0:
-            return _err("tp_ladder_bad_args", detail="splits sum <= 0")
-        splits = [w / s for w in splits]
-
-    flt = _get_filters(client, symbol)
-    with suppress(Exception):
-        _cancel_open_tp_limits(client, symbol)
-
-    role_tags = ["TP1", "TP2", "TP3", "TP4", "TP5"]
-    created = []
-    for i, (pct, w) in enumerate(zip(pcts, splits)):
-        q = _quantize_qty(symbol, qty * float(w), flt)
-        if q <= 0:
-            continue
-        if side == "BUY":
-            price = entry * (1.0 + float(pct) / 100.0)
-            out_side = "SELL"
-        else:
-            price = entry * (1.0 - float(pct) / 100.0)
-            out_side = "BUY"
-        price = _quantize_price(symbol, price, flt)
-
-        try:
-            o = client.futures_create_order(
-                symbol=symbol,
-                side=out_side,
-                type="LIMIT",
-                price=str(price),
-                quantity=str(q),
-                timeInForce="GTC",
-                reduceOnly=True,
-                newClientOrderId=_build_client_order_id(symbol, out_side, role=role_tags[i] if i < len(role_tags) else "TP"),
-            ) or {}
-            created.append({"i": i + 1, "qty": q, "price": price, "orderId": o.get("orderId")})
-        except Exception as e:
-            logger.warning("tp_ladder_create_failed: %s", e)
-
-    if not created:
-        return _err("tp_ladder_create_none")
-    return _ok(symbol=symbol, created=created)
-
-# =========================
-# AUTO MANAGER (async, in-memory) — GATED BY TELEGRAM APPROVAL
-# =========================
-class _AutoParams:
-    def __init__(
-        self,
-        symbol: str,
-        offset_bps: int = None,
-        atr_mult: float = None,
-        pcts: Optional[List[float]] = None,
-        splits: Optional[List[float]] = None,
-        poll_sec: float = None,
-    ):
-        self.symbol = symbol.upper()
-        self.offset_bps = int(offset_bps if offset_bps is not None else int(os.getenv("AUTO_BE_BPS", os.getenv("TP_BE_OFFSET_BPS", "8"))))
-        self.atr_mult = float(atr_mult if atr_mult is not None else float(os.getenv("AUTO_ATR_MULT", os.getenv("TRAIL_ATR_MULT", "1.6"))))
-        self.pcts = list(pcts if pcts is not None else [float(x) for x in (os.getenv("AUTO_TP_PCTS", "3,6,12").split(","))])
-        self.splits = list(splits if splits is not None else [float(x) for x in (os.getenv("AUTO_TP_SPLITS", "0.278,0.333,0.389").split(","))])
-        self.poll_sec = float(poll_sec if poll_sec is not None else float(os.getenv("AUTO_POLL_SEC", "8")))
-
-    def as_dict(self) -> Dict[str, Any]:
-        return {
-            "symbol": self.symbol,
-            "offset_bps": self.offset_bps,
-            "atr_mult": self.atr_mult,
-            "pcts": self.pcts,
-            "splits": self.splits,
-            "poll_sec": self.poll_sec,
-        }
-
-_AUTO: Dict[str, Dict[str, Any]] = {}  # symbol -> {"task": Task, "params": _AutoParams, "started_at": ts}
-
-async def _auto_loop(params: _AutoParams):
-    symbol = params.symbol
-    logger.info("auto_manager_start: %s %s", symbol, params.as_dict())
-    try:
-        while True:
-            # Gate: require Telegram approval
-            if REQUIRE_TG_APPROVAL and not _is_approved(symbol):
 
 
 
