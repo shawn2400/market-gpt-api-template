@@ -1,4 +1,4 @@
-# רוץ MAIN- # main.py
+ # main.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
