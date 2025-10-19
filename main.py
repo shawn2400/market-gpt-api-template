@@ -571,7 +571,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
             r = await _get_redis_cached()
             if r:
                 key_payload = json.dumps({"t": text, "a": approve_url, "r": reject_url, "p": preview_url}, ensure_ascii=False, separators=(",", ":"))
-                idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
+                idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"""
                 ok = await r.setnx(idem_key, "1")
                 if not ok:
                     return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
@@ -1313,7 +1313,7 @@ def _maybe_protect_routes(request: Request) -> None:
 # ===== Patched: accept both ?ticket_id= and ?id= for approve/reject (alias-safe) =====
 @router.get("/ops/approve")
 async def approve(
-    id: Optional[str] = Query(default=None, alias="ticket_id", description="alias of ticket_id"),
+    id: Optional[str] = Query(default=None, description="alias: id"),
     ticket_id: Optional[str] = Query(default=None, description="ticket_id"),
     request: Request = None,
 ):
@@ -1328,7 +1328,7 @@ async def approve(
 
 @router.get("/ops/reject")
 async def reject(
-    id: Optional[str] = Query(default=None, alias="ticket_id", description="alias of ticket_id"),
+    id: Optional[str] = Query(default=None, description="alias: id"),
     ticket_id: Optional[str] = Query(default=None, description="ticket_id"),
     request: Request = None,
 ):
@@ -2298,7 +2298,7 @@ async def meta_telegram(
                 r = await _get_redis_cached()
                 if r:
                     key_payload = json.dumps({"t": msg_text, "cid": cid, "links": links}, ensure_ascii=False, separators=(",", ":"))
-                    idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
+                    idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"""
                     ok = await r.setnx(idem_key, "1")
                     if not ok:
                         return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
@@ -2385,8 +2385,6 @@ async def _trail_rt_loop():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower(), reload=False)
-
-
 
 
 
