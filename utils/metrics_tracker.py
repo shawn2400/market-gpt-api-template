@@ -55,6 +55,10 @@ _LAST_CALLBACK_RATE: Optional[float] = None
 _LAST_BE_DISTANCE_BPS: Optional[float] = None
 _LAST_TP_LADDERS: Optional[int] = None
 
+def inc_event(*a, **k) -> None:
+    """שומר תאימות לאזכורי inc_event היסטוריים (no-op)."""
+    return None
+
 def set_last_entry_score(val: Optional[float]) -> None:
     global _LAST_ENTRY_SCORE
     try:
@@ -505,4 +509,6 @@ __all__ = [
     "observe_http_latency","observe_time_to_tp1","observe_slip_bps",
     "observe_http_ctx","observe_http_ctx_async","observe_http",
     "observe_callback_rate","observe_be_distance_bps","observe_tp_ladders",
+    "inc_event",
 ]
+
