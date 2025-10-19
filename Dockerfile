@@ -64,16 +64,17 @@ WORKDIR /app
 # העתקת קוד האפליקציה
 COPY . .
 
-# יצירת algo_helpers.sh בבילד (ללא jq) + הרשאות
-RUN set -eu; cat > /app/algo_helpers.sh <<'SH'
+# === יצירת algo_helpers.sh (בלי jq) בצורה בטוחה ===
+RUN cat > /app/algo_helpers.sh <<'SH'
 #!/usr/bin/env sh
 # Utility helpers (no jq)
-
 set -eu
 
 API="${API_BASE:-http://127.0.0.1:${PORT:-10000}}"
-AUTH=""
-[ -n "${API_BEARER_TOKEN:-}" ] && AUTH="Authorization: Bearer ${API_BEARER_TOKEN}"
+
+# Header Authorization רק אם יש טוקן
+AUTH_HEADER=""
+[ -n "${API_BEARER_TOKEN:-}" ] && AUTH_HEADER="Authorization: Bearer ${API_BEARER_TOKEN}"
 
 _red() { printf "\033[31m%s\033[0m\n" "$*" >&2; }
 _grn() { printf "\033[32m%s\033[0m\n" "$*"; }
@@ -85,11 +86,11 @@ algoinfo() {
   echo "TZ: ${TZ:-}"
   echo "APP_VERSION: ${ALGOGPT_VERSION:-}"
   echo "HAS_TOKEN: $( [ -n "${API_BEARER_TOKEN:-}" ] && echo yes || echo no )"
-  echo -n "READYZ: "; curl -fsS "$API/readyz" 2>/dev/null || echo "fail"
+  printf "READYZ: "
+  curl -fsS "$API/readyz" 2>/dev/null || echo "fail"
 }
 
 healthz() { curl -fsS "$API/readyz" && echo "OK" || { _red "not ready"; return 1; }; }
-
 version() { curl -fsS "$API/meta/version" || true; }
 
 # mk_ticket SYMBOL SIDE QTY LEV [NOTE]
@@ -101,17 +102,34 @@ mk_ticket() {
   [ -z "$lev" ]  && { _red "missing leverage"; return 2; }
   esc() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
   note_esc="$(esc "${note:-}")"
-  json=$(printf '{"symbol":"%s","side":"%s","qty":%s,"leverage":%s,"note":"%s"}' \
-        "$sym" "$side" "$qty" "$lev" "$note_esc")
-  _ylw "POST /ops/ticket  $json"
-  curl -fsS -H "Content-Type: application/json" -d "$json" "$API/ops/ticket" || { _red "ticket create failed"; return 1; }
+  body=$(printf '{"symbol":"%s","side":"%s","qty":%s,"leverage":%s,"note":"%s"}' "$sym" "$side" "$qty" "$lev" "$note_esc")
+  _ylw "POST /ops/ticket  $body"
+  curl -fsS -H "Content-Type: application/json" -d "$body" "$API/ops/ticket" || { _red "ticket create failed"; return 1; }
   echo
 }
 
-approve_ticket() { tid="${1:-}"; [ -z "$tid" ] && { _red "usage: approve_ticket <ticket_id>"; return 2; }; curl -fsS -H "$AUTH" "$API/ops/approve?ticket_id=$tid" || { _red "approve failed"; return 1; }; echo; }
-reject_ticket()  { tid="${1:-}"; [ -z "$tid" ] && { _red "usage: reject_ticket <ticket_id>"; return 2; };  curl -fsS -H "$AUTH" "$API/ops/reject?ticket_id=$tid"  || { _red "reject failed";  return 1; }; echo; }
+# אישור/דחייה: ב־GET (לא POST) עם Bearer (אם מוגן)
+approve_ticket() {
+  tid="${1:-}"; [ -z "$tid" ] && { _red "usage: approve_ticket <ticket_id>"; return 2; }
+  if [ -n "$AUTH_HEADER" ]; then
+    curl -fsS -H "$AUTH_HEADER" "$API/ops/approve?ticket_id=$tid" || { _red "approve failed"; return 1; }
+  else
+    curl -fsS "$API/ops/approve?ticket_id=$tid" || { _red "approve failed"; return 1; }
+  fi
+  echo
+}
+reject_ticket() {
+  tid="${1:-}"; [ -z "$tid" ] && { _red "usage: reject_ticket <ticket_id>"; return 2; }
+  if [ -n "$AUTH_HEADER" ]; then
+    curl -fsS -H "$AUTH_HEADER" "$API/ops/reject?ticket_id=$tid" || { _red "reject failed"; return 1; }
+  else
+    curl -fsS "$API/ops/reject?ticket_id=$tid" || { _red "reject failed"; return 1; }
+  fi
+  echo
+}
 
-# manage-once SYMBOL [offset_bps] [pcts_csv] [splits_csv]
+# ניהול חד־פעמי
+# manage_once SYMBOL [offset_bps] [pcts_csv] [splits_csv]
 manage_once() {
   sym="${1:-}"; [ -z "$sym" ] && { _red "usage: manage_once <SYMBOL> [offset_bps] [pcts_csv] [splits_csv]"; return 2; }
   off="${2:-}"; pcts="${3:-}"; splits="${4:-}"
@@ -121,40 +139,49 @@ manage_once() {
   [ -n "$splits" ] && body="$body,\"splits\":[${splits}]"
   body="$body}"
   _ylw "POST /manage-once  $body"
-  curl -fsS -H "$AUTH" -H "Content-Type: application/json" -d "$body" "$API/manage-once" || { _red "manage failed"; return 1; }
+  if [ -n "$AUTH_HEADER" ]; then
+    curl -fsS -H "$AUTH_HEADER" -H "Content-Type: application/json" -d "$body" "$API/manage-once" || { _red "manage failed"; return 1; }
+  else
+    curl -fsS -H "Content-Type: application/json" -d "$body" "$API/manage-once" || { _red "manage failed"; return 1; }
+  fi
   echo
 }
 
-hc() { curl -fsS -H "$AUTH" "$@"; }
+hc() { if [ -n "$AUTH_HEADER" ]; then curl -fsS -H "$AUTH_HEADER" "$@"; else curl -fsS "$@"; fi; }
 SH
 RUN chmod +x /app/algo_helpers.sh
 
 # כתיבת גרסה לקובץ (fallback ל-/meta/version)
 RUN printf "%s\n" "${APP_VERSION}" > /app/VERSION || true
 
-# קבצי ברירת־מחדל שנחוצים ל־CMD
-RUN test -f /app/gunicorn_conf.py || printf "%s\n" "\
-bind = '0.0.0.0:' + str(__import__('os').environ.get('PORT', '10000'))\n\
-worker_class = 'uvicorn.workers.UvicornWorker'\n\
-accesslog = '-'\n\
-errorlog  = '-'\n\
-loglevel  = __import__('os').environ.get('UVICORN_LOG_LEVEL','info')\n\
-graceful_timeout = int(__import__('os').environ.get('GUNICORN_GRACEFUL_TIMEOUT','30'))\n\
-timeout = int(__import__('os').environ.get('GUNICORN_TIMEOUT','120'))\n\
-keepalive = int(__import__('os').environ.get('GUNICORN_KEEPALIVE','5'))\n" > /app/gunicorn_conf.py
+# === gunicorn_conf.py (בטוח מריצ'ה עם heredoc) ===
+RUN [ -f /app/gunicorn_conf.py ] || cat > /app/gunicorn_conf.py <<'PY'
+bind = '0.0.0.0:' + str(__import__('os').environ.get('PORT', '10000'))
+worker_class = 'uvicorn.workers.UvicornWorker'
+accesslog = '-'
+errorlog  = '-'
+loglevel  = __import__('os').environ.get('UVICORN_LOG_LEVEL','info')
+graceful_timeout = int(__import__('os').environ.get('GUNICORN_GRACEFUL_TIMEOUT','30'))
+timeout = int(__import__('os').environ.get('GUNICORN_TIMEOUT','120'))
+keepalive = int(__import__('os').environ.get('GUNICORN_KEEPALIVE','5'))
+PY
 
-RUN test -f /app/prestart.sh || printf "%s\n" "\
-#!/usr/bin/env sh\n\
-set -e\n\
-echo \"[prestart] warming up...\"\n\
-mkdir -p /app/.cache/matplotlib /app/logs /app/data || true\n\
-" > /app/prestart.sh && chmod +x /app/prestart.sh
+# === prestart.sh (ללא printf בעייתי) ===
+RUN [ -f /app/prestart.sh ] || cat > /app/prestart.sh <<'SH'
+#!/usr/bin/env sh
+set -e
+echo "[prestart] warming up..."
+mkdir -p /app/.cache/matplotlib /app/logs /app/data || true
+SH
+RUN chmod +x /app/prestart.sh
 
-RUN test -f /app/health_full.sh || printf "%s\n" "\
-#!/usr/bin/env sh\n\
-set -e\n\
-curl -fsS http://127.0.0.1:${PORT:-10000}/readyz >/dev/null\n\
-" > /app/health_full.sh && chmod +x /app/health_full.sh
+# === health_full.sh ===
+RUN [ -f /app/health_full.sh ] || cat > /app/health_full.sh <<'SH'
+#!/usr/bin/env sh
+set -e
+curl -fsS "http://127.0.0.1:${PORT:-10000}/readyz" >/dev/null
+SH
+RUN chmod +x /app/health_full.sh
 
 # הרשאות ותיקיות
 RUN mkdir -p /app/static /app/logs /app/data /app/.cache \
@@ -162,18 +189,9 @@ RUN mkdir -p /app/static /app/logs /app/data /app/.cache \
  && chown -R appuser:appuser /app \
  && (find /usr/local /app -type d -name '__pycache__' -prune -exec rm -rf {} + 2>/dev/null || true)
 
-# טעינה אוטומטית של ההלפרים לכל סשן shell של appuser
-RUN printf "%s\n" "\
-# === Algo helpers auto-load ===\n\
-if [ -f /app/algo_helpers.sh ]; then\n\
-  . /app/algo_helpers.sh\n\
-fi\n" >> /home/appuser/.bashrc \
- && printf "%s\n" "\
-# === Algo helpers auto-load ===\n\
-if [ -f /app/algo_helpers.sh ]; then\n\
-  . /app/algo_helpers.sh\n\
-fi\n" >> /home/appuser/.profile \
- && chown appuser:appuser /home/appuser/.bashrc /home/appuser/.profile
+# טעינה אוטומטית של ההלפרים לסשן interactive של המשתמש (לא חובה ל-CMD)
+RUN printf "%s\n" 'if [ -f /app/algo_helpers.sh ]; then . /app/algo_helpers.sh; fi' >> /home/appuser/.profile \
+ && chown appuser:appuser /home/appuser/.profile
 
 USER appuser
 
@@ -184,17 +202,17 @@ EXPOSE 10000
 
 ENTRYPOINT ["/usr/bin/tini", "--"]
 
-# הערה: כל משתני הסביבה מוזנים מה־Render, לא קשה-מקודד כאן.
-CMD ["/bin/sh","-lc","/app/prestart.sh 2>/dev/null || true; \
-  gunicorn ${APP_MODULE} -c gunicorn_conf.py \
-    --workers ${WEB_CONCURRENCY:-1} \
-    --bind 0.0.0.0:${PORT:-10000} \
-    --timeout ${GUNICORN_TIMEOUT:-120} \
-    --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-30} \
-    --keep-alive ${GUNICORN_KEEPALIVE:-5} \
-    --max-requests ${GUNICORN_MAX_REQUESTS:-500} \
-    --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-50} \
-    --worker-class uvicorn.workers.UvicornWorker"]
+# הערה: כל משתני הסביבה מוזנים מה-Render.
+CMD ["/bin/sh","-lc", "/app/prestart.sh 2>/dev/null || true; \
+gunicorn ${APP_MODULE:-main:app} -c gunicorn_conf.py \
+  --workers ${WEB_CONCURRENCY:-1} \
+  --bind 0.0.0.0:${PORT:-10000} \
+  --timeout ${GUNICORN_TIMEOUT:-120} \
+  --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-30} \
+  --keep-alive ${GUNICORN_KEEPALIVE:-5} \
+  --max-requests ${GUNICORN_MAX_REQUESTS:-500} \
+  --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-50} \
+  --worker-class uvicorn.workers.UvicornWorker" ]
 
 
 
