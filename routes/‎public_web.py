@@ -1,11 +1,12 @@
 # routes/public_web.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, html
+import os
 from typing import Optional
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
-router = APIRouter(tags=["Public Feed"])
+router = APIRouter(prefix="/web", tags=["Public Feed"])
 
 PUBLIC_REQUIRE_BEARER = os.getenv("PUBLIC_REQUIRE_BEARER", "1").lower() in ("1","true","yes","on")
 API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
@@ -49,20 +50,19 @@ async def topk_web(request: Request, authorization: Optional[str] = Header(None,
             resp.headers["Retry-After"] = str(ra)
         return resp
 
-    # מינימל־דף: מושך SSE מ-/scan/public-stream ומעדכן טבלה
-    html_doc = f"""<!doctype html>
+    html_doc = """<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
 <title>TopK — Live</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
-body{{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:0;padding:16px;background:#0b0d10;color:#e2e8f0}}
-table{{width:100%;border-collapse:collapse;margin-top:12px}}
-th,td{{padding:8px;border-bottom:1px solid #1f2937;font-size:14px}}
-th{{text-align:left;color:#93c5fd}}
-.badge{{display:inline-block;padding:2px 6px;border-radius:6px;background:#1f2937}}
-.up{{color:#10b981}} .down{{color:#ef4444}}
-small{{color:#93a3b8}}
+body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:0;padding:16px;background:#0b0d10;color:#e2e8f0}
+table{width:100%;border-collapse:collapse;margin-top:12px}
+th,td{padding:8px;border-bottom:1px solid #1f2937;font-size:14px}
+th{text-align:left;color:#93c5fd}
+.badge{display:inline-block;padding:2px 6px;border-radius:6px;background:#1f2937}
+.up{color:#10b981} .down{color:#ef4444}
+small{color:#93a3b8}
 </style>
 </head><body>
 <h2>TopK <small>live</small></h2>
@@ -71,27 +71,26 @@ small{{color:#93a3b8}}
 </tr></thead><tbody></tbody></table>
 <script>
 const tbody = document.querySelector("#t tbody");
-function fmtTs(ts){{try{{return new Date(ts*1000).toISOString().replace('T',' ').slice(0,19)}}catch{{return ts}}}}
-function render(items){{tbody.innerHTML = ""; (items||[]).forEach(it=>{{
+function fmtTs(ts){try{return new Date(ts*1000).toISOString().replace('T',' ').slice(0,19)}catch{return ts}}
+function render(items){tbody.innerHTML = ""; (items||[]).forEach(it=>{
   const tr = document.createElement("tr");
   const side = (String(it.side||"").toUpperCase()==="BUY") ? "<span class='badge up'>BUY</span>" : "<span class='badge down'>SELL</span>";
   tr.innerHTML = `
-    <td>${{it.symbol||""}}</td>
-    <td>${{side}}</td>
-    <td>${{(it.score||0).toFixed?it.score.toFixed(2):it.score}}</td>
-    <td>${{(it.reason||"")}}</td>
-    <td>${{it.timeframe||""}}</td>
-    <td><small>${{fmtTs(it.ts||0)}}</small></td>
+    <td>${it.symbol||""}</td>
+    <td>${side}</td>
+    <td>${(it.score||0).toFixed?it.score.toFixed(2):it.score}</td>
+    <td>${(it.reason||"")}</td>
+    <td>${it.timeframe||""}</td>
+    <td><small>${fmtTs(it.ts||0)}</small></td>
   `;
   tbody.appendChild(tr);
-}})}}
-function oneShot(){{
-  fetch("/scan/public-topk", {{headers: {{}}}})
-   .then(r=>r.json()).then(j=>render(j.items||[])).catch(()=>{});
-}}
+})}
+function oneShot(){
+  fetch("/scan/public-topk", {headers: {}}).then(r=>r.json()).then(j=>render(j.items||[])).catch(()=>{});
+}
 oneShot();
 const ev = new EventSource("/scan/public-stream");
-ev.addEventListener("topk", (e)=>{{try{{const d = JSON.parse(e.data); render(d.items||[])}}catch{{}}}});
+ev.addEventListener("topk", (e)=>{try{const d = JSON.parse(e.data); render(d.items||[])}catch{}});
 </script>
 </body></html>"""
     return HTMLResponse(html_doc, headers=_csp_headers())
@@ -151,3 +150,4 @@ ev.addEventListener("now", (e)=>{try{const d = JSON.parse(e.data); render(d.item
 </script>
 </body></html>"""
     return HTMLResponse(html_doc, headers=_csp_headers())
+
