@@ -1310,15 +1310,35 @@ async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), s
 def _maybe_protect_routes(request: Request) -> None:
     _require_bearer(request)
 
+# ===== Patched: accept both ?ticket_id= and ?id= for approve/reject (alias-safe) =====
 @router.get("/ops/approve")
-async def approve(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
+async def approve(
+    id: Optional[str] = Query(default=None, alias="ticket_id", description="alias of ticket_id"),
+    ticket_id: Optional[str] = Query(default=None, description="ticket_id"),
+    request: Request = None,
+):
     _maybe_protect_routes(request)
-    return await _approve_core(ticket_id)
+    tid = ticket_id or id
+    if not tid:
+        # Keep legacy-style error payload to avoid breaking clients
+        raise HTTPException(status_code=422, detail=[{
+            "type": "missing", "loc": ["query", "id"], "msg": "Field required", "input": None
+        }])
+    return await _approve_core(str(tid))
 
 @router.get("/ops/reject")
-async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
+async def reject(
+    id: Optional[str] = Query(default=None, alias="ticket_id", description="alias of ticket_id"),
+    ticket_id: Optional[str] = Query(default=None, description="ticket_id"),
+    request: Request = None,
+):
     _maybe_protect_routes(request)
-    return await _reject_core(ticket_id)
+    tid = ticket_id or id
+    if not tid:
+        raise HTTPException(status_code=422, detail=[{
+            "type": "missing", "loc": ["query", "id"], "msg": "Field required", "input": None
+        }])
+    return await _reject_core(str(tid))
 
 # ===== Confirm GET -> POST flow for signed approve/reject =====
 @router.get(SIGN_PATH_APPROVE)
