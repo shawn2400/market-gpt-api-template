@@ -407,9 +407,10 @@ def _get_shared_async_client() -> httpx.AsyncClient:
         if cli and not cli.is_closed:
             return cli
         timeout = httpx.Timeout(15.0)
+        # Keep max_connections >= max_keepalive_connections (sane defaults)
         limits = httpx.Limits(
-            max_connections=int(os.getenv("HTTP_MAX_CONNECTIONS", "50")),
-            max_keepalive_connections=int(os.getenv("HTTP_MAX_KEEPALIVE", "200")),
+            max_connections=int(os.getenv("HTTP_MAX_CONNECTIONS", "200")),
+            max_keepalive_connections=int(os.getenv("HTTP_MAX_KEEPALIVE", "50")),
         )
         cli = httpx.AsyncClient(timeout=timeout, limits=limits, headers={"User-Agent": f"algogpt/{APP_VERSION}"})
         app.state.shared_async_client = cli
@@ -571,7 +572,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
             r = await _get_redis_cached()
             if r:
                 key_payload = json.dumps({"t": text, "a": approve_url, "r": reject_url, "p": preview_url}, ensure_ascii=False, separators=(",", ":"))
-                idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"""
+                idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
                 ok = await r.setnx(idem_key, "1")
                 if not ok:
                     return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
@@ -2298,7 +2299,7 @@ async def meta_telegram(
                 r = await _get_redis_cached()
                 if r:
                     key_payload = json.dumps({"t": msg_text, "cid": cid, "links": links}, ensure_ascii=False, separators=(",", ":"))
-                    idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"""
+                    idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
                     ok = await r.setnx(idem_key, "1")
                     if not ok:
                         return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
@@ -2323,49 +2324,46 @@ async def meta_telegram(
     return {"ok": False, "error": "bad_mode"}
 
 # ==================== Error handlers ====================
-from fastapi.exceptions import HTTPException as FastAPIHTTPException
+from fastapi.exceptions import HTTPException as FastAPIHTTPException  # keeping explicit alias for clarity
 
 @app.exception_handler(FastAPIHTTPException)
-async def http_exc_handler(request: Request, exc: FastAPIHTTPException):
-    return JSONResponse(status_code=exc.status_code, content={"ok": False, "error": exc.detail})
+async def fastapi_http_exception_handler(request: Request, exc: FastAPIHTTPException):
+    # Preserve FastAPI semantics but normalize payload
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "ok": False,
+            "detail": exc.detail,
+        },
+    )
 
-# ==================== Global error handler ====================
 @app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    error_id = secrets.token_hex(6)
-    logger.exception("unhandled_error [%s]: %s %s", error_id, request.method, request.url)
-    show_detail = os.getenv("SHOW_INTERNAL_ERRORS", "0").lower() in ("1", "true", "yes", "on") or LOG_LEVEL == "DEBUG"
-    payload: Dict[str, Any] = {"ok": False, "error": "internal_error", "id": error_id}
-    if show_detail:
-        payload["detail"] = str(exc)
-    return JSONResponse(status_code=500, content=payload)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.exception("unhandled_exception: %s", exc)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "ok": False,
+            "error": "internal_error",
+        },
+    )
 
-# ==================== Startup/Shutdown ====================
+# ==================== Startup / Shutdown ====================
 @app.on_event("startup")
 async def _on_startup():
     app.state.boot_ts = time.time()
-    try:
+    # warm shared http client
+    _get_shared_async_client()
+    # set Telegram webhook if configured
+    with suppress(Exception):
         await _ensure_telegram_webhook()
-    except Exception as e:
-        logger.info("startup.ensure_webhook.failed: %s", e)
-    try:
-        if TRAIL_RT_ENABLE:
-            app.state.trail_task = asyncio.create_task(_trail_rt_loop())
-    except Exception as e:
-        logger.info("startup.trail_loop.failed: %s", e)
+    # optional startup ping
     if STARTUP_NOTIFY_ENABLE and not ONLY_TRADE_NOTIFICATIONS:
         with suppress(Exception):
-            await _send_telegram_html("🚀 Service started and ready.")
+            await _send_telegram_html(f"🟢 <b>{_md_html(APP_TITLE)}</b> started · v<code>{_md_html(APP_VERSION)}</code>")
 
 @app.on_event("shutdown")
 async def _on_shutdown():
-    with suppress(Exception):
-        task = getattr(app.state, "trail_task", None)
-        if task:
-            task.cancel()
-            with suppress(Exception):
-                await task
-    # Close shared clients
     with suppress(Exception):
         cli = getattr(app.state, "shared_async_client", None)
         if cli and not cli.is_closed:
@@ -2375,18 +2373,11 @@ async def _on_shutdown():
         if r:
             await r.close()
 
-# (placeholder) trailing loop if exists elsewhere
-async def _trail_rt_loop():
-    # no-op placeholder if external implementation is absent
-    while False:
-        await asyncio.sleep(1)
-
-# ============== Uvicorn entry (optional) ==============
+# ==================== Main ====================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000")), log_level=LOG_LEVEL.lower(), reload=False)
-
-
+    reload_flag = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
+    uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=reload_flag)
 
 
 
