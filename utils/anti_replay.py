@@ -1,15 +1,20 @@
 # utils/anti_replay.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, time, hmac, hashlib, json, threading
+import os, time, hmac, hashlib, json, threading, asyncio
 from typing import Optional, Tuple, Any, Dict
 from contextlib import suppress
 
-# Optional Redis (preferred)
+# Optional Redis (preferred): both sync and asyncio clients supported
 try:
     import redis.asyncio as aioredis  # type: ignore
-except Exception:
+except Exception:  # pragma: no cover
     aioredis = None  # type: ignore
+
+try:
+    import redis as rsync  # type: ignore
+except Exception:  # pragma: no cover
+    rsync = None  # type: ignore
 
 _NS = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
 _REDIS_URL = (os.getenv("REDIS_URL") or os.getenv("ALGOGPT_REDIS_URL") or "").strip()
@@ -25,16 +30,29 @@ _NONCE_TTL_SEC = int(os.getenv("ANTI_REPLAY_NONCE_TTL_SEC", "600") or 600)
 _mem_lock = threading.Lock()
 _mem_nonces: Dict[str, float] = {}  # key -> expiry_ts
 
-async def _get_redis():
+# ---------- Redis helpers ----------
+_async_redis_cached = None
+_sync_redis_cached = None
+
+async def _get_redis_async():
+    global _async_redis_cached
     if not (aioredis and _REDIS_URL):
         return None
-    r = getattr(_get_redis, "_r", None)
-    if r:
-        return r
-    r = aioredis.from_url(_REDIS_URL, decode_responses=True)
-    setattr(_get_redis, "_r", r)
-    return r
+    if _async_redis_cached:
+        return _async_redis_cached
+    _async_redis_cached = aioredis.from_url(_REDIS_URL, decode_responses=True)
+    return _async_redis_cached
 
+def _get_redis_sync():
+    global _sync_redis_cached
+    if not (rsync and _REDIS_URL):
+        return None
+    if _sync_redis_cached:
+        return _sync_redis_cached
+    _sync_redis_cached = rsync.from_url(_REDIS_URL, decode_responses=True, socket_timeout=3.0)
+    return _sync_redis_cached
+
+# ---------- misc helpers ----------
 def _sha256_hex(data: bytes) -> str:
     h = hashlib.sha256()
     h.update(data)
@@ -63,26 +81,43 @@ def _mem_claim_once(key: str, ttl_sec: int) -> bool:
         _mem_nonces[key] = now + ttl_sec
         return True
 
-def _build_base(route: str, ts: str, nonce: str, body: Any) -> bytes:
-    # Canonical base string for signature (no HTTP method available in current API)
-    # If you later add method/query—append deterministically here.
-    body_bytes: bytes
+def _canonicalize_body(body: Any) -> bytes:
     if body is None:
-        body_bytes = b""
-    elif isinstance(body, (bytes, bytearray)):
-        body_bytes = bytes(body)
-    elif isinstance(body, str):
-        body_bytes = body.encode("utf-8")
-    else:
-        with suppress(Exception):
-            return f"{route}|{ts}|{nonce}|{_NS}|{_sha256_hex(json.dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))}".encode("utf-8")
-        body_bytes = b""
+        return b""
+    if isinstance(body, (bytes, bytearray)):
+        return bytes(body)
+    if isinstance(body, str):
+        return body.encode("utf-8")
+    # dict/list/other json-serializable
+    try:
+        return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    except Exception:
+        return b""
+
+def _build_base(route: str, ts: str, nonce: str, body: Any) -> bytes:
+    """
+    Canonical base string for signature:
+    {route}|{ts}|{nonce}|{namespace}|{sha256(body)}
+    """
+    body_bytes = _canonicalize_body(body)
     return f"{route}|{ts}|{nonce}|{_NS}|{_sha256_hex(body_bytes)}".encode("utf-8")
 
-async def _claim_nonce_global(nonce: str, ttl_sec: int) -> bool:
-    # Prefer Redis NX+EX, fallback to memory
+# ---------- nonce claimers ----------
+def _claim_nonce_global_sync(nonce: str, ttl_sec: int) -> bool:
     key = f"{_NS}:anti_replay:nonce:{nonce}"
-    r = await _get_redis()
+    r = _get_redis_sync()
+    if r:
+        try:
+            ok = r.set(key, "1", nx=True, ex=int(ttl_sec))
+            return bool(ok)
+        except Exception:
+            # fall back to memory
+            pass
+    return _mem_claim_once(key, ttl_sec)
+
+async def _claim_nonce_global_async(nonce: str, ttl_sec: int) -> bool:
+    key = f"{_NS}:anti_replay:nonce:{nonce}"
+    r = await _get_redis_async()
     if r:
         try:
             ok = await r.set(key, "1", nx=True, ex=int(ttl_sec))
@@ -91,7 +126,55 @@ async def _claim_nonce_global(nonce: str, ttl_sec: int) -> bool:
             pass
     return _mem_claim_once(key, ttl_sec)
 
-async def verify_request(
+# ---------- core logic (shared) ----------
+def _verify_fields(ts_header: Optional[str],
+                   nonce_header: Optional[str],
+                   signature_header: Optional[str],
+                   route: str,
+                   body: Any,
+                   require_signature: bool) -> Tuple[bool, str, int, str, str, bytes]:
+    """
+    Returns tuple: (ok, reason, ts_i, ts_s, nonce, base_bytes)
+    If ok=False -> early reason.
+    """
+    if not _ENABLE:
+        return True, "disabled", _now(), "", "", b""
+
+    must_sign = require_signature or _REQUIRE_SIGNATURE_DEFAULT
+
+    ts_s = (ts_header or "").strip()
+    nonce = (nonce_header or "").strip()
+    sig = (signature_header or "").strip()
+
+    # Timestamp
+    try:
+        ts_i = int(ts_s)
+    except Exception:
+        if must_sign:
+            return False, "bad_ts", 0, ts_s, nonce, b""
+        ts_i = _now()
+
+    now = _now()
+    if abs(now - ts_i) > _SKEW_SEC:
+        if must_sign:
+            return False, "ts_skew", ts_i, ts_s, nonce, b""
+        # soft-allow otherwise
+
+    # Signature
+    if must_sign:
+        if not (_SECRET and sig and nonce and ts_s):
+            return False, "missing_sig_or_secret", ts_i, ts_s, nonce, b""
+        base = _build_base(route, ts_s, nonce, body)
+        expected = _hmac_hex(_SECRET, base)
+        if not hmac.compare_digest(expected, sig):
+            return False, "bad_sig", ts_i, ts_s, nonce, base
+        return True, "ok", ts_i, ts_s, nonce, base
+
+    base = _build_base(route, ts_s, nonce, body)  # built anyway for parity/logs
+    return True, "ok", ts_i, ts_s, nonce, base
+
+# ---------- public (sync) ----------
+def verify_request(
     ts_header: Optional[str],
     nonce_header: Optional[str],
     signature_header: Optional[str],
@@ -100,58 +183,49 @@ async def verify_request(
     require_signature: bool = False
 ) -> Tuple[bool, str]:
     """
-    Returns (ok, reason). If _ENABLE is False -> permissive allow (ok, 'disabled').
-    Policy:
-      - If require_signature or _REQUIRE_SIGNATURE_DEFAULT is True: signature must be present & valid.
-      - Timestamp must be within ±_SKEW_SEC.
-      - Nonce must be unique for _NONCE_TTL_SEC.
-
-    Headers (by caller): ts_header, nonce_header, signature_header (hex SHA256 HMAC).
-    Route: the path string e.g. '/ops/approve'.
+    Synchronous verifier — safe to call from regular FastAPI endpoints.
+    Uses sync Redis if configured, else in-memory fallback.
     """
-    if not _ENABLE:
-        return True, "disabled"
+    ok, reason, _ts_i, _ts_s, nonce, _base = _verify_fields(
+        ts_header, nonce_header, signature_header, route, body, require_signature
+    )
+    if not ok:
+        return ok, reason
 
-    # Policy resolve
-    must_sign = require_signature or _REQUIRE_SIGNATURE_DEFAULT
-
-    # Basic fields
-    ts_s = (ts_header or "").strip()
-    nonce = (nonce_header or "").strip()
-    sig = (signature_header or "").strip()
-
-    # TS check
-    try:
-        ts_i = int(ts_s)
-    except Exception:
-        if must_sign:
-            return False, "bad_ts"
-        else:
-            # soft allow when not required
-            ts_i = _now()
-
-    now = _now()
-    if abs(now - ts_i) > _SKEW_SEC:
-        if must_sign:
-            return False, "ts_skew"
-        # soft allow if not required
-    # Signature check
-    if must_sign:
-        if not (_SECRET and sig and nonce and ts_s):
-            return False, "missing_sig_or_secret"
-        base = _build_base(route, ts_s, nonce, body)
-        expected = _hmac_hex(_SECRET, base)
-        if not hmac.compare_digest(expected, sig):
-            return False, "bad_sig"
-
-    # Nonce claim (prevents replay). If missing nonce and must_sign: block. Otherwise best-effort.
-    if must_sign and not nonce:
+    # Nonce claim
+    if (_REQUIRE_SIGNATURE_DEFAULT or require_signature) and not nonce:
         return False, "missing_nonce"
     if nonce:
-        claimed = await _claim_nonce_global(nonce, _NONCE_TTL_SEC)
+        claimed = _claim_nonce_global_sync(nonce, _NONCE_TTL_SEC)
         if not claimed:
             return False, "replay"
 
     return True, "ok"
 
+# ---------- public (async) ----------
+async def verify_request_async(
+    ts_header: Optional[str],
+    nonce_header: Optional[str],
+    signature_header: Optional[str],
+    route: str,
+    body: Any,
+    require_signature: bool = False
+) -> Tuple[bool, str]:
+    """
+    Async variant. If you run in an async context and prefer aioredis, use this.
+    """
+    ok, reason, _ts_i, _ts_s, nonce, _base = _verify_fields(
+        ts_header, nonce_header, signature_header, route, body, require_signature
+    )
+    if not ok:
+        return ok, reason
+
+    if (_REQUIRE_SIGNATURE_DEFAULT or require_signature) and not nonce:
+        return False, "missing_nonce"
+    if nonce:
+        claimed = await _claim_nonce_global_async(nonce, _NONCE_TTL_SEC)
+        if not claimed:
+            return False, "replay"
+
+    return True, "ok"
 
