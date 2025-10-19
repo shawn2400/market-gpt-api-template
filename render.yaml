@@ -92,7 +92,7 @@ services:
       - key: READONLY_ENDPOINTS
         value: "summary,prices_top,news_cache,health,meta_telegram"
       - key: OPENAPI_INCLUDE_TAGS
-        value: "meta,Status,Public Feed,price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk,alerts,aliases,metrics"
+        value: "meta,Status,Public Feed,price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk,alerts,aliases,metrics,routes,auto-discovery"
       - key: OPENAPI_HIDE_PATTERNS
         value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
       - key: OPENAPI_PUBLIC_MAX_OPS
@@ -120,13 +120,13 @@ services:
       - key: TRUST_XFF
         value: "1"
       - key: SECURITY_PUBLIC_PATHS
-        value: "/ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/health,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version"
+        value: "/ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/routes/approve/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/health,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
       - key: SECURITY_PROTECTED_PATHS
         value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run"
 
-      # ======== CSP (מהפאץ' החדש) ========
+      # ======== CSP ========
       - key: ENABLE_CSP
         value: "1"
       - key: CSP_POLICY
@@ -828,6 +828,32 @@ services:
         value: "policies/dynamic_policy.yaml"
       - key: POLICY_SCHEMA_PATH
         value: "config/policy_schema.json"
+
+      # ========================= Auto-Discovery / Allowlist (עשיר) =========================
+      - key: ROUTES_AUTO_DISCOVERY
+        value: "1"         # 1=סורק ומפרסם אוטומטית, 0=מושבת
+      - key: ROUTES_NEED_TG_APPROVAL
+        value: "1"         # דורש אישור בטלגרם לפני אקטיבציה
+      - key: ROUTES_ALLOW
+        value: "*"         # אפשר הכל, לפני deny
+      - key: ROUTES_DENY
+        value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
+      - key: ROUTES_PUBLIC_PREFIX
+        value: "/public"   # פריפיקס שיוגדר כברירת מחדל כ-public
+      - key: ROUTES_PROTECTED_PREFIXES
+        value: "/ops,/manager,/routes,/webhook,/guard"
+      - key: ROUTES_TAGS_REQUIRE
+        value: ""          # לדוגמה: "public,Status"
+      - key: ROUTES_TAGS_DENY
+        value: "internal,debug"
+      - key: ROUTES_APPROVE_ENDPOINT
+        value: "/routes/approve/signed"  # הוסף גם ל-SECURITY_PUBLIC_PATHS
+      - key: ROUTES_DEFAULT_TIMEOUT_SEC
+        value: "30"
+      - key: ROUTES_DEFAULT_RL_RPS
+        value: "5"
+      - key: ROUTES_DEFAULT_RL_BURST
+        value: "15"
 
       # ========================= Bearer tokens (RO/ACTION) =========================
       - key: API_BEARER_TOKEN_RO
