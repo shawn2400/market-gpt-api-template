@@ -1,0 +1,290 @@
+# CHANGELOG
+
+All notable changes to this project are documented in this file. The format roughly follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and the versions use semantic versioning where practical. Dates are in UTC.
+
+> **Scope:** This changelog focuses on API surface, operational behavior, configuration (ENV), security, and integrations as reflected in the latest `main.py`. It is intentionally verbose to enable compliance, DevOps, and SRE teams to assess change impact quickly.
+
+---
+
+## [Unreleased]
+
+### Added
+- **Public snapshot router hook:** Optional mounting of `routes.public_snapshot` when present.
+- **Status router:** Optional mounting of `routes.status` when present.
+- **Public trade status router:** Optional mounting of `routes.public_trade_status` when present.
+- **Expanded CORS controls:** `CORS_ALLOW_ORIGINS_STRICT` helper when `allow_credentials=true` with `*` origins, including safety warning in logs.
+- **Inline security headers middleware:** Adds `X-Content-Type-Options`, `Referrer-Policy`, `X-Frame-Options`, `Cross-Origin-Opener-Policy`, `Cross-Origin-Resource-Policy`, `Permissions-Policy`, and optional HSTS (`ENABLE_HSTS`).
+- **Public GET caching + ETag:** Conditional cache/etag layer for selected paths (configurable via `PUBLIC_CACHE_PATHS`), 304 responses with `Vary: If-None-Match` for safe client-side caching.
+- **Public rate limiting:** Redis-backed (with in-memory fallback) rate limiter for `/scan/public-topk`, `/scan/public-now`, and `/topk`. Configurable RPS and windows.
+- **Signed links for ticket actions:** `/ops/ui/ticket/signed`, `/ops/approve/signed`, `/ops/reject/signed` with HMAC verification and explicit TTL. Disables emitting approve/reject links when `HMAC_SECRET` is not set.
+- **Bearer protection:** Most operational routes can be protected behind `Authorization: Bearer <token>`; controlled by `PROTECT_*` envs. `/meta/routes` is bearer-protected.
+- **Idempotency layer (soft shim):** `utils.idempotency.idem_for_request` if available, with permissive bypass when `ALLOW_MISSING_IDEMPOTENCY=1`.
+- **Anti-replay shim:** Safe import fallback for `utils.anti_replay.verify_request` with opt‑in permissive mode via `ALLOW_MISSING_ANTI_REPLAY=1`.
+- **Telegram integration:** 
+  - Message sending (`_send_telegram_html`) with inline buttons (Preview/Approve/Reject) and Redis-backed idempotency (configurable TTL).
+  - Auto-webhook provisioning on startup (`/telegram/webhook`) when configured.
+  - Diagnostics endpoint `/meta/telegram` with modes `info|dry|set|send` (bearer-protected).
+- **Ops Approval flow:** 
+  - `/ops/ticket` creates approval tickets persisted to Redis (or in-memory fallback store when enabled).
+  - `/ops/ui/ticket` and signed preview render human-readable HTML table of the ticket contents.
+  - Approve/Reject flows apply idempotent handling to avoid double-processing.
+  - Smart ETA estimation for TP levels based on distance and velocity window (best-effort).
+  - Smart Manage kick-off after approval (best-effort triggers when present).
+
+- **Execution modes:** MARKET / HYBRID / AUTO selection:
+  - Inline `[mode: MARKET|HYBRID|AUTO]` parsing from note.
+  - Optional external `utils.exec_decider.decide_execution_mode` hook.
+- **Trade placement:** MARKET placement via direct Binance or `utils.trade_executor.place_futures_market` if present.
+- **Armed execution:** When available (`execute_trade_live`), supports TP/SL ladders and splits.
+- **Auto quantity & leverage:** Derives leverage within min/max bounds; computes quantity based on price and budget (with MAX_TRADE_BUDGET cap). Honors `utils.position_sizing.ensure_final_qty` if available.
+- **Checklist (pretrade) gate:** Optional `compute_pretrade_score` with `ENTRY_SCORE_MIN` threshold; blocks approvals below threshold and reports via Telegram. Records last score via metrics when available.
+- **Slip/impact estimator:** Uses spread and ATR% to estimate impact BPS (best-effort), exported to metrics.
+- **TP maintenance knobs (best-effort):** Optional integration for TP merge, rearm, and anti-stale nudges.
+- **Time-stop knobs (best-effort):** Optional `time_stop` integration; counters exported when hooks exist.
+- **`/manage-once` endpoint:** 
+  - Computes and places BE stop + TP ladders and ATR-based trailing using a **profile** selected by current ADX/ATR%.
+  - Two profiles: `BASE` and `EXTREME` with configurable BE offset (bps), distance `%` ladder, and `splits` that must sum to 1.0.
+  - Fetches exchange filters (tickSize/stepSize) with cached exchange info; rounds prices/quantities to compliant increments.
+  - Returns computed indicators (ADX/ATR/ATR%) and chosen profile in the response.
+- **Digest for expired approvals:** `/ops/digest/expired?hours=6` aggregates approval expiries and summarizes to Telegram.
+- **Diagnostics:** `/meta/version`, `/health`, `/readyz`, `/readyz/strict` (Redis connectivity), `/meta/routes`.
+- **UltraTop integration:** Conditional mount of `main_ultratop.setup_ultratop` under `/ultra` with `ULTRATOP_MODE` controls.
+- **HEAD method compatibility layer:** Converts HEAD to GET to maintain framework invariants.
+- **Graceful global error handler:** Standard JSON envelope with opaque `id` and optional details in DEBUG.
+
+### Changed
+- **Default safety posture:** Many optional features now fail‑closed unless explicitly allowed by environment flags (idempotency, anti‑replay).
+- **Route protection defaults:** Approval routes are bearer-protected by default; can be disabled explicitly.
+- **Ticket persistence:** Default requires Redis (`REQUIRE_REDIS=1`). In-memory `ConfirmStore` is only used when enabled (`CONFIRMSTORE_ENABLE=1`) or Redis is available but per-route logic falls back gracefully.
+- **Position mode alignment:** Optional override via `POSITION_MODE_OVERRIDE` to force hedge/one-way mode alignment prior to order placement.
+- **ETag handling:** Adds `Vary: If-None-Match` when applicable and uses weak equivalence via MD5 of body for 304 logic.
+- **Namespace keying:** Consistent Redis namespace `NS` (`REDIS_NAMESPACE`) used across idempotency, rate limiting, ticket storage, and event logs.
+
+### Fixed
+- Defensive guards around optional imports and network calls to avoid hard crashes.
+- Consistent HTML escaping in Telegram and UI renderers (`_md_html`).
+- Cleaned error surfaces in Approve/Reject paths (idempotency + consistent messages).
+
+### Deprecated
+- None.
+
+### Security
+- HMAC-signed action links with short TTLs; approval/reject links suppressed when `HMAC_SECRET` is not configured.
+- Bearer tokens required on sensitive routes by default (`PROTECT_APPROVE_ROUTES=1`, `PROTECT_DIGEST_ROUTES=1`).
+- Strict security headers middleware and optional HSTS.
+- Redis-backed idempotency keys for Telegram send and webhooks.
+- Request anti-replay shim (opt-in until full module is provided).
+
+### Operations & Observability
+- Metrics counters/histogram hooks (no-ops when module missing):
+  - Approvals OK/Fail/Reject counts
+  - Checklist eval/pass/block counts
+  - Time-stop decisions
+  - Time-to-TP1 histogram
+  - Last entry score and slip estimate setters
+- `LOG_LEVEL` controls and structured messages for critical flows.
+- `/readyz/strict` verifies Redis health quickly with timeout guard.
+
+---
+
+## [1.7.0] - 2025-10-19
+
+### Added
+- **`/manage-once`** route with automatic profile selection (`BASE` vs `EXTREME`) using ADX and ATR% thresholds (`ADX_EXTREME_MIN`, `ATRPCT_EXTREME_MIN`).
+- **Public cache/etag** middleware and **public rate limit** middleware with Redis + memory fallback.
+- **Signed action flows** for Approve/Reject with POST confirmation pages, compatible with reverse proxies using `url_for`.
+- **`/meta/telegram`** diagnostic utility with `info`, `dry`, `set`, `send` modes.
+- **`/ops/ui/pending`** table to list pending tickets (bearer‑protected).
+- **Optional UltraTop mount** under `/ultra`.
+
+### Changed
+- Approval UI renders actionable buttons only when signing is enabled—prevents unsafe GET actions in unsigned mode.
+- Telegram send path is fully idempotent (Redis key) to reduce duplicate notifications during retry storms.
+- Error responses normalized to `{"ok": false, "error": <string>}` across handlers; HTML pages used only for browser-facing approval views.
+
+### Fixed
+- Robust HEAD handling to avoid Starlette runtime error `"No response returned"` from streaming endpoints.
+- Exchange info cache with TTL to minimize Binance API rate pressure while keeping filters consistent.
+
+### Security
+- Default **fail-closed** stances for missing idempotency/anti-replay unless explicitly allowed by env.
+
+---
+
+## [1.6.0] - 2025-08-02
+
+### Added
+- **Checklist gate** (`compute_pretrade_score`) with `ENTRY_SCORE_MIN` threshold & Telegram feedback.
+- **Impact slip estimator** using Binance bookTicker + ATR%.
+- **Time-stop hooks** (optional) with metrics counters.
+- **Smart ETA for TP1-3** based on distance/velocity window.
+
+### Changed
+- Auto quantity sizing respects `MAX_TRADE_BUDGET` cap and splits budget ranges (`AUTO_BUDGET_MIN/MAX`).
+
+### Fixed
+- More stable price fetching by cascading: custom client → REST ticker → SDK ticker.
+
+---
+
+## [1.5.0] - 2025-05-14
+
+### Added
+- **Armed execution** path (`execute_trade_live`) with TP/SL targets and split handling.
+- **Mode parser** added: `[mode: MARKET|HYBRID|AUTO]` in notes, otherwise falls back to decider or defaults.
+
+### Changed
+- Position-side mismatch (`code=-4061`) handled with retries using/without `positionSide` and final derived side.
+
+### Fixed
+- Safer order id builder with bounded length and suffix hash to satisfy exchange constraints.
+
+---
+
+## [1.4.0] - 2025-03-29
+
+### Added
+- **Ticket preview UI** with per-field rendering and localized hints.
+- **Idempotent webhook sample**: `/webhook/whatever` to demonstrate deduplication flow.
+
+### Changed
+- Consolidated Redis namespace usage and TTLs for tickets and digests.
+- Introduced `OPS_TICKET_TTL_SEC` and digest storage (`expired_log`, `expired_log_bad`).
+
+---
+
+## [1.3.0] - 2025-02-10
+
+### Added
+- **Telegram webhook endpoints** (`/telegram/webhook`, `/telegram/hook`, `/telegram/ping`) and auto webhook setup on startup.
+- **`/meta/version`**, **`/health`**, **`/readyz/strict`** for platform and infra health reporting.
+
+### Changed
+- Unified startup/shutdown procedures; graceful task cancellation for trailing loop placeholder.
+
+---
+
+## [1.2.0] - 2024-12-18
+
+### Added
+- Conditional inclusion of a large set of routers from `routes.*` with robust exceptions to avoid hard failures when optional modules are absent.
+
+### Changed
+- Default environment knobs grouped with safe defaults applied at process bootstrap.
+
+---
+
+## [1.1.0] - 2024-10-07
+
+### Added
+- Initial **Ops Approval** flow (create/approve/reject) with Redis persistence and Telegram notifications.
+- Basic in‑memory `ConfirmStore` fallback (disabled by default).
+
+### Changed
+- Message rendering revised for consistent HTML escaping and inline buttons.
+
+---
+
+## [1.0.0] - 2024-06-01
+
+### Added
+- Base FastAPI app with:
+  - CORS configuration
+  - Shared `httpx.AsyncClient`
+  - Basic meta endpoints (`/`, `/meta/version`, `/health`)
+- Binance futures execution primitives (market orders) with leverage alignment helper.
+- Environment-driven configuration and logging.
+
+---
+
+## Upgrade Guide
+
+### 1. Environment Variables (New/Changed)
+| Variable | Default | Purpose |
+|---|---|---|
+| `API_BEARER_TOKEN` | _empty_ | Enables bearer-protected routes. Required if `PROTECT_APPROVE_ROUTES=1`. |
+| `PROTECT_APPROVE_ROUTES` | `1` | Protects approval UI and actions behind bearer auth. |
+| `PROTECT_DIGEST_ROUTES` | `1` | Protects digest endpoints. |
+| `REDIS_URL` | _empty_ | Enables Redis persistence and rate limiting/idempotency. |
+| `REQUIRE_REDIS` | `1` | If set, failing to persist tickets to Redis returns 503. |
+| `REDIS_NAMESPACE` | `ops-supervisor-web` | Namespace prefix for keys. |
+| `HMAC_SECRET` | _empty_ | Enables signed URLs for approve/reject/preview. Without it, action links are suppressed. |
+| `PUBLIC_HOST` | _empty_ | Public base URL for generating signed links. |
+| `TELEGRAM_BOT_TOKEN` | _empty_ | Enables Telegram sending. |
+| `TELEGRAM_CHAT_ID`/`ADMIN_CHAT_ID` | _empty_ | Destination chat id for notifications. |
+| `TELEGRAM_WEBHOOK_SECRET` | _empty_ | Secret token to validate Telegram webhook. |
+| `TELEGRAM_AUTO_WEBHOOK` | `1` | Auto-configure webhook on startup if host+secret present. |
+| `USE_REDIS_IDEM` | `0` | Redis-backed idempotency for Telegram and webhook dedupe. |
+| `IDEM_TTL_SEC` | `60` | Idempotency TTL in seconds. |
+| `PUBLIC_CACHE_PATHS` | `/scan/public-topk,/scan/public-now,/topk` | Endpoints eligible for caching/etag. |
+| `PUBLIC_CACHE_MAX_AGE` | `20` | Cache TTL for public endpoints. |
+| `RATE_LIMIT_ENABLE` | `1` | Enables GET rate limiting for public endpoints. |
+| `PUBLIC_TOPK_RPS` | `2` | RPS for `/scan/public-topk` and `/topk`. |
+| `PUBLIC_TOPK_WINDOW` | `3` | Window (seconds) per key. |
+| `PUBLIC_NOW_RPS` | `2` | RPS for `/scan/public-now`. |
+| `PUBLIC_NOW_WINDOW` | `3` | Window (seconds) per key. |
+| `ENTRY_SCORE_MIN` | `0` | Minimum checklist score to allow approval. |
+| `ETA_SMART_ENABLE` | `1` | Enables ETA estimation for TP targets. |
+| `ULTRATOP_MODE` | `noop` | `mount|embed|attach` to enable UltraTop. |
+| `POSITION_MODE_OVERRIDE` | _empty_ | Force `hedge`/`oneway` alignment before orders. |
+| `ENABLE_HSTS` | `0` | Adds HSTS header. |
+| `CORS_ALLOW_ORIGINS` | `*` | Allowed origins. |
+| `CORS_ALLOW_CREDENTIALS` | `0` | Whether to allow credentials. |
+| `CORS_ALLOW_ORIGINS_STRICT` | _empty_ | Optional stricter origins list if credentials are allowed. |
+
+> See code comments for the extended set of knobs: trailing manager, profiles, TP maintenance, time-stop, and more.
+
+### 2. Breaking Changes
+- **Bearer required by default** on approval and digest routes. Provide `API_BEARER_TOKEN` or disable protections explicitly (not recommended).
+- **Redis required by default** (`REQUIRE_REDIS=1`). For local/dev, set `REQUIRE_REDIS=0` and optionally `CONFIRMSTORE_ENABLE=1`.
+- **Signed action links** only available when `HMAC_SECRET` is set. Without it, only a **Preview** link is emitted.
+- **Fail‑closed shims:** Idempotency and anti‑replay remain disabled unless explicitly permitted with `ALLOW_MISSING_*=1`.
+
+### 3. Migration Steps
+1. Provision Redis and export `REDIS_URL`; keep `REQUIRE_REDIS=1` in prod.
+2. Set `API_BEARER_TOKEN` for protected routes and wire it into your reverse proxy (add/remove per path as needed).
+3. Configure Telegram (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) and optionally `TELEGRAM_WEBHOOK_SECRET` + `PUBLIC_HOST` for webhook and signed URLs.
+4. Set `HMAC_SECRET` (hex or text) to enable signed approve/reject links.
+5. Review public caching and rate limit policies; tune `PUBLIC_*` envs to your traffic.
+
+### 4. Example Requests
+
+**Create Ticket (Approval):**
+```bash
+curl -X POST "$HOST/ops/ticket" \
+  -H "Authorization: Bearer $API_BEARER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "BTCUSDT",
+    "side": "BUY",
+    "qty": 0,
+    "leverage": 0,
+    "budget": 150,
+    "tp1": 73850.0,
+    "tp2": 74200.0,
+    "tp3": 74800.0,
+    "sl": 72600.0,
+    "note": "scalp entry [mode: HYBRID]"
+  }'
+```
+
+**Manage Once (Profiled BE + TP ladders):**
+```bash
+curl -X POST "$HOST/manage-once" \
+  -H "Authorization: Bearer $API_BEARER_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "symbol": "ETHUSDT"
+  }'
+```
+
+### 5. Known Limitations
+- Some features depend on optional modules (`utils.*`, `routes.*`). When missing, behavior falls back to safe no-ops with logs.
+- Binance REST calls are best-effort; consider adding API keys to unlock SDK fallbacks and leverage operations.
+- Trailing loop is a placeholder by default; production systems should provide a concrete implementation or disable it.
+
+---
+
+## Contributors
+- Core maintainers and infra engineers across Trading Platform, SRE, and Risk—special thanks to reviewers who hardened security defaults and observability hooks.
+
