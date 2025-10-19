@@ -213,9 +213,9 @@ services:
       # ========================= Exchange Defaults =========================
       - key: DEFAULT_MARKET
         value: "futures"
-      # BOTH = hedge mode בבינאנס
+      # hedge/dual = dualSidePosition=true בבינאנס
       - key: POSITION_MODE_OVERRIDE
-        value: "BOTH"
+        value: "hedge"
       - key: BINANCE_MARGIN_TYPE_DEFAULT
         value: "ISOLATED"
       - key: BINANCE_FUTURES_HTTP_BASE
