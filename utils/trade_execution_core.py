@@ -59,6 +59,10 @@ CONFIRM_TTL_SEC = int(os.getenv("CONFIRM_TTL_SEC", "180"))
 TELEGRAM_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
 TELEGRAM_PARSE_MODE = os.getenv("TELEGRAM_PARSE_MODE", "HTML").strip() or "HTML"
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
+
+# NEW: make SL type configurable (STOP vs STOP_MARKET)
+SL_KIND = (os.getenv("SL_KIND", "STOP") or "STOP").upper()
+
 try:
     import redis
     _redis_available = bool(REDIS_URL)
@@ -71,20 +75,17 @@ except Exception:
 _HEDGE_MODE_OVERRIDE = os.getenv("HEDGE_MODE", "").strip().lower()
 _HEDGE_MODE_CACHE: Optional[bool] = None
 
-
 def _decimals(step_str: str) -> int:
     if "." not in step_str:
         return 0
     frac = step_str.split(".")[1].rstrip("0")
     return len(frac)
 
-
 def _filters(symbol: str) -> Dict[str, Any]:
     try:
         return get_symbol_filters(symbol) or {}
     except Exception:
         return {}
-
 
 def _q_price(symbol: str, price: float) -> str:
     f = _filters(symbol)
@@ -94,7 +95,6 @@ def _q_price(symbol: str, price: float) -> str:
     p = steps * tick
     return f"{p:.{decs}f}"
 
-
 def _q_qty(symbol: str, qty: float) -> str:
     f = _filters(symbol)
     step = float(f.get("stepSize") or DEFAULT_QTY_STEP) or DEFAULT_QTY_STEP
@@ -103,7 +103,6 @@ def _q_qty(symbol: str, qty: float) -> str:
     q = max(step, steps * step)
     return f"{q:.{decs}f}"
 
-
 def _min_notional(symbol: str) -> float:
     f = _filters(symbol)
     mn = f.get("minNotional")
@@ -111,7 +110,6 @@ def _min_notional(symbol: str) -> float:
         return float(mn) if mn is not None else DEFAULT_MIN_NOT
     except Exception:
         return DEFAULT_MIN_NOT
-
 
 def _ensure_min_notional(symbol: str, price: float, qty_str: str) -> str:
     try:
@@ -124,7 +122,6 @@ def _ensure_min_notional(symbol: str, price: float, qty_str: str) -> str:
     need = mn / max(price, 1e-9)
     return _q_qty(symbol, need)
 
-
 def _calc_qty(symbol: str, price: float, budget: Optional[float], leverage: int, quantity: Optional[float]) -> float:
     if quantity and quantity > 0:
         q = float(quantity)
@@ -136,10 +133,8 @@ def _calc_qty(symbol: str, price: float, budget: Optional[float], leverage: int,
     q = float(_ensure_min_notional(symbol, price, _q_qty(symbol, q)))
     return q
 
-
 def _offset_bps(base: float, bps: float) -> float:
     return base * (1.0 + (bps / 10000.0))
-
 
 def _is_hedge_mode_runtime() -> bool:
     global _HEDGE_MODE_CACHE
@@ -156,7 +151,6 @@ def _is_hedge_mode_runtime() -> bool:
         _HEDGE_MODE_CACHE = False
     return _HEDGE_MODE_CACHE
 
-
 def _effective_position_side(desired: str, hedge_runtime: Optional[bool] = None) -> str:
     d = (desired or "BOTH").upper()
     if hedge_runtime is None:
@@ -164,7 +158,6 @@ def _effective_position_side(desired: str, hedge_runtime: Optional[bool] = None)
     if not hedge_runtime:
         return "BOTH"
     return d if d in {"LONG", "SHORT"} else "BOTH"
-
 
 def _ema(vals: List[float], period: int) -> List[float]:
     k = 2 / (period + 1)
@@ -175,17 +168,13 @@ def _ema(vals: List[float], period: int) -> List[float]:
         ema.append(s)
     return ema
 
-
 def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
     trs: List[float] = []
     prev: Optional[float] = None
     for r in kl:
-        h = float(r[2])
-        l = float(r[3])
-        c = float(r[4])
+        h = float(r[2]); l = float(r[3]); c = float(r[4])
         tr = (h - l) if prev is None else max(h - l, abs(h - prev), abs(l - prev))
-        trs.append(tr)
-        prev = c
+        trs.append(tr); prev = c
     if len(trs) < period:
         return trs[-1] if trs else 0.0
     alpha = 1.0 / period
@@ -193,7 +182,6 @@ def _atr_from_klines(kl: List[List[float]], period: int = 14) -> float:
     for v in trs:
         s = v if s is None else (alpha * v + (1 - alpha) * s)
     return float(s or 0.0)
-
 
 def _adx_from_klines(kl: List[List[float]], period: int = 14) -> float:
     if len(kl) < period + 2:
@@ -212,9 +200,7 @@ def _adx_from_klines(kl: List[List[float]], period: int = 14) -> float:
         pdm = up_move if (up_move > down_move and up_move > 0) else 0.0
         mdm = down_move if (down_move > up_move and down_move > 0) else 0.0
         tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
-        plus_dm.append(pdm)
-        minus_dm.append(mdm)
-        tr_list.append(tr)
+        plus_dm.append(pdm); minus_dm.append(mdm); tr_list.append(tr)
 
     def rma(xs: List[float], p: int) -> List[float]:
         alpha = 1 / p
@@ -244,12 +230,10 @@ def _adx_from_klines(kl: List[List[float]], period: int = 14) -> float:
     adx = rma(dx, period)[-1]
     return float(adx or 0.0)
 
-
 def _fetch_klines_raw(symbol: str, interval: str = "1m", limit: int = 60) -> List[List[float]]:
     cli = get_futures_client()
     data = cli.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(1000, max(50, limit)))
     return data or []
-
 
 def _parse_csv_floats(s: str) -> List[float]:
     out: List[float] = []
@@ -263,10 +247,8 @@ def _parse_csv_floats(s: str) -> List[float]:
             continue
     return out
 
-
 def _parse_pct_csv(s: str) -> List[float]:
     return _parse_csv_floats(s)
-
 
 def _balance_usdt() -> float:
     try:
@@ -279,21 +261,16 @@ def _balance_usdt() -> float:
         pass
     return 0.0
 
-
 def _choose_budget_dynamic(get_budget_usdt, quality: Optional[float], price: float, symbol: Optional[str] = None) -> float:
     if not BUDGET_DYNAMIC_ENABLE:
         return get_budget_usdt(quality=quality, price=price)
     pcts = _parse_pct_csv(BUDGET_DYNAMIC_RISK_PCTS) or [1.5, 3.0, 5.0]
     pcts = (pcts + [pcts[-1]] * 3)[:3]
     q = float(quality or QUALITY_DEFAULT)
-    if q >= 9.5:
-        pct = pcts[2]
-    elif q >= 8.5:
-        pct = pcts[1]
-    elif q >= 7.0:
-        pct = pcts[0]
-    else:
-        pct = min(pcts[0], 1.0)
+    if q >= 9.5: pct = pcts[2]
+    elif q >= 8.5: pct = pcts[1]
+    elif q >= 7.0: pct = pcts[0]
+    else: pct = min(pcts[0], 1.0)
     if BUDGET_USE_BALANCE:
         bal = _balance_usdt()
         if bal <= 0:
@@ -302,7 +279,6 @@ def _choose_budget_dynamic(get_budget_usdt, quality: Optional[float], price: flo
         mn = _min_notional((symbol or "BTCUSDT"))
         return max(alloc, mn)
     return get_budget_usdt(quality=quality, price=price)
-
 
 def _choose_leverage(symbol: str, adx: float, requested: int) -> int:
     lev = int(requested)
@@ -319,7 +295,6 @@ def _choose_leverage(symbol: str, adx: float, requested: int) -> int:
     cap_by_symbol = int(LEVERAGE_SYMBOL_CAPS.get(symbol.upper(), LEV_HARD_CAP))
     dyn = max(MIN_LEVERAGE, min(dyn, cap_by_symbol, LEV_HARD_CAP))
     return max(MIN_LEVERAGE, min(max(lev, dyn), cap_by_symbol, LEV_HARD_CAP))
-
 
 class _Idem:
     def __init__(self, prefix: str = "idem", ttl: int = IDEMPOTENCY_TTL_SEC):
@@ -355,7 +330,6 @@ class _Idem:
             if now - vv > self.ttl * 2:
                 self._mem.pop(kk, None)
         return True
-
 
 def _cancel_old_closing_orders(symbol: str, position_side: Optional[str] = None, kinds: Optional[tuple] = None) -> int:
     try:
@@ -394,28 +368,21 @@ def _cancel_old_closing_orders(symbol: str, position_side: Optional[str] = None,
     except Exception:
         return 0
 
-
 def _normalize_position_side(ps: Optional[str]) -> str:
     ps = (ps or "BOTH").upper().strip()
     return ps if ps in {"BOTH", "LONG", "SHORT"} else "BOTH"
 
-
 def _close_side_for(entry_side: str) -> str:
     return "SELL" if entry_side.upper() == "BUY" else "BUY"
-
 
 def _pos_side_for_entry(side: str) -> str:
     return "LONG" if side.upper() == "BUY" else "SHORT"
 
-
 def _normalize_entry_side(side: str) -> str:
     s = (side or "").upper().strip()
-    if s in ("BUY", "LONG"):
-        return "BUY"
-    if s in ("SELL", "SHORT"):
-        return "SELL"
+    if s in ("BUY", "LONG"): return "BUY"
+    if s in ("SELL", "SHORT"): return "SELL"
     raise ValueError("side must be BUY/SELL or LONG/SHORT")
-
 
 def _compute_tp_sl_targets(
     symbol: str,
@@ -454,6 +421,7 @@ def _compute_tp_sl_targets(
                     out["tp"].append({"price": float(_q_price(symbol, target)), "qty": qf})
         except Exception:
             pass
+
     sl_given = plan.get("sl") or None
     if sl_given and isinstance(sl_given, dict) and float(sl_given.get("price", 0.0)) > 0:
         out["sl"] = {"price": float(sl_given["price"]), "qty": float(sl_given.get("qty", qty))}
@@ -468,6 +436,7 @@ def _compute_tp_sl_targets(
                 out["sl"] = {"price": float(_q_price(symbol, slp)), "qty": float(_q_qty(symbol, qty))}
         except Exception:
             pass
+
     if (out["sl"] is None) and sl_dynamic_enable and atr_abs and atr_abs > 0:
         if side.upper() == "BUY":
             slp = max(1e-12, price_ref - sl_atr_mult * atr_abs)
@@ -475,7 +444,6 @@ def _compute_tp_sl_targets(
             slp = max(1e-12, price_ref + sl_atr_mult * atr_abs)
         out["sl"] = {"price": float(_q_price(symbol, slp)), "qty": float(_q_qty(symbol, qty))}
     return out
-
 
 def _compute_trailing_callback_pct(
     plan: Dict[str, Any], atr_abs: Optional[float], min_pct: float, max_pct: float, default_mult: float
@@ -487,7 +455,6 @@ def _compute_trailing_callback_pct(
         return None
     raw_pct = (atr_abs * default_mult) / price_ref * 100.0
     return max(min_pct, min(max_pct, raw_pct))
-
 
 def _quality_gate(
     quality: Optional[float],
@@ -506,7 +473,6 @@ def _quality_gate(
     if volume is not None and min_volume > 0 and volume < min_volume:
         return False, "low_volume"
     return True, ""
-
 
 __all__ = [
     "ALLOW_MARKET_ENTRY",
@@ -549,6 +515,7 @@ __all__ = [
     "CONFIRM_TTL_SEC",
     "TELEGRAM_CHAT_ID",
     "TELEGRAM_PARSE_MODE",
+    "SL_KIND",  # NEW
     "_q_price",
     "_q_qty",
     "_ensure_min_notional",
@@ -572,7 +539,6 @@ __all__ = [
     "_compute_trailing_callback_pct",
     "_Idem",
 ]
-
 
 
 
