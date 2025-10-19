@@ -1,6 +1,7 @@
-# -*- coding: utf-8 -*-
 # utils/binance_trade.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
+
 import os, time, math, re
 from typing import Any, Dict, Optional, List, Tuple
 from contextlib import suppress
@@ -105,7 +106,7 @@ def _last_price(client, symbol: str) -> float:
         return float(t.get("price") or 0.0)
     return 0.0
 
-# ── PNL/ROE snapshot (fixes “PNL תמיד 0”) ─────────────────────────────────────
+# ── PNL/ROE snapshot ─────────────────────────────────────────────────────────
 def unrealized(symbol: str) -> Dict[str, Any]:
     """
     Pulls USDT-M position info and computes live PnL% and ROE%.
@@ -390,11 +391,6 @@ async def execute_order(*args, **kwargs) -> Dict[str, Any]:
         if any(code in s for code in ("429", "418", "1003")):
             return {"ok": False, "error": "rate_limited_or_banned", "detail": f"{e}"}
         return {"ok": False, "error": f"{e}"}
-
-
-
-
-
 
 
 
