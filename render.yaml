@@ -172,7 +172,7 @@ services:
 
       # ========================= Redis (incl. TLS) =========================
       - key: REQUIRE_REDIS
-        value: "0"            # זמני: לא להפיל /readyz/strict אם אין Redis
+        value: "0"
       - key: CONFIRMSTORE_ENABLE
         value: "1"
       - key: USE_REDIS_IDEM
