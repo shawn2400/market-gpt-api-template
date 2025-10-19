@@ -13,7 +13,7 @@ GUARD_ENSURE_SL        = (os.getenv("GUARD_ENSURE_SL","1").lower() in ("1","true
 GUARD_SL_GRACE_SEC     = int(os.getenv("GUARD_SL_GRACE_SEC","2"))
 STRICT_MODE_SINGLE     = (os.getenv("STRICT_MODE_SINGLE","1").lower() in ("1","true","yes","on"))
 USE_NATIVE_TP_SL_FLAG  = (os.getenv("USE_NATIVE_TP_SL","0").lower() in ("1","true","yes","on"))
-AUTO_TPSL_MODE         = (os.getenv("AUTO_TPSL_MODE","off").lower() in ("auto","on","1","true","yes"))
+AUTO_TPSL_MODE         = (os.getenv("AUTO_TPSL_MODE","off").lower() in ("auto","on","1","true","yes","on"))
 STOP_WORKING_TYPE      = (os.getenv("STOP_WORKING_TYPE") or os.getenv("BINANCE_WORKING_TYPE") or "MARK_PRICE")
 TP_BE_ONLY_AFTER_TP1   = (os.getenv("TP_BE_ONLY_AFTER_TP1","1").lower() in ("1","true","yes","on"))
 SMART_MANAGE_AFTER_TP1 = (os.getenv("SMART_MANAGE_AFTER_TP1","1").lower() in ("1","true","yes","on"))
@@ -70,7 +70,7 @@ def _tp1_filled(cli, symbol: str) -> bool:
     return False
 
 # =========================
-# Quantize
+# Quantize (עם Shim תאימות ל-utils.quantize)
 # =========================
 def _fallback_filters():
     return {"price_tick": float(os.getenv("DEFAULT_PRICE_TICK","0.01")),
@@ -83,11 +83,11 @@ def _round_step(v: float, step: float) -> float:
     if step <= 0: return v
     return math.floor(v/step + 1e-12) * step
 
-def _qprice(symbol: str, price: float, flt: Dict[str,Any]) -> float:
+def _qprice_local(symbol: str, price: float, flt: Dict[str,Any]) -> float:
     step = float(flt.get("price_tick") or 0.0)
     return round(_round_step(price, step), 8) if (ORDER_ROUND_TO_TICK and step>0) else round(price, 8)
 
-def _qqty(symbol: str, qty: float, flt: Dict[str,Any]) -> float:
+def _qqty_local(symbol: str, qty: float, flt: Dict[str,Any]) -> float:
     step = float(flt.get("qty_step") or 0.0)
     return round(_round_step(qty, step), 8) if (ORDER_ROUND_TO_TICK and step>0) else round(qty, 8)
 
@@ -103,7 +103,7 @@ def _get_filters_uncached(cli, symbol: str) -> Dict[str,Any]:
             return {"price_tick": price_tick, "qty_step": qty_step} or _fallback_filters()
     return _fallback_filters()
 
-def _get_filters(cli, symbol: str) -> Dict[str,Any]:
+def _get_filters_local(cli, symbol: str) -> Dict[str,Any]:
     if not USE_EXCHANGE_FILTERS:
         return _fallback_filters()
     now = _t.time()
@@ -117,15 +117,60 @@ def _get_filters(cli, symbol: str) -> Dict[str,Any]:
         return data
     return _fallback_filters()
 
-# Optional override via utils.quantize (אם קיים)
+# --- Shim ל-utils.quantize (אם קיים) ---
+_qp_fn = None
+_qq_fn = None
+_gf_fn = None
 with suppress(Exception):
-    from utils.quantize import get_filters as _gf, quantize_price as _qp, quantize_qty as _qq  # type: ignore
-    def _get_filters(cli, symbol: str) -> Dict[str,Any]:  # type: ignore
-        return _gf(cli, symbol)
-    def _qprice(symbol: str, price: float, flt: Dict[str,Any]) -> float:  # type: ignore
-        return _qp(symbol, price, flt)
-    def _qqty(symbol: str, qty: float, flt: Dict[str,Any]) -> float:  # type: ignore
-        return _qq(symbol, qty, flt)
+    from utils.quantize import get_filters as _gf_fn0, quantize_price as _qp_fn0, quantize_qty as _qq_fn0  # type: ignore
+    _qp_fn = _qp_fn0
+    _qq_fn = _qq_fn0
+    _gf_fn = _gf_fn0
+
+def _map_utils_to_local(f: Dict[str,Any]) -> Dict[str,Any]:
+    # ממפה dict של utils.quantize (tick/step) למבנה המקומי (price_tick/qty_step)
+    return {
+        "price_tick": float(f.get("tick", 0.0) or 0.0),
+        "qty_step": float(f.get("step", 0.0) or 0.0),
+    }
+
+def _map_local_to_utils(f: Dict[str,Any]) -> Dict[str,Any]:
+    # local -> utils
+    return {
+        "tick": float(f.get("price_tick", 0.0) or 0.0),
+        "step": float(f.get("qty_step", 0.0) or 0.0),
+    }
+
+def _get_filters(cli, symbol: str) -> Dict[str,Any]:
+    if _gf_fn is None:
+        return _get_filters_local(cli, symbol)
+    try:
+        f = _gf_fn(cli, symbol) or {}
+        # utils מחזיר tick/step
+        return _map_utils_to_local(f)
+    except Exception:
+        return _get_filters_local(cli, symbol)
+
+def _qprice(symbol: str, price: float, flt: Dict[str,Any]) -> float:
+    if _qp_fn is None:
+        return _qprice_local(symbol, price, flt)
+    # נסה חתימת (symbol, price, filters); אחרת (price, filters)
+    try:
+        return float(_qp_fn(symbol, price, _map_local_to_utils(flt)))  # type: ignore[misc]
+    except TypeError:
+        return float(_qp_fn(float(price), _map_local_to_utils(flt)))   # type: ignore[misc,call-arg]
+    except Exception:
+        return _qprice_local(symbol, price, flt)
+
+def _qqty(symbol: str, qty: float, flt: Dict[str,Any]) -> float:
+    if _qq_fn is None:
+        return _qqty_local(symbol, qty, flt)
+    try:
+        return float(_qq_fn(symbol, qty, _map_local_to_utils(flt)))  # type: ignore[misc]
+    except TypeError:
+        return float(_qq_fn(float(qty), _map_local_to_utils(flt)))   # type: ignore[misc,call-arg]
+    except Exception:
+        return _qqty_local(symbol, qty, flt)
 
 # =========================
 # Order IDs (מרוכז עם fallback)
@@ -383,5 +428,6 @@ def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Di
             {"cancelled_old_stops": cancelled},
         ]
     }
+
 
 
