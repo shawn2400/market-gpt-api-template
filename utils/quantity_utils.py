@@ -15,6 +15,23 @@ def round_step(value: float, step: float) -> float:
     n = round(v / s)
     return round(n * s, 12)
 
+def round_tick(price: float, tick: float) -> float:
+    """
+    עיגול מחיר לפי tickSize (PRICE_FILTER) – עיגול מטה למכפלת tick.
+    מטרת הפונקציה: תאימות לאחור למודולים שמצפים round_tick ב-quantity_utils.
+    """
+    if not tick:
+        return float(price)
+    try:
+        p = float(price)
+        t = float(tick)
+        if t <= 0:
+            return p
+        k = int(p // t)
+        return round(k * t, 12)
+    except Exception:
+        return float(price)
+
 # ---- get_precision_info shim (נסגר אזהרת import בלוג) -----------------------
 try:
     from utils.precision_utils import get_precision_info as _get_precision_info  # type: ignore
@@ -38,13 +55,7 @@ def get_precision_info(symbol: str) -> Dict[str, Any]:
         "tick_size": 0.01,
     }
 
-__all__ = ["round_step", "get_precision_info"]
-
-
-
-
-
-
+__all__ = ["round_step", "round_tick", "get_precision_info"]
 
 
 
