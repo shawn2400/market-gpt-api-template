@@ -119,6 +119,12 @@ services:
         value: "1"
       - key: TRUST_XFF
         value: "1"
+
+      # --- פרסום מפורש של נתיבי approve ---
+      # /ops/approve  => מוגן Bearer, דורש POST עם query param id
+      # /ops/approve/signed => ציבורי (ללא Bearer) אבל דורש חתימה ו-anti-replay
+      - key: ROUTES_APPROVE_ENDPOINT
+        value: "/ops/approve"
       - key: SECURITY_PUBLIC_PATHS
         value: "/ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/routes/approve/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/health,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version"
       - key: SECURITY_PUBLIC_PREFIXES
@@ -219,7 +225,6 @@ services:
       # ========================= Exchange Defaults =========================
       - key: DEFAULT_MARKET
         value: "futures"
-      # hedge/dual = dualSidePosition=true בבינאנס
       - key: POSITION_MODE_OVERRIDE
         value: "hedge"
       - key: BINANCE_MARGIN_TYPE_DEFAULT
@@ -390,7 +395,6 @@ services:
         value: "50"
 
       # ========================= Approvals / Notifications =========================
-      # >>> דרוש אישור בטלגרם לפתיחה; אחרי אישור – ניהול אוטומטי <<<
       - key: APPROVAL_ENABLED
         value: "1"
       - key: REQUIRE_TELEGRAM_APPROVAL
@@ -398,7 +402,7 @@ services:
       - key: AUTO_OPEN_ON_APPROVE
         value: "1"
 
-      # לא לחסום ניהול שוטף אחרי האישור
+      # אל תחסום ניהול אחרי האישור
       - key: SINK_ENFORCE_APPROVALS
         value: "0"
       - key: APPROVE_BEFORE_GATE
@@ -829,25 +833,25 @@ services:
       - key: POLICY_SCHEMA_PATH
         value: "config/policy_schema.json"
 
-      # ========================= Auto-Discovery / Allowlist (עשיר) =========================
+      # ========================= Auto-Discovery / Allowlist =========================
       - key: ROUTES_AUTO_DISCOVERY
-        value: "1"         # 1=סורק ומפרסם אוטומטית, 0=מושבת
+        value: "1"
       - key: ROUTES_NEED_TG_APPROVAL
-        value: "1"         # דורש אישור בטלגרם לפני אקטיבציה
+        value: "1"
       - key: ROUTES_ALLOW
-        value: "*"         # אפשר הכל, לפני deny
+        value: "*"
       - key: ROUTES_DENY
         value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
       - key: ROUTES_PUBLIC_PREFIX
-        value: "/public"   # פריפיקס שיוגדר כברירת מחדל כ-public
+        value: "/public"
       - key: ROUTES_PROTECTED_PREFIXES
         value: "/ops,/manager,/routes,/webhook,/guard"
       - key: ROUTES_TAGS_REQUIRE
-        value: ""          # לדוגמה: "public,Status"
+        value: ""
       - key: ROUTES_TAGS_DENY
         value: "internal,debug"
       - key: ROUTES_APPROVE_ENDPOINT
-        value: "/routes/approve/signed"  # הוסף גם ל-SECURITY_PUBLIC_PATHS
+        value: "/ops/approve"
       - key: ROUTES_DEFAULT_TIMEOUT_SEC
         value: "30"
       - key: ROUTES_DEFAULT_RL_RPS
