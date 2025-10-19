@@ -30,7 +30,7 @@ services:
       - key: SERVICE_INSTANCE
         value: "algogpt-prod"
 
-      # <<< שינוי: hybrid לניהול אוטומטי >>>
+      # מצב הפעלה היברידי (שרת + מנהל)
       - key: MODE
         value: "hybrid"
 
@@ -213,8 +213,9 @@ services:
       # ========================= Exchange Defaults =========================
       - key: DEFAULT_MARKET
         value: "futures"
+      # הערה: BOTH = hedge-mode כפי שבינאנס מגדיר. אם תרצה לעקוף לגמרי, השאר ריק.
       - key: POSITION_MODE_OVERRIDE
-        value: "hedge"
+        value: "BOTH"
       - key: BINANCE_MARGIN_TYPE_DEFAULT
         value: "ISOLATED"
       - key: BINANCE_FUTURES_HTTP_BASE
@@ -333,8 +334,6 @@ services:
         value: "0.05"
       - key: VOLATILITY_GATE_ATRPCT
         value: "1.2"
-
-      # <<< ברירת מחדל היברידית >>>
       - key: PREFER_HYBRID_DEFAULT
         value: "1"
 
@@ -385,13 +384,14 @@ services:
         value: "50"
 
       # ========================= Approvals / Notifications =========================
-      # <<< לא לאלץ אישור טלגרם לניהול >>>
+      # >>> דרוש אישור בטלגרם לפתיחה; אחרי אישור – הכל אוטומטי <<<
       - key: APPROVAL_ENABLED
         value: "1"
       - key: REQUIRE_TELEGRAM_APPROVAL
-        value: "0"
+        value: "1"
       - key: AUTO_OPEN_ON_APPROVE
         value: "1"
+      # לא לחסום פעולות ניהול שוטפות אחרי האישור
       - key: SINK_ENFORCE_APPROVALS
         value: "0"
       - key: APPROVAL_REQUIRE_WATCHLIST
@@ -406,10 +406,9 @@ services:
         value: "1"
       - key: APPROVAL_DUP_COOLDOWN_SEC
         value: "0"
-
-      # <<< לא לאכוף "אשר לפני שער" >>>
+      # אשר לפני gate (בדיקות/תנאים) – ועדיין ניהול אחרי אישור הוא אוטומטי
       - key: APPROVE_BEFORE_GATE
-        value: "0"
+        value: "1"
 
       - key: CONFIRM_TTL_SEC
         value: "120"
@@ -528,11 +527,11 @@ services:
       - key: STREAM_TP_BE
         value: "1"
 
-      # <<< לא לקשור סולם/סמארט לאישור >>>
+      # הפעלה אוטומטית של סולם ו"סמארט מנג'" מיד לאחר האישור
       - key: TP_LADDER_ON_APPROVE
-        value: "0"
+        value: "1"
       - key: SMART_MANAGE_ON_APPROVE
-        value: "0"
+        value: "1"
 
       - key: SMART_MANAGE_BE_OFFSET_BPS
         value: "5"
@@ -620,11 +619,8 @@ services:
       # ========================= Real-time Trailing (RT loop) =========================
       - key: TRAIL_RT_ENABLE
         value: "1"
-
-      # <<< האטה כדי לא לגעת ב־-1003 >>>
       - key: TRAIL_RT_INTERVAL_SEC
         value: "20"
-
       - key: TRAIL_RT_ATR_MULT
         value: "1.6"
       - key: TRAIL_RT_MIN_CALLBACK
@@ -783,11 +779,8 @@ services:
         value: "1"
       - key: TRADE_MANAGER_ENABLE
         value: "1"
-
-      # <<< האטתי כדי להוריד עומס >>>
       - key: MANAGER_INTERVAL_SEC
         value: "30"
-
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
@@ -800,8 +793,6 @@ services:
         value: "3,6,12"
       - key: AUTO_TP_SPLITS
         value: "0.278,0.333,0.389"
-
-      # <<< כאן שינוי: הפולינג ברירת מחדל ל־45 שניות >>>
       - key: AUTO_POLL_SEC
         value: "45"
 
@@ -866,4 +857,5 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
+
 
