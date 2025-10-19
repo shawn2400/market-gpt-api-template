@@ -632,6 +632,12 @@ services:
       - key: TRAIL_RT_WATCHLIST
         value: ""
 
+      # ========================= Health / Alerts =========================
+      - key: HEALTH_ALERTS_ENABLE
+        value: "1"
+      - key: HEALTH_ALERTS_COOLDOWN_SEC
+        value: "120"
+
       # ========================= Health / Digest =========================
       - key: HEALTH_PRICE_MAX_AGE
         value: "30"
@@ -687,6 +693,12 @@ services:
         value: "1"
       - key: READINESS_CHECK_SQLITE
         value: "0"
+      - key: READINESS_FAIL_GRACE_SEC
+        value: "5"
+      - key: READINESS_BINANCE_RETRY
+        value: "1"
+      - key: READINESS_REDIS_RETRY
+        value: "1"
       - key: SQLITE_PATH
         value: "/app/data/state.db"
 
@@ -848,5 +860,3 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
-
-
