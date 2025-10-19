@@ -134,13 +134,14 @@ async def idem_for_request(
         sig,
         ts,
         auth[:64],  # לא שומרים את כל הטוקן
-        hashlib.sha256(body or b"").hexdigest(),
+        hashlib.sha256((body or b"")).hexdigest(),
         json.dumps(extra or {}, sort_keys=True, separators=(",", ":")),
     )
     return await check_and_set(parts, ttl_sec=ttl_sec)
 
 
 __all__ = ["check_and_set", "idem_for_request", "DEFAULT_TTL_SEC"]
+
 
 
 
