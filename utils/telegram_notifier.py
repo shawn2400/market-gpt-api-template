@@ -201,8 +201,10 @@ class TelegramNotifier:
     async def send_ops_action_result(symbol: str, action_name: str, chat_id: Optional[int] = None) -> None:
         text = f"✅ {symbol} · {action_name} done"
         kb   = _ops_action_kb(symbol)
-        # פעולה אופרטיבית: נסווג kind="ops"
-        await notify_telegram_with_markup(text, kb, level="warning", kind="ops", chat_id=chat_id, dedupe_key=f"ops:{symbol}:{action_name}", cooldown_sec=30)
+        await notify_telegram_with_markup(
+            text, kb, level="warning", kind="ops",
+            chat_id=chat_id, dedupe_key=f"ops:{symbol}:{action_name}", cooldown_sec=30
+        )
 
     # ——— new: used by routes/manager.py after ingest ———
     @staticmethod
@@ -371,12 +373,10 @@ async def notify_explain_trade(plan: Dict[str, Any]) -> None:
 
 # ===================== Trade Approval (rich) =====================
 def _entry_score_badge(plan: Dict[str, Any]) -> Optional[str]:
-    # אם הלקוח סיפק badges ידניים — נציג אותם (מרובים) עם רווחים
     badges = plan.get("badges")
     if isinstance(badges, list) and badges:
         return " ".join(str(b) for b in badges)
 
-    # Badge אוטומטי לפי blocked_by_entry_score / entry_score(+min)
     blocked = bool(plan.get("blocked_by_entry_score", False))
     score   = plan.get("entry_score")
     min_s   = plan.get("entry_score_min")
@@ -393,7 +393,6 @@ def _entry_score_badge(plan: Dict[str, Any]) -> Optional[str]:
         if s == s and m == m:
             return f"⚠️ BLOCKED_BY_ENTRY_SCORE (s={s:.2f} < min={m:.2f})"
         return "⚠️ BLOCKED_BY_ENTRY_SCORE"
-    # passed/neutral
     if m == m and m > 0 and s == s:
         if s >= m:
             return f"✅ ENTRY SCORE OK (s={s:.2f} ≥ min={m:.2f})"
@@ -446,7 +445,6 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     overall_p = probs.get("overall") or probs.get("success") or probs.get("p_overall")
     market_line = get_btc_anchor_summary()
 
-    # ===== headline =====
     title = f"🟡 <b>Trade Pending Approval</b> · <b>{kind}</b>"
     badge = _entry_score_badge(plan)
 
@@ -489,8 +487,10 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
 
     urls = _build_trade_urls(idem, plan)
     kb = _approval_kb_for_trade(idem, ticket_url=urls.get("ticket"))
-    # אישור טרייד — קריטי, וייסווג כ-kind="approve" כדי לעבור מסנן trade-only
-    await notify_telegram_with_markup("\n".join(lines), kb, level="critical", kind="approve", chat_id=chat_id, dedupe_key=f"approve:{idem}", cooldown_sec=5, force=False)
+    await notify_telegram_with_markup(
+        "\n".join(lines), kb, level="critical", kind="approve",
+        chat_id=chat_id, dedupe_key=f"approve:{idem}", cooldown_sec=5, force=False
+    )
 
 # ===================== Trade lifecycle short notifiers =====================
 async def send_trade_opened(info: Dict[str, Any]) -> None:
@@ -515,7 +515,11 @@ async def send_trade_update(info: Dict[str, Any]) -> None:
     tp = _tp_legs_to_lines(plan.get("tp"))
     sl = (plan.get("sl") or {}).get("stopPrice")
     parts = [f"📈 <b>Update</b> {s} {side}", *tp, f"🛡 SL: <code>{_fmt_num(sl,4)}</code>"]
-    await notify_telegram("\n".join(parts), level="warning", kind="status", dedupe_key=f"upd:{s}:{hashlib.sha1(json.dumps(plan, sort_keys=True, default=str).encode()).hexdigest()[:8]}", cooldown_sec=45)
+    await notify_telegram(
+        "\n".join(parts), level="warning", kind="status",
+        dedupe_key=f"upd:{s}:{hashlib.sha1(json.dumps(plan, sort_keys=True, default=str).encode()).hexdigest()[:8]}",
+        cooldown_sec=45
+    )
 
 async def send_trade_closed(info: Dict[str, Any]) -> None:
     plan = info.get("plan") or {}
@@ -535,8 +539,8 @@ async def send_trade_closed(info: Dict[str, Any]) -> None:
     entry = plan.get("entry_price") or plan.get("price")
     exit  = info.get("exit_price") or info.get("avg_exit")
 
-    from .telegram_notifier_core import _fmt_pct_prob, _fmt_usd
     lines = [f"🔴 <b>Closed</b> · <b>{kind}</b> · {s} {side}"]
+    from .telegram_notifier_core import _fmt_pct_prob, _fmt_usd
     lines.append(f"💰 PnL: <b>{_fmt_usd(pnl_usd)}</b> ({_fmt_pct_prob(pnl_pct) if pnl_pct is not None else '—'})")
     lines.append(f"🎯 Hit: {', '.join(hit) if hit else '—'}")
     lines.append(f"⏱ Duration: {dur if dur is not None else '—'}")
@@ -582,12 +586,9 @@ __all__ = [
     "should_auto_approve_trade",
     "make_callback", "verify_callback_data", "TelegramNotifier",
     "build_ticket_buttons",
-    # חדש:
     "notify_telegram", "notify_telegram_with_markup", "should_notify",
     "_send",
 ]
-
-
 
 
 
