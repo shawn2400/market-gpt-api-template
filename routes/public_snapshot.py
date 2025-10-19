@@ -14,8 +14,7 @@ _ACTION = (os.getenv("API_BEARER_TOKEN_ACTION") or "").strip()
 _REQUIRE_ACTION = os.getenv("PUBLIC_SNAPSHOT_REQUIRE_ACTION", "1").lower() in ("1","true","yes","on")
 
 def _check_action_bearer(authorization: Optional[str]) -> None:
-    if not _REQU
-IRE_ACTION:
+    if not _REQUIRE_ACTION:
         return
     if not _ACTION:
         raise HTTPException(status_code=500, detail="missing action token in server config")
@@ -33,8 +32,10 @@ def _validate_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
     if side not in ("LONG", "SHORT", "L", "S", ""):
         raise HTTPException(status_code=422, detail="bad side")
     # normalize
-    if side == "L": side = "LONG"
-    if side == "S": side = "SHORT"
+    if side == "L":
+        side = "LONG"
+    if side == "S":
+        side = "SHORT"
 
     # optional numeric coercions
     def _coerce_float(x):
@@ -58,7 +59,7 @@ def _validate_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
         clean["sl"] = payload["sl"]
     if "tp" in payload:
         if isinstance(payload["tp"], list):
-            clean["tp"] = payload["tp"][:6]  # תקרה קטנה כדי לא להתפוצץ
+            clean["tp"] = payload["tp"][:6]  # small cap to stay safe
         else:
             raise HTTPException(status_code=422, detail="tp must be list")
 
