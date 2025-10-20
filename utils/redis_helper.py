@@ -1,37 +1,39 @@
 # utils/redis_helper.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import os
-import logging
-from typing import Optional
+import os, json, asyncio
+from typing import Any, Optional
 
-log = logging.getLogger("algogpt.redis")
-REDIS_URL = (os.getenv("REDIS_URL") or "").strip()
-
+_aioredis = None
 try:
-    import redis.asyncio as aioredis  # type: ignore
+    import aioredis  # type: ignore
+    _aioredis = aioredis
 except Exception:
-    aioredis = None  # type: ignore
+    pass
 
-def redis_enabled() -> bool:
-    return bool(aioredis and REDIS_URL)
+REDIS_URL = os.getenv("REDIS_URL", "")
 
 async def get_redis():
-    """
-    מחזיר client אסינכרוני עם timeouts קצרים ו-healthcheck.
-    במקרה של כשל – מחזיר None ולא מפיל את היישום.
-    """
-    if not redis_enabled():
+    if not _aioredis or not REDIS_URL:
         return None
-    try:
-        return aioredis.from_url(
-            REDIS_URL,
-            decode_responses=True,
-            socket_timeout=float(os.getenv("REDIS_SOCKET_TIMEOUT","1.5")),
-            socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT","1.5")),
-            health_check_interval=int(os.getenv("REDIS_HEALTHCHECK_SEC","30")),
-            retry_on_timeout=True,
-        )
-    except Exception as e:
-        log.warning({"event":"redis.client_init_failed","error":str(e)})
+    return await _aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+
+async def set_json(key: str, value: Any, *, ttl_sec: Optional[int] = None) -> bool:
+    r = await get_redis()
+    if not r:
+        return False
+    data = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    if ttl_sec and ttl_sec > 0:
+        await r.set(key, data, ex=int(ttl_sec))
+    else:
+        await r.set(key, data)
+    return True
+
+async def get_json(key: str) -> Any:
+    r = await get_redis()
+    if not r:
         return None
+    raw = await r.get(key)
+    return json.loads(raw) if raw else None
+
 
