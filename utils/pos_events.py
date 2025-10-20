@@ -25,6 +25,7 @@ def _should_tg(op: str) -> bool:
     if not _tg_ready(): return False
     if _TELEGRAM_LEVEL == "none": return False
     if _TELEGRAM_LEVEL == "all": return True
+    # "important" level:
     return op in ("sl_move", "trail_move", "tp_hit", "be_move", "be_arm", "tp_place")
 
 def _fmt_num(x: Any, d: int = 4) -> str:
@@ -46,17 +47,27 @@ def _render_tg_text(e: Dict[str, Any]) -> str:
     if op == "be_arm":
         return f"⚙️ <b>BE armed</b> · <code>{sym}</code>\n• @ { _fmt_num(e.get('bps'), 2) } bps\n<i>{when}</i>"
     if op == "be_move":
-        return f"⚙️ <b>BE move</b> · <code>{sym}</code>\n• { _fmt_num(e.get('from_bps'), 2) } → <b>{ _fmt_num(e.get('to_bps'), 2) }</b> bps\n<i>{when}</i>"
+        # תמיכה גם ב-bps וגם במחירים גולמיים
+        if e.get("from_bps") is not None or e.get("to_bps") is not None:
+            return f"⚙️ <b>BE move</b> · <code>{sym}</code>\n• { _fmt_num(e.get('from_bps'), 2) } → <b>{ _fmt_num(e.get('to_bps'), 2) }</b> bps\n<i>{when}</i>"
+        return f"⚙️ <b>BE move</b> · <code>{sym}</code>\n• { _fmt_num(e.get('from')) } → <b>{ _fmt_num(e.get('to')) }</b>\n<i>{when}</i>"
     if op == "tp_place":
         idx = f" #{int(e['idx'])}" if e.get("idx") is not None else ""
         return f"🎯 <b>TP place{idx}</b> · <code>{sym}</code>\n• price { _fmt_num(e.get('price')) } · qty { _fmt_num(e.get('qty')) }\n<i>{when}</i>"
     if op == "tp_hit":
         idx = f" #{int(e['idx'])}" if e.get("idx") is not None else ""
-        return f"✅ <b>TP hit{idx}</b> · <code>{sym}</code>\n• price { _fmt_num(e.get('price')) } · qty { _fmt_num(e.get('qty')) }\n<i>{when}</i>"
+        extra = []
+        if e.get("price") is not None: extra.append(f"price { _fmt_num(e.get('price')) }")
+        if e.get("qty") is not None:   extra.append(f"qty { _fmt_num(e.get('qty')) }")
+        xline = " · ".join(extra) if extra else ""
+        if xline:
+            xline = "\n• " + xline
+        return f"✅ <b>TP hit{idx}</b> · <code>{sym}</code>{xline}\n<i>{when}</i>"
     if op == "note":
         return f"📝 <b>Note</b> · <code>{sym}</code>\n• { e.get('msg','') }\n<i>{when}</i>"
+
     body = json.dumps({k:v for k,v in e.items() if k not in ("ts",)}, ensure_ascii=False)
-    return f"ℹ️ <b>{op}</b> · <code>{sym}</code>\n{body}\n<i>{when}</i>"
+    return f" ℹ️ <b>{op}</b> · <code>{sym}</code>\n{body}\n<i>{when}</i>"
 
 async def _send_tg(text: str) -> Dict[str, Any]:
     if not _tg_ready():
