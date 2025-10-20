@@ -10,19 +10,8 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /ultra/readyz/strict
 
-    # מריץ self-check לפני העלאת השרת; אם נכשל -> exit 23 כדי לגרום ל-Render לבצע restart/redeploy
-    dockerCommand: >
-      bash -lc '
-      if [ "${ENABLE_STARTUP_SELF_CHECK:-1}" = "1" ]; then
-        python -m app.scripts.startup_gate --verbose --strict || exit 23;
-      fi;
-      exec gunicorn -k uvicorn.workers.UvicornWorker
-        -w ${WEB_CONCURRENCY:-1}
-        -t ${GUNICORN_TIMEOUT:-180}
-        --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-45}
-        --keep-alive ${GUNICORN_KEEPALIVE:-30}
-        -b 0.0.0.0:${PORT:-10000} ${APP_MODULE:-main:app}
-      '
+    # מריץ self-check וגאניקורן דרך entry.sh כדי למנוע תקלות quoting/paren ב-/bin/sh
+    dockerCommand: "/app/entry.sh"
 
     disk:
       name: data
@@ -196,6 +185,16 @@ services:
         value: "4"
       - key: PUBLIC_RL_NS
         value: "ops-supervisor-web:rl"
+
+      # -------- EXECUTOR RL (חדש) --------
+      - key: EXECUTOR_RL_RPS
+        value: "2"
+      - key: EXECUTOR_RL_BURST
+        value: "6"
+      - key: EXECUTOR_RL_WINDOW
+        value: "3"
+      - key: EXECUTOR_RL_NS
+        value: "ops-executor:rl"
 
       # ========================= Redis (incl. TLS) =========================
       - key: REQUIRE_REDIS
@@ -1037,7 +1036,7 @@ services:
       - key: ONCHAIN_CACHE_TTL_SEC
         value: "900"
       - key: ETHERSCAN_ENABLE
-        value: "1"
+        value: "0"   # עד שיהיה KEY. הפוך ל-1 כשתוסיף Secret.
       - key: ETHERSCAN_API_KEY
         fromSecret: ETHERSCAN_API_KEY
       - key: RISK_GATE_ONCHAIN_COOLDOWN_MIN
@@ -1048,6 +1047,5 @@ services:
         value: "1"
       - key: ENABLE_STARTUP_SELF_CHECK
         value: "1"
-
 
 
