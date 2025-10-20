@@ -1,4 +1,4 @@
-services:
++services:
   - type: web
     name: algogpt-prod
     env: docker
@@ -889,3 +889,21 @@ services:
         fromSecret: BINANCE_API_SECRET
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER
+
+      # ======== NEW: Publishers / Events ========
+      - key: POS_PUB_ENABLE
+        value: "1"
+      - key: POS_PUB_INTERVAL_SEC
+        value: "20"
+
+      - key: POS_EVENTS_ENABLE
+        value: "1"
+      - key: POS_EVENTS_KEY
+        value: "pos:events"
+      - key: POS_EVENTS_CHAN
+        value: "pos:events:chan"
+      - key: POS_EVENTS_MAX
+        value: "500"
+      - key: POS_EVENTS_EXPIRE_SEC
+        value: "86400"
+
