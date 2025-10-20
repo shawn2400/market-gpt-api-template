@@ -60,24 +60,11 @@ RUN useradd -ms /bin/bash appuser
 WORKDIR /app
 COPY . .
 
-# write version file (optional)
+# version file (optional)
 RUN printf "%s\n" "${APP_VERSION}" > /app/VERSION || true
 
-# gunicorn config (simple)
-RUN [ -f /app/gunicorn_conf.py ] || cat > /app/gunicorn_conf.py <<'PY'
-bind = '0.0.0.0:' + str(__import__('os').environ.get('PORT', '10000'))
-worker_class = 'uvicorn.workers.UvicornWorker'
-accesslog = '-'
-errorlog  = '-'
-loglevel  = __import__('os').environ.get('UVICORN_LOG_LEVEL','info')
-graceful_timeout = int(__import__('os').environ.get('GUNICORN_GRACEFUL_TIMEOUT','45'))
-timeout = int(__import__('os').environ.get('GUNICORN_TIMEOUT','180'))
-keepalive = int(__import__('os').environ.get('GUNICORN_KEEPALIVE','30'))
-workers = int(__import__('os').environ.get('WEB_CONCURRENCY','1'))
-PY
-
-# create needed dirs (includes UltraTop static dir to avoid noop)
-RUN mkdir -p /app/.cache/matplotlib /app/static /app/static/ultra /app/logs /app/data || true \
+# create needed dirs & permissions
+RUN mkdir -p /app/.cache/matplotlib /app/static/ultra /app/logs /app/data \
  && chown -R appuser:appuser /app
 
 USER appuser
@@ -86,11 +73,9 @@ EXPOSE 10000
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
   CMD curl -fsS http://127.0.0.1:${PORT:-10000}/health || exit 1
 
+# Important: rely on gunicorn_conf.py (wsgi_app) instead of passing ${APP_MODULE} as arg
 ENTRYPOINT ["/usr/bin/tini","--"]
-CMD ["gunicorn","-k","uvicorn.workers.UvicornWorker","-c","/app/gunicorn_conf.py","${APP_MODULE:-main:app}"]
-
-
-
+CMD ["gunicorn","-c","/app/gunicorn_conf.py"]
 
 
 
