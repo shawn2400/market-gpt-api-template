@@ -1,4 +1,4 @@
-+services:
+services:
   - type: web
     name: algogpt-prod
     env: docker
@@ -906,4 +906,10 @@
         value: "500"
       - key: POS_EVENTS_EXPIRE_SEC
         value: "86400"
+
+      # 🔔 Telegram from events (רשות, ללא עומס)
+      - key: POS_EVENTS_TELEGRAM_ENABLE
+        value: "1"
+      - key: POS_EVENTS_TELEGRAM_LEVEL
+        value: "important"   # all / important / none
 
