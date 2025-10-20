@@ -94,11 +94,11 @@ async def _set_sl(symbol: str, side: str, price: float, qty: float) -> bool:
     px, _ = apply_price_tick_side(price, symbol, close_side)
     try:
         place_stop_market(symbol, close_side, float(px), float(qty), reduce_only=True)
-        # 🔔 דווח BE/Lock כ-"be_move"
+        # 🔔 דווח BE/Lock (price-based)
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                loop.create_task(emit(symbol, "be_move", frm=None, to=float(px)))
+                loop.create_task(emit(symbol, "be_move", **{"from": None, "to": float(px)}))
         except Exception:
             pass
         return True
@@ -125,14 +125,22 @@ async def _on_tp(symbol: str, side: str, filled_price: float, label: Optional[st
         return
     entry, qty, side_ok = await _positions_lookup(symbol)
     if not qty or not entry:
+        # אין פוזיציה חיה – בכל זאת נשלח tp_hit כדי שתראה בתצוגה
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                idx = _stage_from_label(label or "")
+                loop.create_task(emit(symbol, "tp_hit", idx=(idx or 0), price=float(filled_price), side=side, coid=(label or "")))
+        except Exception:
+            pass
         return
 
-    # 🔔 ידווח tp{idx}_hit תמיד (גם אם STREAM_TP_BE כבוי)
+    # 🔔 תמיד נפרסם tp_hit (גם אם STREAM_TP_BE כבוי)
     try:
-        idx = _stage_from_label(label or "")
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            loop.create_task(emit(symbol, f"tp{idx or 0}_hit", price=float(filled_price), side=side, coid=(label or "")))
+            idx = _stage_from_label(label or "")
+            loop.create_task(emit(symbol, "tp_hit", idx=(idx or 0), price=float(filled_price), side=side, coid=(label or "")))
     except Exception:
         pass
 
@@ -221,7 +229,7 @@ def _is_sl_hit(o: Dict[str, Any]) -> bool:
     ty = str(o.get("o", "")).upper()
     st = str(o.get("X", "")).upper()
     ro = str(o.get("R", "")).lower() in ("true", "1")
-    return (ty in ("STOP", "STOP_MARKET")) and ro and st in ("FILLED", "TRADE")
+    return (ty in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET")) and ro and st in ("FILLED", "PARTIALLY_FILLED")
 
 async def _consumer():
     lk = await _futures_listen_key()
@@ -243,7 +251,7 @@ async def _consumer():
                     data = json.loads(raw)
                     if str(data.get("e", "")).upper() == "ORDER_TRADE_UPDATE":
                         o = data.get("o") or {}
-                        # TP – שליחת tp{idx}_hit + טיפול BE/Lock
+                        # TP – שליחת tp_hit + טיפול BE/Lock
                         if _is_reduce_only_tp(o):
                             sym = str(o.get("s") or "").upper()
                             side = str(o.get("S") or "")
@@ -298,3 +306,4 @@ async def stop_user_stream_consumer():
         pass
     _keepalive_task = None
     logger.info({"event": "user_stream_stopped"})
+
