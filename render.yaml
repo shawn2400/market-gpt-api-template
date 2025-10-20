@@ -63,10 +63,12 @@ services:
         value: "false"
       - key: UVICORN_LOG_LEVEL
         value: "info"
+
+      # שמרנו על יחס תקין בין חיבורים פעילים לשמירת-חיים
       - key: HTTP_MAX_CONNECTIONS
-        value: "30"
-      - key: HTTP_MAX_KEEPALIVE
         value: "200"
+      - key: HTTP_MAX_KEEPALIVE
+        value: "50"
       - key: AUTO_RUN
         value: "1"
 
@@ -989,5 +991,4 @@ services:
         value: "https://testnet.binancefuture.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
         value: "3"
-
 
