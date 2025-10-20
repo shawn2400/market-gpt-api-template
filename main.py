@@ -210,6 +210,11 @@ app = FastAPI(
     openapi_url=OPENAPI_URL,
 )
 
+# ----- HTTP metrics (lightweight): middleware + /metrics (Bearer-protected) -----
+from utils.metrics_helpers import mount_metrics, HttpMetricsMiddleware  # type: ignore
+app.add_middleware(HttpMetricsMiddleware)   # מדידות HTTP קלות
+mount_metrics(app)                          # ראוט /metrics מוגן ב-Bearer
+
 # (NEW) מעקב In-memory: כניסה ראשונית ו-TP1 timing + מצב דיווח רציף
 app.state.pos_open_ts = getattr(app.state, "pos_open_ts", {})
 app.state.tp1_hit_ts = getattr(app.state, "tp1_hit_ts", {})
@@ -264,6 +269,59 @@ app.add_middleware(
     allow_methods=[m.strip() for m in CORS_ALLOW_METHODS.split(",")] if CORS_ALLOW_METHODS else ["*"],
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
 )
+
+# ==================== RiskGate + FX/URLREP/ONCHAIN (PATCH) ====================
+# RiskGate middleware (protects /ops/* and /telegram/* by its own internal PREFIXES)
+try:
+    from middleware.risk_gate import RiskGate  # type: ignore
+except Exception:
+    class RiskGate:  # safe no-op middleware if missing
+        def __init__(self, app):
+            self.app = app
+        async def __call__(self, scope, receive, send):
+            await self.app(scope, receive, send)
+
+# Optional providers with safe fallbacks
+try:
+    from utils.fx_provider import get_rates, convert  # type: ignore
+except Exception:
+    async def get_rates(base: str = "USD") -> Dict[str, float]:
+        return {}
+    def convert(amount: float, from_: str, to: str, rates: Optional[Dict[str,float]] = None) -> float:
+        raise HTTPException(status_code=501, detail="fx_provider_missing")
+
+try:
+    from utils.url_reputation import check_url  # type: ignore
+except Exception:
+    async def check_url(u: str) -> Dict[str, Any]:
+        raise HTTPException(status_code=501, detail="url_reputation_missing")
+
+try:
+    from utils.onchain_risk import analyze_asset  # type: ignore
+except Exception:
+    async def analyze_asset(network: str, address: str, symbol: str = "") -> Dict[str, Any]:
+        raise HTTPException(status_code=501, detail="onchain_risk_missing")
+
+# mount RiskGate (as requested)
+app.add_middleware(RiskGate)  # מגן רק על /ops/* ו-/telegram/* לפי PREFIXES
+
+# Sample endpoints (exactly as in patch)
+@app.get("/fx/sample")
+async def fx_sample():
+    rates = await get_rates(base="USD")
+    ils = rates.get("ILS")
+    eur = rates.get("EUR")
+    return {"ILS": ils, "EUR": eur}
+
+@app.get("/urlrep")
+async def url_rep(u: str):
+    return await check_url(u)
+
+@app.get("/onchain/sample")
+async def onchain_sample():
+    # דוגמה: USDT (ERC20) – כתובת לדוגמה
+    return await analyze_asset(network="ethereum", address="0xdAC17F958D2ee523a2206206994597C13D831ec7", symbol="USDT")
+# ================== END PATCH SECTION ==================
 
 # ==================== Env & helpers ====================
 def _port() -> int:
@@ -953,15 +1011,6 @@ async def webhook_whatever(request: Request):
             return JSONResponse({"ok": True, "skipped": True, "reason": "idem_duplicate"}, status_code=200)
     return JSONResponse({"ok": True, "handled_once": True}, status_code=200)
 
-def _require_bearer(request: Request) -> None:
-    if os.getenv("PROTECT_APPROVE_ROUTES", "1").lower() not in ("1", "true", "yes", "on"):
-        return
-    if not API_BEARER_TOKEN:
-        raise HTTPException(status_code=503, detail="Route protection enabled but API_BEARER_TOKEN missing")
-    auth = request.headers.get("Authorization", "")
-    if not (auth.startswith("Bearer ") and auth.split(" ", 1)[1].trim() == API_BEARER_TOKEN):
-        raise HTTPException(status_code=401, detail="Unauthorized")
-# fix .trim() to .strip()
 def _require_bearer(request: Request) -> None:
     if os.getenv("PROTECT_APPROVE_ROUTES", "1").lower() not in ("1", "true", "yes", "on"):
         return
@@ -2166,10 +2215,21 @@ except Exception as e:
     logger.warning("pos_publisher not started: %s", e)
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-# >>>>>> PATCH: public_pos_events router <<<<<<
-from routes.public_pos_events import router as public_pos_events_router
-app.include_router(public_pos_events_router)
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+# --- Public POS Events SSE router (new) ---
+try:
+    from routes.public_pos_events import router as public_pos_events_router
+    app.include_router(public_pos_events_router, tags=["Public Feed"])
+    logger.info("public_pos_events router mounted")
+except Exception as e:
+    logger.warning("routes.public_pos_events router not loaded: %s", e)
+
+# --- self_check router (NEW) ---
+try:
+    from app.routers import self_check  # type: ignore
+    app.include_router(self_check.router)
+    logger.info("self_check router mounted")
+except Exception as e:
+    logger.warning("self_check router not loaded: %s", e)
 
 app.include_router(router)
 
@@ -2421,11 +2481,6 @@ if __name__ == "__main__":
     import uvicorn
     reload_flag = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=reload_flag)
-
-
-
-
-
 
 
 
