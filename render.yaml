@@ -109,6 +109,8 @@ services:
         value: "1"
       - key: PROTECT_DIGEST_ROUTES
         value: "1"
+      - key: PROTECT_DEBUG_ROUTES
+        value: "1"
       - key: ENABLE_HSTS
         value: "1"
       - key: TRUST_XFF
@@ -822,6 +824,12 @@ services:
       - key: ROUTES_DEFAULT_RL_BURST
         value: "15"
 
+      # דגלי טעינת ראוטרים מהקוד החדש
+      - key: ENABLE_ROUTES
+        value: ""
+      - key: DISABLE_ROUTES
+        value: "debug,debug_auth,debug_binance,debug_env"
+
       - key: API_BEARER_TOKEN_RO
         fromSecret: API_BEARER_TOKEN_RO_STAGING
       - key: API_BEARER_TOKEN_ACTION
@@ -981,4 +989,5 @@ services:
         value: "https://testnet.binancefuture.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
         value: "3"
+
 
