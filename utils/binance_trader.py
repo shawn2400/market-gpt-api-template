@@ -1,8 +1,7 @@
 # utils/binance_trade.py
 # -*- coding: utf-8 -*-
 """
-מעטפת מינימלית ומסודרת לביצוע פקודות FUTURES בבינאנס.
-מתאימה לשימוש ישיר או ע"י ראוטרים אחרים (executor וכו').
+מעטפת נקייה למסחר FUTURES בבינאנס (LIVE/TESTNET לפי ENV).
 """
 from __future__ import annotations
 
@@ -16,22 +15,21 @@ from binance.enums import (
 )
 
 # --- קונפיג מהסביבה ---
-_API_KEY = os.getenv("BINANCE_API_KEY", "").strip()
-_API_SECRET = os.getenv("BINANCE_API_SECRET", "").strip()
-_IS_TESTNET = os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "yes", "on")
+_API_KEY = (os.getenv("BINANCE_API_KEY") or "").strip()
+_API_SECRET = (os.getenv("BINANCE_API_SECRET") or "").strip()
+_IS_TESTNET = (os.getenv("BINANCE_TESTNET", "false").lower() in ("1", "true", "yes", "on"))
 
-# אופציונלי: בסיסי URL חלופיים (פרוקסי/מראה)
+# אופציונלי: Base URLs (אם רוצים לעקוף ברירת מחדל)
 _FUTURES_HTTP_BASE = (os.getenv("BINANCE_FUTURES_HTTP_BASE") or "").strip().rstrip("/")
 _SPOT_HTTP_BASE    = (os.getenv("BINANCE_SPOT_HTTP_BASE") or "").strip().rstrip("/")
 
 _client: Optional[Client] = None
 
-
 def _make_client() -> Client:
     if not _API_KEY or not _API_SECRET:
         raise RuntimeError("BINANCE_API_KEY / BINANCE_API_SECRET not set")
     cli = Client(api_key=_API_KEY, api_secret=_API_SECRET, testnet=_IS_TESTNET)
-    # התאמות בסיס כתובות אם הוגדרו (ספריית python-binance תומכת בשדות אלו)
+    # אם הוגדרו בסיסי כתובות — לעדכן (לא חובה ב-LIVE)
     if _FUTURES_HTTP_BASE:
         try:
             cli.FUTURES_URL = _FUTURES_HTTP_BASE
@@ -44,41 +42,31 @@ def _make_client() -> Client:
             pass
     return cli
 
-
 def get_client() -> Client:
-    """לקוח סינגלטון עם cache מקומי."""
     global _client
     if _client is None:
         _client = _make_client()
     return _client
 
-
-# --- דיוק/עיגולים: שימוש במודול חיצוני אם קיים, אחרת נפילה רכה ---
+# --- דיוק/עיגולים: שימוש במודול חיצוני אם יש, אחרת נפילה רכה ---
 try:
     from utils.precision_utils import (  # type: ignore
         apply_price_tick, apply_price_tick_side, apply_qty_step
     )
 except Exception:
     def apply_price_tick(price: float, symbol: str) -> Tuple[float, str]:
-        p = float(price)
-        return p, f"{p}"
-
+        p = float(price); return p, f"{p}"
     def apply_price_tick_side(price: float, symbol: str, side: str) -> Tuple[float, str]:
-        p = float(price)
-        return p, f"{p}"
-
+        p = float(price); return p, f"{p}"
     def apply_qty_step(qty: float, symbol: str) -> Tuple[float, str]:
-        q = float(qty)
-        return q, f"{q}"
+        q = float(qty); return q, f"{q}"
 
-
-# --- שירותי עזר אופציונליים ---
+# --- שירותי עזר ---
 def ensure_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     cli = get_client()
     lev = int(max(1, min(int(leverage), 125)))
     res = cli.futures_change_leverage(symbol=symbol.upper(), leverage=lev)
     return {"ok": True, "result": res, "leverage": lev}
-
 
 def ensure_margin_type(symbol: str, margin_type: str = "ISOLATED") -> Dict[str, Any]:
     cli = get_client()
@@ -88,7 +76,6 @@ def ensure_margin_type(symbol: str, margin_type: str = "ISOLATED") -> Dict[str, 
     try:
         res = cli.futures_change_margin_type(symbol=symbol.upper(), marginType=mt)
     except Exception as e:
-        # אם כבר מוגדר—אין צורך לשנות
         msg = str(e)
         if "No need to change margin type" in msg or "margin type same" in msg.lower():
             res = {"note": "already_in_margin_type"}
@@ -96,8 +83,7 @@ def ensure_margin_type(symbol: str, margin_type: str = "ISOLATED") -> Dict[str, 
             raise
     return {"ok": True, "result": res, "margin_type": mt}
 
-
-# --- פעולות הזמנה ---
+# --- יצירת הזמנות ---
 def place_limit_order(
     symbol: str,
     side: str,
@@ -123,8 +109,7 @@ def place_limit_order(
         quantity=q_str,
         price=p_str,
     )
-    # תמיכה בשדות binance כגון newClientOrderId, positionSide, reduceOnly וכו'
-    payload.update(kwargs or {})
+    payload.update(kwargs or {})  # newClientOrderId, positionSide, reduceOnly, ...
 
     res = cli.futures_create_order(**payload)
     return {
@@ -133,7 +118,6 @@ def place_limit_order(
         "adj": {"qty": q_adj, "qty_str": q_str, "price": p_adj, "price_str": p_str},
         "payload": payload,
     }
-
 
 def place_market_order(
     symbol: str,
@@ -146,7 +130,6 @@ def place_market_order(
 
     cli = get_client()
     side_norm = SIDE_BUY if str(side).upper() == "BUY" else SIDE_SELL
-
     q_adj, q_str = apply_qty_step(float(quantity), symbol)
 
     payload = dict(
@@ -158,13 +141,7 @@ def place_market_order(
     payload.update(kwargs or {})
 
     res = cli.futures_create_order(**payload)
-    return {
-        "ok": True,
-        "result": res,
-        "adj": {"qty": q_adj, "qty_str": q_str},
-        "payload": payload,
-    }
-
+    return {"ok": True, "result": res, "adj": {"qty": q_adj, "qty_str": q_str}, "payload": payload}
 
 def place_order(
     symbol: str,
@@ -183,29 +160,22 @@ def place_order(
         return place_market_order(symbol, side, quantity, **kwargs)
     raise ValueError(f"Unsupported order_type: {order_type}")
 
-
 # --- ביטולים/שאילתות ---
 def cancel_all(symbol: str) -> Dict[str, Any]:
     cli = get_client()
     res = cli.futures_cancel_all_open_orders(symbol=symbol.upper())
     return {"ok": True, "result": res}
 
-
 def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
     cli = get_client()
     res = cli.futures_cancel_order(symbol=symbol.upper(), orderId=int(order_id))
     return {"ok": True, "result": res}
-
 
 def get_position(symbol: str) -> Dict[str, Any]:
     cli = get_client()
     arr = cli.futures_position_information(symbol=symbol.upper())
     pos = arr[0] if isinstance(arr, list) and arr else {}
     return {"ok": True, "position": pos}
-
-
-
-
 
 
 
