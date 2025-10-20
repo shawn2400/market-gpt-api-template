@@ -2128,6 +2128,15 @@ except Exception as e:
     logger.warning("routes.public_snapshot router not loaded: %s", e)
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
+# >>>>>> NEW: visual_stream router include <<<<<<
+try:
+    from routes.visual_stream import router as _visual_stream_router
+    app.include_router(_visual_stream_router, tags=["visual-stream"])
+    logger.info("visual_stream router mounted")
+except Exception as e:
+    logger.warning("routes.visual_stream not loaded: %s", e)
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
 app.include_router(router)
 
 # ==================== Meta & Diagnostics ====================
@@ -2357,6 +2366,11 @@ async def _on_startup():
     # set Telegram webhook if configured
     with suppress(Exception):
         await _ensure_telegram_webhook()
+    # (NEW) start positions publisher loop (safe no-op if module missing)
+    with suppress(Exception):
+        from manager.pos_publisher import start_pos_publisher  # <- Publisher
+        start_pos_publisher(app)  # מפעיל לולאת עדכון Redis לפוזיציות
+        logger.info("pos_publisher loop started")
     # optional startup ping
     if STARTUP_NOTIFY_ENABLE and not ONLY_TRADE_NOTIFICATIONS:
         with suppress(Exception):
@@ -2378,6 +2392,7 @@ if __name__ == "__main__":
     import uvicorn
     reload_flag = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=reload_flag)
+
 
 
 
