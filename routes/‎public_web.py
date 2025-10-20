@@ -2,21 +2,19 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import os
 from typing import Optional
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
-# נתיבי Web ציבוריים (ללא דרישת Bearer) — תואם 1:1 למבנה שב-main
+# נתיבי Web ציבוריים (ללא דרישת Bearer)
 router = APIRouter(prefix="", tags=["Public Web"])
 
-# Rate-limit token bucket (אם קיים). אם לא — נפילה רכה.
+# Rate-limit token bucket (נפילה רכה אם לא קיים)
 try:
     from utils.rate_limit_tb import tb_allow  # type: ignore
 except Exception:  # pragma: no cover
     async def tb_allow(ip: str, path: str, sse_hint: bool = False):
         return True, None
-
 
 def _csp_headers() -> dict:
     return {
@@ -28,15 +26,12 @@ def _csp_headers() -> dict:
         "Referrer-Policy": "no-referrer",
     }
 
-
-@router.get("/topk")  # אליאס היסטורי לנתיב החדש
+@router.get("/topk")
 async def topk_legacy_redirect():
     return RedirectResponse("/scan/public-topk", status_code=307)
 
-
 @router.get("/scan/public-topk/web")
 async def topk_web(request: Request, authorization: Optional[str] = Header(None, alias="Authorization")):
-    # עמוד ציבורי: מציג טבלה חיה על בסיס /scan/public-topk ו-/scan/public-stream (אירוע topk)
     ip = (request.client.host if request.client else "0.0.0.0")
     allowed, ra = await tb_allow(ip, request.url.path, sse_hint=False)
     if not allowed:
@@ -88,10 +83,8 @@ try{
 </body></html>"""
     return HTMLResponse(html_doc, headers=_csp_headers())
 
-
 @router.get("/scan/public-now/web")
 async def now_web(request: Request, authorization: Optional[str] = Header(None, alias="Authorization")):
-    # עמוד ציבורי: מציג טבלה חיה על בסיס /scan/public-now ו-/scan/public-stream (אירוע now)
     ip = (request.client.host if request.client else "0.0.0.0")
     allowed, ra = await tb_allow(ip, request.url.path, sse_hint=False)
     if not allowed:
