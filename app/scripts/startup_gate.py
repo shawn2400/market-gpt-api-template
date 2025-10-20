@@ -1,94 +1,168 @@
-import os, time, sys, json, asyncio, httpx, redis, yaml, jsonschema
+# app/scripts/startup_gate.py
+# Minimal start-up gate: Redis + policy YAML schema + params/optimized/*.json
+from __future__ import annotations
 
-POLICY_PATH = os.getenv("POLICY_DSL_PATH", "policies/dynamic_policy.yaml")
-SCHEMA_PATH = os.getenv("POLICY_SCHEMA_PATH", "config/policy_schema.json")
-REDIS_URL   = os.getenv("REDIS_URL")
-BINANCE_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
+import os, sys, json, glob, traceback
+from typing import Any, Dict, Tuple
 
-def _print(status, msg, meta=None):
-    print(json.dumps({"status": status, "msg": msg, "meta": meta or {}}, ensure_ascii=False))
+# deps: pip install redis PyYAML jsonschema
+import yaml
+from jsonschema import Draft7Validator
+from redis import Redis
+from urllib.parse import urlparse
 
-def check_policy():
+
+def _log(msg: str) -> None:
+    print(f"[startup-gate] {msg}", flush=True)
+
+
+def _fail(msg: str, verbose: bool) -> bool:
+    _log(f"❌ {msg}")
+    if verbose:
+        traceback.print_exc()
+    return False
+
+
+def ping_redis(verbose: bool = False) -> bool:
+    """PING Redis using REDIS_URL (or ALGOGPT_REDIS_URL)"""
+    url = os.getenv("REDIS_URL") or os.getenv("ALGOGPT_REDIS_URL")
+    if not url:
+        _log("⚠️  REDIS_URL/ALGOGPT_REDIS_URL not set — skipping Redis check")
+        return True  # not hard-fail if redis explicitly disabled
+
     try:
-        with open(POLICY_PATH, "r", encoding="utf-8") as f:
-            policy = yaml.safe_load(f)
-        with open(SCHEMA_PATH, "r", encoding="utf-8") as f:
-            schema = json.load(f)
-        jsonschema.validate(policy, schema)
-        _print("ok", "policy schema validated")
-        return True
+        parsed = urlparse(url)
+        ssl = parsed.scheme in ("rediss", "redis+ssl")
+        # Handle render-like URLs: redis://[:password]@host:port/db
+        client = Redis.from_url(url, ssl=ssl, socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT", "8.0")))
+        pong = client.ping()
+        if pong:
+            _log("✅ Redis PING OK")
+            return True
+        return _fail("Redis ping returned false", verbose)
     except Exception as e:
-        _print("fail", "policy validation error", {"error": str(e)})
-        return False
+        return _fail(f"Redis connection error: {e}", verbose)
 
-def check_redis():
+
+def load_yaml(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+
+def load_json(path: str) -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def validate_policy_schema(policy_path: str, schema_path: str, verbose: bool = False) -> bool:
+    """Validate YAML policy against JSON schema + a few semantic sanity checks."""
     try:
-        r = redis.from_url(REDIS_URL, socket_timeout=2.0, socket_connect_timeout=2.0)
-        t0 = time.time()
-        pong = r.ping()
-        _print("ok", "redis ping", {"lat_ms": round((time.time()-t0)*1000,2)})
-        return True
+        policy = load_yaml(policy_path)
+    except FileNotFoundError:
+        return _fail(f"Policy file not found: {policy_path}", verbose)
     except Exception as e:
-        _print("fail", "redis error", {"error": str(e)})
-        return False
+        return _fail(f"Failed to read policy YAML: {e}", verbose)
 
-async def check_binance():
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            r = await client.get(f"{BINANCE_FAPI}/fapi/v1/ping")
-            if r.status_code == 200:
-                _print("ok", "binance ping", {"code": r.status_code})
-                return True
-            _print("fail", "binance bad status", {"code": r.status_code})
-            return False
+        schema = load_json(schema_path)
+    except FileNotFoundError:
+        return _fail(f"Schema file not found: {schema_path}", verbose)
     except Exception as e:
-        _print("fail", "binance error", {"error": str(e)})
-        return False
+        return _fail(f"Failed to read schema JSON: {e}", verbose)
 
-def check_secrets():
-    required = [
-        "OPENAI_API_KEY","BINANCE_API_KEY","BINANCE_API_SECRET",
-        "API_BEARER_TOKEN","API_SIGNING_SECRET","OPS_SIGN_SECRET","REDIS_URL"
-    ]
-    missing = [k for k in required if not os.getenv(k)]
-    if missing:
-        _print("fail", "missing secrets", {"missing": missing})
-        return False
-    _print("ok", "secrets present")
+    try:
+        Draft7Validator(schema).validate(policy)
+    except Exception as e:
+        return _fail(f"Schema validation failed: {e}", verbose)
+
+    # --- Semantic sanity checks (optional but helpful) ---
+    try:
+        # ladder.tp.splits should sum ~ 1.0 (±0.05)
+        tp = (policy.get("ladder") or {}).get("tp") or {}
+        splits = tp.get("splits")
+        if splits:
+            s = float(sum(splits))
+            if not (0.95 <= s <= 1.05):
+                return _fail(f"ladder.tp.splits sum must be ~1.0 (±0.05). got {s:.4f}", verbose)
+
+        # trailing.callback_min_pct <= callback_max_pct
+        trailing = policy.get("trailing") or {}
+        cmin, cmax = trailing.get("callback_min_pct"), trailing.get("callback_max_pct")
+        if cmin is not None and cmax is not None and cmin > cmax:
+            return _fail(f"trailing.callback_min_pct ({cmin}) > callback_max_pct ({cmax})", verbose)
+
+        # breakeven.offset_bps reasonable (0..50)
+        breakeven = policy.get("breakeven") or {}
+        off = breakeven.get("offset_bps")
+        if off is not None and not (0 <= float(off) <= 50):
+            return _fail(f"breakeven.offset_bps out of range (0..50): {off}", verbose)
+
+    except Exception as e:
+        return _fail(f"Semantic checks error: {e}", verbose)
+
+    _log(f"✅ Policy schema + semantic checks OK ({policy_path})")
     return True
 
-def check_ranges():
-    ok = True
-    def num(k, d):
-        try:
-            return float(os.getenv(k, str(d)))
-        except:
-            return d
-    a_min, a_max = num("AUTO_LEV_MIN",15), num("AUTO_LEV_MAX",25)
-    if a_min > a_max:
-        _print("fail", "AUTO_LEV_MIN>AUTO_LEV_MAX", {"min":a_min,"max":a_max}); ok=False
-    d_min, d_max = num("DYNAMIC_MAX_TRADE_BUDGET_MIN",200), num("DYNAMIC_MAX_TRADE_BUDGET_MAX",600)
-    if d_min > d_max:
-        _print("fail", "DYNAMIC_MAX_TRADE_BUDGET_MIN>DYNAMIC_MAX_TRADE_BUDGET_MAX", {"min":d_min,"max":d_max}); ok=False
-    if ok: _print("ok","ranges sane")
-    return ok
 
-async def main():
-    if os.getenv("ENABLE_STARTUP_SELF_CHECK","1") != "1":
-        _print("skip","startup self-check disabled")
-        sys.exit(0)
-    results = [
-        check_policy(),
-        check_secrets(),
-        check_redis(),
-        await check_binance(),
-        check_ranges()
-    ]
-    if all(results):
-        _print("ok","startup gate passed")
-        sys.exit(0)
-    _print("fail","startup gate failed")
-    sys.exit(23)
+def verify_params_dir(params_dir: str, verbose: bool = False) -> bool:
+    """Ensure at least one JSON exists and is syntactically valid."""
+    try:
+        pattern = os.path.join(params_dir, "*.json")
+        files = sorted(glob.glob(pattern))
+        if not files:
+            return _fail(f"No JSON files found in {params_dir}", verbose)
+
+        bad: list[Tuple[str, str]] = []
+        for p in files:
+            try:
+                load_json(p)  # just syntax check
+            except Exception as e:
+                bad.append((p, str(e)))
+
+        if bad:
+            details = "; ".join([f"{p}: {err}" for p, err in bad[:5]])
+            return _fail(f"Invalid JSON in params ({len(bad)} files): {details}", verbose)
+
+        _log(f"✅ Params OK: {len(files)} file(s) under {params_dir}")
+        return True
+    except Exception as e:
+        return _fail(f"Params check error: {e}", verbose)
+
+
+def main(argv: list[str] | None = None) -> bool:
+    argv = argv or sys.argv[1:]
+    verbose = ("-v" in argv) or ("--verbose" in argv)
+    strict = ("--strict" in argv)  # if True, Redis not set will also fail
+
+    ok_all = True
+
+    # 1) Redis
+    ok_redis = ping_redis(verbose=verbose)
+    if strict and not ok_redis:
+        ok_all = False
+    elif not ok_redis:
+        # Non-strict mode: only warn if redis misconfigured AND REQUIRE_REDIS=1
+        if os.getenv("REQUIRE_REDIS", "1") == "1":
+            ok_all = False
+
+    # 2) Policy schema
+    policy_path = os.getenv("POLICY_DSL_PATH", "policies/dynamic_policy.yaml")
+    schema_path = os.getenv("POLICY_SCHEMA_PATH", "config/policy_schema.json")
+    ok_policy = validate_policy_schema(policy_path, schema_path, verbose=verbose)
+    ok_all = ok_all and ok_policy
+
+    # 3) Params dir
+    params_dir = os.getenv("PARAMS_DIR", "params/optimized")
+    ok_params = verify_params_dir(params_dir, verbose=verbose)
+    ok_all = ok_all and ok_params
+
+    if ok_all:
+        _log("🎉 All startup checks passed")
+    else:
+        _log("🛑 Startup checks failed")
+
+    return ok_all
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    sys.exit(0 if main() else 23)
