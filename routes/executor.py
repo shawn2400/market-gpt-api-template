@@ -1,74 +1,161 @@
 # routes/executor.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-from typing import Any, Dict, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+
+import logging
+import os
+from typing import Dict, Any, List, Optional
+
 import httpx
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from utils.auth import require_api_key
-from utils.binance_trade import plan_and_execute
-from utils.telegram_notify import send_audit
+# ---- soft auth shim (אם utils.auth לא קיים) ----
+try:
+    from utils.auth import require_api_key  # type: ignore
+except Exception:
+    async def require_api_key(request: Request):
+        protect = os.getenv("PROTECT_EXECUTOR_ROUTES", "1").lower() in ("1", "true", "yes", "on")
+        if not protect:
+            return
+        token = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
+        if not token:
+            raise HTTPException(status_code=503, detail="API_BEARER_TOKEN missing")
+        auth = request.headers.get("Authorization", "")
+        if not (auth.startswith("Bearer ") and auth.split(" ", 1)[1].strip() == token):
+            raise HTTPException(status_code=401, detail="Unauthorized")
 
-router = APIRouter(prefix="/executor", tags=["executor"])
+logger = logging.getLogger("algogpt.routes.executor")
 
-@router.get("/status")
-def executor_status() -> Dict[str, Any]:
-    import time
-    return {"ok": True, "status": "running", "ts": int(time.time() * 1000)}
+router = APIRouter(
+    prefix="/executor",
+    tags=["Executor"],
+    dependencies=[Depends(require_api_key)],
+)
 
-@router.post("/trade")
-async def trade(
-    symbol: str = Query(..., min_length=1, max_length=32),
-    side: str = Query(..., pattern=r"(?i)^(BUY|SELL)$"),
-    budget: float = Query(..., gt=0.0, description="Budget in USD"),
-    leverage: int = Query(..., ge=1, le=125),
-    dry_run: bool = Query(False),
-    _token: str = Depends(require_api_key),
-) -> Dict[str, Any]:
+_FAPI = os.getenv("BINANCE_FAPI", "https://fapi.binance.com").rstrip("/")
+
+
+def _filter_usdt_perp(sym: Dict[str, Any], quote: str = "USDT") -> bool:
     try:
-        res = await plan_and_execute(
-            symbol=symbol,
-            side=side,
-            leverage=leverage,
-            budget_usd=float(budget),
-            tp_targets=None,
-            tp_splits=None,
-            sl_price=None,
-            dry_run=bool(dry_run),
-        )
-        # Audit (non-blocking אם אפשר)
-        plan = (res.get("plan") or {})
-        tp = plan.get("tp") or []
-        sl = plan.get("sl") or {}
-        try:
-            await send_audit(
-                "EXECUTOR TRADE",
-                {
-                    "symbol": plan.get("symbol"),
-                    "side": plan.get("side"),
-                    "lev": plan.get("leverage"),
-                    "qty": plan.get("qty"),
-                    "price": round(float(plan.get("entry_price", 0.0)), 2),
-                    "tp": "; ".join([f"{round(l['stopPrice'],2)}@{l['qty']}" for l in tp]) if tp else "—",
-                    "sl": round(float(sl.get("stopPrice", 0.0)), 2) if sl else "—",
-                    "dry": dry_run,
-                },
-            )
-        except Exception:
-            # לא מפילים את הקריאה על כשל הודעת אודיט
-            pass
-        return {"ok": True, "result": res}
-    except ValueError as ve:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=[{"type": "value_error", "loc": ["query"], "msg": str(ve)}],
-        )
-    except httpx.HTTPStatusError as he:
-        raise HTTPException(
-            status_code=502,
-            detail={"error": "binance_http", "status": he.response.status_code, "body": he.response.text},
-        )
+        if sym.get("status") != "TRADING":
+            return False
+        if sym.get("quoteAsset") != quote:
+            return False
+        ct = (sym.get("contractType") or "").upper()
+        return ct in ("PERPETUAL", "CURRENT_QUARTER", "NEXT_QUARTER")
+    except Exception:
+        return False
+
+
+def _http() -> httpx.Client:
+    # חיבור קל עם timeout סביר
+    return httpx.Client(timeout=10.0, headers={"User-Agent": "algogpt/executor"})
+
+
+@router.get("/positions", summary="List open futures positions")
+def list_positions() -> Dict[str, Any]:
+    """
+    מחזיר פוזיציות פתוחות ע״י SDK אם קיים; אחרת 501.
+    """
+    try:
+        from binance.client import Client  # type: ignore
+        cli = Client(os.getenv("BINANCE_API_KEY", ""), os.getenv("BINANCE_API_SECRET", ""), testnet=os.getenv("BINANCE_TESTNET", "0") in ("1","true","on"))
+        items = cli.futures_position_information() or []
+        # סינון רק פוזיציות עם כמות != 0
+        items = [p for p in items if abs(float(p.get("positionAmt") or 0)) > 0]
+        return {"ok": True, "items": items, "count": len(items)}
+    except ImportError:
+        raise HTTPException(status_code=501, detail="python-binance not installed")
     except Exception as e:
+        logger.exception("[executor] positions error: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/balance", summary="Get futures account balance")
+def get_balance() -> Dict[str, Any]:
+    try:
+        from binance.client import Client  # type: ignore
+        cli = Client(os.getenv("BINANCE_API_KEY", ""), os.getenv("BINANCE_API_SECRET", ""), testnet=os.getenv("BINANCE_TESTNET", "0") in ("1","true","on"))
+        bal = cli.futures_account_balance()
+        return {"ok": True, "balances": bal}
+    except ImportError:
+        raise HTTPException(status_code=501, detail="python-binance not installed")
+    except Exception as e:
+        logger.exception("[executor] balance error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/mark-price", summary="Get futures mark price")
+def get_mark_price(symbol: str = Query(..., description="e.g. BTCUSDT")) -> Dict[str, Any]:
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        raise HTTPException(status_code=422, detail="symbol required")
+    url = f"{_FAPI}/fapi/v1/premiumIndex"
+    try:
+        with _http() as c:
+            r = c.get(url, params={"symbol": sym})
+            r.raise_for_status()
+            data = r.json()
+            # premiumIndex מחזיר markPrice
+            mp = float(data.get("markPrice"))
+            return {"ok": True, "symbol": sym, "markPrice": mp}
+    except Exception as e:
+        logger.exception("[executor] mark-price error: %s", e)
+        raise HTTPException(status_code=502, detail="mark price unavailable")
+
+
+@router.get("/exchange-info", summary="Raw Binance futures exchangeInfo (slim)")
+def get_exchange_info() -> Dict[str, Any]:
+    url = f"{_FAPI}/fapi/v1/exchangeInfo"
+    try:
+        with _http() as c:
+            r = c.get(url)
+            r.raise_for_status()
+            info = r.json()
+    except Exception as e:
+        logger.exception("[executor] exchange-info error: %s", e)
+        raise HTTPException(status_code=502, detail=f"exchangeInfo failed: {e}")
+
+    symbols = info.get("symbols", []) if isinstance(info, dict) else []
+    slim: List[Dict[str, Any]] = []
+    for s in symbols:
+        try:
+            slim.append({
+                "symbol": s.get("symbol"),
+                "baseAsset": s.get("baseAsset"),
+                "quoteAsset": s.get("quoteAsset"),
+                "contractType": s.get("contractType"),
+                "status": s.get("status"),
+                "filters": [
+                    f for f in (s.get("filters") or [])
+                    if f.get("filterType") in {"PRICE_FILTER", "LOT_SIZE"}
+                ],
+            })
+        except Exception:
+            continue
+    return {"ok": True, "symbols": slim, "count": len(slim)}
+
+
+@router.get("/symbols", summary="Tradable USDT-M futures symbols")
+def get_symbols(quote: str = Query("USDT", description="סימול מטבע ציטוט (ברירת מחדל USDT)")) -> Dict[str, Any]:
+    url = f"{_FAPI}/fapi/v1/exchangeInfo"
+    try:
+        with _http() as c:
+            r = c.get(url)
+            r.raise_for_status()
+            info = r.json()
+    except Exception as e:
+        logger.exception("[executor] symbols error: %s", e)
+        raise HTTPException(status_code=502, detail=f"get symbols failed: {e}")
+
+    symbols = info.get("symbols", []) if isinstance(info, dict) else []
+    quote = (quote or "USDT").upper().strip()
+    out = sorted({
+        s.get("symbol")
+        for s in symbols
+        if isinstance(s, dict) and _filter_usdt_perp(s, quote=quote)
+    })
+    return {"ok": True, "symbols": out, "count": len(out)}
 
 
 
