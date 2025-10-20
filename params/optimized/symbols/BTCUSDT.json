@@ -1,0 +1,13 @@
+{
+  "symbol": "BTCUSDT",
+  "price_dp_override": 1,
+  "qty_step_override": 0.001,
+  "risk": {
+    "max_trade_budget_usdt": 500,
+    "max_loss_usdt": 150
+  },
+  "timeframes": {
+    "15m": { "atr_mult_trail": 1.65, "tp_targets_pct": [3.2, 6.4, 12.8] },
+    "1h":  { "atr_mult_trail": 1.6,  "tp_targets_pct": [2.6, 5.2, 10.4] }
+  }
+}
