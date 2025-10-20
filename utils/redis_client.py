@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import os
-import ssl
 import time
 import logging
 from typing import Optional, Tuple
-from urllib.parse import urlparse, parse_qs, urlunsplit
+from urllib.parse import urlparse, urlunsplit
 
 try:
     import redis  # redis-py
@@ -23,18 +22,16 @@ def get_redis_url() -> str:
     return os.getenv("REDIS_URL", "").strip()
 
 def _timeouts() -> Tuple[float, float]:
-    # נשמר מעט נדיב מול עננים (Render וכו')
+    # מעט נדיב מול עננים (Render וכו')
     conn_to = float(os.getenv("REDIS_CONNECT_TIMEOUT_SEC", os.getenv("REDIS_CONNECT_TIMEOUT", "5")) or 5)
     sock_to = float(os.getenv("REDIS_SOCKET_TIMEOUT_SEC", os.getenv("REDIS_SOCKET_TIMEOUT", "5")) or 5)
     return conn_to, sock_to
 
 POOL_MAX_CONNECTIONS = int(os.getenv("REDIS_POOL_MAX_CONNECTIONS", "30"))
 CLIENT_NAME          = os.getenv("REDIS_CLIENT_NAME", "algogpt")
-SSL_NO_VERIFY_ENV    = _env_bool("REDIS_SSL_NO_VERIFY", "0")
 PING_RETRIES         = int(os.getenv("REDIS_PING_RETRIES", "2"))
 PING_BACKOFF_SEC     = float(os.getenv("REDIS_PING_RETRY_BACKOFF_SEC", "0.3"))
 RETRY_ON_TIMEOUT     = _env_bool("REDIS_RETRY_ON_TIMEOUT", "1")
-SSL_CA_CERTS_PATH    = os.getenv("REDIS_SSL_CA_CERTS", "").strip()  # אופציונלי
 
 # -------------------- Helpers --------------------
 def _mask_url(url: str) -> str:
@@ -48,69 +45,33 @@ def _mask_url(url: str) -> str:
     except Exception:
         return "<unparseable>"
 
-def _map_cert(val: str) -> int:
-    v = (val or "").strip().lower()
-    # תמיכה גם בערכים בוליאניים/מספריים/מחרוזיים
-    if v in {"none", "no", "0", "off", "false"}:
-        return ssl.CERT_NONE
-    if v in {"optional", "1", "on", "true"}:
-        return ssl.CERT_OPTIONAL
-    # required כברירת מחדל
-    return ssl.CERT_REQUIRED
-
 # -------------------- Client factory --------------------
 def make_client(*, decode: bool = True) -> "redis.Redis":
     """
-    יוצר לקוח Redis יציב עם TLS נכון.
-    חשוב: לא שולחים kw בשם 'ssl', כדי להימנע מהשגיאה:
-      AbstractConnection.__init__() got an unexpected keyword argument 'ssl'
-    במקום זאת בוחרים connection_class=SSLConnection ומעבירים ssl_cert_reqs בלבד.
+    יוצר לקוח Redis יציב המבוסס *אך ורק* על ה-URL.
+    אין שימוש בפרמטרים כמו ssl= או connection_class — הכול נגזר מה-URL (redis:// או rediss://).
     """
     url = get_redis_url()
     if not url:
         raise RuntimeError("REDIS_URL not set")
 
-    parsed = urlparse(url)
-    qs = parse_qs(parsed.query or "")
+    scheme = (urlparse(url).scheme or "").lower()
+    if scheme not in ("redis", "rediss"):
+        raise RuntimeError("REDIS_URL must start with redis:// or rediss://")
+
     conn_to, sock_to = _timeouts()
 
-    # ארגומנטים כלליים — יעבדו גם ל-redis:// וגם ל-rediss://
-    kwargs = dict(
+    # כל ההגדרות דרך kwargs “רגילים” שאינם משנים סיווג TLS — זה נקבע מה-URL בלבד.
+    cli = redis.from_url(
+        url,
+        decode_responses=decode,
+        retry_on_timeout=RETRY_ON_TIMEOUT,
         socket_connect_timeout=conn_to,
         socket_timeout=sock_to,
-        decode_responses=decode,
         client_name=CLIENT_NAME,
         max_connections=POOL_MAX_CONNECTIONS,
         socket_keepalive=True,
-        retry_on_timeout=RETRY_ON_TIMEOUT,
     )
-
-    scheme = (parsed.scheme or "").lower()
-    if scheme == "rediss":
-        # ב-TLS נשתמש במחלקת SSLConnection; לא מעבירים ssl=True.
-        from redis.connection import SSLConnection
-        # קדימות לפרמטר ב-URL, אחרת מה-ENV, ברירת מחדל required
-        cert_str = qs.get("ssl_cert_reqs", [os.getenv("REDIS_SSL_CERT_REQS", "required")])[0]
-        cert_req = _map_cert(cert_str)
-
-        # אם ביקשו לבטל אימות דרך ENV (בדיקות), נאכוף CERT_NONE — אלא אם ה-URL ביקש required במפורש
-        if SSL_NO_VERIFY_ENV and cert_str.strip().lower() not in {"required"}:
-            cert_req = ssl.CERT_NONE
-
-        kwargs.update(
-            connection_class=SSLConnection,
-            ssl_cert_reqs=cert_req,
-        )
-
-        # אם סופק CA ייעודי — נעביר
-        if SSL_CA_CERTS_PATH:
-            kwargs["ssl_ca_certs"] = SSL_CA_CERTS_PATH
-    else:
-        from redis.connection import Connection
-        kwargs.update(connection_class=Connection)
-
-    # יצירה מה-URL (כולל קרדנציאלס/הוסט/פורט/DB ושאר query params)
-    cli = redis.from_url(url, **kwargs)
     return cli
 
 # -------------------- Singleton + accessors --------------------
@@ -176,9 +137,5 @@ def ping_safe() -> bool:
         return False
 
 __all__ = ["make_client", "get_redis", "redis_client", "ping_safe"]
-
-
-
-
 
 
