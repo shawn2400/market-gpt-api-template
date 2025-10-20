@@ -2,8 +2,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, asyncio, json
-from typing import Optional, List, Dict, Any
-from fastapi import APIRouter, Header, Request
+from typing import Dict, Any
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, StreamingResponse
 
 from utils.redis_helper import get_redis
@@ -12,7 +12,7 @@ router = APIRouter(prefix="/public", tags=["Public Feed"])
 
 _POS_EVENTS_KEY = os.getenv("POS_EVENTS_KEY", "pos:events")
 _POS_EVENTS_CHAN = os.getenv("POS_EVENTS_CHAN", "pos:events:chan")
-_SSE_HEARTBEAT_SEC = int(os.getenv("PUBLIC_SSE_HEARTBEAT_SEC", "20"))
+_SSE_HEARTBEAT_SEC = int(os.getenv("PUBLIC_SSE_HEARTBEAT_SEC", "20") or 20)
 
 async def _sse_event(event: str, data: dict | list) -> bytes:
     payload = f"event: {event}\n" + "data: " + json.dumps(data, ensure_ascii=False, separators=(",",":")) + "\n\n"
@@ -21,7 +21,7 @@ async def _sse_event(event: str, data: dict | list) -> bytes:
 async def _sse_comment(msg: str) -> bytes:
     return (f": {msg}\n\n").encode("utf-8")
 
-# ====== SSE: תמונת מצב פוזיציות ======
+# ====== SSE: תמונת מצב פוזיציות (poll עדין) ======
 @router.get("/sse-positions")
 async def sse_positions(request: Request):
     r = await get_redis()
@@ -29,26 +29,29 @@ async def sse_positions(request: Request):
         return PlainTextResponse("redis_unavailable", status_code=503)
 
     async def gen():
-        last_ping = 0
+        last_ping = 0.0
         while True:
-            if await request.is_disconnected(): break
+            if await request.is_disconnected():
+                break
             try:
                 raw = await r.get("pos:all")
                 if raw:
                     doc = json.loads(raw)
                     yield await _sse_event("positions", doc)
             except Exception:
+                # לא מפילים את הזרם
                 pass
-            # heartbeat למניעת idle timeouts
             now = asyncio.get_event_loop().time()
             if now - last_ping > _SSE_HEARTBEAT_SEC:
                 last_ping = now
                 yield await _sse_comment("hb")
-            await asyncio.sleep(2)
+            await asyncio.sleep(2.0)
+
     headers = {
         "Cache-Control": "no-cache",
-        "Content-Type": "text/event-stream",
+        "Content-Type": "text/event-stream; charset=utf-8",
         "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
     }
     return StreamingResponse(gen(), headers=headers)
 
@@ -60,23 +63,30 @@ async def sse_pos_events(request: Request):
         return PlainTextResponse("redis_unavailable", status_code=503)
 
     async def gen():
-        # שליחת BACKLOG ראשוני (עד 100 אחרונים)
+        # BACKLOG ראשוני (עד 100 אחרונים)
         try:
             raw_list = await r.lrange(_POS_EVENTS_KEY, 0, 99)
             if raw_list:
-                items = [json.loads(x) for x in raw_list][::-1]  # מהישן לחדש
+                items = []
+                for x in raw_list:
+                    try:
+                        items.append(json.loads(x))
+                    except Exception:
+                        items.append({"raw": x})
+                # מהישן לחדש
+                items = items[::-1]
                 yield await _sse_event("pos_events_snapshot", items)
         except Exception:
             pass
 
-        # הרשמה ל-PUBSUB
         pubsub = r.pubsub()
         await pubsub.subscribe(_POS_EVENTS_CHAN)
 
-        last_ping = 0
+        last_ping = 0.0
         try:
             while True:
-                if await request.is_disconnected(): break
+                if await request.is_disconnected():
+                    break
                 try:
                     msg = await pubsub.get_message(ignore_subscribe_messages=True, timeout=1.0)
                     if msg and msg.get("type") == "message":
@@ -90,7 +100,6 @@ async def sse_pos_events(request: Request):
                         yield await _sse_event("pos_event", evt)
                 except Exception:
                     pass
-                # heartbeat
                 now = asyncio.get_event_loop().time()
                 if now - last_ping > _SSE_HEARTBEAT_SEC:
                     last_ping = now
@@ -99,18 +108,22 @@ async def sse_pos_events(request: Request):
         finally:
             try:
                 await pubsub.unsubscribe(_POS_EVENTS_CHAN)
+            except Exception:
+                pass
+            try:
                 await pubsub.close()
             except Exception:
                 pass
 
     headers = {
         "Cache-Control": "no-cache",
-        "Content-Type": "text/event-stream",
+        "Content-Type": "text/event-stream; charset=utf-8",
         "Connection": "keep-alive",
+        "X-Accel-Buffering": "no",
     }
     return StreamingResponse(gen(), headers=headers)
 
-# ====== UI ======
+# ====== דף תצוגה מינימלי ======
 @router.get("/positions/web")
 async def positions_web():
     html = """<!doctype html>
@@ -243,4 +256,3 @@ evMgr.addEventListener("pos_event", e=>{
 </body></html>
 """
     return HTMLResponse(html)
-
