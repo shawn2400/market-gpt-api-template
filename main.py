@@ -2128,14 +2128,34 @@ except Exception as e:
     logger.warning("routes.public_snapshot router not loaded: %s", e)
 # <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
-# >>>>>> NEW: visual_stream router include <<<<<<
+# >>>>>> NEW: visual_stream router <<<<<<
 try:
     from routes.visual_stream import router as _visual_stream_router
     app.include_router(_visual_stream_router, tags=["visual-stream"])
-    logger.info("visual_stream router mounted")
+    logger.info("routes.visual_stream router mounted")
 except Exception as e:
     logger.warning("routes.visual_stream not loaded: %s", e)
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
+
+# >>>>>> NEW: Position Publisher loop (Redis positions broadcaster) <<<<<<
+# Will run only if POS_PUB_ENABLE is truthy. Interval defaults to 20s.
+try:
+    from manager.pos_publisher import start_pos_publisher as _start_pos_publisher
+    if os.getenv("POS_PUB_ENABLE", "0").lower() in ("1", "true", "yes", "on"):
+        # build kwargs safely in case function signature differs
+        _pub_kwargs = {"app": app, "interval_sec": int(os.getenv("POS_PUB_INTERVAL_SEC", "20") or 20), "redis_url": REDIS_URL}
+        try:
+            # reuse local helper to pass only supported args
+            _pub_kwargs = _filter_kwargs_for_callable(_start_pos_publisher, _pub_kwargs)
+        except Exception:
+            pass
+        _start_pos_publisher(**_pub_kwargs)
+        logger.info("pos_publisher started (interval=%ss)", os.getenv("POS_PUB_INTERVAL_SEC", "20"))
+    else:
+        logger.info("pos_publisher disabled by env (POS_PUB_ENABLE)")
+except Exception as e:
+    logger.warning("pos_publisher not started: %s", e)
+# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
 
 app.include_router(router)
 
@@ -2366,11 +2386,6 @@ async def _on_startup():
     # set Telegram webhook if configured
     with suppress(Exception):
         await _ensure_telegram_webhook()
-    # (NEW) start positions publisher loop (safe no-op if module missing)
-    with suppress(Exception):
-        from manager.pos_publisher import start_pos_publisher  # <- Publisher
-        start_pos_publisher(app)  # מפעיל לולאת עדכון Redis לפוזיציות
-        logger.info("pos_publisher loop started")
     # optional startup ping
     if STARTUP_NOTIFY_ENABLE and not ONLY_TRADE_NOTIFICATIONS:
         with suppress(Exception):
@@ -2392,6 +2407,7 @@ if __name__ == "__main__":
     import uvicorn
     reload_flag = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=reload_flag)
+
 
 
 
