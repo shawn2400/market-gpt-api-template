@@ -8,10 +8,7 @@ services:
     plan: pro
     autoDeploy: false
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /ultra/readyz/strict
-
-    # מריץ self-check וגאניקורן דרך entry.sh כדי למנוע תקלות quoting/paren ב-/bin/sh
-    dockerCommand: "/app/entry.sh"
+    healthCheckPath: /health   # ללא UltraTop; ברירת מחדל FastAPI
 
     disk:
       name: data
@@ -45,7 +42,7 @@ services:
       - key: PYTHONPATH
         value: "/app"
 
-      # ---------- Ultratop (נותן /ultra/readyz/strict) ----------
+      # ---------- Ultratop (אם לא מותקן – יעבוד במצב noop) ----------
       - key: ULTRATOP_MODE
         value: "mount"
       - key: ULTRATOP_PREFIX
@@ -125,6 +122,7 @@ services:
         value: "1"
       - key: TRUST_XFF
         value: "1"
+
       - key: SECURITY_PUBLIC_PATHS
         value: "/ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/routes/approve/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/health,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/public/pos-events/stream,/internal/self-check/signed"
       - key: SECURITY_PUBLIC_PREFIXES
@@ -138,7 +136,7 @@ services:
       - key: CSP_POLICY
         value: "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https:; base-uri 'none'; frame-ancestors 'none'"
 
-      # ========================= Anti-Replay (generic) =========================
+      # ========================= Anti-Replay =========================
       - key: ANTI_REPLAY_ENABLE
         value: "1"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
@@ -148,27 +146,7 @@ services:
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
 
-      # ========================= HMAC (request signing for executor & more) =========================
-      - key: HMAC_ENABLE
-        value: "1"
-      - key: HMAC_REQUIRE
-        value: "1"
-      - key: HMAC_HEADER
-        value: "X-Signature"
-      - key: HMAC_TS_HEADER
-        value: "X-Timestamp"
-      - key: HMAC_NONCE_HEADER
-        value: "X-Nonce"
-      - key: HMAC_BODY_HASH_HEADER
-        value: "X-Content-SHA256"
-      - key: HMAC_TOLERANCE_SEC
-        value: "60"
-      - key: HMAC_NONCE_TTL_SEC
-        value: "180"
-      - key: HMAC_NAMESPACE
-        value: "hmac"
-
-      # ========================= Rate Limit (public middleware) =========================
+      # ========================= Rate Limit =========================
       - key: RATE_LIMIT_ENABLE
         value: "1"
       - key: RL_FAIL_OPEN
@@ -203,7 +181,7 @@ services:
       - key: PUBLIC_RL_NS
         value: "ops-supervisor-web:rl"
 
-      # -------- EXECUTOR RL (קיים אצלך; נשאר) --------
+      # -------- EXECUTOR RL --------
       - key: EXECUTOR_RL_RPS
         value: "2"
       - key: EXECUTOR_RL_BURST
@@ -212,45 +190,6 @@ services:
         value: "3"
       - key: EXECUTOR_RL_NS
         value: "ops-executor:rl"
-
-      # ========================= Token-Bucket RL (utils/rate_limit_tb.py) =========================
-      - key: TB_ENABLE
-        value: "1"
-      - key: TB_NAMESPACE
-        value: "tb"
-      - key: TB_DEFAULT_RATE
-        value: "5"
-      - key: TB_DEFAULT_BURST
-        value: "15"
-      - key: TB_DEFAULT_PERIOD_SEC
-        value: "1"
-      - key: TB_REST_RATE
-        value: "5"
-      - key: TB_REST_BURST
-        value: "15"
-      - key: TB_REST_PERIOD_SEC
-        value: "1"
-      - key: TB_WEB_RATE
-        value: "2"
-      - key: TB_WEB_BURST
-        value: "6"
-      - key: TB_WEB_PERIOD_SEC
-        value: "1"
-      - key: TB_SSE_RATE
-        value: "20"
-      - key: TB_SSE_BURST
-        value: "20"
-      - key: TB_SSE_PERIOD_SEC
-        value: "60"
-      - key: TB_PATH_RULES
-        value: |
-          [
-            {"pattern":"^/executor/positions$","rate":3,"burst":9,"period_sec":1},
-            {"pattern":"^/executor/balance$","rate":2,"burst":6,"period_sec":1},
-            {"pattern":"^/executor/mark-price$","rate":2,"burst":6,"period_sec":1},
-            {"pattern":"^/executor/exchange-info$","rate":1,"burst":3,"period_sec":2},
-            {"pattern":"^/executor/symbols$","rate":1,"burst":3,"period_sec":2}
-          ]
 
       # ========================= Redis (incl. TLS) =========================
       - key: REQUIRE_REDIS
@@ -982,7 +921,7 @@ services:
       - key: POS_EVENTS_TELEGRAM_ENABLE
         value: "1"
       - key: POS_EVENTS_TELEGRAM_LEVEL
-        value: "important"   # all / important / none
+        value: "important"
 
       # ========================= Dynamic Auto-Controller =========================
       - key: DYNAMIC_CONTROL_ENABLE
@@ -1096,7 +1035,7 @@ services:
       - key: ONCHAIN_CACHE_TTL_SEC
         value: "900"
       - key: ETHERSCAN_ENABLE
-        value: "0"   # עד שיהיה KEY. הפוך ל-1 כשתוסיף Secret.
+        value: "0"
       - key: RISK_GATE_ONCHAIN_COOLDOWN_MIN
         value: "30"
 
@@ -1105,4 +1044,3 @@ services:
         value: "1"
       - key: ENABLE_STARTUP_SELF_CHECK
         value: "1"
-
