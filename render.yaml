@@ -30,7 +30,6 @@ services:
       - key: SERVICE_INSTANCE
         value: "algogpt-prod"
 
-      # מצב הפעלה היברידי (שרת + מנהל)
       - key: MODE
         value: "hybrid"
 
@@ -38,14 +37,16 @@ services:
         value: "10000"
       - key: APP_MODULE
         value: "main:app"
+      - key: PYTHONPATH
+        value: "/app"
+
+      # ---------- Ultratop (נותן /ultra/readyz/strict) ----------
       - key: ULTRATOP_MODE
         value: "mount"
       - key: ULTRATOP_PREFIX
         value: "/ultra"
-      - key: PYTHONPATH
-        value: "/app"
 
-      # Gunicorn/Uvicorn – שמרני
+      # Gunicorn/Uvicorn
       - key: WEB_CONCURRENCY
         value: "1"
       - key: GUNICORN_TIMEOUT
@@ -120,9 +121,6 @@ services:
       - key: TRUST_XFF
         value: "1"
 
-      # --- פרסום מפורש של נתיבי approve ---
-      # /ops/approve  => מוגן Bearer, דורש POST עם query param id
-      # /ops/approve/signed => ציבורי (ללא Bearer) אבל דורש חתימה ו-anti-replay
       - key: ROUTES_APPROVE_ENDPOINT
         value: "/ops/approve"
       - key: SECURITY_PUBLIC_PATHS
@@ -148,7 +146,7 @@ services:
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
 
-      # ========================= Rate Limit (coarse) =========================
+      # ========================= Rate Limit =========================
       - key: RATE_LIMIT_ENABLE
         value: "1"
       - key: RL_FAIL_OPEN
@@ -168,7 +166,6 @@ services:
       - key: PUBLIC_CACHE_PATHS
         value: "/scan/public-topk,/scan/public-now,/topk"
 
-      # ===== Extra RL knobs =====
       - key: PUBLIC_WEB_RPS
         value: "2"
       - key: PUBLIC_WEB_BURST
@@ -338,7 +335,7 @@ services:
       - key: IMPACT_SLIP_BPS_MAX
         value: "25"
 
-      # ----- Sensitivity: spread & volatility -----
+      # ----- Sensitivity -----
       - key: SPREAD_ASSUME_PCT
         value: "0.02"
       - key: SPREAD_SOFT_PCT
@@ -348,7 +345,7 @@ services:
       - key: PREFER_HYBRID_DEFAULT
         value: "1"
 
-      # ===== Weights (optional tuning) =====
+      # ===== Weights =====
       - key: W_REGIME
         value: "2.0"
       - key: W_COMPRESSION
@@ -402,7 +399,6 @@ services:
       - key: AUTO_OPEN_ON_APPROVE
         value: "1"
 
-      # אל תחסום ניהול אחרי האישור
       - key: SINK_ENFORCE_APPROVALS
         value: "0"
       - key: APPROVE_BEFORE_GATE
@@ -494,7 +490,7 @@ services:
       - key: RETRY_JITTER
         value: "1"
 
-      # ======== Binance precision overrides (BTCUSDT) =========
+      # ===== Binance precision overrides (BTCUSDT) =====
       - key: PRICE_DP_OVERRIDE__BTCUSDT
         value: "1"
       - key: QTY_STEP_OVERRIDE__BTCUSDT
@@ -538,7 +534,6 @@ services:
       - key: STREAM_TP_BE
         value: "1"
 
-      # הפעלה אוטומטית של סולם ו"סמארט מנג'" מיד לאחר האישור
       - key: TP_LADDER_ON_APPROVE
         value: "1"
       - key: SMART_MANAGE_ON_APPROVE
