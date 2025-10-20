@@ -84,6 +84,13 @@ with suppress(Exception):
 with suppress(Exception):
     from utils.guard_stop import ensure_protective_stop
 
+# === Optional event-emitter (Redis + Telegram) ===
+try:
+    from utils.pos_events import emit  # async
+except Exception:
+    async def emit(*args, **kwargs):
+        return {"ok": False, "skipped": True, "reason": "pos_events_unavailable"}
+
 try:
     from utils.budget import get_budget_usdt
 except Exception:
@@ -202,7 +209,6 @@ def _order_matches(
         if eff_ps != "BOTH":
             if pos_side_in_order != eff_ps:
                 return False
-        # if eff_ps == BOTH -> don't fail if API returns positionSide unexpectedly
         if expect_ro:
             ro = o.get("reduceOnly")
             if ro not in (True, "true", 1):
@@ -352,7 +358,6 @@ def _ensure_qty(
     return q_min, q_min_f
 
 def _approve_if_needed(idem: _Idem, plan: Dict[str, Any]) -> None:
-    # Enforce global approval toggle OR per-plan requirement
     if ENFORCE_APPROVAL_ALWAYS or require_approval(plan):
         ttl = int(plan.get("confirm_ttl_sec") or CONFIRM_TTL_SEC or 600)
         send_confirm_request(idem, plan, ttl=ttl)
@@ -395,12 +400,11 @@ def _place_tp_sl_for_position(
             "type": tp_kind,
             "reduceOnly": True,
             "quantity": part_qty_str,
-            "stopPrice": _q_price(symbol, px),  # both kinds use stopPrice
+            "stopPrice": _q_price(symbol, px),
             "timeInForce": None if tp_is_mkt else "GTC",
             "price": None if tp_is_mkt else _q_price(symbol, px),
             "newClientOrderId": _coid(f"TP{i}", symbol, close_side) if ORDER_ID_PREFIX else None,
         }
-        # remove None keys
         args = {k: v for k, v in args.items() if v is not None}
         if eff_position_side != "BOTH":
             args["positionSide"] = eff_position_side
@@ -421,6 +425,14 @@ def _place_tp_sl_for_position(
         )
         results["tp"].append(res)
 
+        # 🔔 אירוע על הצבת TP
+        try:
+            asyncio.get_event_loop().create_task(
+                emit(symbol, "tp_place", idx=i, price=px, qty=float(part_qty_str))
+            )
+        except Exception:
+            pass
+
     if sl_target and float(sl_target.get("price") or 0.0) > 0:
         sl_px = float(sl_target["price"])
         sl_args = {
@@ -429,7 +441,7 @@ def _place_tp_sl_for_position(
             "type": sl_kind,
             "reduceOnly": True,
             "quantity": qty_str,
-            "stopPrice": _q_price(symbol, sl_px),  # both kinds use stopPrice
+            "stopPrice": _q_price(symbol, sl_px),
             "timeInForce": None if sl_is_mkt else "GTC",
             "price": None if sl_is_mkt else _q_price(symbol, sl_px),
             "newClientOrderId": _coid("SL", symbol, close_side) if ORDER_ID_PREFIX else None,
@@ -595,7 +607,7 @@ def _maybe_breakeven_after_tp1(
     args = {
         "symbol": symbol.upper(),
         "side": close_side,
-        "type": SL_KIND,  # keep BE as same SL kind (STOP/STOP_MARKET)
+        "type": SL_KIND,
         "reduceOnly": True,
         "quantity": qty_str,
         "stopPrice": _q_price(symbol, float(be_px)),
@@ -827,6 +839,7 @@ async def execute_trade_live_async(plan: Dict[str, Any]) -> Dict[str, Any]:
     return await loop.run_in_executor(None, execute_trade_live, plan)
 
 __all__ = ["execute_trade_live", "execute_trade_live_async", "_safe_close_position"]
+
 
 
 
