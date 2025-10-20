@@ -10,6 +10,21 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /ultra/readyz/strict
 
+    # (אופציונלי אך מומלץ) הרצת Gate לפני השרת:
+    # אם אצלך לא נתמך dockerCommand ל-Docker services, השב אותו ב-Dockerfile כ-ENTRYPOINT/ CMD.
+    dockerCommand: >
+      bash -lc '
+      if [ "${ENABLE_STARTUP_SELF_CHECK:-1}" = "1" ]; then
+        python -m app.scripts.startup_gate || exit 23;
+      fi;
+      exec gunicorn -k uvicorn.workers.UvicornWorker
+        -w ${WEB_CONCURRENCY:-1}
+        -t ${GUNICORN_TIMEOUT:-180}
+        --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-45}
+        --keep-alive ${GUNICORN_KEEPALIVE:-30}
+        -b 0.0.0.0:${PORT:-10000} ${APP_MODULE:-main:app}
+      '
+
     disk:
       name: data
       mountPath: /app/data
@@ -126,7 +141,7 @@ services:
       - key: ROUTES_APPROVE_ENDPOINT
         value: "/ops/approve"
       - key: SECURITY_PUBLIC_PATHS
-        value: "/ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/routes/approve/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/health,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/public/pos-events/stream"
+        value: "/ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/routes/approve/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/health,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/public/pos-events/stream,/internal/self-check/signed"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
       - key: SECURITY_PROTECTED_PATHS
@@ -1013,7 +1028,7 @@ services:
       - key: KILL_SWITCH_REASON
         value: "auto-guard"
 
-      # ===== ON-CHAIN (אופציונלי — לפי הבקשה שלך) =====
+      # ===== ON-CHAIN (אופציונלי) =====
       - key: ONCHAIN_ENABLE
         value: "1"
       - key: ONCHAIN_PROVIDER
@@ -1028,6 +1043,12 @@ services:
         fromSecret: ETHERSCAN_API_KEY
       - key: RISK_GATE_ONCHAIN_COOLDOWN_MIN
         value: "30"
+
+      # ===== Self-check flags =====
+      - key: ENABLE_SELF_CHECK
+        value: "1"
+      - key: ENABLE_STARTUP_SELF_CHECK
+        value: "1"
 
 
 
