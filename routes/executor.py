@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -59,7 +59,8 @@ def list_positions() -> Dict[str, Any]:
     """
     try:
         from binance.client import Client  # type: ignore
-        cli = Client(os.getenv("BINANCE_API_KEY", ""), os.getenv("BINANCE_API_SECRET", ""), testnet=os.getenv("BINANCE_TESTNET", "0") in ("1","true","on"))
+        testnet = os.getenv("BINANCE_TESTNET", "0").lower() in ("1", "true", "yes", "on")
+        cli = Client(os.getenv("BINANCE_API_KEY", ""), os.getenv("BINANCE_API_SECRET", ""), testnet=testnet)
         items = cli.futures_position_information() or []
         # סינון רק פוזיציות עם כמות != 0
         items = [p for p in items if abs(float(p.get("positionAmt") or 0)) > 0]
@@ -75,7 +76,8 @@ def list_positions() -> Dict[str, Any]:
 def get_balance() -> Dict[str, Any]:
     try:
         from binance.client import Client  # type: ignore
-        cli = Client(os.getenv("BINANCE_API_KEY", ""), os.getenv("BINANCE_API_SECRET", ""), testnet=os.getenv("BINANCE_TESTNET", "0") in ("1","true","on"))
+        testnet = os.getenv("BINANCE_TESTNET", "0").lower() in ("1", "true", "yes", "on")
+        cli = Client(os.getenv("BINANCE_API_KEY", ""), os.getenv("BINANCE_API_SECRET", ""), testnet=testnet)
         bal = cli.futures_account_balance()
         return {"ok": True, "balances": bal}
     except ImportError:
@@ -156,7 +158,6 @@ def get_symbols(quote: str = Query("USDT", description="סימול מטבע צי
         if isinstance(s, dict) and _filter_usdt_perp(s, quote=quote)
     })
     return {"ok": True, "symbols": out, "count": len(out)}
-
 
 
 
