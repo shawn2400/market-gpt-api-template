@@ -1,149 +1,74 @@
-# routes/public_web.py
-# -*- coding: utf-8 -*-
+# routes/executor.py
 from __future__ import annotations
-import os
-from typing import Optional
-from fastapi import APIRouter, Header, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
+from typing import Any, Dict, Optional
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+import httpx
 
-# אין prefix כדי ליישר 1:1 לנתיבים שב-SECURITY_PUBLIC_PATHS
-router = APIRouter(prefix="", tags=["Public Web"])
+from utils.auth import require_api_key
+from utils.binance_trade import plan_and_execute
+from utils.telegram_notify import send_audit
 
-# נשאר להמשך שימוש (לא נדרש לעמודי ה-Web הציבוריים)
-PUBLIC_REQUIRE_BEARER = os.getenv("PUBLIC_REQUIRE_BEARER", "1").lower() in ("1","true","yes","on")
-API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
+router = APIRouter(prefix="/executor", tags=["executor"])
 
-try:
-    from utils.rate_limit_tb import tb_allow  # type: ignore
-except Exception:
-    async def tb_allow(ip: str, path: str, sse_hint: bool=False):
-        return True, None
+@router.get("/status")
+def executor_status() -> Dict[str, Any]:
+    import time
+    return {"ok": True, "status": "running", "ts": int(time.time() * 1000)}
 
-def _csp_headers() -> dict:
-    return {
-        "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; frame-ancestors 'none'",
-        "X-Frame-Options": "DENY",
-        "X-Content-Type-Options": "nosniff",
-        "Referrer-Policy": "no-referrer",
-    }
-
-@router.get("/topk")  # legacy redirect (תואם לנתיב הישן)
-async def topk_legacy_redirect():
-    return RedirectResponse("/scan/public-topk", status_code=307)
-
-@router.get("/scan/public-topk/web")
-async def topk_web(request: Request, authorization: Optional[str] = Header(None, alias="Authorization")):
-    # עמוד זה ציבורי בכוונה (תואם ל-SECURITY_PUBLIC_PATHS); לא מבצעים Bearer check פה.
-    ip = (request.client.host if request.client else "0.0.0.0")
-    allowed, ra = await tb_allow(ip, request.url.path, sse_hint=False)
-    if not allowed:
-        resp = PlainTextResponse("rate_limited", status_code=429)
-        if ra:
-            resp.headers["Retry-After"] = str(ra)
-        return resp
-
-    html_doc = """<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8">
-<title>TopK — Live</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:0;padding:16px;background:#0b0d10;color:#e2e8f0}
-table{width:100%;border-collapse:collapse;margin-top:12px}
-th,td{padding:8px;border-bottom:1px solid #1f2937;font-size:14px}
-th{text-align:left;color:#93c5fd}
-.badge{display:inline-block;padding:2px 6px;border-radius:6px;background:#1f2937}
-.up{color:#10b981} .down{color:#ef4444}
-small{color:#93a3b8}
-</style>
-</head><body>
-<h2>TopK <small>live</small></h2>
-<table id="t"><thead><tr>
-<th>Symbol</th><th>Side</th><th>Score</th><th>Why</th><th>TF</th><th>TS</th>
-</tr></thead><tbody></tbody></table>
-<script>
-const tbody = document.querySelector("#t tbody");
-function fmtTs(ts){try{return new Date(ts*1000).toISOString().replace('T',' ').slice(0,19)}catch{return ts}}
-function render(items){tbody.innerHTML = ""; (items||[]).forEach(it=>{
-  const tr = document.createElement("tr");
-  const side = (String(it.side||"").toUpperCase()==="BUY") ? "<span class='badge up'>BUY</span>" : "<span class='badge down'>SELL</span>";
-  tr.innerHTML = `
-    <td>${it.symbol||""}</td>
-    <td>${side}</td>
-    <td>${(it.score||0).toFixed?it.score.toFixed(2):it.score}</td>
-    <td>${(it.reason||"")}</td>
-    <td>${it.timeframe||""}</td>
-    <td><small>${fmtTs(it.ts||0)}</small></td>
-  `;
-  tbody.appendChild(tr);
-})}
-function oneShot(){
-  fetch("/scan/public-topk").then(r=>r.json()).then(j=>render(j.items||[])).catch(()=>{});
-}
-oneShot();
-const ev = new EventSource("/scan/public-stream");
-ev.addEventListener("topk", (e)=>{try{const d = JSON.parse(e.data); render(d.items||[])}catch{}});
-</script>
-</body></html>"""
-    return HTMLResponse(html_doc, headers=_csp_headers())
-
-@router.get("/scan/public-now/web")
-async def now_web(request: Request, authorization: Optional[str] = Header(None, alias="Authorization")):
-    # גם עמוד זה ציבורי בכוונה; אין Bearer check כאן.
-    ip = (request.client.host if request.client else "0.0.0.0")
-    allowed, ra = await tb_allow(ip, request.url.path, sse_hint=False)
-    if not allowed:
-        resp = PlainTextResponse("rate_limited", status_code=429)
-        if ra:
-            resp.headers["Retry-After"] = str(ra)
-        return resp
-
-    html_doc = """<!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8"><title>Now — Live</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-body{font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif;margin:0;padding:16px;background:#0b0d10;color:#e2e8f0}
-table{width:100%;border-collapse:collapse;margin-top:12px}
-th,td{padding:8px;border-bottom:1px solid #1f2937;font-size:14px}
-th{text-align:left;color:#93c5fd}
-.badge{display:inline-block;padding:2px 6px;border-radius:6px;background:#1f2937}
-.up{color:#10b981} .down{color:#ef4444}
-small{color:#93a3b8}
-</style>
-</head><body>
-<h2>Now <small>live</small></h2>
-<table id="t"><thead><tr>
-<th>Symbol</th><th>Side</th><th>Price</th><th>Why</th><th>TF</th><th>TS</th>
-</tr></thead><tbody></tbody></table>
-<script>
-const tbody = document.querySelector("#t tbody");
-function fmtTs(ts){try{return new Date(ts*1000).toISOString().replace('T',' ').slice(0,19)}catch{return ts}}
-function render(items){tbody.innerHTML = ""; (items||[]).forEach(it=>{
-  const tr = document.createElement("tr");
-  const side = (String(it.side||"").toUpperCase()==="BUY") ? "<span class='badge up'>BUY</span>" : "<span class='badge down'>SELL</span>";
-  tr.innerHTML = `
-    <td>${it.symbol||""}</td>
-    <td>${side}</td>
-    <td>${(it.price||0)}</td>
-    <td>${(it.reason||"")}</td>
-    <td>${it.timeframe||""}</td>
-    <td><small>${fmtTs(it.ts||0)}</small></td>
-  `;
-  tbody.appendChild(tr);
-})}
-function oneShot(){
-  fetch("/scan/public-now").then(r=>r.json()).then(j=>render(j.items||[])).catch(()=>{});
-}
-oneShot();
-const ev = new EventSource("/scan/public-stream");
-ev.addEventListener("now", (e)=>{try{const d = JSON.parse(e.data); render(d.items||[])}catch{}});
-</script>
-</body></html>"""
-    return HTMLResponse(html_doc, headers=_csp_headers())
-
-
-
+@router.post("/trade")
+async def trade(
+    symbol: str = Query(..., min_length=1, max_length=32),
+    side: str = Query(..., pattern=r"(?i)^(BUY|SELL)$"),
+    budget: float = Query(..., gt=0.0, description="Budget in USD"),
+    leverage: int = Query(..., ge=1, le=125),
+    dry_run: bool = Query(False),
+    _token: str = Depends(require_api_key),
+) -> Dict[str, Any]:
+    try:
+        res = await plan_and_execute(
+            symbol=symbol,
+            side=side,
+            leverage=leverage,
+            budget_usd=float(budget),
+            tp_targets=None,
+            tp_splits=None,
+            sl_price=None,
+            dry_run=bool(dry_run),
+        )
+        # Audit (non-blocking אם אפשר)
+        plan = (res.get("plan") or {})
+        tp = plan.get("tp") or []
+        sl = plan.get("sl") or {}
+        try:
+            await send_audit(
+                "EXECUTOR TRADE",
+                {
+                    "symbol": plan.get("symbol"),
+                    "side": plan.get("side"),
+                    "lev": plan.get("leverage"),
+                    "qty": plan.get("qty"),
+                    "price": round(float(plan.get("entry_price", 0.0)), 2),
+                    "tp": "; ".join([f"{round(l['stopPrice'],2)}@{l['qty']}" for l in tp]) if tp else "—",
+                    "sl": round(float(sl.get("stopPrice", 0.0)), 2) if sl else "—",
+                    "dry": dry_run,
+                },
+            )
+        except Exception:
+            # לא מפילים את הקריאה על כשל הודעת אודיט
+            pass
+        return {"ok": True, "result": res}
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=[{"type": "value_error", "loc": ["query"], "msg": str(ve)}],
+        )
+    except httpx.HTTPStatusError as he:
+        raise HTTPException(
+            status_code=502,
+            detail={"error": "binance_http", "status": he.response.status_code, "body": he.response.text},
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 
