@@ -43,6 +43,8 @@ services:
         value: "mount"
       - key: ULTRATOP_PREFIX
         value: "/ultra"
+      - key: ULTRATOP_STATIC_DIR
+        value: "/app/static/ultra"
 
       - key: WEB_CONCURRENCY
         value: "1"
@@ -64,7 +66,7 @@ services:
       - key: UVICORN_LOG_LEVEL
         value: "info"
 
-      # שמרנו על יחס תקין בין חיבורים פעילים לשמירת-חיים
+      # יחס תקין בין חיבורים ו־keepalive
       - key: HTTP_MAX_CONNECTIONS
         value: "200"
       - key: HTTP_MAX_KEEPALIVE
@@ -826,11 +828,11 @@ services:
       - key: ROUTES_DEFAULT_RL_BURST
         value: "15"
 
-      # דגלי טעינת ראוטרים מהקוד החדש
+      # דגלי טעינת ראוטרים + כיבוי מודולים חסרים
       - key: ENABLE_ROUTES
         value: ""
       - key: DISABLE_ROUTES
-        value: "debug,debug_auth,debug_binance,debug_env"
+        value: "public_web,debug,debug_auth,debug_binance,debug_env"
 
       - key: API_BEARER_TOKEN_RO
         fromSecret: API_BEARER_TOKEN_RO_STAGING
@@ -866,8 +868,9 @@ services:
       - key: ETHERSCAN_API_KEY
         fromSecret: ETHERSCAN_API_KEY_STAGING
 
+      # Publisher פנימי – כבוי (מודול חסר)
       - key: POS_PUB_ENABLE
-        value: "1"
+        value: "0"
       - key: POS_PUB_INTERVAL_SEC
         value: "30"
 
