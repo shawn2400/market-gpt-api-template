@@ -13,6 +13,13 @@ except Exception:
 import httpx
 from prometheus_client import Counter, Gauge
 
+# 🔔 אירועים (Redis + Telegram) – Fallback רך
+try:
+    from utils.pos_events import emit  # async
+except Exception:
+    async def emit(*args, **kwargs):  # type: ignore
+        return {"ok": False, "skipped": True, "reason": "pos_events_unavailable"}
+
 # runtime counters hooks (aliases קיימים ב-runtime_counters)
 try:
     from utils.runtime_counters import ws_note_event, ws_note_reconnect, ws_note_up
@@ -86,6 +93,28 @@ def _jitter(base: float, pct: float = 0.1) -> float:
     delta = base * pct
     return base + random.uniform(-delta, delta)
 
+def _extract_order(o: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    מנרמל מעט את השדות של הודעת ORDER_TRADE_UPDATE/ORDER_UPDATE (REST/WS).
+    """
+    return {
+        "type": str(o.get("o") or o.get("orderType") or o.get("type") or "").upper(),
+        "status": str(o.get("X") or o.get("orderStatus") or o.get("status") or "").upper(),
+        "side": str(o.get("S") or o.get("side") or ""),
+        "symbol": str(o.get("s") or o.get("symbol") or "").upper(),
+        "reduceOnly": str(o.get("R") or o.get("reduceOnly") or "").lower() in ("true","1"),
+        "clientId": str(o.get("c") or o.get("clientOrderId") or ""),
+        "avgPrice": float(o.get("ap") or o.get("avgPrice") or o.get("p") or 0.0),
+        "stopPrice": float(o.get("sp") or o.get("stopPrice") or 0.0),
+        "filled": float(o.get("z") or o.get("filledQty") or 0.0),
+    }
+
+def _coid_tp_index(coid: str) -> int:
+    u = (coid or "").upper()
+    for i in (1,2,3,4):
+        if f"TP{i}" in u: return i
+    return 0
+
 async def _handle_event(msg: Dict[str, Any]):
     etype = (msg.get("e") or msg.get("eventType") or "").upper() or "UNKNOWN"
     WS_EVENTS_TOTAL.labels(etype).inc()
@@ -108,7 +137,30 @@ async def _handle_event(msg: Dict[str, Any]):
         _seen_event[uniq] = True
         if len(_seen_event) > _seen_cap: _seen_event.clear()
 
-        # Hook ביקורת AI על סגירה
+        # ---- TP/SL hit זיהוי ושיגור אירועים ----
+        try:
+            if etype in ("ORDER_TRADE_UPDATE","ORDER_UPDATE"):
+                o = _extract_order(msg.get("o") or msg.get("order") or {})
+                # TP filled (reduceOnly)
+                if o["type"].startswith("TAKE_PROFIT") and o["reduceOnly"] and o["status"] in ("FILLED","PARTIALLY_FILLED","TRADE"):
+                    idx = _coid_tp_index(o["clientId"])
+                    try:
+                        await emit(o["symbol"], f"tp{idx}_hit", price=float(o["avgPrice"] or o["stopPrice"] or 0.0),
+                                   filled_qty=o["filled"], side=o["side"], coid=o["clientId"])
+                    except Exception:
+                        pass
+                # SL filled (reduceOnly)
+                if o["type"] in ("STOP","STOP_MARKET") and o["reduceOnly"] and o["status"] in ("FILLED","TRADE"):
+                    try:
+                        await emit(o["symbol"], "sl_hit", price=float(o["avgPrice"] or o["stopPrice"] or 0.0),
+                                   side=o["side"], coid=o["clientId"])
+                    except Exception:
+                        pass
+        except Exception as e:
+            WS_ERRORS_TOTAL.labels("hook_emit").inc()
+            logger.debug({"event":"ws.emit_hook_error","error":str(e)})
+
+        # Hook ביקורת AI על סגירה (נשמר כמות-שהוא)
         try:
             if etype in ("ORDER_TRADE_UPDATE","ORDER_UPDATE"):
                 o = msg.get("o") or msg.get("order") or {}
@@ -203,5 +255,6 @@ async def stop_async():
             _task.cancel()
         except: pass
     logger.info({"event":"ws.stopped"})
+
 
 
