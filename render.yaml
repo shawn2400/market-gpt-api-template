@@ -913,3 +913,4 @@ services:
       - key: POS_EVENTS_TELEGRAM_LEVEL
         value: "important"   # all / important / none
 
+
