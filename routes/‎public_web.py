@@ -1,39 +1,42 @@
 # routes/public_web.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
 import os
 from typing import Optional
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
-# אין prefix כדי ליישר 1:1 לנתיבים שב-SECURITY_PUBLIC_PATHS
+# נתיבי Web ציבוריים (ללא דרישת Bearer) — תואם 1:1 למבנה שב-main
 router = APIRouter(prefix="", tags=["Public Web"])
 
-# נשאר להמשך שימוש (לא נדרש לעמודי ה-Web הציבוריים)
-PUBLIC_REQUIRE_BEARER = os.getenv("PUBLIC_REQUIRE_BEARER", "1").lower() in ("1","true","yes","on")
-API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
-
+# Rate-limit token bucket (אם קיים). אם לא — נפילה רכה.
 try:
     from utils.rate_limit_tb import tb_allow  # type: ignore
-except Exception:
-    async def tb_allow(ip: str, path: str, sse_hint: bool=False):
+except Exception:  # pragma: no cover
+    async def tb_allow(ip: str, path: str, sse_hint: bool = False):
         return True, None
+
 
 def _csp_headers() -> dict:
     return {
-        "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; frame-ancestors 'none'",
+        "Content-Security-Policy":
+            "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+            "script-src 'self'; frame-ancestors 'none'",
         "X-Frame-Options": "DENY",
         "X-Content-Type-Options": "nosniff",
         "Referrer-Policy": "no-referrer",
     }
 
-@router.get("/topk")  # legacy redirect (תואם לנתיב הישן)
+
+@router.get("/topk")  # אליאס היסטורי לנתיב החדש
 async def topk_legacy_redirect():
     return RedirectResponse("/scan/public-topk", status_code=307)
 
+
 @router.get("/scan/public-topk/web")
 async def topk_web(request: Request, authorization: Optional[str] = Header(None, alias="Authorization")):
-    # עמוד זה ציבורי בכוונה (תואם ל-SECURITY_PUBLIC_PATHS); לא מבצעים Bearer check פה.
+    # עמוד ציבורי: מציג טבלה חיה על בסיס /scan/public-topk ו-/scan/public-stream (אירוע topk)
     ip = (request.client.host if request.client else "0.0.0.0")
     allowed, ra = await tb_allow(ip, request.url.path, sse_hint=False)
     if not allowed:
@@ -64,32 +67,31 @@ small{color:#93a3b8}
 <script>
 const tbody = document.querySelector("#t tbody");
 function fmtTs(ts){try{return new Date(ts*1000).toISOString().replace('T',' ').slice(0,19)}catch{return ts}}
-function render(items){tbody.innerHTML = ""; (items||[]).forEach(it=>{
-  const tr = document.createElement("tr");
-  const side = (String(it.side||"").toUpperCase()==="BUY") ? "<span class='badge up'>BUY</span>" : "<span class='badge down'>SELL</span>";
-  tr.innerHTML = `
-    <td>${it.symbol||""}</td>
+function render(items){tbody.innerHTML="";(items||[]).forEach(it=>{
+  const tr=document.createElement("tr");
+  const side=(String(it.side||"").toUpperCase()==="BUY")?"<span class='badge up'>BUY</span>":"<span class='badge down'>SELL</span>";
+  tr.innerHTML=`<td>${it.symbol||""}</td>
     <td>${side}</td>
     <td>${(it.score||0).toFixed?it.score.toFixed(2):it.score}</td>
-    <td>${(it.reason||"")}</td>
+    <td>${it.reason||""}</td>
     <td>${it.timeframe||""}</td>
-    <td><small>${fmtTs(it.ts||0)}</small></td>
-  `;
+    <td><small>${fmtTs(it.ts||0)}</small></td>`;
   tbody.appendChild(tr);
 })}
-function oneShot(){
-  fetch("/scan/public-topk").then(r=>r.json()).then(j=>render(j.items||[])).catch(()=>{});
-}
+function oneShot(){fetch("/scan/public-topk").then(r=>r.json()).then(j=>render(j.items||[])).catch(()=>{});}
 oneShot();
-const ev = new EventSource("/scan/public-stream");
-ev.addEventListener("topk", (e)=>{try{const d = JSON.parse(e.data); render(d.items||[])}catch{}});
+try{
+  const ev=new EventSource("/scan/public-stream");
+  ev.addEventListener("topk",(e)=>{try{const d=JSON.parse(e.data);render(d.items||[])}catch{}});
+}catch(e){}
 </script>
 </body></html>"""
     return HTMLResponse(html_doc, headers=_csp_headers())
 
+
 @router.get("/scan/public-now/web")
 async def now_web(request: Request, authorization: Optional[str] = Header(None, alias="Authorization")):
-    # גם עמוד זה ציבורי בכוונה; אין Bearer check כאן.
+    # עמוד ציבורי: מציג טבלה חיה על בסיס /scan/public-now ו-/scan/public-stream (אירוע now)
     ip = (request.client.host if request.client else "0.0.0.0")
     allowed, ra = await tb_allow(ip, request.url.path, sse_hint=False)
     if not allowed:
@@ -117,27 +119,25 @@ small{color:#93a3b8}
 <th>Symbol</th><th>Side</th><th>Price</th><th>Why</th><th>TF</th><th>TS</th>
 </tr></thead><tbody></tbody></table>
 <script>
-const tbody = document.querySelector("#t tbody");
+const tbody=document.querySelector("#t tbody");
 function fmtTs(ts){try{return new Date(ts*1000).toISOString().replace('T',' ').slice(0,19)}catch{return ts}}
-function render(items){tbody.innerHTML = ""; (items||[]).forEach(it=>{
-  const tr = document.createElement("tr");
-  const side = (String(it.side||"").toUpperCase()==="BUY") ? "<span class='badge up'>BUY</span>" : "<span class='badge down'>SELL</span>";
-  tr.innerHTML = `
-    <td>${it.symbol||""}</td>
+function render(items){tbody.innerHTML="";(items||[]).forEach(it=>{
+  const tr=document.createElement("tr");
+  const side=(String(it.side||"").toUpperCase()==="BUY")?"<span class='badge up'>BUY</span>":"<span class='badge down'>SELL</span>";
+  tr.innerHTML=`<td>${it.symbol||""}</td>
     <td>${side}</td>
-    <td>${(it.price||0)}</td>
-    <td>${(it.reason||"")}</td>
+    <td>${it.price||0}</td>
+    <td>${it.reason||""}</td>
     <td>${it.timeframe||""}</td>
-    <td><small>${fmtTs(it.ts||0)}</small></td>
-  `;
+    <td><small>${fmtTs(it.ts||0)}</small></td>`;
   tbody.appendChild(tr);
 })}
-function oneShot(){
-  fetch("/scan/public-now").then(r=>r.json()).then(j=>render(j.items||[])).catch(()=>{});
-}
+function oneShot(){fetch("/scan/public-now").then(r=>r.json()).then(j=>render(j.items||[])).catch(()=>{});}
 oneShot();
-const ev = new EventSource("/scan/public-stream");
-ev.addEventListener("now", (e)=>{try{const d = JSON.parse(e.data); render(d.items||[])}catch{}});
+try{
+  const ev=new EventSource("/scan/public-stream");
+  ev.addEventListener("now",(e)=>{try{const d=JSON.parse(e.data);render(d.items||[])}catch{}});
+}catch(e){}
 </script>
 </body></html>"""
     return HTMLResponse(html_doc, headers=_csp_headers())
