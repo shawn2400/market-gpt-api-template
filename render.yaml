@@ -976,3 +976,9 @@ services:
       - key: ENABLE_STARTUP_SELF_CHECK
         value: "1"
 
+      # --- תוספות ממוקדות ---
+      - key: BINANCE_FAPI
+        value: "https://testnet.binancefuture.com"
+      - key: PUBLIC_STREAM_INTERVAL_SEC
+        value: "3"
+
