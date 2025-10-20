@@ -8,8 +8,10 @@ from typing import Any, Dict, Tuple
 # deps: pip install redis PyYAML jsonschema
 import yaml
 from jsonschema import Draft7Validator
-from redis import Redis
 from urllib.parse import urlparse
+
+# שימוש בלקוח האחיד שננעל ל-URL בלבד
+from utils.redis_client import make_client as make_redis_client
 
 
 def _log(msg: str) -> None:
@@ -24,17 +26,20 @@ def _fail(msg: str, verbose: bool) -> bool:
 
 
 def ping_redis(verbose: bool = False) -> bool:
-    """PING Redis using REDIS_URL (or ALGOGPT_REDIS_URL)"""
+    """PING Redis using REDIS_URL (או ALGOGPT_REDIS_URL) — ללא ssl=, לפי ה-URL בלבד."""
     url = os.getenv("REDIS_URL") or os.getenv("ALGOGPT_REDIS_URL")
     if not url:
         _log("⚠️  REDIS_URL/ALGOGPT_REDIS_URL not set — skipping Redis check")
-        return True  # not hard-fail if redis explicitly disabled
+        return True  # לא נכשל קשיח אם מבטלים Redis במכוון
 
     try:
-        parsed = urlparse(url)
-        ssl = parsed.scheme in ("rediss", "redis+ssl")
-        # Handle render-like URLs: redis://[:password]@host:port/db
-        client = Redis.from_url(url, ssl=ssl, socket_connect_timeout=float(os.getenv("REDIS_CONNECT_TIMEOUT", "8.0")))
+        scheme = (urlparse(url).scheme or "").lower()
+        if scheme not in ("redis", "rediss"):
+            return _fail("REDIS_URL must start with redis:// or rediss://", verbose)
+
+        # יצירת לקוח דרך ה-factory שנעול ל-URL
+        client = make_redis_client()
+
         pong = client.ping()
         if pong:
             _log("✅ Redis PING OK")
@@ -115,7 +120,7 @@ def verify_params_dir(params_dir: str, verbose: bool = False) -> bool:
         bad: list[Tuple[str, str]] = []
         for p in files:
             try:
-                load_json(p)  # just syntax check
+                load_json(p)  # רק בדיקת תחביר
             except Exception as e:
                 bad.append((p, str(e)))
 
@@ -132,7 +137,7 @@ def verify_params_dir(params_dir: str, verbose: bool = False) -> bool:
 def main(argv: list[str] | None = None) -> bool:
     argv = argv or sys.argv[1:]
     verbose = ("-v" in argv) or ("--verbose" in argv)
-    strict = ("--strict" in argv)  # if True, Redis not set will also fail
+    strict = ("--strict" in argv)  # אם True, גם Redis לא מוגדר יכשיל
 
     ok_all = True
 
@@ -141,7 +146,7 @@ def main(argv: list[str] | None = None) -> bool:
     if strict and not ok_redis:
         ok_all = False
     elif not ok_redis:
-        # Non-strict mode: only warn if redis misconfigured AND REQUIRE_REDIS=1
+        # Non-strict mode: רק אם REQUIRE_REDIS=1 נתייחס ככשל
         if os.getenv("REQUIRE_REDIS", "1") == "1":
             ok_all = False
 
@@ -166,3 +171,4 @@ def main(argv: list[str] | None = None) -> bool:
 
 if __name__ == "__main__":
     sys.exit(0 if main() else 23)
+
