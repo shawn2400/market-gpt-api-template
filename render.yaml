@@ -994,4 +994,3 @@ services:
         value: "https://testnet.binancefuture.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
         value: "3"
-
