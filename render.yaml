@@ -10,12 +10,11 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /ultra/readyz/strict
 
-    # (אופציונלי אך מומלץ) הרצת Gate לפני השרת:
-    # אם אצלך לא נתמך dockerCommand ל-Docker services, השב אותו ב-Dockerfile כ-ENTRYPOINT/ CMD.
+    # מריץ self-check לפני העלאת השרת; אם נכשל -> exit 23 כדי לגרום ל-Render לבצע restart/redeploy
     dockerCommand: >
       bash -lc '
       if [ "${ENABLE_STARTUP_SELF_CHECK:-1}" = "1" ]; then
-        python -m app.scripts.startup_gate || exit 23;
+        python -m app.scripts.startup_gate --verbose --strict || exit 23;
       fi;
       exec gunicorn -k uvicorn.workers.UvicornWorker
         -w ${WEB_CONCURRENCY:-1}
@@ -1049,7 +1048,6 @@ services:
         value: "1"
       - key: ENABLE_STARTUP_SELF_CHECK
         value: "1"
-
 
 
 
