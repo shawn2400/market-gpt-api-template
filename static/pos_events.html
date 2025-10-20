@@ -1,47 +1,68 @@
 <!doctype html>
-<html lang="he">
+<html lang="he" dir="rtl">
 <head>
   <meta charset="utf-8" />
   <title>Live POS Events</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
+    :root { color-scheme: dark; }
     body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 16px; background:#0b0f14; color:#e6edf3 }
-    header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px }
+    header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; gap: 12px; flex-wrap: wrap; }
     .chip { background:#19232d; padding:6px 10px; border-radius:999px; font-size:12px; }
     #events { display:flex; flex-direction:column; gap:8px; }
     .card { background:#111723; border:1px solid #1f2a37; border-radius:12px; padding:10px 12px }
     .row { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap }
     .op { font-weight:600 }
     .sym { opacity:.9 }
-    .time { opacity:.6; font-size:12px; margin-left:auto }
-    .meta { opacity:.85; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size:12px; }
+    .time { opacity:.6; font-size:12px; margin-inline-start:auto }
+    .meta { opacity:.85; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size:12px; word-break: break-all; }
     .ok { color:#45d483 } .warn { color:#f0ad4e } .err { color:#ff6b6b }
-    #filter { padding:6px 8px; border-radius:8px; border:1px solid #1f2a37; background:#0b0f14; color:#e6edf3 }
+    #filter, #bearer, #endpoint { padding:6px 8px; border-radius:8px; border:1px solid #1f2a37; background:#0b0f14; color:#e6edf3 }
+    .controls { display:flex; gap:8px; align-items:center; flex-wrap:wrap }
+    button { padding:6px 10px; border-radius:8px; border:1px solid #1f2a37; background:#0f1724; color:#e6edf3; cursor:pointer }
+    button:hover { background:#132033 }
   </style>
 </head>
 <body>
   <header>
     <h3 style="margin:0">Live POS Events</h3>
-    <div class="row">
+    <div class="controls">
+      <input id="endpoint" size="28" placeholder="/public/pos-events/stream" />
       <input id="filter" placeholder="סנן לפי סמל (למשל BTCUSDT)" />
+      <input id="bearer" placeholder="Bearer (אופציונלי)" />
+      <button id="btnConnect">התחבר</button>
       <span class="chip" id="status">ממתין…</span>
     </div>
   </header>
 
-  <div id="events"></div>
+  <div id="events" aria-live="polite" aria-busy="true"></div>
 
   <script>
-    const $events = document.getElementById('events');
-    const $status = document.getElementById('status');
-    const $filter = document.getElementById('filter');
+    const $events  = document.getElementById('events');
+    const $status  = document.getElementById('status');
+    const $filter  = document.getElementById('filter');
+    const $bearer  = document.getElementById('bearer');
+    const $endpoint= document.getElementById('endpoint');
+    const $btnConn = document.getElementById('btnConnect');
 
-    let es;
+    // ברירת מחדל לשדה ה-endpoint אם ריק
+    if (!$endpoint.value) $endpoint.value = "/public/pos-events/stream";
+
+    let es = null;
 
     function fmtTime(ts){
       try{
-        const d = new Date(ts*1000);
+        const d = new Date((Number(ts) || 0) * 1000);
+        if (!isFinite(d.getTime())) return '';
         return d.toISOString().replace('T',' ').slice(0,19) + 'Z';
       }catch{ return '' }
+    }
+
+    function escapeHtml(s){
+      return String(s)
+        .replace(/&/g,"&amp;")
+        .replace(/</g,"&lt;")
+        .replace(/>/g,"&gt;");
     }
 
     function addCard(evt){
@@ -50,52 +71,96 @@
       const when = evt.ts ? fmtTime(evt.ts) : '';
       div.innerHTML = `
         <div class="row">
-          <span class="op">${evt.op || '-'}</span>
-          <span class="sym">· ${evt.sym || '-'}</span>
+          <span class="op">${evt.op ? escapeHtml(evt.op) : '-'}</span>
+          <span class="sym">· ${evt.sym ? escapeHtml(evt.sym) : '-'}</span>
           <span class="time">${when}</span>
         </div>
         <div class="meta">${escapeHtml(JSON.stringify(evt))}</div>
       `;
       $events.prepend(div);
-      // שמור עד ~200 פריטים כדי לא להכביד
+
+      // שמירת כמות פריטים סבירה כדי לא להכביד על הדפדפן
       const limit = 200;
-      while ($events.children.length > limit) $events.lastChild.remove();
+      while ($events.children.length > limit) {
+        $events.lastElementChild?.remove();
+      }
     }
 
-    function escapeHtml(s){
-      return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    function setStatus(text, cls){
+      $status.textContent = text;
+      $status.className = 'chip ' + (cls || '');
+    }
+
+    function buildUrl(){
+      const base = $endpoint.value.trim() || "/public/pos-events/stream";
+      const u = new URL(base, window.location.origin);
+      const sym = ($filter.value || "").trim();
+      const bearer = ($bearer.value || "").trim();
+
+      if (sym) u.searchParams.set("sym", sym);
+      if (bearer) u.searchParams.set("bearer", bearer); // רק אם דרוש (PUBLIC_REQUIRE_BEARER=1)
+      return u.toString();
     }
 
     function connect(){
-      const params = new URLSearchParams();
-      const sym = ($filter.value || '').trim();
-      if (sym) params.set('sym', sym.toUpperCase());
+      disconnect(); // נקה חיבור קודם
+      $events.innerHTML = "";
+      const url = buildUrl();
 
-      if (es) { es.close(); es = null; }
-      const url = `/public/pos-events/stream` + (params.toString() ? `?${params.toString()}` : '');
+      try{
+        es = new EventSource(url, { withCredentials: false });
+      }catch(e){
+        setStatus("שגיאה ביצירת EventSource", "err");
+        return;
+      }
 
-      $status.textContent = 'מתחבר…';
-      es = new EventSource(url, { withCredentials: false });
+      setStatus("מתחבר…");
 
-      es.onopen = () => { $status.textContent = 'מחובר'; };
-      es.onerror = () => { $status.textContent = 'מנותק · מנסה שוב…'; };
-      es.addEventListener('message', e => {
-        try { addCard(JSON.parse(e.data)); } catch {}
+      es.onopen = () => {
+        setStatus("מחובר", "ok");
+        $events.setAttribute("aria-busy", "false");
+      };
+
+      es.onerror = (e) => {
+        setStatus("שגיאה / נותק", "err");
+      };
+
+      // ברירת מחדל – message
+      es.onmessage = (ev) => {
+        try{
+          const data = JSON.parse(ev.data);
+          addCard(data);
+        }catch(_){}
+      };
+
+      // נאזין גם לכל event name ספציפי (op), נרשום מאזין כללי
+      const ops = ["pos_event","OPEN","CLOSE","TP","SL","UPDATE","INFO","WARN","ERROR"];
+      ops.forEach(name => {
+        es.addEventListener(name, (ev) => {
+          try{
+            const data = JSON.parse(ev.data);
+            if (!data.op) data.op = name;
+            addCard(data);
+          }catch(_){}
+        });
       });
-      // האירועים מן השרת נשלחים עם event: <op>; נאזין לכולם ברירת מחדל
-      es.addEventListener('tp_hit', e => { try { addCard(JSON.parse(e.data)); } catch {} });
-      es.addEventListener('tp_place', e => { try { addCard(JSON.parse(e.data)); } catch {} });
-      es.addEventListener('sl_move', e => { try { addCard(JSON.parse(e.data)); } catch {} });
-      es.addEventListener('be_move', e => { try { addCard(JSON.parse(e.data)); } catch {} });
-      es.addEventListener('trail_move', e => { try { addCard(JSON.parse(e.data)); } catch {} });
     }
 
-    // התחברות ראשונית
-    connect();
+    function disconnect(){
+      if (es) {
+        try { es.close(); } catch(_){}
+        es = null;
+      }
+    }
 
-    // שינוי פילטר -> פתיחת חיבור חדש
-    $filter.addEventListener('change', connect);
-    $filter.addEventListener('keyup', (e) => { if(e.key === 'Enter') connect(); });
+    $btnConn.addEventListener('click', connect);
+    $filter.addEventListener('keyup', (e) => { if (e.key === 'Enter') connect(); });
+    $endpoint.addEventListener('keyup', (e) => { if (e.key === 'Enter') connect(); });
+    $bearer.addEventListener('keyup', (e) => { if (e.key === 'Enter') connect(); });
+
+    // התחברות אוטומטית בטעינה
+    window.addEventListener('load', connect);
+    window.addEventListener('beforeunload', disconnect);
   </script>
 </body>
 </html>
