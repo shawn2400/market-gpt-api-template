@@ -38,7 +38,7 @@ openai==1.37.0
 # Utils / Infra
 # =========================
 python-dotenv==1.0.1
-redis==5.0.4
+redis==4.6.0          # <<< חשוב: תואם ssl= ו-ssl_cert_reqs=
 orjson==3.10.6
 psutil==5.9.8
 PyYAML==6.0.2
@@ -62,7 +62,6 @@ matplotlib==3.9.2
 # =========================
 pytest==8.2.2
 jsonschema==4.23.0
-
 
 
 
