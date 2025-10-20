@@ -1,3 +1,5 @@
+# Render blueprint — production
+# קובץ מלא ותקין. יש להציב סודות (fromSecret) ב-Render Dashboard.
 services:
   - type: web
     name: algogpt-prod
@@ -124,7 +126,7 @@ services:
       - key: ROUTES_APPROVE_ENDPOINT
         value: "/ops/approve"
       - key: SECURITY_PUBLIC_PATHS
-        value: "/ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/routes/approve/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/health,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version"
+        value: "/ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/routes/approve/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/health,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/public/pos-events/stream"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
       - key: SECURITY_PROTECTED_PATHS
@@ -725,6 +727,8 @@ services:
         value: "30,60,120,300,600,1200,3600"
       - key: SLIP_BPS_BUCKETS
         value: "1,2,5,10,20,50,100"
+      - key: METRICS_BEARER
+        fromSecret: METRICS_BEARER
 
       # ========================= Risk rails =========================
       - key: DAILY_LOSS_CAP_USDT
@@ -887,8 +891,6 @@ services:
         fromSecret: BINANCE_API_KEY
       - key: BINANCE_API_SECRET
         fromSecret: BINANCE_API_SECRET
-      - key: METRICS_BEARER
-        fromSecret: METRICS_BEARER
 
       # ======== NEW: Publishers / Events ========
       - key: POS_PUB_ENABLE
@@ -906,11 +908,126 @@ services:
         value: "500"
       - key: POS_EVENTS_EXPIRE_SEC
         value: "86400"
-
-      # 🔔 Telegram from events (רשות, ללא עומס)
       - key: POS_EVENTS_TELEGRAM_ENABLE
         value: "1"
       - key: POS_EVENTS_TELEGRAM_LEVEL
         value: "important"   # all / important / none
+
+      # ========================= Dynamic Auto-Controller =========================
+      - key: DYNAMIC_CONTROL_ENABLE
+        value: "1"
+      - key: DYNAMIC_SAFETY_MODE
+        value: "on"
+      - key: DYNAMIC_TARGET_P95_MS
+        value: "800"
+      - key: DYNAMIC_ERROR_RATE_MAX_PCT
+        value: "1.5"
+      - key: DYNAMIC_CPU_HIGH_WATERMARK_PCT
+        value: "80"
+      - key: DYNAMIC_CPU_LOW_WATERMARK_PCT
+        value: "45"
+      - key: DYNAMIC_MEM_HIGH_WATERMARK_PCT
+        value: "85"
+      - key: DYNAMIC_SCALE_INTERVAL_SEC
+        value: "30"
+      - key: DYNAMIC_MIN_STABILIZE_SEC
+        value: "90"
+
+      # ---- Adaptive Rate Limit / SSE ----
+      - key: ADAPTIVE_RL_ENABLE
+        value: "1"
+      - key: ADAPTIVE_RL_MIN_RPS
+        value: "3"
+      - key: ADAPTIVE_RL_MAX_RPS
+        value: "15"
+      - key: ADAPTIVE_RL_BURST_MIN
+        value: "9"
+      - key: ADAPTIVE_RL_BURST_MAX
+        value: "45"
+      - key: ADAPTIVE_SSE_ENABLE
+        value: "1"
+      - key: ADAPTIVE_SSE_MAX_CONNS_MIN
+        value: "40"
+      - key: ADAPTIVE_SSE_MAX_CONNS_MAX
+        value: "120"
+      - key: ADAPTIVE_SSE_PER_IP_MIN
+        value: "2"
+      - key: ADAPTIVE_SSE_PER_IP_MAX
+        value: "6"
+
+      # ---- Adaptive Scanning / Concurrency ----
+      - key: ADAPTIVE_SCAN_ENABLE
+        value: "1"
+      - key: SCAN_CONCURRENCY_MIN
+        value: "1"
+      - key: SCAN_CONCURRENCY_MAX
+        value: "4"
+      - key: SCAN_INTERVAL_SEC_MIN
+        value: "30"
+      - key: SCAN_INTERVAL_SEC_MAX
+        value: "90"
+      - key: ADAPTIVE_MANAGER_ENABLE
+        value: "1"
+      - key: MANAGER_INTERVAL_SEC_MIN
+        value: "20"
+      - key: MANAGER_INTERVAL_SEC_MAX
+        value: "60"
+
+      # ---- Load Shedding / Backpressure ----
+      - key: LOAD_SHED_ENABLE
+        value: "1"
+      - key: LOAD_SHED_P95_HARD_MS
+        value: "1500"
+      - key: LOAD_SHED_QUEUE_MAX
+        value: "200"
+      - key: LOAD_SHED_REJECT_PCT_STEP
+        value: "10"
+
+      # ---- Redis / Exchange Health Guards ----
+      - key: DYNAMIC_REDIS_GUARDS_ENABLE
+        value: "1"
+      - key: DYNAMIC_BINANCE_GUARDS_ENABLE
+        value: "1"
+      - key: HALT_TRADING_ON_DEGRADED_HEALTH
+        value: "1"
+      - key: HEALTH_RECOVERY_GRACE_SEC
+        value: "120"
+
+      # ---- Trading Safety Autopilot ----
+      - key: DYNAMIC_RISK_ENABLE
+        value: "1"
+      - key: DYNAMIC_MAX_TRADE_BUDGET_MIN
+        value: "200"
+      - key: DYNAMIC_MAX_TRADE_BUDGET_MAX
+        value: "600"
+      - key: DYNAMIC_DAILY_LOSS_CAP_MIN
+        value: "200"
+      - key: DYNAMIC_DAILY_LOSS_CAP_MAX
+        value: "300"
+      - key: DYNAMIC_COOLDOWNS_ENABLE
+        value: "1"
+
+      # ---- Kill-switch ----
+      - key: KILL_SWITCH_ENABLE
+        value: "1"
+      - key: KILL_SWITCH_REASON
+        value: "auto-guard"
+
+      # ===== ON-CHAIN (אופציונלי — לפי הבקשה שלך) =====
+      - key: ONCHAIN_ENABLE
+        value: "1"
+      - key: ONCHAIN_PROVIDER
+        value: "bitquery"
+      - key: ONCHAIN_TIMEOUT_MS
+        value: "2000"
+      - key: ONCHAIN_CACHE_TTL_SEC
+        value: "900"
+      - key: ETHERSCAN_ENABLE
+        value: "1"
+      - key: ETHERSCAN_API_KEY
+        fromSecret: ETHERSCAN_API_KEY
+      - key: RISK_GATE_ONCHAIN_COOLDOWN_MIN
+        value: "30"
+
 
 
