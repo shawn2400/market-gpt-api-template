@@ -61,7 +61,6 @@ def make_client(*, decode: bool = True) -> "redis.Redis":
 
     conn_to, sock_to = _timeouts()
 
-    # כל ההגדרות דרך kwargs “רגילים” שאינם משנים סיווג TLS — זה נקבע מה-URL בלבד.
     cli = redis.from_url(
         url,
         decode_responses=decode,
