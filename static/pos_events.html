@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="he">
+<head>
+  <meta charset="utf-8" />
+  <title>Live POS Events</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <style>
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; margin: 16px; background:#0b0f14; color:#e6edf3 }
+    header { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px }
+    .chip { background:#19232d; padding:6px 10px; border-radius:999px; font-size:12px; }
+    #events { display:flex; flex-direction:column; gap:8px; }
+    .card { background:#111723; border:1px solid #1f2a37; border-radius:12px; padding:10px 12px }
+    .row { display:flex; gap:12px; align-items:baseline; flex-wrap:wrap }
+    .op { font-weight:600 }
+    .sym { opacity:.9 }
+    .time { opacity:.6; font-size:12px; margin-left:auto }
+    .meta { opacity:.85; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size:12px; }
+    .ok { color:#45d483 } .warn { color:#f0ad4e } .err { color:#ff6b6b }
+    #filter { padding:6px 8px; border-radius:8px; border:1px solid #1f2a37; background:#0b0f14; color:#e6edf3 }
+  </style>
+</head>
+<body>
+  <header>
+    <h3 style="margin:0">Live POS Events</h3>
+    <div class="row">
+      <input id="filter" placeholder="סנן לפי סמל (למשל BTCUSDT)" />
+      <span class="chip" id="status">ממתין…</span>
+    </div>
+  </header>
+
+  <div id="events"></div>
+
+  <script>
+    const $events = document.getElementById('events');
+    const $status = document.getElementById('status');
+    const $filter = document.getElementById('filter');
+
+    let es;
+
+    function fmtTime(ts){
+      try{
+        const d = new Date(ts*1000);
+        return d.toISOString().replace('T',' ').slice(0,19) + 'Z';
+      }catch{ return '' }
+    }
+
+    function addCard(evt){
+      const div = document.createElement('div');
+      div.className = 'card';
+      const when = evt.ts ? fmtTime(evt.ts) : '';
+      div.innerHTML = `
+        <div class="row">
+          <span class="op">${evt.op || '-'}</span>
+          <span class="sym">· ${evt.sym || '-'}</span>
+          <span class="time">${when}</span>
+        </div>
+        <div class="meta">${escapeHtml(JSON.stringify(evt))}</div>
+      `;
+      $events.prepend(div);
+      // שמור עד ~200 פריטים כדי לא להכביד
+      const limit = 200;
+      while ($events.children.length > limit) $events.lastChild.remove();
+    }
+
+    function escapeHtml(s){
+      return s.replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+    }
+
+    function connect(){
+      const params = new URLSearchParams();
+      const sym = ($filter.value || '').trim();
+      if (sym) params.set('sym', sym.toUpperCase());
+
+      if (es) { es.close(); es = null; }
+      const url = `/public/pos-events/stream` + (params.toString() ? `?${params.toString()}` : '');
+
+      $status.textContent = 'מתחבר…';
+      es = new EventSource(url, { withCredentials: false });
+
+      es.onopen = () => { $status.textContent = 'מחובר'; };
+      es.onerror = () => { $status.textContent = 'מנותק · מנסה שוב…'; };
+      es.addEventListener('message', e => {
+        try { addCard(JSON.parse(e.data)); } catch {}
+      });
+      // האירועים מן השרת נשלחים עם event: <op>; נאזין לכולם ברירת מחדל
+      es.addEventListener('tp_hit', e => { try { addCard(JSON.parse(e.data)); } catch {} });
+      es.addEventListener('tp_place', e => { try { addCard(JSON.parse(e.data)); } catch {} });
+      es.addEventListener('sl_move', e => { try { addCard(JSON.parse(e.data)); } catch {} });
+      es.addEventListener('be_move', e => { try { addCard(JSON.parse(e.data)); } catch {} });
+      es.addEventListener('trail_move', e => { try { addCard(JSON.parse(e.data)); } catch {} });
+    }
+
+    // התחברות ראשונית
+    connect();
+
+    // שינוי פילטר -> פתיחת חיבור חדש
+    $filter.addEventListener('change', connect);
+    $filter.addEventListener('keyup', (e) => { if(e.key === 'Enter') connect(); });
+  </script>
+</body>
+</html>
