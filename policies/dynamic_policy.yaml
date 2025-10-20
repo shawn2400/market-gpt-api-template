@@ -1,6 +1,125 @@
 # policies/dynamic_policy.yaml
 # AlgoGPT Dynamic Policy — runtime hot-reload (SIGNED)
-# גרסה: v1
+# גרסה: v1.2
+
+meta:
+  policy_name: "algogpt-dynamic-policy"
+  version: "1.2"
+  author: "ops"
+  signed: false
+  updated_at: "2025-10-19T00:00:00Z"
+
+routing:
+  public_routes:
+    - "/readyz"
+    - "/readyz/strict"
+    - "/health"
+    - "/topk"
+    - "/topk.csv"
+    - "/scan/public-now"
+    - "/scan/public-topk"
+    - "/scan/public-now/web"
+    - "/scan/public-topk/web"
+    - "/scan/public-stream"
+    - "/public/sse-ticket"
+    - "/public/ticket/inspect"
+    - "/alerts/ingest"
+    - "/alerts/trades/update"
+    - "/alerts/trades/active/scan-top-volume"
+    - "/scan/now"
+    - "/meta/version"
+    - "/public/pos-events/stream"
+  protected_routes:
+    - "/ops/approve"
+    - "/ops/reject"
+    - "/webhook/whatever"
+    - "/guard/smoke/run"
+
+controls:
+  dynamic_control_enable: true
+  safety_mode: "on"
+  target_p95_ms: 800
+  max_error_rate_pct: 1.5
+  cpu_high_watermark_pct: 80
+  cpu_low_watermark_pct: 45
+  mem_high_watermark_pct: 85
+  scale_interval_sec: 30
+  min_stabilize_sec: 90
+
+load_shedding:
+  enable: true
+  p95_hard_ms: 1500
+  queue_max: 200
+  reject_pct_step: 10
+
+adaptive_limits:
+  rl:
+    enable: true
+    min_rps: 3
+    max_rps: 15
+    burst_min: 9
+    burst_max: 45
+  sse:
+    enable: true
+    max_conns_min: 40
+    max_conns_max: 120
+    per_ip_min: 2
+    per_ip_max: 6
+
+adaptive_workers:
+  scan:
+    enable: true
+    concurrency_min: 1
+    concurrency_max: 4
+    interval_sec_min: 30
+    interval_sec_max: 90
+  manager:
+    enable: true
+    interval_sec_min: 20
+    interval_sec_max: 60
+
+health_guards:
+  redis:
+    enable: true
+    degrade_on_error: true
+  exchange:
+    enable: true
+    halt_trading_on_degraded: true
+    recovery_grace_sec: 120
+
+risk:
+  dynamic_risk_enable: true
+  dynamic_max_trade_budget:
+    min_usdt: 200
+    max_usdt: 600
+  dynamic_daily_loss_cap:
+    min_usdt: 200
+    max_usdt: 300
+  cooldowns:
+    enable: true
+  rails:
+    daily_loss_cap_usdt: 300
+    kill_on_cap: true
+    price_protect: true
+    max_loss_per_symbol_usdt: 150
+    daily_max_trades_per_symbol: 8
+    caps_per_symbol_window_sec: 3600
+    three_strike_n: 3
+    three_strike_window_sec: 86400
+    equity_usdt: 5000
+    equity_ath_usdt: 8000
+    equity_drawdown_guard_pct: 25
+    corr_cap_beta: 1.6
+    vol_target_pct: 0.015
+    kelly_lite_cap: 0.5
+    gap_shock_bps: 80
+
+sessions:
+  rules:
+    - window: "02:00-06:00Z"
+      action: "OFF"
+    - window: "12:30-13:00Z"
+      action: "REDUCE_50"
 
 breakeven:
   enable: true
@@ -8,25 +127,88 @@ breakeven:
   offset_bps: 8
   guard_every_sec: 30
   arm_pct: 1.6
+  stair:
+    steps: 1
+    factor: 0.5
+  bounds_bps:
+    min: 2
+    max: 25
 
 trailing:
   enable: true
-  atr_mult: 1.5
+  atr_mult: 1.6
   callback_min_pct: 0.1
   callback_max_pct: 4.9
   freeze_on_pullback: true
   enable_dynamic_trailing: true
+  in_chop: true
+  real_time:
+    enable: true
+    interval_sec: 20
+    atr_mult: 1.6
+    price_src: "MARK_PRICE"
+    max_symbols: 30
+    adjust_threshold_pct: 0.2
 
-ladder:
+ladders:
   tp:
     enable: true
-    splits: [0.40, 0.35, 0.25]
-    targets_pct: [1.8, 3.2, 5.5]
-    place_native: true
+    targets_pct: [4.0, 8.0, 16.0]
+    splits: [0.30, 0.30, 0.40]
+    merge_tick_band: 1
+    rearm_tick: 1
+    place_native: false
   sl:
     enable: true
-    atr_mult: 1.2
-    place_native: true
+    monotonic: true
+    stop_band_bps: 20
+    struct:
+      enable: true
+      lookback: 50
+      left: 3
+      right: 3
+      buffer_bps: 5
+      merge_mode: "tight"
+    atr_mult: 1.6
+    place_native: false
+
+entries:
+  allow_market: false
+  entry_band_bps: 25
+  gap:
+    max_pct: 0.80
+    warn_pct: 0.50
+  trigger: "mark"
+  post_only: true
+
+checklist:
+  entry_score:
+    mode: "log"
+    min: 8.5
+    interval: "15m"
+    enforce_on_approve: false
+  quality:
+    enforce: true
+    debounce_limit: 1
+    spread_depth: 1
+    tf_align: 1
+    volume_gate: 1
+    daily_caps: 0
+  regime:
+    adx_trend_min: 22
+    chop_atr: 0.6
+    compression_bw: 1.2
+  limits:
+    ema_gap_max_pct: 6
+    impact_slip_bps_max: 25
+
+indicators:
+  intervals: ["15m","1h","4h","1d"]
+  exit_enable: true
+  adx_min: 20
+  max_atr_pct: 3
+  allow_http: false
+  subset: []
 
 thresholds:
   entry_conf_min: 0.65
@@ -36,12 +218,139 @@ guards:
   flip_latency_max_ms: 300
   adx_min: 15
   flip_min_interval_sec: 180
+  percent_guard:
+    enable: true
+    price_guard_bps: 180
+  freshness:
+    price_max_age_sec: 30
+  tp_grace_sec: 8
+
+btc_gate:
+  enable: true
+  tf: "15m"
+  long_req: "ema21>=ema50"
+  short_req: "ema21<=ema50"
+
+manager:
+  enable: true
+  interval_sec: 30
+  allow_manage_open_trades: true
+  reissue:
+    enable: true
+    policy: "cancel_replace"
+  auto:
+    be_bps: 8
+    atr_mult: 1.6
+    tp_pcts: [3,6,12]
+    tp_splits: [0.278,0.333,0.389]
+    poll_sec: 45
+
+approvals:
+  enabled: true
+  require_telegram: true
+  auto_open_on_approve: true
+  approve_before_gate: false
+  require_watchlist: false
+  rr_min: 1.30
+  success_min_pct: 50
+  max_sl_pct: 3.0
+  require_fresh_price: true
+  dup_cooldown_sec: 0
+
+notifications:
+  telegram:
+    send_enable: true
+    parse_mode: "HTML"
+    rich_msg: false
+    level: "critical"
+    only_trade_notifications: true
+  pos_events:
+    enable: true
+    to_telegram: true
+    level: "important"
+
+digest:
+  ops_digest_interval_hours: 3
+  send_telegram: true
+  max_lines_default: 30
+  tp1:
+    enable: false
+    interval_sec: 1200
+    only_with_position: true
+    tags: ["TP1","tp1","tp_1","TAKE_PROFIT_1"]
+
+eta:
+  smart_enable: true
+  velocity_window: 30
+  default_interval: "15m"
+
+watchlist:
+  allowlist_mode: "off"
+  symbols_allowlist_path: "config/symbols_allowlist.json"
+  default_symbols: ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","NEARUSDT"]
+
+binance:
+  futures_http_base: "https://fapi.binance.com"
+  futures_ws_base: "wss://fstream.binance.com"
+  spot_http_base: "https://api.binance.com"
+  testnet: false
+  working_type: "MARK_PRICE"
+  http_timeout_sec: 10.0
+  max_retries: 0
+  recv_window_ms: 45000
+  ws_keepalive_sec: 25
+  user_stream_enable: true
+  listenkey_keepalive_sec: 1800
+  exchange_info_ttl_sec: 900
 
 sizing:
   cluster_exposure_cap: 0.60
   es_lookback_days: 14
   tail_risk_sizer_enable: true
+  auto_qty:
+    enable: true
+    mode: "notional"
+    margin_buffer_pct: 0.20
+    lev_min: 15
+    lev_max: 25
+    budget_min_usdt: 100
+    budget_max_usdt: 200
 
-regime:
-  ensemble: [hurst, chop, adx_slope, vol_cluster]
+overrides:
+  symbols:
+    BTCUSDT:
+      price_dp_override: 1
+      qty_step_override: 0.001
+      risk:
+        max_trade_budget_usdt: 500
+        max_loss_usdt: 150
+    ETHUSDT:
+      risk:
+        max_trade_budget_usdt: 400
+  regimes:
+    high_vol:
+      when:
+        atrpct_gt: 0.02
+      actions:
+        trailing.atr_mult: 1.8
+        ladders.tp.targets_pct: [5.0, 9.0, 18.0]
+        risk.dynamic_max_trade_budget.max_usdt: 400
+    low_vol:
+      when:
+        atrpct_lt: 0.008
+      actions:
+        trailing.atr_mult: 1.4
+        ladders.tp.targets_pct: [2.5, 5.0, 10.0]
+
+kill_switch:
+  enable: true
+  reason: "auto-guard"
+  trip_conditions:
+    - type: "drawdown_pct"
+      threshold: 25
+    - type: "error_rate_pct"
+      threshold: 3
+  auto_recover:
+    enable: true
+    grace_sec: 600
 
