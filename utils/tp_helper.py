@@ -183,6 +183,62 @@ def place_trailing(client, symbol: str, side_txt: str, callback_rate: float,
     except Exception:
         return None
 
+# --- NEW: הזזת סטופ בפועל + emit("sl_move", ...) אחרי הצלחה -------------------
+def move_sl_stop(*, client, symbol: str, side_txt: str,
+                 old_price: Optional[float], new_price: float,
+                 coid: str, working_type: str = "MARK_PRICE") -> Dict[str, Any]:
+    """
+    מזיז סטופ ClosePosition ל-new_price.
+    אסטרטגיה: יוצרים סטופ חדש, ואז מבטלים STOP/STOP_MARKET ישנים (closePosition) — כך שלא נהיה חשופים.
+    """
+    out: Dict[str, Any] = {"ok": False, "created": None, "canceled_old": 0}
+    try:
+        created = client.futures_create_order(
+            symbol=symbol,
+            side=("SELL" if side_txt.upper() == "BUY" else "BUY"),
+            type="STOP_MARKET",
+            stopPrice=float(new_price),
+            closePosition=True,
+            workingType=working_type,
+            newClientOrderId=coid,
+        )
+        out["created"] = created
+        # בטל ישנים
+        canceled = 0
+        try:
+            oo = client.futures_get_open_orders(symbol=symbol)
+            for o in oo or []:
+                if str(o.get("type")) in ("STOP", "STOP_MARKET") and str(o.get("closePosition")).lower() == "true":
+                    # אל תבטל את זה שרק יצרת (לפי clientOrderId/stopPrice)
+                    try:
+                        if str(o.get("clientOrderId")) == str(coid):
+                            continue
+                    except Exception:
+                        pass
+                    try:
+                        client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+                        canceled += 1
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        out["canceled_old"] = canceled
+        out["ok"] = True
+        # 🔔 emit sl_move אחרי הצלחה
+        try:
+            import asyncio
+            asyncio.get_event_loop().create_task(
+                emit(symbol, "sl_move",
+                     frm=(float(old_price) if old_price is not None else None),
+                     to=float(new_price),
+                     source="tp_helper.move_sl_stop")
+            )
+        except Exception:
+            pass
+        return out
+    except Exception as e:
+        return {"ok": False, "error": f"{e}", **out}
+
 # ─── Orchestrator ל-/manage-once ───────────────────────────────────────────────
 def manage_once_place_all(*, client, symbol: str, side_txt: str,
                           entry_price: float, price_now: Optional[float],
@@ -332,6 +388,14 @@ def maybe_merge_close_tps(client, symbol: str, *, tick: float, tick_band: int) -
             except Exception:
                 pass
             inc_tp_merge()
+            # 🔔 emit tp_merge
+            try:
+                import asyncio
+                asyncio.get_event_loop().create_task(
+                    emit(symbol, "tp_merge", price=float(a["price"]))
+                )
+            except Exception:
+                pass
             ro = fetch_reduce_only_limits(client, symbol)
             i = 0
             continue
@@ -368,6 +432,14 @@ def maybe_rearm_on_bounce(client, symbol: str, *, side_txt: str,
                     )
                     inc_tp_rearm()
                     placed += 1
+                    # 🔔 emit tp_rearm
+                    try:
+                        import asyncio
+                        asyncio.get_event_loop().create_task(
+                            emit(symbol, "tp_rearm", price=float(tgt), qty=float(qty_hint))
+                        )
+                    except Exception:
+                        pass
                 except Exception:
                     continue
         return {"ok": True, "rearmed": placed}
@@ -417,6 +489,14 @@ def anti_stale_nudge(client, symbol: str, *, side_txt: str,
                     )
                     client.futures_cancel_order(symbol=symbol, orderId=o["orderId"])
                     moved += 1
+                    # 🔔 emit tp_nudge
+                    try:
+                        import asyncio
+                        asyncio.get_event_loop().create_task(
+                            emit(symbol, "tp_nudge", frm=float(old), to=float(new_rounded))
+                        )
+                    except Exception:
+                        pass
                 except Exception:
                     continue
         if moved:
@@ -424,4 +504,5 @@ def anti_stale_nudge(client, symbol: str, *, side_txt: str,
         return {"ok": True, "nudged": moved}
     except Exception as e:
         return {"ok": False, "error": f"{e}"}
+
 
