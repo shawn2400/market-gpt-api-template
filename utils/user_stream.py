@@ -12,6 +12,13 @@ from utils.precision_utils import apply_price_tick_side
 
 logger = logging.getLogger("algogpt.userstream")
 
+# 🔔 אירועים (Redis + Telegram) – Fallback רך
+try:
+    from utils.pos_events import emit  # async
+except Exception:
+    async def emit(*args, **kwargs):  # type: ignore
+        return {"ok": False, "skipped": True, "reason": "pos_events_unavailable"}
+
 # ===== ENV =====
 BINANCE_FAPI = cfg.BINANCE_FUTURES_HTTP_BASE
 FWS_BASE = (os.getenv("BINANCE_FUTURES_WS_BASE") or "wss://fstream.binance.com").rstrip("/")
@@ -87,6 +94,13 @@ async def _set_sl(symbol: str, side: str, price: float, qty: float) -> bool:
     px, _ = apply_price_tick_side(price, symbol, close_side)
     try:
         place_stop_market(symbol, close_side, float(px), float(qty), reduce_only=True)
+        # 🔔 דווח BE/Lock כ-"be_move"
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                loop.create_task(emit(symbol, "be_move", frm=None, to=float(px)))
+        except Exception:
+            pass
         return True
     except Exception as e:
         logger.warning({"event": "set_sl_failed", "symbol": symbol, "err": str(e)})
@@ -100,6 +114,8 @@ def _stage_from_label(label: str) -> Optional[int]:
         return 2
     if "TP3" in L:
         return 3
+    if "TP4" in L:
+        return 4
     return None
 
 # ===== TP handler =====
@@ -110,6 +126,15 @@ async def _on_tp(symbol: str, side: str, filled_price: float, label: Optional[st
     entry, qty, side_ok = await _positions_lookup(symbol)
     if not qty or not entry:
         return
+
+    # 🔔 ידווח tp{idx}_hit תמיד (גם אם STREAM_TP_BE כבוי)
+    try:
+        idx = _stage_from_label(label or "")
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            loop.create_task(emit(symbol, f"tp{idx or 0}_hit", price=float(filled_price), side=side, coid=(label or "")))
+    except Exception:
+        pass
 
     if not STREAM_TP_BE:
         return
@@ -192,6 +217,12 @@ def _is_reduce_only_tp(o: Dict[str, Any]) -> bool:
     st = str(o.get("X", "")).upper()
     return ty.startswith("TAKE_PROFIT") and ro and st in ("FILLED", "PARTIALLY_FILLED")
 
+def _is_sl_hit(o: Dict[str, Any]) -> bool:
+    ty = str(o.get("o", "")).upper()
+    st = str(o.get("X", "")).upper()
+    ro = str(o.get("R", "")).lower() in ("true", "1")
+    return (ty in ("STOP", "STOP_MARKET")) and ro and st in ("FILLED", "TRADE")
+
 async def _consumer():
     lk = await _futures_listen_key()
     global _keepalive_task
@@ -212,6 +243,7 @@ async def _consumer():
                     data = json.loads(raw)
                     if str(data.get("e", "")).upper() == "ORDER_TRADE_UPDATE":
                         o = data.get("o") or {}
+                        # TP – שליחת tp{idx}_hit + טיפול BE/Lock
                         if _is_reduce_only_tp(o):
                             sym = str(o.get("s") or "").upper()
                             side = str(o.get("S") or "")
@@ -223,6 +255,16 @@ async def _consumer():
                                 logger.warning(
                                     {"event": "tp_handler_error", "symbol": sym, "err": str(e)}
                                 )
+                        # SL – שליחת sl_hit
+                        if _is_sl_hit(o):
+                            sym = str(o.get("s") or "").upper()
+                            side = str(o.get("S") or "")
+                            label = str(o.get("c") or "")
+                            fp = float(o.get("ap") or o.get("sp") or o.get("p") or 0.0)
+                            try:
+                                await emit(sym, "sl_hit", price=fp, side=side, coid=label)
+                            except Exception as e:
+                                logger.debug({"event":"emit_sl_hit_failed","err":str(e)})
         except asyncio.CancelledError:
             break
         except Exception as e:
@@ -256,4 +298,3 @@ async def stop_user_stream_consumer():
         pass
     _keepalive_task = None
     logger.info({"event": "user_stream_stopped"})
-
