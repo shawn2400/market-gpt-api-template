@@ -6,8 +6,10 @@ from typing import Optional
 from fastapi import APIRouter, Header, Request
 from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse
 
-router = APIRouter(prefix="/web", tags=["Public Feed"])
+# אין prefix כדי ליישר 1:1 לנתיבים שב-SECURITY_PUBLIC_PATHS
+router = APIRouter(prefix="", tags=["Public Web"])
 
+# נשאר להמשך שימוש (לא נדרש לעמודי ה-Web הציבוריים)
 PUBLIC_REQUIRE_BEARER = os.getenv("PUBLIC_REQUIRE_BEARER", "1").lower() in ("1","true","yes","on")
 API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
 
@@ -17,15 +19,6 @@ except Exception:
     async def tb_allow(ip: str, path: str, sse_hint: bool=False):
         return True, None
 
-def _bearer_ok(auth_header: Optional[str]) -> bool:
-    if not PUBLIC_REQUIRE_BEARER:
-        return True
-    if not API_BEARER_TOKEN:
-        return False
-    if not (auth_header and auth_header.startswith("Bearer ")):
-        return False
-    return auth_header.split(" ", 1)[1].strip() == API_BEARER_TOKEN
-
 def _csp_headers() -> dict:
     return {
         "Content-Security-Policy": "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; script-src 'self'; frame-ancestors 'none'",
@@ -34,14 +27,13 @@ def _csp_headers() -> dict:
         "Referrer-Policy": "no-referrer",
     }
 
-@router.get("/topk")  # legacy redirect
+@router.get("/topk")  # legacy redirect (תואם לנתיב הישן)
 async def topk_legacy_redirect():
     return RedirectResponse("/scan/public-topk", status_code=307)
 
 @router.get("/scan/public-topk/web")
 async def topk_web(request: Request, authorization: Optional[str] = Header(None, alias="Authorization")):
-    if not _bearer_ok(authorization):
-        return PlainTextResponse("Unauthorized", status_code=401)
+    # עמוד זה ציבורי בכוונה (תואם ל-SECURITY_PUBLIC_PATHS); לא מבצעים Bearer check פה.
     ip = (request.client.host if request.client else "0.0.0.0")
     allowed, ra = await tb_allow(ip, request.url.path, sse_hint=False)
     if not allowed:
@@ -86,7 +78,7 @@ function render(items){tbody.innerHTML = ""; (items||[]).forEach(it=>{
   tbody.appendChild(tr);
 })}
 function oneShot(){
-  fetch("/scan/public-topk", {headers: {}}).then(r=>r.json()).then(j=>render(j.items||[])).catch(()=>{});
+  fetch("/scan/public-topk").then(r=>r.json()).then(j=>render(j.items||[])).catch(()=>{});
 }
 oneShot();
 const ev = new EventSource("/scan/public-stream");
@@ -97,8 +89,7 @@ ev.addEventListener("topk", (e)=>{try{const d = JSON.parse(e.data); render(d.ite
 
 @router.get("/scan/public-now/web")
 async def now_web(request: Request, authorization: Optional[str] = Header(None, alias="Authorization")):
-    if not _bearer_ok(authorization):
-        return PlainTextResponse("Unauthorized", status_code=401)
+    # גם עמוד זה ציבורי בכוונה; אין Bearer check כאן.
     ip = (request.client.host if request.client else "0.0.0.0")
     allowed, ra = await tb_allow(ip, request.url.path, sse_hint=False)
     if not allowed:
@@ -142,7 +133,7 @@ function render(items){tbody.innerHTML = ""; (items||[]).forEach(it=>{
   tbody.appendChild(tr);
 })}
 function oneShot(){
-  fetch("/scan/public-now", {headers: {}}).then(r=>r.json()).then(j=>render(j.items||[])).catch(()=>{});
+  fetch("/scan/public-now").then(r=>r.json()).then(j=>render(j.items||[])).catch(()=>{});
 }
 oneShot();
 const ev = new EventSource("/scan/public-stream");
