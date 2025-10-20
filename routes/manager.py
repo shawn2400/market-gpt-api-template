@@ -12,6 +12,13 @@ from utils.anti_replay import verify_request
 from utils.telegram_notifier import TelegramNotifier, send_trade_approval  # type: ignore
 from utils.metrics_tracker import observe_http_ctx_async  # מטריקות עוטפות HTTP
 
+# 🔔 אירועים (Redis + Telegram) — fallback רך אם המודול חסר
+try:
+    from utils.pos_events import emit  # type: ignore
+except Exception:
+    async def emit(*args, **kwargs):  # type: ignore
+        return {"ok": False, "skipped": True, "reason": "pos_events_unavailable"}
+
 logger = logging.getLogger("algogpt.manager")
 router = APIRouter(tags=["manager"])
 
@@ -544,4 +551,83 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+# ============ NEW: webhook לאירועי fills / EXECUTION_REPORT -> emit ============
+class ExecEvent(BaseModel):
+    # תומך גם Payload מנורמל וגם Binance EXECUTION_REPORT
+    symbol: str
+    event: Optional[str] = None          # 'tp_hit', 'be_move', 'sl_hit', 'note' ...
+    idx: Optional[int] = None            # tp index if relevant
+    price: Optional[float] = None
+    qty: Optional[float] = None
+    frm: Optional[float] = None
+    to: Optional[float] = None
+    raw: Optional[Dict[str, Any]] = None # EXECUTION_REPORT מקורי (אופציונלי)
+
+@router.post("/events/execution")
+async def events_execution(ev: ExecEvent):
+    """
+    נקודת webhook כללית:
+    1) אם נשלח event מנורמל -> נעשה emit מיידי.
+    2) אם נשלח raw EXECUTION_REPORT של Binance -> נעשה מיפוי חכם ל־tp{idx}_hit / sl_hit וכו׳.
+    """
+    sym = ev.symbol.upper()
+
+    # 1) event מנורמל
+    if ev.event:
+        try:
+            if ev.event == "tp_hit":
+                idx = int(ev.idx or 0) if ev.idx is not None else 0
+                # tp{idx}_hit בשם האירוע (כמו שביקשת)
+                await emit(sym, f"tp{idx}_hit", price=float(ev.price or 0.0), filled_qty=float(ev.qty or 0.0))
+                return {"ok": True, "emitted": f"tp{idx}_hit"}
+            elif ev.event == "be_move":
+                await emit(sym, "be_move", frm=(float(ev.frm) if ev.frm is not None else None), to=float(ev.to or 0.0))
+                return {"ok": True, "emitted": "be_move"}
+            elif ev.event == "sl_move":
+                await emit(sym, "sl_move", frm=(float(ev.frm) if ev.frm is not None else None), to=float(ev.to or 0.0))
+                return {"ok": True, "emitted": "sl_move"}
+            elif ev.event == "sl_hit":
+                await emit(sym, "sl_hit", price=float(ev.price or 0.0))
+                return {"ok": True, "emitted": "sl_hit"}
+            else:
+                await emit(sym, ev.event, **{k: v for k, v in {"idx": ev.idx, "price": ev.price, "qty": ev.qty, "frm": ev.frm, "to": ev.to}.items() if v is not None})
+                return {"ok": True, "emitted": ev.event}
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"emit_failed: {e}")
+
+    # 2) EXECUTION_REPORT mapping (raw)
+    raw = ev.raw or {}
+    try:
+        etype = str(raw.get("e") or raw.get("eventType") or "").upper()
+        if etype == "EXECUTION_REPORT":
+            otype = str(raw.get("o") or raw.get("orderType") or "").upper()
+            status = str(raw.get("X") or raw.get("orderStatus") or "").upper()
+            side = str(raw.get("S") or raw.get("side") or "").upper()
+            client_id = str(raw.get("c") or raw.get("clientOrderId") or "")
+            reduce_only = str(raw.get("reduceOnly") or raw.get("R") or "").lower() == "true"
+            filled_qty = float(raw.get("z") or raw.get("filledQty") or 0.0)
+            last_price = float(raw.get("L") or raw.get("lastPrice") or 0.0)
+
+            # TP HIT: LIMIT + reduceOnly + FILLED/TRADE
+            if otype == "LIMIT" and reduce_only and status in ("FILLED", "PARTIALLY_FILLED", "TRADE"):
+                # ננסה לחלץ אינדקס מ-COID בסגנון ...-TP2-...
+                idx = 0
+                for i in (1,2,3,4):
+                    if f"TP{i}" in client_id.upper():
+                        idx = i
+                        break
+                await emit(sym, f"tp{idx}_hit", price=last_price, filled_qty=filled_qty, side=side, coid=client_id)
+                return {"ok": True, "emitted": f"tp{idx}_hit"}
+
+            # SL HIT: STOP/STOP_MARKET + FILLED
+            if otype in ("STOP", "STOP_MARKET") and status in ("FILLED", "TRADE"):
+                await emit(sym, "sl_hit", price=last_price, side=side, coid=client_id)
+                return {"ok": True, "emitted": "sl_hit"}
+
+        # אם לא זוהה — נשמר כ-note
+        await emit(sym, "note", raw=raw)
+        return {"ok": True, "emitted": "note"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"exec_event_parse_failed: {e}")
 
