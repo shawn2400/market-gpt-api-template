@@ -1,111 +1,219 @@
 # routes/scan_public.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import Any, Dict, List, Iterable, Tuple
-from fastapi import APIRouter, Query
+import asyncio
+import json
+import os
+import time
 from contextlib import suppress
-import inspect
+from typing import Any, Dict, List, Optional, Tuple
 
-router = APIRouter(prefix="/scan", tags=["scan"])
+import httpx
+from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
-# ננסה למחזר את חישוב הסיגנלים הפנימי
-_compute_signals = None
-with suppress(Exception):
-    from routes.scan_top_volume import _compute_signals  # type: ignore
+router = APIRouter(prefix="/scan", tags=["Public Feed"])
 
+# ---- Rate-limit (נפילה רכה אם אין מודול) ----
+try:
+    from utils.rate_limit_tb import tb_allow  # type: ignore
+except Exception:
+    async def tb_allow(ip: str, path: str, sse_hint: bool = False):
+        return True, None
 
-def _project_public(sig: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    הקרנה לשדות ציבוריים בלבד. לא מחזירים מזהים/כמויות/תקציבים/כתובות/לינקים וכו'.
-    """
-    details = sig.get("details") or {}
-    return {
-        "symbol": str(sig.get("symbol") or "").upper(),
-        "timeframe": str(sig.get("timeframe") or ""),
-        "side": (str(sig.get("side") or "").upper() or None),
-        "score": float(sig.get("score")) if sig.get("score") is not None else None,
-        "note": sig.get("note"),
-        # אינדיקטיבים בלבד — בלי פרטי הזמנה
-        "trend": details.get("trend"),
-        "rsi": details.get("rsi"),
-        "ema21": details.get("ema21"),
-        "ema50": details.get("ema50"),
-    }
+# ---- Redis async (נפילה רכה אם אין) ----
+try:
+    import redis.asyncio as aioredis  # type: ignore
+except Exception:
+    aioredis = None  # type: ignore
 
+NS = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
+REDIS_URL = (os.getenv("REDIS_URL") or "").strip()
+PUBLIC_TOPK_K = os.getenv("PUBLIC_TOPK_KEY", f"{NS}:public:topk")
+PUBLIC_NOW_K  = os.getenv("PUBLIC_NOW_KEY",  f"{NS}:public:now")
 
-async def _maybe_await(fn, *args, **kwargs):
-    """
-    מאפשר קריאה גם אם _compute_signals מוגדרת כ-sync וגם אם היא async.
-    """
-    if inspect.iscoroutinefunction(fn):
-        return await fn(*args, **kwargs)
-    res = fn(*args, **kwargs)
-    if inspect.isawaitable(res):
-        return await res
-    return res
+# פולינג ל-SSE
+STREAM_INTERVAL_SEC = int(os.getenv("PUBLIC_STREAM_INTERVAL_SEC", "3") or 3)
+FAPI = os.getenv("BINANCE_FAPI", "https://fapi.binance.com").rstrip("/")
 
+# אם אין Redis — fallback מינימלי בזיכרון
+_mem_store: Dict[str, Any] = {
+    "topk": {"items": [], "ts": int(time.time())},
+    "now": {"items": [], "ts": int(time.time())},
+}
 
-def _coerce_seq(obj: Any) -> List[Dict[str, Any]]:
-    """
-    דואג שלבסוף תהיה רשימת סיגנלים (dict). אם מגיע tuple (signals, meta) נחלץ את הראשון.
-    """
-    if isinstance(obj, tuple) and obj:
-        obj = obj[0]
-    if obj is None:
-        return []
-    if isinstance(obj, Iterable) and not isinstance(obj, (dict, str, bytes)):
-        return [x for x in obj]  # type: ignore
-    return []
+# --- עזרי IO ---
+async def _get_redis():
+    if not (aioredis and REDIS_URL):
+        return None
+    r = getattr(router, "_r", None)
+    if r:
+        return r
+    r = aioredis.from_url(REDIS_URL, decode_responses=True)
+    setattr(router, "_r", r)
+    return r
 
+def _http() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "algogpt/public-scan"})
 
-@router.get("/public-now", summary="Public scan (read-only, no approvals/alerts)")
-async def scan_public_now(
-    market: str = Query("futures"),
-    quote: str = Query("USDT"),
-    limit: int = Query(10, ge=1, le=100),
-    timeframe: str = Query("15m"),
-    kline_limit: int = Query(200, ge=60, le=1000),
-    min_score: float = Query(7.0),
-    require_side: bool = Query(True),
-):
-    """
-    סריקה ציבורית לקריאה בלבד: לא מבצעת אישורים/התראות.
-    מחזירה רק שדות אינדיקטיביים.
-    """
-    if _compute_signals is None:
-        return {"ok": False, "error": "scanner_unavailable", "signals": [], "mode": "public"}
-
+# --- קריאת נתוני TopK/Now מ-Redis או מהזיכרון ---
+async def _load_json_from_redis(key: str) -> Optional[Dict[str, Any]]:
+    r = await _get_redis()
+    if not r:
+        return None
     try:
-        raw = await _maybe_await(_compute_signals, market, quote, limit, timeframe, kline_limit)
-        signals_in: List[Dict[str, Any]] = _coerce_seq(raw)
+        raw = await r.get(key)
+        if not raw:
+            return None
+        obj = json.loads(raw)
+        if isinstance(obj, dict):
+            return obj
+    except Exception:
+        return None
+    return None
 
-        filtered = []
-        for s in signals_in:
+def _mem_get(kind: str) -> Dict[str, Any]:
+    rec = _mem_store.get(kind) or {}
+    return {"ok": True, "items": list(rec.get("items") or []), "ts": int(rec.get("ts") or time.time())}
+
+async def _ensure_sample_mem(kind: str):
+    # ממלא מעט דמו אם אין Redis — כדי שהדף לא יהיה ריק
+    rec = _mem_store.get(kind) or {}
+    if not rec.get("items"):
+        now = int(time.time())
+        if kind == "topk":
+            rec = {
+                "items": [
+                    {"symbol": "BTCUSDT", "side": "BUY",  "score": 8.7, "reason": "ADX↑, breakout", "timeframe": "15m", "ts": now},
+                    {"symbol": "ETHUSDT", "side": "SELL", "score": 7.9, "reason": "RSI div",        "timeframe": "5m",  "ts": now},
+                ],
+                "ts": now,
+            }
+        else:
+            rec = {
+                "items": [
+                    {"symbol": "BTCUSDT", "side": "BUY", "price": 63000.0, "reason": "mark", "timeframe": "1m", "ts": now},
+                    {"symbol": "ETHUSDT", "side": "BUY", "price": 3200.0,  "reason": "mark", "timeframe": "1m", "ts": now},
+                ],
+                "ts": now,
+            }
+        _mem_store[kind] = rec
+
+# --- Binance עזר: משיכת mark prices לרשימה (אם תרצה להזין NOW בזמן אמת) ---
+async def _fetch_mark_prices(symbols: List[str]) -> Dict[str, float]:
+    if not symbols:
+        return {}
+    url = f"{FAPI}/fapi/v1/premiumIndex"
+    out: Dict[str, float] = {}
+    async with _http() as c:
+        for s in symbols:
             try:
-                score_val = float(s.get("score") or 0)
+                r = await c.get(url, params={"symbol": s})
+                if r.status_code == 200:
+                    j = r.json()
+                    mp = float(j.get("markPrice"))
+                    out[s] = mp
             except Exception:
-                score_val = 0.0
-            side_val = str(s.get("side") or "").upper()
-
-            if score_val < float(min_score or 0):
                 continue
-            if require_side and side_val not in ("BUY", "SELL"):
-                continue
+    return out
 
-            filtered.append(_project_public(s))
+# --- Endpoints JSON ---
+@router.get("/public-topk")
+async def public_topk(request: Request):
+    ip = request.client.host if request.client else "0.0.0.0"
+    allowed, ra = await tb_allow(ip, request.url.path, sse_hint=False)
+    if not allowed:
+        resp = JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+        if ra:
+            resp.headers["Retry-After"] = str(ra)
+        return resp
 
-        return {
-            "ok": True,
-            "returned": len(filtered),
-            "signals": filtered,
-            "mode": "public"
-        }
+    obj = await _load_json_from_redis(PUBLIC_TOPK_K)
+    if obj is None:
+        await _ensure_sample_mem("topk")
+        return _mem_get("topk")
+    # מצפים לפורמט {"items":[...], "ts": unix}
+    items = obj.get("items") or []
+    ts = int(obj.get("ts") or time.time())
+    return {"ok": True, "items": items, "ts": ts}
 
-    except Exception as e:
-        # לא חושפים traceback — רק הודעת שגיאה כללית
-        return {
-            "ok": False,
-            "error": f"public_scan_failed: {e}",
-            "signals": [],
-            "mode": "public"
-        }
+
+@router.get("/public-now")
+async def public_now(request: Request):
+    ip = request.client.host if request.client else "0.0.0.0"
+    allowed, ra = await tb_allow(ip, request.url.path, sse_hint=False)
+    if not allowed:
+        resp = JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+        if ra:
+            resp.headers["Retry-After"] = str(ra)
+        return resp
+
+    obj = await _load_json_from_redis(PUBLIC_NOW_K)
+    if obj is None:
+        await _ensure_sample_mem("now")
+        return _mem_get("now")
+    items = obj.get("items") or []
+    ts = int(obj.get("ts") or time.time())
+    return {"ok": True, "items": items, "ts": ts}
+
+# --- SSE stream: משדר אירועים בשם "topk" ו-"now" כאשר יש שינוי / כל N שניות ---
+@router.get("/public-stream")
+async def public_stream(request: Request, authorization: Optional[str] = Header(None, alias="Authorization")):
+    ip = request.client.host if request.client else "0.0.0.0"
+    allowed, ra = await tb_allow(ip, request.url.path, sse_hint=True)
+    if not allowed:
+        resp = PlainTextResponse("rate_limited", status_code=429)
+        if ra:
+            resp.headers["Retry-After"] = str(ra)
+        return resp
+
+    async def _gen():
+        # מצב אחרון ששודר (לזיהוי שינוי)
+        last_topk = ""
+        last_now = ""
+        # קצב שידור
+        interval = max(1, int(STREAM_INTERVAL_SEC))
+
+        # שליחת אירוע פתיחה (ידידותי ללקוח)
+        yield "event: ping\ndata: {}\n\n"
+
+        while True:
+            if await request.is_disconnected():
+                break
+
+            # TOPK
+            obj_t = await _load_json_from_redis(PUBLIC_TOPK_K)
+            if obj_t is None:
+                await _ensure_sample_mem("topk")
+                obj_t = _mem_store["topk"]
+            try:
+                payload_t = json.dumps({"items": obj_t.get("items") or [], "ts": int(obj_t.get("ts") or time.time())}, separators=(",", ":"), ensure_ascii=False)
+            except Exception:
+                payload_t = '{"items":[],"ts":%d}' % int(time.time())
+
+            if payload_t != last_topk:
+                last_topk = payload_t
+                yield "event: topk\n"
+                yield f"data: {payload_t}\n\n"
+
+            # NOW
+            obj_n = await _load_json_from_redis(PUBLIC_NOW_K)
+            if obj_n is None:
+                await _ensure_sample_mem("now")
+                obj_n = _mem_store["now"]
+            try:
+                payload_n = json.dumps({"items": obj_n.get("items") or [], "ts": int(obj_n.get("ts") or time.time())}, separators=(",", ":"), ensure_ascii=False)
+            except Exception:
+                payload_n = '{"items":[],"ts":%d}' % int(time.time())
+
+            if payload_n != last_now:
+                last_now = payload_n
+                yield "event: now\n"
+                yield f"data: {payload_n}\n\n"
+
+            # דופק כל interval שניות
+            await asyncio.sleep(interval)
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
