@@ -1,33 +1,55 @@
 # server_routes.py
-from fastapi import FastAPI, HTTPException, Depends, Query
+from __future__ import annotations
+import os
+from fastapi import FastAPI, HTTPException, Depends, Query, Header
 from pydantic import BaseModel
 from server_signing import verify_signature
 
 app = FastAPI()
 
-# אופציונלי: תלות שמאמת Bearer (אם נדרש)
-def require_bearer(authorization: str | None = None):
-    # אם מחייבים Bearer — אמתו כאן וזרקו 401/403 במקרה הצורך.
-    # אם לא — הפונקציה יכולה להיות no-op או לא להיקרא בכלל.
+# -------- Optional Bearer auth --------
+REQUIRE_BEARER = (os.getenv("REQUIRE_BEARER", "0").lower() in {"1", "true", "yes", "on"})
+API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "")  # set to enable enforcement
+
+def require_bearer(authorization: str | None = Header(default=None)) -> bool:
+    if not REQUIRE_BEARER:
+        return True
+    if not API_BEARER_TOKEN:
+        raise HTTPException(status_code=500, detail="Bearer required but API_BEARER_TOKEN not set")
+    if not authorization or not authorization.lower().startswith("bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    token = authorization.split(" ", 1)[1].strip()
+    if token != API_BEARER_TOKEN:
+        raise HTTPException(status_code=403, detail="Invalid bearer token")
     return True
 
+# -------- Models --------
 class ApproveResponse(BaseModel):
     ok: bool
     ticket_id: str
     detail: str | None = None
 
+class HealthResponse(BaseModel):
+    ok: bool
+    require_bearer: bool
+
+# -------- Routes --------
+@app.get("/health", response_model=HealthResponse)
+def health():
+    return HealthResponse(ok=True, require_bearer=REQUIRE_BEARER)
+
 @app.get("/ops/approve/signed", response_model=ApproveResponse)
 def approve_signed(
-    ticket_id: str = Query(...),
-    exp: str = Query(...),
-    sig: str = Query(...),
-    _auth_ok: bool = Depends(require_bearer)  # בטלו אם לא מחייבים Bearer
+    ticket_id: str = Query(..., description="Ticket id"),
+    exp: str = Query(..., description="Expiry (unix seconds or ms)"),
+    sig: str = Query(..., description="HMAC-SHA256 signature (hex or b64url)"),
+    _auth_ok: bool = Depends(require_bearer),
 ):
     ok, why = verify_signature(ticket_id, exp, sig)
     if not ok:
-        # החזירו 401 עם פירוט מסייע (לוגים מלאים בצד השרת)
+        # Return 401 for signature failures to match your logs
         raise HTTPException(status_code=401, detail=f"Bad signature: {why}")
 
-    # בצעו את אישור הטיקט בפועל (טרנזקציה/קריאת בורסה/וכו׳)
-    # אם צריך, ודאו שהטיקט קיים/לא בוטל/לא אושר כבר.
+    # TODO: perform the actual approval/side-effects here (db/redis/exchange/etc.)
+    # Make sure to validate the ticket state (not already approved/rejected/expired).
     return ApproveResponse(ok=True, ticket_id=ticket_id, detail="approved")
