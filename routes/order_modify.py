@@ -11,6 +11,15 @@ from utils.binance_client import (
     place_stop_market_order, place_take_profit_market,
 )
 
+# 🔔 אירועים (Redis + Telegram) – Fallback רך
+try:
+    from utils.pos_events import emit  # async
+except Exception:
+    async def emit(*args, **kwargs):  # type: ignore
+        return {"ok": False, "skipped": True, "reason": "pos_events_unavailable"}
+
+import asyncio
+
 router = APIRouter(
     prefix="/trade",
     tags=["Trade-Modify"],
@@ -49,6 +58,7 @@ def update_order(req: UpdateOrderReq = Body(...)) -> Dict[str, Any]:
     - נשלוף את ההזמנה.
     - אם זה טריגר מסוג מתאים → נבטל וניצור מחדש עם ה-stopPrice החדש.
     - אם זה לא טריגר מוכר, או PUT לא נתמך – מחזירים שגיאה מנומקת.
+    - אם מדובר ב-SL: לאחר הצלחה נשגר emit("sl_move", frm=..., to=...)
     """
     if not (req.orderId or req.clientId):
         raise HTTPException(status_code=400, detail="must provide orderId or clientId")
@@ -69,6 +79,13 @@ def update_order(req: UpdateOrderReq = Body(...)) -> Dict[str, Any]:
     side = (ord_.get("side") or "").upper()
     qty  = ord_.get("origQty") or ord_.get("quantity") or ord_.get("cumQty") or None
     pos_side = ord_.get("positionSide")  # יכול להיות None במצב one-way
+
+    # נשמור מחיר ישן (לדיוח sl_move)
+    try:
+        old_trigger = float(ord_.get("stopPrice") or ord_.get("price") or 0.0)
+    except Exception:
+        old_trigger = 0.0
+
     if qty is None:
         # fallback: נשלוף openOrders ונמצא את הכמות שוב (במקרה של שדות שונים)
         try:
@@ -77,6 +94,11 @@ def update_order(req: UpdateOrderReq = Body(...)) -> Dict[str, Any]:
                 if (req.orderId and o.get("orderId") == req.orderId) or \
                    (req.clientId and o.get("clientOrderId") == req.clientId):
                     qty = o.get("origQty") or o.get("quantity")
+                    if not old_trigger:
+                        try:
+                            old_trigger = float(o.get("stopPrice") or o.get("price") or 0.0)
+                        except Exception:
+                            pass
                     break
         except Exception:
             pass
@@ -139,6 +161,19 @@ def update_order(req: UpdateOrderReq = Body(...)) -> Dict[str, Any]:
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"re-place {req.type} failed: {e}")
 
+    # 🔔 emit sl_move/ tp_move (לבקשתך – חובה לפחות sl_move)
+    try:
+        loop = asyncio.get_event_loop()
+        if req.type == "SL":
+            if loop.is_running():
+                loop.create_task(emit(sym, "sl_move", frm=old_trigger or None, to=float(req.new_price)))
+        else:
+            # אופציונלי: tp_move (לא נדרש אם לא תרצה)
+            if loop.is_running():
+                loop.create_task(emit(sym, "tp_move", frm=old_trigger or None, to=float(req.new_price)))
+    except Exception:
+        pass
+
     return {
         "ok": True,
         "symbol": sym,
@@ -148,3 +183,4 @@ def update_order(req: UpdateOrderReq = Body(...)) -> Dict[str, Any]:
         "new_trigger": float(req.new_price),
         "response": {k: resp.get(k) for k in ("orderId", "clientOrderId", "type", "side", "status", "stopPrice", "origQty")},
     }
+
