@@ -1,0 +1,55 @@
+{
+  "meta": {
+    "name": "default-params",
+    "version": "1.0",
+    "updated_at": "2025-10-19T00:00:00Z",
+    "description": "ברירת מחדל לכל הסימבולים והטיים-פריימים אם לא קיים override"
+  },
+  "timeframes": {
+    "15m": {
+      "atr_mult_trail": 1.6,
+      "tp_targets_pct": [3.0, 6.0, 12.0],
+      "tp_splits": [0.278, 0.333, 0.389],
+      "entry_band_bps": 25,
+      "stop_band_bps": 20,
+      "adx_min": 20
+    },
+    "1h": {
+      "atr_mult_trail": 1.6,
+      "tp_targets_pct": [2.5, 5.0, 10.0],
+      "tp_splits": [0.30, 0.35, 0.35],
+      "entry_band_bps": 20,
+      "stop_band_bps": 18,
+      "adx_min": 18
+    },
+    "4h": {
+      "atr_mult_trail": 1.5,
+      "tp_targets_pct": [2.0, 4.0, 8.0],
+      "tp_splits": [0.35, 0.35, 0.30],
+      "entry_band_bps": 18,
+      "stop_band_bps": 16,
+      "adx_min": 16
+    },
+    "1d": {
+      "atr_mult_trail": 1.4,
+      "tp_targets_pct": [1.8, 3.6, 7.2],
+      "tp_splits": [0.40, 0.35, 0.25],
+      "entry_band_bps": 15,
+      "stop_band_bps": 14,
+      "adx_min": 15
+    }
+  },
+  "risk": {
+    "max_trade_budget_usdt": 400,
+    "min_notional_usdt": 25,
+    "kelly_lite_cap": 0.5
+  },
+  "sizer": {
+    "mode": "notional",
+    "margin_buffer_pct": 0.20,
+    "lev_min": 15,
+    "lev_max": 25,
+    "budget_min_usdt": 100,
+    "budget_max_usdt": 200
+  }
+}
