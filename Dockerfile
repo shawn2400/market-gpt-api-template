@@ -76,7 +76,7 @@ keepalive = int(__import__('os').environ.get('GUNICORN_KEEPALIVE','30'))
 workers = int(__import__('os').environ.get('WEB_CONCURRENCY','1'))
 PY
 
-# create needed dirs — בלי chmod על /app/data (ממופה ע"י Render)
+# create needed dirs
 RUN mkdir -p /app/.cache/matplotlib /app/static /app/logs || true \
  && chown -R appuser:appuser /app
 
@@ -88,8 +88,6 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
 
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["gunicorn","-k","uvicorn.workers.UvicornWorker","-c","/app/gunicorn_conf.py","main:app"]
-
-
 
 
 
