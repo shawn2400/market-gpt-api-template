@@ -155,7 +155,7 @@ def inc_struct_sl_applied() -> None:
 
 # -------------------- Lightweight Histograms --------------------
 def _csv_floats(env: str, default: List[float]) -> List[float]:
-    s = os.getenv(env, "").strip()
+    s = (os.getenv(env, "") or "").strip()
     if not s:
         return default[:]
     out: List[float] = []
@@ -271,7 +271,7 @@ def observe_http_ctx(name: str = "io", labels: Optional[Dict[str,str]] = None):
           ... IO ...
     מודד latency ושופך להיסטוגרמה הגנרית (דלי נמוך קרדינליות).
     """
-    _ = name, labels  # לעתיד
+    _ = name, labels  # שמור לעתיד
     t0 = time.perf_counter()
     try:
         yield
@@ -372,8 +372,7 @@ def _render_histogram(name: str,
                       inf_count: int,
                       _sum: float,
                       _count: int,
-                      help_text: str,
-                      unit: str = "") -> List[str]:
+                      help_text: str) -> List[str]:
     lines = [
         f"# HELP {name} {help_text}",
         f"# TYPE {name} histogram",
@@ -381,19 +380,19 @@ def _render_histogram(name: str,
     total = 0
     for b in sorted(buckets.keys()):
         total += buckets[b]
-        le = f'{b:.6g}{unit}' if unit else f"{b:.6g}"
-        lines.append(f'{name}_bucket{{le="{le}"}} {total}')
+        # Prometheus מצפה ל־le מספרי – נשמור בלי יחידות
+        lines.append(f'{name}_bucket{{le="{b:.6g}"}} {total}')
     total += inf_count
     lines.append(f'{name}_bucket{{le="+Inf"}} {total}')
-    lines.append(f"{name}_sum {_sum:.6f}")
-    lines.append(f"{name}_count {_count}")
+    lines.append(f"{name}_sum {float(_sum):.6f}")
+    lines.append(f"{name}_count {int(_count)}")
     return lines
 
 def render_prometheus_text() -> str:
     lines = [
         "# HELP algogpt_uptime_seconds Process uptime seconds.",
         "# TYPE algogpt_uptime_seconds gauge",
-        f"algogpt_uptime_seconds {_START_TIME and (time.time() - _START_TIME):.1f}",
+        f"algogpt_uptime_seconds {max(0.0, (time.time() - _START_TIME)):.1f}",
         "# HELP algogpt_telegram_sent_total Telegram messages sent.",
         "# TYPE algogpt_telegram_sent_total counter",
         f"algogpt_telegram_sent_total {_SENT_TELEGRAM}",
@@ -450,31 +449,31 @@ def render_prometheus_text() -> str:
         lines += [
             "# HELP algogpt_entry_quality_score_last Last computed pre-trade entry score (0..10).",
             "# TYPE algogpt_entry_quality_score_last gauge",
-            f"algogpt_entry_quality_score_last {_LAST_ENTRY_SCORE:.3f}",
+            f"algogpt_entry_quality_score_last {float(_LAST_ENTRY_SCORE):.3f}",
         ]
     if _LAST_SLIP_ESTIMATE_BPS is not None:
         lines += [
             "# HELP algogpt_slip_estimate_bps_last Last estimated slip (bps) at ticket creation.",
             "# TYPE algogpt_slip_estimate_bps_last gauge",
-            f"algogpt_slip_estimate_bps_last {_LAST_SLIP_ESTIMATE_BPS:.3f}",
+            f"algogpt_slip_estimate_bps_last {float(_LAST_SLIP_ESTIMATE_BPS):.3f}",
         ]
     if _LAST_CALLBACK_RATE is not None:
         lines += [
             "# HELP algogpt_trailing_callback_rate_last Last computed trailing callback rate (percent).",
             "# TYPE algogpt_trailing_callback_rate_last gauge",
-            f"algogpt_trailing_callback_rate_last {_LAST_CALLBACK_RATE:.3f}",
+            f"algogpt_trailing_callback_rate_last {float(_LAST_CALLBACK_RATE):.3f}",
         ]
     if _LAST_BE_DISTANCE_BPS is not None:
         lines += [
             "# HELP algogpt_be_distance_bps_last Last computed BE distance from price (bps).",
             "# TYPE algogpt_be_distance_bps_last gauge",
-            f"algogpt_be_distance_bps_last {_LAST_BE_DISTANCE_BPS:.3f}",
+            f"algogpt_be_distance_bps_last {float(_LAST_BE_DISTANCE_BPS):.3f}",
         ]
     if _LAST_TP_LADDERS is not None:
         lines += [
             "# HELP algogpt_tp_ladders_last Last number of TP ladders placed in manage-once.",
             "# TYPE algogpt_tp_ladders_last gauge",
-            f"algogpt_tp_ladders_last {_LAST_TP_LADDERS}",
+            f"algogpt_tp_ladders_last {int(_LAST_TP_LADDERS)}",
         ]
 
     lines += _render_histogram(
@@ -511,4 +510,5 @@ __all__ = [
     "observe_callback_rate","observe_be_distance_bps","observe_tp_ladders",
     "inc_event",
 ]
+
 
