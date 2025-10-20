@@ -6,11 +6,10 @@ import asyncio
 import json
 import os
 import time
-from contextlib import suppress
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 import httpx
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, Request
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 router = APIRouter(prefix="/scan", tags=["Public Feed"])
@@ -56,6 +55,13 @@ async def _get_redis():
 
 def _http() -> httpx.AsyncClient:
     return httpx.AsyncClient(timeout=10.0, headers={"User-Agent": "algogpt/public-scan"})
+
+def _client_ip(request: Request) -> str:
+    if os.getenv("TRUST_XFF", "0").lower() in ("1", "true", "yes", "on"):
+        xff = request.headers.get("x-forwarded-for") or ""
+        if xff:
+            return xff.split(",")[0].strip()
+    return request.client.host if request.client else "0.0.0.0"
 
 # --- קריאת נתוני TopK/Now מ-Redis או מהזיכרון ---
 async def _load_json_from_redis(key: str) -> Optional[Dict[str, Any]]:
@@ -121,7 +127,7 @@ async def _fetch_mark_prices(symbols: List[str]) -> Dict[str, float]:
 # --- Endpoints JSON ---
 @router.get("/public-topk")
 async def public_topk(request: Request):
-    ip = request.client.host if request.client else "0.0.0.0"
+    ip = _client_ip(request)
     allowed, ra = await tb_allow(ip, request.url.path, sse_hint=False)
     if not allowed:
         resp = JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
@@ -138,10 +144,9 @@ async def public_topk(request: Request):
     ts = int(obj.get("ts") or time.time())
     return {"ok": True, "items": items, "ts": ts}
 
-
 @router.get("/public-now")
 async def public_now(request: Request):
-    ip = request.client.host if request.client else "0.0.0.0"
+    ip = _client_ip(request)
     allowed, ra = await tb_allow(ip, request.url.path, sse_hint=False)
     if not allowed:
         resp = JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
@@ -160,7 +165,7 @@ async def public_now(request: Request):
 # --- SSE stream: משדר אירועים בשם "topk" ו-"now" כאשר יש שינוי / כל N שניות ---
 @router.get("/public-stream")
 async def public_stream(request: Request, authorization: Optional[str] = Header(None, alias="Authorization")):
-    ip = request.client.host if request.client else "0.0.0.0"
+    ip = _client_ip(request)
     allowed, ra = await tb_allow(ip, request.url.path, sse_hint=True)
     if not allowed:
         resp = PlainTextResponse("rate_limited", status_code=429)
@@ -188,7 +193,11 @@ async def public_stream(request: Request, authorization: Optional[str] = Header(
                 await _ensure_sample_mem("topk")
                 obj_t = _mem_store["topk"]
             try:
-                payload_t = json.dumps({"items": obj_t.get("items") or [], "ts": int(obj_t.get("ts") or time.time())}, separators=(",", ":"), ensure_ascii=False)
+                payload_t = json.dumps(
+                    {"items": obj_t.get("items") or [], "ts": int(obj_t.get("ts") or time.time())},
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
             except Exception:
                 payload_t = '{"items":[],"ts":%d}' % int(time.time())
 
@@ -203,7 +212,11 @@ async def public_stream(request: Request, authorization: Optional[str] = Header(
                 await _ensure_sample_mem("now")
                 obj_n = _mem_store["now"]
             try:
-                payload_n = json.dumps({"items": obj_n.get("items") or [], "ts": int(obj_n.get("ts") or time.time())}, separators=(",", ":"), ensure_ascii=False)
+                payload_n = json.dumps(
+                    {"items": obj_n.get("items") or [], "ts": int(obj_n.get("ts") or time.time())},
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                )
             except Exception:
                 payload_n = '{"items":[],"ts":%d}' % int(time.time())
 
@@ -215,5 +228,10 @@ async def public_stream(request: Request, authorization: Optional[str] = Header(
             # דופק כל interval שניות
             await asyncio.sleep(interval)
 
-    return StreamingResponse(_gen(), media_type="text/event-stream")
+    headers = {
+        "Cache-Control": "no-store",
+        "X-Accel-Buffering": "no",
+        "Connection": "keep-alive",
+    }
+    return StreamingResponse(_gen(), media_type="text/event-stream", headers=headers)
 
