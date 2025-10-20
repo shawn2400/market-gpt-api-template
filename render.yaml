@@ -1,14 +1,14 @@
-# Render blueprint — production
-# קובץ מלא ותקין. יש להציב סודות (fromSecret) ב-Render Dashboard.
+# Render blueprint — staging
+# יש להציב סודות ב-Render Dashboard. אפשר למחזר את אותם סודות של prod או ליצור נפרדים ל-staging.
 services:
   - type: web
-    name: algogpt-prod
+    name: algogpt-staging
     env: docker
     region: frankfurt
-    plan: pro
-    autoDeploy: false
+    plan: standard            # או starter/pro — לבחירתך
+    autoDeploy: true          # דיפלוי אוטומטי ל-staging
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /health   # ללא UltraTop; ברירת מחדל FastAPI
+    healthCheckPath: /health
 
     disk:
       name: data
@@ -20,17 +20,17 @@ services:
       - key: APP_NAME
         value: "algogpt"
       - key: APP_TITLE
-        value: "AlgoGPT Service"
+        value: "AlgoGPT Service (staging)"
       - key: ALGOGPT_VERSION
         value: "2.18.0"
       - key: INSTANCE_ID
-        value: "algogpt-prod"
+        value: "algogpt-staging"
       - key: INSTANCE
-        value: "algogpt-prod"
+        value: "algogpt-staging"
       - key: APP_INSTANCE
-        value: "algogpt-prod"
+        value: "algogpt-staging"
       - key: SERVICE_INSTANCE
-        value: "algogpt-prod"
+        value: "algogpt-staging"
 
       - key: MODE
         value: "hybrid"
@@ -42,7 +42,7 @@ services:
       - key: PYTHONPATH
         value: "/app"
 
-      # ---------- Ultratop (אם לא מותקן – יעבוד במצב noop) ----------
+      # ---------- Ultratop (noop אם לא קיים) ----------
       - key: ULTRATOP_MODE
         value: "mount"
       - key: ULTRATOP_PREFIX
@@ -77,11 +77,11 @@ services:
 
       # ========================= Base URLs =========================
       - key: PUBLIC_HOST
-        value: "https://algogpt-docker.onrender.com"
+        value: "https://algogpt-staging.onrender.com"
       - key: CONTEXT_URL
-        value: "https://algogpt-docker.onrender.com"
+        value: "https://algogpt-staging.onrender.com"
       - key: WEBHOOK_HOST
-        value: "https://algogpt-docker.onrender.com"
+        value: "https://algogpt-staging.onrender.com"
 
       # ========================= OpenAPI / Docs =========================
       - key: DOCS_URL
@@ -103,9 +103,9 @@ services:
 
       # ========================= CORS =========================
       - key: CORS_ALLOW_ORIGINS
-        value: "https://algogpt-docker.onrender.com"
+        value: "https://algogpt-staging.onrender.com"
       - key: CORS_ALLOW_ORIGINS_STRICT
-        value: "https://algogpt-docker.onrender.com"
+        value: "https://algogpt-staging.onrender.com"
       - key: CORS_ALLOW_HEADERS
         value: "*"
       - key: CORS_ALLOW_METHODS
@@ -175,11 +175,11 @@ services:
       - key: PUBLIC_REST_BURST
         value: "15"
       - key: PUBLIC_SSE_MAX_CONNS
-        value: "80"
+        value: "40"
       - key: PUBLIC_SSE_MAX_CONNS_PER_IP
-        value: "4"
+        value: "2"
       - key: PUBLIC_RL_NS
-        value: "ops-supervisor-web:rl"
+        value: "ops-supervisor-web:rl:staging"
 
       # -------- EXECUTOR RL --------
       - key: EXECUTOR_RL_RPS
@@ -189,7 +189,7 @@ services:
       - key: EXECUTOR_RL_WINDOW
         value: "3"
       - key: EXECUTOR_RL_NS
-        value: "ops-executor:rl"
+        value: "ops-executor:rl:staging"
 
       # ========================= Redis (incl. TLS) =========================
       - key: REQUIRE_REDIS
@@ -207,13 +207,13 @@ services:
       - key: REDIS_SOCKET_TIMEOUT
         value: "8.0"
       - key: REDIS_POOL_MAX_CONNECTIONS
-        value: "30"
+        value: "20"
       - key: REDIS_PING_RETRIES
         value: "3"
       - key: REDIS_PING_RETRY_BACKOFF_SEC
         value: "0.6"
       - key: REDIS_CLIENT_NAME
-        value: "algogpt"
+        value: "algogpt-staging"
       - key: REDIS_RETRY_ON_TIMEOUT
         value: "1"
       - key: REDIS_SSL_NO_VERIFY
@@ -223,11 +223,11 @@ services:
       - key: REDIS_SSL_CA_CERTS
         value: "/etc/ssl/certs/ca-certificates.crt"
       - key: REDIS_NAMESPACE
-        value: "ops-supervisor-web"
+        value: "ops-supervisor-web:staging"
       - key: REDIS_URL
-        fromSecret: REDIS_URL
+        fromSecret: REDIS_URL_STAGING   # או REDIS_URL אם אותו אינסטנס
       - key: ALGOGPT_REDIS_URL
-        fromSecret: REDIS_URL
+        fromSecret: REDIS_URL_STAGING   # או REDIS_URL
 
       # ========================= Exchange Defaults =========================
       - key: DEFAULT_MARKET
@@ -237,13 +237,13 @@ services:
       - key: BINANCE_MARGIN_TYPE_DEFAULT
         value: "ISOLATED"
       - key: BINANCE_FUTURES_HTTP_BASE
-        value: "https://fapi.binance.com"
+        value: "https://testnet.binancefuture.com"  # testnet
       - key: BINANCE_FUTURES_WS_BASE
-        value: "wss://fstream.binance.com"
+        value: "wss://stream.testnet.binancefuture.com/ws"  # testnet
       - key: BINANCE_SPOT_HTTP_BASE
-        value: "https://api.binance.com"
+        value: "https://testnet.binance.vision"    # spot testnet
       - key: BINANCE_TESTNET
-        value: "false"
+        value: "true"
       - key: BINANCE_WORKING_TYPE
         value: "MARK_PRICE"
       - key: BINANCE_HTTP_TIMEOUT
@@ -261,7 +261,7 @@ services:
       - key: EXCHANGE_INFO_TTL_SEC
         value: "900"
       - key: USER_STREAM_ENABLE
-        value: "1"
+        value: "0"   # staging: לרוב אין צורך ב-user stream אמיתי
 
       # ========================= Router Enablement =========================
       - key: ENABLE_AI_ROUTES
@@ -277,23 +277,23 @@ services:
       - key: SCAN_INTERVALS
         value: "5m,15m,1h,4h"
       - key: SCAN_MAX_SYMBOLS
-        value: "150"
+        value: "80"   # קטן יותר ב-staging
       - key: SCAN_MAX_LIMIT
         value: "0"
       - key: SCAN_CONCURRENCY
-        value: "2"
+        value: "1"
       - key: TOP_SYMBOLS
-        value: "80"
+        value: "40"
       - key: SUGGEST_FUTURES
         value: "1"
       - key: SUGGEST_INTERVAL_SEC
-        value: "45"
+        value: "60"
       - key: SUGGEST_CAP_PER_CYCLE
-        value: "30"
+        value: "15"
       - key: SCAN_AUTOTICKET_ENABLE
         value: "1"
       - key: SCAN_NOTIFY_TELEGRAM
-        value: "1"
+        value: "0"   # מושתק ברירת מחדל
 
       # ========================= Indicators / Gates =========================
       - key: INDICATOR_INTERVALS
@@ -379,13 +379,13 @@ services:
       - key: SCAN_CRON_ENABLE
         value: "1"
       - key: SCAN_CRON_EVERY_SEC
-        value: "45"
+        value: "60"
       - key: SCAN_CRON_TIMEFRAME
         value: "15m"
       - key: SCAN_CRON_KLINES
-        value: "200"
+        value: "150"
       - key: SCAN_CRON_LIMIT
-        value: "12"
+        value: "8"
       - key: SCAN_CRON_MIN_SCORE
         value: "8.5"
       - key: SCAN_REARM_SCORE
@@ -397,17 +397,17 @@ services:
       - key: SCAN_RICH
         value: "1"
       - key: DEFAULT_LEVERAGE
-        value: "10"
+        value: "5"
       - key: DEFAULT_STAKE_USDT
-        value: "50"
+        value: "25"
 
       # ========================= Approvals / Notifications =========================
       - key: APPROVAL_ENABLED
         value: "1"
       - key: REQUIRE_TELEGRAM_APPROVAL
-        value: "1"
+        value: "0"  # staging לא מחייב אישור טלגרם
       - key: AUTO_OPEN_ON_APPROVE
-        value: "1"
+        value: "0"
 
       - key: SINK_ENFORCE_APPROVALS
         value: "0"
@@ -430,7 +430,7 @@ services:
       - key: CONFIRM_TTL_SEC
         value: "120"
       - key: OPS_TICKET_TTL_SEC
-        value: "1800"
+        value: "900"
       - key: ONLY_TRADE_NOTIFICATIONS
         value: "1"
       - key: NOTIFY_LEVEL
@@ -444,7 +444,7 @@ services:
       - key: TELEGRAM_ADMIN_IDS
         value: "449087907"
       - key: TELEGRAM_AUTO_WEBHOOK
-        value: "1"
+        value: "0"  # השתקה ב-staging
       - key: TELEGRAM_PARSE_MODE
         value: "HTML"
       - key: TELEGRAM_RICH_MSG
@@ -452,15 +452,15 @@ services:
       - key: ALLOW_PUBLIC_META_TELEGRAM_SEND
         value: "0"
       - key: TELEGRAM_SEND_ENABLE
-        value: "1"
+        value: "0"  # לא שולח התראות כברירת מחדל
 
       # ========================= Trade & Orders =========================
       - key: EXECUTE_TRADES
-        value: "1"
+        value: "0"   # הכי חשוב: אין מסחר אמיתי
       - key: ALLOW_MARKET_ENTRY
         value: "0"
       - key: MANAGER_WRITES_ORDERS
-        value: "1"
+        value: "0"
       - key: ORDERS_USE_OCO
         value: "1"
       - key: ORDER_ID_PREFIX
@@ -482,9 +482,9 @@ services:
       - key: MAX_TRADES_PER_TICK
         value: "1"
       - key: MIN_NOTIONAL_USDT
-        value: "25"
+        value: "5"
       - key: MAX_TRADE_BUDGET
-        value: "600"
+        value: "50"
       - key: ORDER_TRIGGER
         value: "mark"
       - key: POST_ONLY
@@ -514,13 +514,13 @@ services:
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
         value: "0.20"
       - key: AUTO_LEV_MIN
-        value: "15"
+        value: "5"
       - key: AUTO_LEV_MAX
-        value: "25"
+        value: "10"
       - key: AUTO_BUDGET_MIN
-        value: "100"
+        value: "10"
       - key: AUTO_BUDGET_MAX
-        value: "200"
+        value: "25"
 
       # ========================= SL/TP / BE / Trail / Ladder =========================
       - key: NATIVE_TPSL_ENABLE
@@ -608,7 +608,7 @@ services:
       - key: TP_SL_REFRESH_SEC
         value: "420"
       - key: MANAGER_REISSUE_ENABLE
-        value: "1"
+        value: "0"  # אין פקודות אמיתיות ב-staging
       - key: MANAGER_REISSUE_POLICY
         value: "cancel_replace"
       - key: TRAIL_PAUSE_WINDOWS
@@ -646,7 +646,7 @@ services:
       - key: TRAIL_RT_PRICE_SRC
         value: "MARK_PRICE"
       - key: TRAIL_RT_MAX_SYMBOLS
-        value: "30"
+        value: "20"
       - key: TRAIL_RT_ADJUST_THRESHOLD
         value: "0.2"
       - key: TRAIL_RT_WATCHLIST
@@ -672,7 +672,7 @@ services:
       - key: TP1_TAGS
         value: "TP1,tp1,tp_1,TAKE_PROFIT_1"
       - key: OPS_DIGEST_INTERVAL_HOURS
-        value: "3"
+        value: "6"
       - key: OPS_HEARTBEAT_ENABLE
         value: "0"
       - key: OPS_HEARTBEAT_EVERY_MIN
@@ -688,7 +688,7 @@ services:
       - key: DIGEST_MAX_LINES_DEFAULT
         value: "30"
       - key: DIGEST_SEND_TELEGRAM
-        value: "1"
+        value: "0"  # לא לשלוח לטלגרם ב-staging
 
       # ========================= ETA / Defaults =========================
       - key: ETA_SMART_ENABLE
@@ -736,19 +736,19 @@ services:
       - key: SLIP_BPS_BUCKETS
         value: "1,2,5,10,20,50,100"
       - key: METRICS_BEARER
-        fromSecret: METRICS_BEARER
+        fromSecret: METRICS_BEARER_STAGING  # או אותו bearer
 
       # ========================= Risk rails =========================
       - key: DAILY_LOSS_CAP_USDT
-        value: "300"
+        value: "100"
       - key: KILL_ON_CAP
         value: "1"
       - key: PRICE_PROTECT
         value: "1"
       - key: MAX_LOSS_PER_SYMBOL_USDT
-        value: "150"
+        value: "50"
       - key: DAILY_MAX_TRADES_PER_SYMBOL
-        value: "8"
+        value: "4"
       - key: CAPS_PER_SYMBOL_WINDOW_SEC
         value: "3600"
       - key: THREE_STRIKE_N
@@ -756,11 +756,11 @@ services:
       - key: THREE_STRIKE_WINDOW_SEC
         value: "86400"
       - key: SAFE_MODE
-        value: "0"
+        value: "1"   # staging: שמרני
       - key: EQUITY_USDT
-        value: "5000"
+        value: "2000"
       - key: EQUITY_ATH_USDT
-        value: "8000"
+        value: "4000"
       - key: EQUITY_DRAWDOWN_GUARD_PCT
         value: "25"
       - key: CORR_CAP_BETA
@@ -790,7 +790,7 @@ services:
       - key: PRICE_WS_FRESH_TTL
         value: "60"
       - key: PRICE_SCAN_INTERVAL
-        value: "45"
+        value: "60"
 
       # ========================= Managers =========================
       - key: MANAGER_ENABLE
@@ -800,7 +800,7 @@ services:
       - key: MANAGER_INTERVAL_SEC
         value: "30"
       - key: ALLOW_MANAGE_OPEN_TRADES
-        value: "1"
+        value: "0"  # לא מנהל פוזיציות אמיתיות
 
       # ======== Auto Manager defaults (this service) ========
       - key: AUTO_BE_BPS
@@ -844,7 +844,7 @@ services:
       - key: ROUTES_AUTO_DISCOVERY
         value: "1"
       - key: ROUTES_NEED_TG_APPROVAL
-        value: "1"
+        value: "0"
       - key: ROUTES_ALLOW
         value: "*"
       - key: ROUTES_DENY
@@ -866,72 +866,72 @@ services:
       - key: ROUTES_DEFAULT_RL_BURST
         value: "15"
 
-      # ========================= Bearer tokens (RO/ACTION) =========================
+      # ========================= Bearer tokens =========================
       - key: API_BEARER_TOKEN_RO
-        fromSecret: API_BEARER_TOKEN_RO
+        fromSecret: API_BEARER_TOKEN_RO_STAGING
       - key: API_BEARER_TOKEN_ACTION
-        fromSecret: API_BEARER_TOKEN_ACTION
+        fromSecret: API_BEARER_TOKEN_ACTION_STAGING
 
       # ========================= Secrets =========================
       - key: API_BEARER_TOKEN
-        fromSecret: API_BEARER_TOKEN
+        fromSecret: API_BEARER_TOKEN_STAGING
       - key: API_TOKEN
-        fromSecret: API_TOKEN
+        fromSecret: API_TOKEN_STAGING
       - key: PRIMARY_API_TOKEN
-        fromSecret: PRIMARY_API_TOKEN
+        fromSecret: PRIMARY_API_TOKEN_STAGING
       - key: API_SIGNING_SECRET
-        fromSecret: API_SIGNING_SECRET
+        fromSecret: API_SIGNING_SECRET_STAGING
       - key: OPS_SIGN_SECRET
-        fromSecret: OPS_SIGN_SECRET
+        fromSecret: OPS_SIGN_SECRET_STAGING
       - key: WEBHOOK_HMAC_SECRET
-        fromSecret: WEBHOOK_HMAC_SECRET
+        fromSecret: WEBHOOK_HMAC_SECRET_STAGING
       - key: OPENAI_API_KEY
-        fromSecret: OPENAI_API_KEY
+        fromSecret: OPENAI_API_KEY_STAGING
       - key: TELEGRAM_BOT_TOKEN
-        fromSecret: TELEGRAM_BOT_TOKEN
+        fromSecret: TELEGRAM_BOT_TOKEN_STAGING
       - key: TELEGRAM_WEBHOOK_SECRET
-        fromSecret: TELEGRAM_WEBHOOK_SECRET
+        fromSecret: TELEGRAM_WEBHOOK_SECRET_STAGING
       - key: ALERTS_INGEST_HMAC_SECRET
-        fromSecret: ALERTS_INGEST_HMAC_SECRET
+        fromSecret: ALERTS_INGEST_HMAC_SECRET_STAGING
       - key: INTERNAL_JWT_PUBLIC_KEY
-        fromSecret: INTERNAL_JWT_PUBLIC_KEY
+        fromSecret: INTERNAL_JWT_PUBLIC_KEY_STAGING
       - key: BINANCE_API_KEY
-        fromSecret: BINANCE_API_KEY
+        fromSecret: BINANCE_API_KEY_TESTNET
       - key: BINANCE_API_SECRET
-        fromSecret: BINANCE_API_SECRET
+        fromSecret: BINANCE_API_SECRET_TESTNET
       - key: ETHERSCAN_API_KEY
-        fromSecret: ETHERSCAN_API_KEY
+        fromSecret: ETHERSCAN_API_KEY_STAGING
 
-      # ======== NEW: Publishers / Events ========
+      # ======== Publishers / Events (ב-staging לרוב רק ללוגים) ========
       - key: POS_PUB_ENABLE
         value: "1"
       - key: POS_PUB_INTERVAL_SEC
-        value: "20"
+        value: "30"
 
       - key: POS_EVENTS_ENABLE
         value: "1"
       - key: POS_EVENTS_KEY
-        value: "pos:events"
+        value: "pos:events:staging"
       - key: POS_EVENTS_CHAN
-        value: "pos:events:chan"
+        value: "pos:events:chan:staging"
       - key: POS_EVENTS_MAX
-        value: "500"
+        value: "300"
       - key: POS_EVENTS_EXPIRE_SEC
-        value: "86400"
+        value: "43200"
       - key: POS_EVENTS_TELEGRAM_ENABLE
-        value: "1"
+        value: "0"
       - key: POS_EVENTS_TELEGRAM_LEVEL
-        value: "important"
+        value: "none"
 
-      # ========================= Dynamic Auto-Controller =========================
+      # ========================= Dynamic / Adaptive / Guards =========================
       - key: DYNAMIC_CONTROL_ENABLE
         value: "1"
       - key: DYNAMIC_SAFETY_MODE
         value: "on"
       - key: DYNAMIC_TARGET_P95_MS
-        value: "800"
+        value: "900"
       - key: DYNAMIC_ERROR_RATE_MAX_PCT
-        value: "1.5"
+        value: "2.0"
       - key: DYNAMIC_CPU_HIGH_WATERMARK_PCT
         value: "80"
       - key: DYNAMIC_CPU_LOW_WATERMARK_PCT
@@ -945,35 +945,33 @@ services:
       - key: DYNAMIC_MIN_STABILIZE_SEC
         value: "90"
 
-      # ---- Adaptive Rate Limit / SSE ----
       - key: ADAPTIVE_RL_ENABLE
         value: "1"
       - key: ADAPTIVE_RL_MIN_RPS
         value: "3"
       - key: ADAPTIVE_RL_MAX_RPS
-        value: "15"
+        value: "10"
       - key: ADAPTIVE_RL_BURST_MIN
-        value: "9"
+        value: "6"
       - key: ADAPTIVE_RL_BURST_MAX
-        value: "45"
+        value: "30"
       - key: ADAPTIVE_SSE_ENABLE
         value: "1"
       - key: ADAPTIVE_SSE_MAX_CONNS_MIN
-        value: "40"
+        value: "20"
       - key: ADAPTIVE_SSE_MAX_CONNS_MAX
-        value: "120"
+        value: "60"
       - key: ADAPTIVE_SSE_PER_IP_MIN
-        value: "2"
+        value: "1"
       - key: ADAPTIVE_SSE_PER_IP_MAX
-        value: "6"
+        value: "3"
 
-      # ---- Adaptive Scanning / Concurrency ----
       - key: ADAPTIVE_SCAN_ENABLE
         value: "1"
       - key: SCAN_CONCURRENCY_MIN
         value: "1"
       - key: SCAN_CONCURRENCY_MAX
-        value: "4"
+        value: "2"
       - key: SCAN_INTERVAL_SEC_MIN
         value: "30"
       - key: SCAN_INTERVAL_SEC_MAX
@@ -985,7 +983,6 @@ services:
       - key: MANAGER_INTERVAL_SEC_MAX
         value: "60"
 
-      # ---- Load Shedding / Backpressure ----
       - key: LOAD_SHED_ENABLE
         value: "1"
       - key: LOAD_SHED_P95_HARD_MS
@@ -995,7 +992,6 @@ services:
       - key: LOAD_SHED_REJECT_PCT_STEP
         value: "10"
 
-      # ---- Redis / Exchange Health Guards ----
       - key: DYNAMIC_REDIS_GUARDS_ENABLE
         value: "1"
       - key: DYNAMIC_BINANCE_GUARDS_ENABLE
@@ -1005,42 +1001,27 @@ services:
       - key: HEALTH_RECOVERY_GRACE_SEC
         value: "120"
 
-      # ---- Trading Safety Autopilot ----
       - key: DYNAMIC_RISK_ENABLE
         value: "1"
       - key: DYNAMIC_MAX_TRADE_BUDGET_MIN
-        value: "200"
+        value: "10"
       - key: DYNAMIC_MAX_TRADE_BUDGET_MAX
-        value: "600"
+        value: "50"
       - key: DYNAMIC_DAILY_LOSS_CAP_MIN
-        value: "200"
+        value: "50"
       - key: DYNAMIC_DAILY_LOSS_CAP_MAX
-        value: "300"
+        value: "100"
       - key: DYNAMIC_COOLDOWNS_ENABLE
         value: "1"
 
-      # ---- Kill-switch ----
       - key: KILL_SWITCH_ENABLE
         value: "1"
       - key: KILL_SWITCH_REASON
         value: "auto-guard"
-
-      # ===== ON-CHAIN (אופציונלי) =====
-      - key: ONCHAIN_ENABLE
-        value: "1"
-      - key: ONCHAIN_PROVIDER
-        value: "bitquery"
-      - key: ONCHAIN_TIMEOUT_MS
-        value: "2000"
-      - key: ONCHAIN_CACHE_TTL_SEC
-        value: "900"
-      - key: ETHERSCAN_ENABLE
-        value: "0"
-      - key: RISK_GATE_ONCHAIN_COOLDOWN_MIN
-        value: "30"
 
       # ===== Self-check flags =====
       - key: ENABLE_SELF_CHECK
         value: "1"
       - key: ENABLE_STARTUP_SELF_CHECK
         value: "1"
+
