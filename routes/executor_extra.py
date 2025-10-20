@@ -14,7 +14,7 @@ from utils.binance_client import (
 
 logger = logging.getLogger("algogpt.routes.executor_extra")
 
-# שמרנו את שם המודול/קובץ, אבל מיישרים prefix ל-/executor כדי להתאים למערכת והבדיקות
+# prefix נשאר /executor כדי להתאים למערכת ולמדיניות ההרשאות
 router = APIRouter(
     prefix="/executor",
     tags=["Executor"],
@@ -146,8 +146,6 @@ def get_symbols(
         if isinstance(s, dict) and _filter_usdt_perp(s, quote=quote)
     })
     return {"ok": True, "symbols": out, "count": len(out)}
-
-
 
 
 
