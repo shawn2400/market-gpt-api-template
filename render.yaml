@@ -73,7 +73,7 @@ services:
       - key: AUTO_RUN
         value: "1"
 
-      # דומיין מיושר – חשוב לקישורים חתומים/טלגרם
+      # דומיין מיושר
       - key: PUBLIC_HOST
         value: "https://algogpt-staging.onrender.com"
       - key: CONTEXT_URL
@@ -311,7 +311,7 @@ services:
       - key: INDICATORS_SUBSET
         value: ""
 
-      # כדי לא להיחסם באישור – מבטלים את סף הצ'קליסט
+      # כדי לא להיחסם באישור
       - key: ENTRY_SCORE_MODE
         value: "log"
       - key: ENTRY_SCORE_MIN
@@ -390,7 +390,7 @@ services:
       - key: REQUIRE_TELEGRAM_APPROVAL
         value: "0"
       - key: AUTO_OPEN_ON_APPROVE
-        value: "0"
+        value: "1"
 
       - key: SINK_ENFORCE_APPROVALS
         value: "0"
@@ -465,13 +465,13 @@ services:
       - key: MIN_NOTIONAL_USDT
         value: "5"
 
-      # מרשה תקציב עד $200 כדי שלא ייחתך באוטו-סייז
+      # מרשה תקציב עד $200
       - key: MAX_TRADE_BUDGET
         value: "200"
       - key: ORDER_TRIGGER
         value: "mark"
       - key: POST_ONLY
-        value: "1"
+        value: "0"   # לא לחסום כניסה מהירה
 
       - key: REST_COOLDOWN_SEC
         value: "10"
@@ -487,7 +487,7 @@ services:
       - key: QTY_STEP_OVERRIDE__BTCUSDT
         value: "0.001"
 
-      # אוטו-סייז לטווח המבוקש 100–200$, לו׳ 20–35
+      # אוטו-סייז לטווח 100–200$, לו׳ 20–35
       - key: AUTO_QTY_ENABLE
         value: "1"
       - key: AUTO_QTY_MODE
@@ -792,7 +792,6 @@ services:
       - key: BTC_SHORT_REQ
         value: "ema21<=ema50"
 
-      # עושים את הפאבליק באמת פאבליק – שלא תקבל 401 ב-/scan/public-topk
       - key: PUBLIC_REQUIRE_BEARER
         value: "0"
       - key: PUBLIC_SSE_HEARTBEAT_SEC
@@ -842,21 +841,18 @@ services:
         fromSecret: API_BEARER_TOKEN_RO_STAGING
       - key: API_BEARER_TOKEN_ACTION
         fromSecret: API_BEARER_TOKEN_ACTION_STAGING
-
       - key: API_BEARER_TOKEN
         fromSecret: API_BEARER_TOKEN_STAGING
       - key: API_TOKEN
         fromSecret: API_TOKEN_STAGING
       - key: PRIMARY_API_TOKEN
         fromSecret: PRIMARY_API_TOKEN_STAGING
-
       - key: API_SIGNING_SECRET
         fromSecret: OPS_SIGN_SECRET_STAGING
       - key: OPS_SIGN_SECRET
         fromSecret: OPS_SIGN_SECRET_STAGING
       - key: WEBHOOK_HMAC_SECRET
         fromSecret: WEBHOOK_HMAC_SECRET_STAGING
-
       - key: OPENAI_API_KEY
         fromSecret: OPENAI_API_KEY_STAGING
       - key: TELEGRAM_BOT_TOKEN
@@ -998,5 +994,4 @@ services:
         value: "https://testnet.binancefuture.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
         value: "3"
-
 
