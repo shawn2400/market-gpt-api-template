@@ -121,6 +121,11 @@ app = FastAPI(title="Ops Sign Server", version=APP_VERSION)
 async def health():
     return {"ok": True}
 
+# אליאס עבור Render Health Check (כדי לא לשנות Settings)
+@app.get("/healthz", include_in_schema=False)
+async def healthz():
+    return {"ok": True}
+
 @app.get("/readyz", include_in_schema=False)
 async def readyz():
     return {"ok": True, "version": APP_VERSION, "keys": len(KEYS)}
