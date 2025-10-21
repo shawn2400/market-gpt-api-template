@@ -74,6 +74,7 @@ services:
       - key: AUTO_RUN
         value: "1"
 
+      # 1) דומיין מיושר – לשמור גם בצד הלקוח
       - key: PUBLIC_HOST
         value: "https://algogpt-staging.onrender.com"
       - key: CONTEXT_URL
@@ -819,8 +820,9 @@ services:
         value: ""
       - key: ROUTES_TAGS_DENY
         value: "internal,debug"
+      # 3) הנתיב שמייצר מערכות אישור – ל/signed (תואם לקוד שמייצר קישורים חתומים)
       - key: ROUTES_APPROVE_ENDPOINT
-        value: "/ops/approve"
+        value: "/ops/approve/signed"
       - key: ROUTES_DEFAULT_TIMEOUT_SEC
         value: "30"
       - key: ROUTES_DEFAULT_RL_RPS
@@ -834,6 +836,7 @@ services:
       - key: DISABLE_ROUTES
         value: "public_web,debug,debug_auth,debug_binance,debug_env"
 
+      # 2) איחוד סוד החתימה – כולם מאות אותו secret
       - key: API_BEARER_TOKEN_RO
         fromSecret: API_BEARER_TOKEN_RO_STAGING
       - key: API_BEARER_TOKEN_ACTION
@@ -845,12 +848,15 @@ services:
         fromSecret: API_TOKEN_STAGING
       - key: PRIMARY_API_TOKEN
         fromSecret: PRIMARY_API_TOKEN_STAGING
+
+      # חשוב: משתמשים באותו secret עבור API_SIGNING_SECRET ו-OPS_SIGN_SECRET
       - key: API_SIGNING_SECRET
-        fromSecret: API_SIGNING_SECRET_STAGING
+        fromSecret: OPS_SIGN_SECRET_STAGING
       - key: OPS_SIGN_SECRET
         fromSecret: OPS_SIGN_SECRET_STAGING
       - key: WEBHOOK_HMAC_SECRET
         fromSecret: WEBHOOK_HMAC_SECRET_STAGING
+
       - key: OPENAI_API_KEY
         fromSecret: OPENAI_API_KEY_STAGING
       - key: TELEGRAM_BOT_TOKEN
@@ -994,3 +1000,4 @@ services:
         value: "https://testnet.binancefuture.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
         value: "3"
+
