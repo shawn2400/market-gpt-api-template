@@ -6,7 +6,7 @@ services:
     plan: standard
     autoDeploy: true
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /health
+    healthCheckPath: /readyz
 
     disk:
       name: data
@@ -35,7 +35,7 @@ services:
       - key: PORT
         value: "10000"
       - key: APP_MODULE
-        value: "main:app"
+        value: "algogpt.main:app"
       - key: PYTHONPATH
         value: "/app"
 
@@ -91,8 +91,9 @@ services:
         value: "1"
       - key: READONLY_ENDPOINTS
         value: "summary,prices_top,news_cache,health,meta_telegram"
-      - key: OPENAPI_INCLUDE_TAGS
-        value: "meta,Status,Public Feed,price,scan,manager,ops-ui,ops-approval,ops-flags,position-ops,ops-digest,debug,topk,alerts,aliases,metrics,routes,auto-discovery"
+      # שורה זו גרמה בעבר להיעלמות חלק מראוטרים — משאירים בלי include-tags
+      # - key: OPENAPI_INCLUDE_TAGS
+      #   value: "..."
       - key: OPENAPI_HIDE_PATTERNS
         value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
       - key: OPENAPI_PUBLIC_MAX_OPS
@@ -311,7 +312,7 @@ services:
       - key: INDICATORS_SUBSET
         value: ""
 
-      # כדי לא להיחסם באישור
+      # לא לחסום באישור
       - key: ENTRY_SCORE_MODE
         value: "log"
       - key: ENTRY_SCORE_MIN
@@ -834,7 +835,7 @@ services:
       - key: ENABLE_ROUTES
         value: ""
       - key: DISABLE_ROUTES
-        value: "public_web,debug,debug_auth,debug_binance,debug_env"
+        value: ""
 
       # סודות/מפתחות
       - key: API_BEARER_TOKEN_RO
