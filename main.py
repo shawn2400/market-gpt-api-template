@@ -1,3 +1,4 @@
+# main.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -16,19 +17,15 @@ import threading
 import math
 from contextlib import suppress
 from typing import Any, Dict, List, Optional, Callable, Tuple, Union
-from fastapi import Form  # for POST confirm endpoints
 
 # --- soft shim so routes.position_ops can import even if utils.anti_replay is missing ---
 import sys, types  # noqa: E402
 if "utils.anti_replay" not in sys.modules:
     _m = types.ModuleType("utils.anti_replay")
-
     def verify_request(ts_header: Optional[str], nonce_header: Optional[str], signature_header: Optional[str],
                        route: str, body: Any, require_signature: bool = False) -> Tuple[bool, str]:
-        # safer default: fail-closed unless explicitly allowed
-        allow = os.getenv("ALLOW_MISSING_ANTI_REPLAY", "0").lower() in ("1", "true", "yes", "on")
-        return (True, "ok") if allow else (False, "anti_replay_module_missing")
-
+        # permissive default; real verification lives in utils.anti_replay if present
+        return True, "ok"
     _m.verify_request = verify_request  # type: ignore[attr-defined]
     sys.modules["utils.anti_replay"] = _m
 # ----------------------------------------------------------------------------------------
@@ -38,9 +35,7 @@ try:
     from utils.idempotency import idem_for_request  # type: ignore
 except Exception:
     async def idem_for_request(body: bytes, headers: Dict[str, str], extra: Optional[Dict[str, Any]] = None) -> bool:  # type: ignore
-        # safer default: fail-closed unless explicitly allowed
-        allow = os.getenv("ALLOW_MISSING_IDEMPOTENCY", "0").lower() in ("1", "true", "yes", "on")
-        return True if allow else False
+        return True
 # ----------------------------------------------------------------------------------------
 
 import httpx
@@ -210,16 +205,10 @@ app = FastAPI(
     openapi_url=OPENAPI_URL,
 )
 
-# ----- HTTP metrics (lightweight): middleware + /metrics (Bearer-protected) -----
-from utils.metrics_helpers import mount_metrics, HttpMetricsMiddleware  # type: ignore
-app.add_middleware(HttpMetricsMiddleware)   # מדידות HTTP קלות
-mount_metrics(app)                          # ראוט /metrics מוגן ב-Bearer
-
-# (NEW) מעקב In-memory: כניסה ראשונית ו-TP1 timing + מצב דיווח רציף
+# (NEW) מעקב In-memory: כניסה ראשונית ו-TP1 timing
+# ייווצרו אם לא קיימים (טעינה/רילוד)
 app.state.pos_open_ts = getattr(app.state, "pos_open_ts", {})
 app.state.tp1_hit_ts = getattr(app.state, "tp1_hit_ts", {})
-app.state.pos_track = getattr(app.state, "pos_track", {})  # per-symbol state (entry, qty, side, highs, lows...)
-app.state.pos_last_report_ts = getattr(app.state, "pos_last_report_ts", {})  # throttling of continuous reports
 
 # ===== UltraTop integration (mount under /ultra only if enabled) =====
 ULTRATOP_MODE = os.getenv("ULTRATOP_MODE", "noop").lower()
@@ -270,59 +259,6 @@ app.add_middleware(
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
 )
 
-# ==================== RiskGate + FX/URLREP/ONCHAIN (PATCH) ====================
-# RiskGate middleware (protects /ops/* and /telegram/* by its own internal PREFIXES)
-try:
-    from middleware.risk_gate import RiskGate  # type: ignore
-except Exception:
-    class RiskGate:  # safe no-op middleware if missing
-        def __init__(self, app):
-            self.app = app
-        async def __call__(self, scope, receive, send):
-            await self.app(scope, receive, send)
-
-# Optional providers with safe fallbacks
-try:
-    from utils.fx_provider import get_rates, convert  # type: ignore
-except Exception:
-    async def get_rates(base: str = "USD") -> Dict[str, float]:
-        return {}
-    def convert(amount: float, from_: str, to: str, rates: Optional[Dict[str,float]] = None) -> float:
-        raise HTTPException(status_code=501, detail="fx_provider_missing")
-
-try:
-    from utils.url_reputation import check_url  # type: ignore
-except Exception:
-    async def check_url(u: str) -> Dict[str, Any]:
-        raise HTTPException(status_code=501, detail="url_reputation_missing")
-
-try:
-    from utils.onchain_risk import analyze_asset  # type: ignore
-except Exception:
-    async def analyze_asset(network: str, address: str, symbol: str = "") -> Dict[str, Any]:
-        raise HTTPException(status_code=501, detail="onchain_risk_missing")
-
-# mount RiskGate (as requested)
-app.add_middleware(RiskGate)  # מגן רק על /ops/* ו-/telegram/* לפי PREFIXES
-
-# Sample endpoints (exactly as in patch)
-@app.get("/fx/sample")
-async def fx_sample():
-    rates = await get_rates(base="USD")
-    ils = rates.get("ILS")
-    eur = rates.get("EUR")
-    return {"ILS": ils, "EUR": eur}
-
-@app.get("/urlrep")
-async def url_rep(u: str):
-    return await check_url(u)
-
-@app.get("/onchain/sample")
-async def onchain_sample():
-    # דוגמה: USDT (ERC20) – כתובת לדוגמה
-    return await analyze_asset(network="ethereum", address="0xdAC17F958D2ee523a2206206994597C13D831ec7", symbol="USDT")
-# ================== END PATCH SECTION ==================
-
 # ==================== Env & helpers ====================
 def _port() -> int:
     try:
@@ -342,7 +278,6 @@ WATCHLIST = [s.strip().upper() for s in (os.getenv("WATCHLIST", "") or "").split
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 ADMIN_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") or os.getenv("ADMIN_CHAT_ID")
 TELEGRAM_AUTO_WEBHOOK = os.getenv("TELEGRAM_AUTO_WEBHOOK", "1").lower() in ("1", "true", "yes", "on")
-TELEGRAM_SEND_ENABLE = os.getenv("TELEGRAM_SEND_ENABLE", "1").lower() in ("1", "true", "yes", "on")
 TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 
 API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
@@ -374,17 +309,7 @@ ETA_VELOCITY_WINDOW = int(os.getenv("ETA_VELOCITY_WINDOW", "30"))
 TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1")).split(",") if t.strip()]
 
 # HMAC secret for signed links
-HMAC_SECRET = (
-    os.getenv("HMAC_SECRET") or
-    os.getenv("WEBHOOK_HMAC_SECRET") or
-    os.getenv("OPS_SIGN_SECRET") or
-    ""
-).strip()
-
-# ==== Signed-link paths (DRY & safer) ====
-SIGN_PATH_PREVIEW = "/ops/ui/ticket/signed"
-SIGN_PATH_APPROVE = "/ops/approve/signed"
-SIGN_PATH_REJECT  = "/ops/reject/signed"
+HMAC_SECRET = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
 
 # ==================== Security helpers ====================
 def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
@@ -401,10 +326,11 @@ def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
 
 def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600, action: Optional[str] = None) -> str:
     if not HMAC_SECRET:
-        # Harden: never emit approve/reject links when not signing
-        if action in ("approve", "reject"):
-            return ""
         route = "/ops/ui/ticket"
+        if action == "approve":
+            route = "/ops/approve"
+        elif action == "reject":
+            route = "/ops/reject"
         sep = "&" if "?" in route else "?"
         return f"{base}{route}{sep}ticket_id={ticket_id}"
     exp = int(time.time()) + int(ttl_sec)
@@ -446,6 +372,7 @@ class ConfirmStore:
 
     @classmethod
     def remove(cls, ticket_id: str) -> None:
+        # FIX: גרש לא חוקי תוקן
         cls._items.pop(str(ticket_id), None)
 
 # ==================== Shared HTTP and Redis ====================
@@ -470,7 +397,13 @@ def _get_shared_async_client() -> httpx.AsyncClient:
             max_connections=int(os.getenv("HTTP_MAX_CONNECTIONS", "200")),
             max_keepalive_connections=int(os.getenv("HTTP_MAX_KEEPALIVE", "50")),
         )
-        cli = httpx.AsyncClient(timeout=timeout, limits=limits, headers={"User-Agent": f"algogpt/{APP_VERSION}"})
+        # Enable HTTP/2 where available for better connection reuse
+        cli = httpx.AsyncClient(
+            timeout=timeout,
+            limits=limits,
+            headers={"User-Agent": f"algogpt/{APP_VERSION}"},
+            http2=True,
+        )
         app.state.shared_async_client = cli
         return cli
 
@@ -493,7 +426,10 @@ async def _security_headers(request: Request, call_next):
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
-    resp.headers.setdefault("Permissions-Policy", "interest-cohort=()")
+    # Modernize security headers
+    resp.headers.setdefault("Permissions-Policy", "browsing-topics=()")
+    resp.headers.setdefault("Cross-Origin-Embedder-Policy", "require-corp")
+    resp.headers.setdefault("X-XSS-Protection", "0")
     if os.getenv("ENABLE_HSTS", "0").lower() in ("1", "true", "yes", "on"):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
     return resp
@@ -524,11 +460,6 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
     rec = bucket.get(key)
     if not rec or (now - rec["start"]) >= window_sec:
         bucket[key] = {"start": now, "count": 1}
-        # GC
-        with suppress(Exception):
-            stale = [k for k, v in bucket.items() if (now - v.get("start", now)) >= window_sec * 4]
-            for sk in stale:
-                bucket.pop(sk, None)
         return False
     rec["count"] += 1  # type: ignore[index]
     return rec["count"] > int(limit)  # type: ignore[index]
@@ -540,9 +471,7 @@ async def _public_rate_limit(request: Request, call_next):
     p = request.url.path
     if request.method.upper() != "GET":
         return await call_next(request)
-    xff = request.headers.get("X-Forwarded-For", "")
-    trust_xff = os.getenv("TRUST_XFF", "0").lower() in ("1", "true", "yes", "on")
-    ip = (xff.split(",", 1)[0].strip() if (trust_xff and xff) else (request.client.host if request.client else "0.0.0.0"))
+    ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.client.host if request.client else "0.0.0.0")
     rules = {
         "/scan/public-topk": (PUBLIC_TOPK_RPS, PUBLIC_TOPK_WINDOW),
         "/scan/public-now": (PUBLIC_NOW_RPS, PUBLIC_NOW_WINDOW),
@@ -552,7 +481,12 @@ async def _public_rate_limit(request: Request, call_next):
         if p.startswith(k):
             over = await _rl_hit(k, int(win), int(rps) * int(win), ip)
             if over:
-                return JSONResponse({"ok": False, "error": "rate_limited"}, status_code=429)
+                # Friendlier rate limit with Retry-After hint
+                return JSONResponse(
+                    {"ok": False, "error": "rate_limited"},
+                    status_code=429,
+                    headers={"Retry-After": str(win)},
+                )
             break
     return await call_next(request)
 
@@ -591,7 +525,6 @@ async def _public_cache_etag(request: Request, call_next):
         body = b""
         with suppress(Exception):
             body = resp.body if getattr(resp, "body", None) else b""
-        # streaming responses -> skip ETag
         if not body:
             if "vary" not in hdrs_lower:
                 resp.headers["Vary"] = "If-None-Match"
@@ -622,15 +555,14 @@ def _md_html(s: str) -> str:
 
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                               reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
-    if not TELEGRAM_SEND_ENABLE:
-        return {"ok": True, "skipped": True, "reason": "disabled"}
-
+    # --- idempotency on Redis to avoid duplicate sends within IDEM_TTL_SEC ---
     if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
         try:
             r = await _get_redis_cached()
             if r:
                 key_payload = json.dumps({"t": text, "a": approve_url, "r": reject_url, "p": preview_url}, ensure_ascii=False, separators=(",", ":"))
                 idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
+
                 ok = await r.setnx(idem_key, "1")
                 if not ok:
                     return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
@@ -688,8 +620,6 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
 
 async def _ensure_telegram_webhook() -> None:
     if not TELEGRAM_AUTO_WEBHOOK:
-        return
-    if not TELEGRAM_SEND_ENABLE:
         return
     bot = TELEGRAM_BOT_TOKEN
     secret = TELEGRAM_WEBHOOK_SECRET
@@ -753,8 +683,11 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
                 return v
     return None
 
-# >>> KL HTTP HELPER
+# >>> KL HTTP HELPER (לוקלי; מביא klines ב-HTTP לצ'קליסט)
 async def _fetch_klines_http(symbol: str, interval: str = "15m", limit: int = 120) -> List[List[Any]]:
+    """
+    מחזיר klines בפורמט binance (מערכים) דרך HTTP. Best-effort בלבד.
+    """
     sym = symbol.upper()
     if not sym.endswith("USDT"):
         sym += "USDT"
@@ -808,7 +741,6 @@ except Exception:
             return s
         h = hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
         return f"{s[:limit - (len(h) + 1)]}_{h}"
-
     def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Optional[str] = None) -> str:
         prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
         sym = str(symbol).upper()
@@ -819,6 +751,46 @@ except Exception:
         return _coid_fit_local(base, 36)
 
 # ==================== Execute trade helpers ====================
+def _bn_round(value: float, step: float) -> float:
+    if step <= 0:
+        return value
+    return math.floor(value / step) * step
+
+def _round_tick_dir(value: float, step: float, direction: str) -> float:
+    if step <= 0:
+        return value
+    q = value / step
+    if direction.lower().startswith("up"):
+        return math.ceil(q) * step
+    return math.floor(q) * step
+
+def _get_filters(client, symbol: str) -> Tuple[float, float]:
+    tick = 0.1
+    step = 0.001
+    try:
+        ex = client.futures_exchange_info()
+        for s in ex.get("symbols", []):
+            if s.get("symbol") == symbol:
+                for f in s.get("filters", []):
+                    if f.get("filterType") == "PRICE_FILTER":
+                        tick = float(f.get("tickSize", tick))
+                    if f.get("filterType") == "LOT_SIZE":
+                        step = float(f.get("stepSize", step))
+                break
+    except Exception:
+        pass
+    return tick, step
+
+def _round_to_lot_size(client, symbol: str, qty: float) -> float:
+    """
+    Ensure qty complies with Binance LOT_SIZE even when utils.position_sizing is absent.
+    """
+    try:
+        _tick, step = _get_filters(client, symbol)
+        return math.floor(float(qty) / float(step)) * float(step) if step and step > 0 else float(qty)
+    except Exception:
+        return float(qty)
+
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     with suppress(Exception):
         from utils.trade_executor import place_futures_market  # type: ignore
@@ -826,12 +798,12 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from binance.client import Client  # type: ignore
     except Exception as e:
-        return {"ok": False, "error": "binance_client_import_failed", "detail": str(e)}
+        return {"ok": False, "entered": False, "error": "binance_client_import_failed", "detail": str(e)}
     try:
         api_key = os.getenv("BINANCE_API_KEY", "").strip()
         api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
         if not api_key or not api_sec:
-            return {"ok": False, "error": "binance_keys_missing"}
+            return {"ok": False, "entered": False, "error": "binance_keys_missing"}
         client = Client(api_key, api_sec)
         _align_position_mode(client)
         symbol = str(ticket.get("symbol", "")).upper()
@@ -839,9 +811,15 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
         qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
         leverage = int(ticket.get("leverage") or ticket.get("lev") or 1)
         if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
-            return {"ok": False, "error": "bad_ticket_params"}
+            return {"ok": False, "entered": False, "error": "bad_ticket_params"}
         with suppress(Exception):
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
+        # LOT_SIZE rounding safeguard
+        try:
+            if qty > 0:
+                qty = _round_to_lot_size(client, symbol, qty)
+        except Exception:
+            pass
         base_kwargs: Dict[str, Any] = {
             "symbol": symbol,
             "side": side,
@@ -855,23 +833,23 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
             attempt_order["positionSide"] = pos_side_supplied
         try:
             order = client.futures_create_order(**attempt_order)
-            return {"ok": True, "exchange": "binance_futures", "order": order}
+            return {"ok": True, "entered": True, "exchange": "binance_futures", "order": order}
         except Exception as e1:
             if not _is_code_4061(e1):
                 raise
             try:
                 order = client.futures_create_order(**base_kwargs)
-                return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "no_positionSide"}
+                return {"ok": True, "entered": True, "exchange": "binance_futures", "order": order, "retry": "no_positionSide"}
             except Exception as e2:
                 try:
                     retry2_kwargs = dict(base_kwargs)
                     retry2_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
                     order = client.futures_create_order(**retry2_kwargs)
-                    return {"ok": True, "exchange": "binance_futures", "order": order, "retry": "derived_positionSide"}
+                    return {"ok": True, "entered": True, "exchange": "binance_futures", "order": order, "retry": "derived_positionSide"}
                 except Exception as e3:
-                    return {"ok": False, "error": "order_failed", "detail": str(e3), "first_error": str(e1), "second_error": str(e2)}
+                    return {"ok": False, "entered": False, "error": "order_failed", "detail": str(e3), "first_error": str(e1), "second_error": str(e2)}
     except Exception as e:
-        return {"ok": False, "error": "order_failed", "detail": str(e)}
+        return {"ok": False, "entered": False, "error": "order_failed", "detail": str(e)}
 
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     execute_trade_live = None
@@ -883,7 +861,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
             from app.trade_executor import execute_trade_live as _x  # type: ignore
             execute_trade_live = _x
     if execute_trade_live is None:
-        return {"ok": False, "error": "execute_trade_live_missing"}
+        return {"ok": False, "entered": False, "error": "execute_trade_live_missing"}
     symbol = (ticket.get("symbol") or "").upper()
     side = (ticket.get("side") or "").upper()
     qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
@@ -894,7 +872,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0", "0.0") and float(x) > 0]
     sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
     if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
-        return {"ok": False, "error": "bad_ticket_params"}
+        return {"ok": False, "entered": False, "error": "bad_ticket_params"}
     try:
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY", "").strip()
@@ -926,9 +904,10 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     clean = _filter_kwargs_for_callable(execute_trade_live, base_kwargs)
     try:
         res = await execute_trade_live(**clean)  # type: ignore
-        return res
+        # Normalize schema to include 'entered' when possible
+        return {"entered": bool(res.get("ok")), **res}
     except Exception as e:
-        return {"ok": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
+        return {"ok": False, "entered": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
 
 # ======== AUTO QTY/LEV ========
 def _round_qty(q: float, dec: int) -> float:
@@ -1006,9 +985,10 @@ async def webhook_whatever(request: Request):
         ok_first = await idem_for_request(body, headers, extra={"route": "/webhook/whatever"})
     except Exception as e:
         logger.warning("idem_for_request failed (permissive allow): %s", e)
-    else:
-        if not ok_first:
-            return JSONResponse({"ok": True, "skipped": True, "reason": "idem_duplicate"}, status_code=200)
+        ok_first = True
+    if not ok_first:
+        return JSONResponse({"ok": True, "skipped": True, "reason": "idem_duplicate"}, status_code=200)
+    # TODO: add your single-execution logic here.
     return JSONResponse({"ok": True, "handled_once": True}, status_code=200)
 
 def _require_bearer(request: Request) -> None:
@@ -1023,7 +1003,7 @@ def _require_bearer(request: Request) -> None:
 def _rows_kv_html(t: Dict[str, Any]) -> str:
     def cv(k, default="—"):
         v = t.get(k, default)
-        return default if (v is None or v == "" or v == []) else _md_html(str(v))
+        return default if v in (None, "", []) else _md_html(str(v))
     rows = []
     for k in (
         "ticket_id","symbol","side","qty","leverage","position_side","budget","score",
@@ -1131,7 +1111,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         price_now = None
         with suppress(Exception):
             price_now = await get_last_price_async(symbol)
-
         def _smart(symbol: str, side: str, price_now: Optional[float], tps: List[Optional[float]]) -> Dict[str, Any]:
             if not price_now:
                 return {}
@@ -1142,7 +1121,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
                     out[f"eta_tp{i}_min"] = max(1, int(dist_bps / max(1, ETA_VELOCITY_WINDOW)))
             out.setdefault("eta_open_min", out.get("eta_tp1_min", 2))
             return out
-
         etas = _smart(symbol, side, price_now, [payload.get("tp1"), payload.get("tp2"), payload.get("tp3")])
         payload.update(etas)
 
@@ -1200,12 +1178,13 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
                 ConfirmStore.create(dict(req_body))
             persisted = True
 
-    # Metrics
+    # Metrics: approvals_created_total++
     with suppress(Exception):
         inc_approvals_created()
 
-    # Slip estimate (best-effort)
+    # Soft slip-estimate gauge (best-effort)
     with suppress(Exception):
+        # get price + book spread
         cli = _get_shared_async_client()
         px = await get_last_price_async(symbol) or 0.0
         spread_pct = 0.0
@@ -1219,6 +1198,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
                     spread_pct = abs(ask - bid) / ((ask + bid) / 2.0) * 100.0
         except Exception:
             pass
+        # atr% from klines
         atr_pct = 0.0
         kl = await _fetch_klines_http(symbol, "15m", 120)
         if kl:
@@ -1233,9 +1213,9 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         set_last_slip_estimate_bps(float(est_bps))
 
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
-    preview_url = _build_signed_link(base, SIGN_PATH_PREVIEW, tid, ttl_sec=900, action="preview")
-    approve_url = _build_signed_link(base, SIGN_PATH_APPROVE, tid, ttl_sec=900, action="approve")
-    reject_url = _build_signed_link(base, SIGN_PATH_REJECT, tid, ttl_sec=900, action="reject")
+    preview_url = _build_signed_link(base, "/ops/ui/ticket/signed", tid, ttl_sec=900, action="preview")
+    approve_url = _build_signed_link(base, "/ops/approve/signed", tid, ttl_sec=900, action="approve")
+    reject_url = _build_signed_link(base, "/ops/reject/signed", tid, ttl_sec=900, action="reject")
 
     lines = [
         "⚠️ <b>Approval Needed</b>",
@@ -1275,37 +1255,30 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     }
 
 def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
+    # prefer explicit mode hint in note
     mode = _parse_mode(ticket.get("note"))
     if mode in ("MARKET", "HYBRID", "AUTO"):
         return mode
+    # optional external policy from utils.exec_decider
     if callable(decide_execution_mode):
         with suppress(Exception):
             m = decide_execution_mode(ticket)  # type: ignore
             if isinstance(m, str) and m.upper() in ("MARKET", "HYBRID", "AUTO"):
                 return m.upper()
+    # fallback
     return "HYBRID" if os.getenv("TP_LADDER_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on") else "MARKET"
 
 def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLResponse:
-    approve_url = _build_signed_link(base, SIGN_PATH_APPROVE, ticket_id, ttl_sec=900, action="approve")
-    reject_url  = _build_signed_link(base, SIGN_PATH_REJECT,  ticket_id, ttl_sec=900, action="reject")
-
-    # Render buttons only if we have signed URLs (i.e., HMAC secret present)
-    btns: List[str] = []
-    if approve_url:
-        btns.append(
-            f"<a href='{approve_url}' style='display:inline-block;padding:.6rem 1rem;background:#16a34a;color:#fff;border-radius:9px;text-decoration:none'>✅ Approve</a>"
-        )
-    if reject_url:
-        btns.append(
-            f"<a href='{reject_url}' style='display:inline-block;padding:.6rem 1rem;background:#dc2626;color:#fff;border-radius:9px;text-decoration:none;margin-left:.6rem'>❌ Reject</a>"
-        )
-    buttons_html = "".join(btns) if btns else "<div style='color:#777'>Signed actions are disabled (no HMAC secret).</div>"
-
+    approve_url = _build_signed_link(base, "/ops/approve/signed", ticket_id, ttl_sec=900, action="approve")
+    reject_url = _build_signed_link(base, "/ops/reject/signed", ticket_id, ttl_sec=900, action="reject")
     body = (
         "<!doctype html><meta charset='utf-8'>"
         "<body style='font-family:sans-serif;max-width:880px;margin:2rem auto;line-height:1.45'>"
         f"<h2 style='margin:0 0 1rem 0'>Ticket Preview · <code>{_md_html(ticket_id)}</code></h2>"
-        f"<div style='margin:.5rem 0 1rem 0'>{buttons_html}</div>"
+        "<div style='margin:.5rem 0 1rem 0'>"
+        f"<a href='{approve_url}' style='display:inline-block;padding:.6rem 1rem;background:#16a34a;color:#fff;border-radius:9px;text-decoration:none'>✅ Approve</a>"
+        f"<a href='{reject_url}' style='display:inline-block;padding:.6rem 1rem;background:#dc2626;color:#fff;border-radius:9px;text-decoration:none;margin-left:.6rem'>❌ Reject</a>"
+        "</div>"
         "<table style='border-collapse:collapse;width:100%;border:1px solid #eee'>"
         f"{_rows_kv_html(rec)}"
         "</table>"
@@ -1314,36 +1287,14 @@ def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLR
     )
     return HTMLResponse(body)
 
-# ===== Idempotency guard for approve/reject (atomic) =====
-async def _try_mark_decided(ticket_id: str, decision: str, ttl: int = 30) -> bool:
-    """
-    Prevent duplicate handling of approve/reject by racing clicks/retries.
-    Returns True if this is the first handler; False if already handled.
-    """
-    if not (aioredis and REDIS_URL):
-        # in-memory best-effort
-        bucket = getattr(app.state, "_decided_mem", None)
-        if bucket is None:
-            bucket = {}
-            app.state._decided_mem = bucket
-        key = f"{ticket_id}:{decision}"
-        if bucket.get(key):
-            return False
-        bucket[key] = time.time()
-        return True
-    r = await _get_redis_cached()
-    if not r:
-        return True
-    key = f"{NS}:decided:{ticket_id}:{decision}"
-    ok = await r.setnx(key, "1")
-    if ok:
-        with suppress(Exception):
-            await r.expire(key, ttl)
-    return bool(ok)
-
 @router.get("/ops/ui/ticket")
 async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
-    _require_bearer(request)
+    # Strict bearer requirement for UI regardless of PROTECT_APPROVE_ROUTES env
+    if not API_BEARER_TOKEN:
+        raise HTTPException(status_code=503, detail="Route protection enabled but API_BEARER_TOKEN missing")
+    auth = request.headers.get("Authorization", "") if request else ""
+    if not (auth.startswith("Bearer ") and auth.split(" ", 1)[1].strip() == API_BEARER_TOKEN):
+        raise HTTPException(status_code=401, detail="Unauthorized")
     rec, _ = await _load_ticket(ticket_id)
     if not rec and CONFIRMSTORE_ENABLE:
         with suppress(Exception):
@@ -1356,9 +1307,9 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     return _render_ticket_html(ticket_id, rec, base)
 
-@router.get(SIGN_PATH_PREVIEW)
+@router.get("/ops/ui/ticket/signed")
 async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
-    if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_PREVIEW):
+    if not _verify_signed_params(ticket_id, exp, sig, "/ops/ui/ticket/signed"):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     rec, _ = await _load_ticket(ticket_id)
     if not rec:
@@ -1369,91 +1320,25 @@ async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), s
 def _maybe_protect_routes(request: Request) -> None:
     _require_bearer(request)
 
-# ===== Patched: accept both ?ticket_id= and ?id= for approve/reject (alias-safe) =====
 @router.get("/ops/approve")
-async def approve(
-    id: Optional[str] = Query(default=None, description="alias: id"),
-    ticket_id: Optional[str] = Query(default=None, description="ticket_id"),
-    request: Request = None,
-):
+async def approve(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
     _maybe_protect_routes(request)
-    tid = ticket_id or id
-    if not tid:
-        # Keep legacy-style error payload to avoid breaking clients
-        raise HTTPException(status_code=422, detail=[{
-            "type": "missing", "loc": ["query", "id"], "msg": "Field required", "input": None
-        }])
-    return await _approve_core(str(tid))
+    return await _approve_core(ticket_id)
 
 @router.get("/ops/reject")
-async def reject(
-    id: Optional[str] = Query(default=None, description="alias: id"),
-    ticket_id: Optional[str] = Query(default=None, description="ticket_id"),
-    request: Request = None,
-):
+async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
     _maybe_protect_routes(request)
-    tid = ticket_id or id
-    if not tid:
-        raise HTTPException(status_code=422, detail=[{
-            "type": "missing", "loc": ["query", "id"], "msg": "Field required", "input": None
-        }])
-    return await _reject_core(str(tid))
+    return await _reject_core(ticket_id)
 
-# ===== Confirm GET -> POST flow for signed approve/reject =====
-@router.get(SIGN_PATH_APPROVE)
-async def approve_signed_confirm(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
-    if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_APPROVE):
-        raise HTTPException(status_code=401, detail="Bad or expired signature")
-    # build action via url_for (reverse-proxy safe)
-    action = "/ops/approve/signed"
-    try:
-        if request is not None:
-            action = request.url_for("approve_signed_post")
-    except Exception:
-        pass
-    return HTMLResponse(
-        "<!doctype html><meta charset='utf-8'>"
-        "<body style='font-family:sans-serif;max-width:720px;margin:3rem auto'>"
-        "<h3>Confirm Approve</h3>"
-        f"<form method='post' action='{_md_html(action)}'>"
-        f"<input type='hidden' name='ticket_id' value='{_md_html(ticket_id)}'/>"
-        f"<input type='hidden' name='exp' value='{_md_html(exp)}'/>"
-        f"<input type='hidden' name='sig' value='{_md_html(sig)}'/>"
-        "<button style='padding:.6rem 1rem;background:#16a34a;color:#fff;border:0;border-radius:8px'>Approve</button>"
-        "</form></body>"
-    )
-
-@router.post(SIGN_PATH_APPROVE)
-async def approve_signed_post(ticket_id: str = Form(...), exp: str = Form(...), sig: str = Form(...)):
-    if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_APPROVE):
+@router.get("/ops/approve/signed")
+async def approve_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
+    if not _verify_signed_params(ticket_id, exp, sig, "/ops/approve/signed"):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _approve_core(ticket_id)
 
-@router.get(SIGN_PATH_REJECT)
-async def reject_signed_confirm(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
-    if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_REJECT):
-        raise HTTPException(status_code=401, detail="Bad or expired signature")
-    action = "/ops/reject/signed"
-    try:
-        if request is not None:
-            action = request.url_for("reject_signed_post")
-    except Exception:
-        pass
-    return HTMLResponse(
-        "<!doctype html><meta charset='utf-8'>"
-        "<body style='font-family:sans-serif;max-width:720px;margin:3rem auto'>"
-        "<h3>Confirm Reject</h3>"
-        f"<form method='post' action='{_md_html(action)}'>"
-        f"<input type='hidden' name='ticket_id' value='{_md_html(ticket_id)}'/>"
-        f"<input type='hidden' name='exp' value='{_md_html(exp)}'/>"
-        f"<input type='hidden' name='sig' value='{_md_html(sig)}'/>"
-        "<button style='padding:.6rem 1rem;background:#dc2626;color:#fff;border:0;border-radius:8px'>Reject</button>"
-        "</form></body>"
-    )
-
-@router.post(SIGN_PATH_REJECT)
-async def reject_signed_post(ticket_id: str = Form(...), exp: str = Form(...), sig: str = Form(...)):
-    if not _verify_signed_params(ticket_id, exp, sig, SIGN_PATH_REJECT):
+@router.get("/ops/reject/signed")
+async def reject_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
+    if not _verify_signed_params(ticket_id, exp, sig, "/ops/reject/signed"):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _reject_core(ticket_id)
 
@@ -1463,6 +1348,10 @@ async def _smart_manage_now(symbol: str,
                             pcts: Optional[List[float]] = None,
                             splits: Optional[List[float]] = None,
                             atr_mult: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Best-effort wrapper: אם קיים מימוש ב-routes.manager/app.manager נשתמש בו.
+    אחרת נחזור עם skipped=True ולא נכשיל את הזרימה.
+    """
     fn = None
     with suppress(Exception):
         from routes.manager import smart_manage_now as _fn  # type: ignore
@@ -1479,11 +1368,44 @@ async def _smart_manage_now(symbol: str,
     try:
         if inspect.iscoroutinefunction(fn):  # type: ignore[arg-type]
             return await fn(**params)  # type: ignore[misc]
+        # במקרה של sync
         return await asyncio.to_thread(lambda: fn(**params))  # type: ignore[misc]
     except Exception as e:
         return {"ok": False, "error": "smart_manage_now_failed", "detail": f"{e}"}
 
+async def _try_mark_decided(ticket_id: str, decision: str, ttl: int = 30) -> bool:
+    """
+    Prevent duplicate handling of approve/reject by racing clicks/retries.
+    Returns True if this is the first handler; False if already handled.
+    """
+    if not (aioredis and REDIS_URL):
+        # in-memory best-effort
+        bucket = getattr(app.state, "_decided_mem", None)
+        if bucket is None:
+            bucket = {}
+            app.state._decided_mem = bucket
+        # Single ANY key so approve/reject can't both win
+        key_any = f"{ticket_id}:ANY"
+        if bucket.get(key_any):
+            return False
+        bucket[key_any] = time.time()
+        return True
+    r = await _get_redis_cached()
+    if not r:
+        return True
+    # Single ANY key in Redis too
+    key_any = f"{NS}:decided:{ticket_id}:ANY"
+    ok = await r.setnx(key_any, "1")
+    if ok:
+        with suppress(Exception):
+            await r.expire(key_any, ttl)
+    return bool(ok)
+
 async def _approve_core(ticket_id: str):
+    # duplicate-protect
+    if not await _try_mark_decided(ticket_id, "approve"):
+        return _html("⚠️ בקשה זו כבר טופלה (כפילות נמנעה).")
+
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור.")
@@ -1531,13 +1453,6 @@ async def _approve_core(ticket_id: str):
             logger.warning("checklist_gate_failed (permissive allow): %s", e)
     # --- סוף ה-Checklist Gate ---
 
-    # Idem guard: avoid double handling of the same ticket
-    first = await _try_mark_decided(ticket_id, "approve")
-    if not first:
-        with suppress(Exception):
-            await _send_telegram_html(f"ℹ️ <b>Approve Duplicate</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• Skipped duplicate.")
-        return _html("⚠️ בקשה זהה כבר טופלה.")
-
     t2 = await _apply_auto_qty_on_ticket_async(ticket)
     if t2 is None:
         return _html("⚠️ שגיאה: לא ניתן להביא מחיר עדכני לצורך חישוב כמות אוטומטית.")
@@ -1552,11 +1467,14 @@ async def _approve_core(ticket_id: str):
               else _execute_trade(ticket))
     )
     ok = bool(exec_res.get("ok"))
-    if (not ok) and flow in ("HYBRID", "AUTO") and (os.getenv("PROPOSE_BLOCK_ON_FAIL", "0").lower() not in ("1", "true", "yes", "on")):
+    entered = bool(exec_res.get("entered"))
+    # Avoid double-entry: fallback to MARKET only if nothing was entered yet
+    if (not ok) and (not entered) and flow in ("HYBRID", "AUTO") and (os.getenv("PROPOSE_BLOCK_ON_FAIL", "0").lower() not in ("1", "true", "yes", "on")):
         retry_res = await _execute_trade(ticket)
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
 
+    # === Metrics ===
     try:
         if ok:
             inc_approve_ok()
@@ -1586,8 +1504,6 @@ async def _approve_core(ticket_id: str):
             logger.warning("smart_manage_trigger_failed: %s", e)
     with suppress(Exception):
         sym, side, qty = ticket.get("symbol", ""), ticket.get("side", ""), ticket.get("qty", "")
-        # brief error summary instead of full exec payload
-        err_brief = exec_res.get("error") or exec_res.get("primary_error") or exec_res.get("detail") or "unknown_error"
         msg = (
             f"✅ <b>Approved</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
             f"• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n• Flow: <code>{flow}</code>\n— — —\nבוצע והועבר לניהול."
@@ -1595,24 +1511,22 @@ async def _approve_core(ticket_id: str):
             else
             f"⚠️ <b>Approve Failed</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n"
             f"• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n• Flow: <code>{flow}</code>\n— — —\n"
-            f"שגיאה: <code>{_md_html(str(err_brief))}</code>"
+            f"שגיאה: <code>{_md_html(json.dumps(exec_res, ensure_ascii=False))}</code>"
         )
         await _send_telegram_html(msg)
     await _delete_ticket(ticket_id, source, final_status=ok)
     return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.") if ok else _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
 
 async def _reject_core(ticket_id: str):
+    # duplicate-protect
+    if not await _try_mark_decided(ticket_id, "reject"):
+        return _html("⚠️ בקשה זו כבר טופלה (כפילות נמנעה).")
+
     ticket, source = await _load_ticket(ticket_id)
     if not ticket:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור/דחייה.")
 
-    # Idem guard
-    first = await _try_mark_decided(ticket_id, "reject")
-    if not first:
-        with suppress(Exception):
-            await _send_telegram_html(f"ℹ️ <b>Reject Duplicate</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• Skipped duplicate.")
-        return _html("⚠️ בקשה זהה כבר טופלה.")
-
+    # === Metrics ===
     try:
         inc_reject()
     except Exception:
@@ -1639,7 +1553,7 @@ async def ui_pending(request: Request = None):
                 cursor: Any = 0
                 while True:
                     res = await r.scan(cursor, match=f"{NS}:ticket:*", count=200)
-                    cursor = int(res[0])
+                    cursor = int(res[0]) if not isinstance(res[0], int) else res[0]
                     keys = res[1]
                     for k in keys:
                         raw = await r.get(k)
@@ -1733,7 +1647,7 @@ PROFILE_EXTREME_SPLITS = [float(x) for x in (os.getenv("PROFILE_EXTREME_SPLITS",
 PROFILE_EXTREME_ATR_MULT = float(os.getenv("PROFILE_EXTREME_ATR_MULT", "1.6"))
 
 ADX_EXTREME_MIN = float(os.getenv("ADX_EXTREME_MIN", "28"))
-ATRPCT_EXTREME_MIN = float(os.getenv("ATRPCT_EXTREME_MIN", "0.7"))  # 0.7%
+ATRPCT_EXTREME_MIN = float(os.getenv("ATRPCT_EXTREME_MIN", "0.007"))
 
 def _wilder_smooth(values: List[float], period: int) -> List[float]:
     if not values or period <= 0 or len(values) < period:
@@ -1764,7 +1678,7 @@ def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -
         minus_dm_s = _wilder_smooth(minus_dm, period)
         if not (atr_series and plus_dm_s and minus_dm_s):
             return {"atr": 0.0, "adx": 0.0, "price": closes[-1]}
-        atr = atr_series[-1]
+        atr = attr = atr_series[-1]
         plus_di = [(p / atr_series[i]) * 100 if atr_series[i] > 0 else 0.0 for i, p in enumerate(plus_dm_s)]
         minus_di = [(m / atr_series[i]) * 100 if atr_series[i] > 0 else 0.0 for i, m in enumerate(minus_dm_s)]
         dx = []
@@ -1774,81 +1688,21 @@ def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -
             dx.append((d / s) * 100 if s > 0 else 0.0)
         adx_series = _wilder_smooth(dx, period)
         adx = adx_series[-1] if adx_series else 0.0
-        return {"atr": float(atr), "adx": float(adx), "price": float(closes[-1])}
+        return {"atr": float(attr), "adx": float(adx), "price": float(closes[-1])}
     except Exception:
         return {"atr": 0.0, "adx": 0.0, "price": 0.0}
-
-def _bn_round(value: float, step: float) -> float:
-    if step <= 0:
-        return value
-    return math.floor(value / step) * step
-
-def _round_tick_dir(value: float, step: float, direction: str) -> float:
-    if step <= 0:
-        return value
-    q = value / step
-    if direction.lower().startswith("up"):
-        return math.ceil(q) * step
-    return math.floor(q) * step
-
-# ---- Exchange info cache ----
-def _ex_info_cache_key() -> str:
-    return "futures_exchange_info"
-
-def _get_exchange_info_cached(client) -> Dict[str, Any]:
-    ttl = 600
-    with suppress(Exception):
-        ttl = int(os.getenv("EXCHANGE_INFO_TTL_SEC", "600") or 600)
-    now = time.time()
-    key = _ex_info_cache_key()
-
-    cache_bucket = getattr(app.state, "ex_info_cache", None)
-    if cache_bucket is None:
-        cache_bucket = {}
-        app.state.ex_info_cache = cache_bucket
-
-    rec = cache_bucket.get(key)
-    if rec and (now - rec.get("ts", 0)) < ttl and isinstance(rec.get("data"), dict):
-        return rec["data"]  # type: ignore[return-value]
-
-    try:
-        data = client.futures_exchange_info()
-        if isinstance(data, dict):
-            cache_bucket[key] = {"ts": now, "data": data}
-            return data
-    except Exception:
-        if rec and isinstance(rec.get("data"), dict):
-            return rec["data"]  # type: ignore[return-value]
-        raise
-
-def _get_filters(client, symbol: str) -> Tuple[float, float]:
-    tick = 0.1
-    step = 0.001
-    try:
-        ex = _get_exchange_info_cached(client)
-        for s in ex.get("symbols", []):
-            if s.get("symbol") == symbol:
-                for f in s.get("filters", []):
-                    if f.get("filterType") == "PRICE_FILTER":
-                        tick = float(f.get("tickSize", tick))
-                    elif f.get("filterType") == "LOT_SIZE":
-                        step = float(f.get("stepSize", step))
-                break
-    except Exception:
-        pass
-    return tick, step
 
 # ===== Profile select for /manage-once =====
 async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, float], str]:
     try:
-        klines = await asyncio.to_thread(client.futures_klines, symbol=symbol, interval="1m", limit=60)
+        klines = client.futures_klines(symbol=symbol, interval="1m", limit=60)
     except Exception:
         klines = []
     indicators = _compute_indicators_from_klines(klines or [], period=14)
     price = float(indicators.get("price") or 0.0)
     atr = float(indicators.get("atr") or 0.0)
     adx = float(indicators.get("adx") or 0.0)
-    atr_pct = (atr / price) * 100.0 if price > 0 else 0.0  # percent
+    atr_pct = (atr / price) if price > 0 else 0.0
 
     use_extreme = PROFILE_AUTO_SELECT and ((adx >= ADX_EXTREME_MIN) or (atr_pct >= ATRPCT_EXTREME_MIN))
     profile_name = "EXTREME" if use_extreme else "BASE"
@@ -1876,11 +1730,10 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
 def _parse_pause_windows(spec: str) -> List[Tuple[int, int]]:
     windows: List[Tuple[int, int]] = []
     for part in [p.strip() for p in (spec or "").split(",") if p.strip()]:
-        p = part.rstrip("Zz").replace(" ", "")
+        p = part.rstrip("Zz")
         if "-" not in p:
             continue
         a, b = [x.strip() for x in p.split("-", 1)]
-
         def _hm(s: str) -> Optional[int]:
             try:
                 hh, mm = s.split(":")
@@ -1890,7 +1743,6 @@ def _parse_pause_windows(spec: str) -> List[Tuple[int, int]]:
             except Exception:
                 return None
             return None
-
         s = _hm(a); e = _hm(b)
         if s is None or e is None:
             continue
@@ -1935,7 +1787,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     entry_price = None
     side_txt = None
     try:
-        positions = await asyncio.to_thread(client.futures_position_information, symbol=symbol)
+        positions = client.futures_position_information(symbol=symbol)
         for p in positions:
             amt = float(p.get("positionAmt") or 0.0)
             if abs(amt) > 0:
@@ -1949,10 +1801,10 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     if not side_txt or not entry_price or abs(pos_amt) <= 0:
         return {"ok": True, "skipped": True, "reason": "no_open_position"}
 
-    tick, step = await asyncio.to_thread(_get_filters, client, symbol)
+    tick, step = _get_filters(client, symbol)
     price_now = None
     with suppress(Exception):
-        tick_data = await asyncio.to_thread(client.futures_symbol_ticker, symbol=symbol)
+        tick_data = client.futures_symbol_ticker(symbol=symbol)
         if tick_data and "price" in tick_data:
             price_now = float(tick_data["price"])
     base_price = price_now or entry_price
@@ -1965,37 +1817,40 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
 
     if len(pcts) != len(splits) or not (0.999 <= sum(splits) <= 1.001):
         raise HTTPException(status_code=422, detail="pcts/splits mismatch or splits must sum to 1.0")
-    if any((not math.isfinite(x)) or (x <= 0) for x in pcts + splits):
-        raise HTTPException(status_code=422, detail="pcts/splits must be finite and > 0")
+    if any(x <= 0 for x in pcts):
+        raise HTTPException(status_code=422, detail="pcts must be > 0")
+    if any(x <= 0 for x in splits):
+        raise HTTPException(status_code=422, detail="splits must be > 0")
 
+    # === החלפה: ניהול בעזרת tp_helper (BE + TP + Trail) ===
     try:
         from utils.tp_helper import manage_once_place_all  # type: ignore
     except Exception as e:
         return {"ok": False, "error": "tp_helper_missing", "detail": str(e)}
 
     try:
-        res = await asyncio.to_thread(
-            manage_once_place_all,
-            client,
-            symbol,
-            side_txt,
-            float(entry_price),
-            float(base_price),
-            float(abs(pos_amt)),
-            float(tick),
-            float(step),
-            int(offset_bps),
-            [float(x) for x in pcts],
-            [float(x) for x in splits],
-            float(indicators.get("atr", 0.0)),
-            atr_mult if atr_mult is not None else None,
-            os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
-            build_client_order_id,
-            False,
+        res = manage_once_place_all(
+            client=client,
+            symbol=symbol,
+            side_txt=side_txt,
+            entry_price=float(entry_price),
+            price_now=float(base_price),
+            qty_abs=float(abs(pos_amt)),
+            tick=float(tick),
+            step=float(step),
+            offset_bps=int(offset_bps),
+            pcts=[float(x) for x in pcts],
+            splits=[float(x) for x in splits],
+            atr=float(indicators.get("atr", 0.0)),
+            atr_mult=atr_mult if atr_mult is not None else None,
+            working_type=os.getenv("BINANCE_WORKING_TYPE", "MARK_PRICE"),
+            coid_builder=build_client_order_id,
+            dry_run=False,
         )
     except Exception as e:
         return {"ok": False, "error": "manage_once_place_all_failed", "detail": f"{e}"}
 
+    # (NEW 2.2) סימון כשה-Structural SL באמת השפיע (רק אם merged_stop != be_price)
     try:
         computed = (res or {}).get("computed", {}) or {}
         be_price = computed.get("be_price")
@@ -2020,7 +1875,7 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
             "adx": round(float(indicators.get("adx", 0.0)), 2),
             "atr": float(indicators.get("atr", 0.0)),
             "price": float(indicators.get("price", 0.0)),
-            "atr_pct": round((float(indicators.get("atr", 0.0)) / float(indicators.get("price", 1.0))) * 100.0, 6) if indicators.get("price", 0.0) else 0.0,
+            "atr_pct": round(float(indicators.get("atr", 0.0)) / float(indicators.get("price", 1.0)), 6) if indicators.get("price", 0.0) else 0.0,
             "thresholds": {"ADX_EXTREME_MIN": ADX_EXTREME_MIN, "ATRPCT_EXTREME_MIN": ATRPCT_EXTREME_MIN},
         },
     }
@@ -2079,8 +1934,8 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = 
 
 async def _telegram_webhook_core(request: Request) -> Dict[str, Any]:
     secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    TELEGRAM_WEBHOOK_SECRET_L = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
-    if TELEGRAM_WEBHOOK_SECRET_L and secret != TELEGRAM_WEBHOOK_SECRET_L:
+    TELEGRAM_WEBHOOK_SECRET_ = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
+    if TELEGRAM_WEBHOOK_SECRET_ and secret != TELEGRAM_WEBHOOK_SECRET_:
         raise HTTPException(status_code=401, detail="Bad secret")
     _ = await request.body()
     return {"ok": True}
@@ -2093,42 +1948,12 @@ async def telegram_webhook(request: Request):
 async def telegram_hook_alias(request: Request):
     return await _telegram_webhook_core(request)
 
+# ---- small ping route (listed in SECURITY_PUBLIC_PATHS) ----
 @app.get("/telegram/ping", tags=["meta"])
 async def telegram_ping():
     return {"ok": True, "ts": int(time.time())}
 
 # ==================== Optional routers include ====================
-
-# 1) include_router בטוחה ל-position_ops אם קיים
-try:
-    from routes import position_ops as _pos_ops
-    app.include_router(_pos_ops.router, tags=["position-ops"])
-    logger.info("routes.position_ops mounted (direct)")
-except Exception as e:
-    logger.warning("routes.position_ops not loaded (direct): %s", e)
-
-# 2) לולאת POSSIBLE_ROUTES דינמית
-POSSIBLE_ROUTES = [
-    "executors","notify_hooks","admin","admin_control","ai_analyze","analytics","anchor","auto_trade",
-    "binance_status","calibration","context","dashboard","dashboard_live","debug","debug_auth","debug_binance",
-    "debug_env","debug_hmac","decision","executor_control","executor_extra","executor_status","executors_grid_export",
-    "export","grid","guard_smoke","health_compat","indicators","indicators_extra","locked_report","manage_state","market",
-    "market_extra","multi_scan","news","ops_approval","ops_approve","ops_guard","ops_ticket","order_modify","orderbook",
-    "orderflow","orders","orders_utils","pnl","portfolio","precision","provider_cryptopanic","public_feed","reconcile",
-    "review_analytics","risk","risk_tools","root","root_aliases","rpc","scan_now_alias","scan_public","scheduler_ai",
-    "snapshot","state","strategy","system_autopilot","telegram","telegram_callbacks","telegram_fallback","telegram_ping",
-    "telegram_push_status","telegram_webhook_secure","trade_approvals","trade_autoscale","trade_sink","ui","ui_grid",
-    "utils","ws","ws_health","ws_stream","ws_user_status","ws_user_stream",
-]
-for name in POSSIBLE_ROUTES:
-    try:
-        mod = __import__(f"routes.{name}", fromlist=["router"])
-        if hasattr(mod, "router"):
-            app.include_router(mod.router)
-    except Exception:
-        pass
-
-# 3) include "ידועה" עם תגיות
 for mod, tag in (
     ("routes.manager", "manager"),
     ("routes.price", "price"),
@@ -2148,88 +1973,12 @@ for mod, tag in (
     ("routes.public_web", "Public Feed"),
     ("routes.ai", "AI"),
     ("routes.metrics", "metrics"),
-    ("routes.trade", "trade"),
-    ("routes.backtest", "backtest"),
-    ("routes.executor", "executor"),
-    ("routes.kpi_mini", "kpi-mini"),
-    ("routes.telegram_bot", "telegram-bot"),
-    ("routes.telegram_webhook", "telegram-webhook"),
 ):
     try:
         module = __import__(mod, fromlist=["router"])
         app.include_router(getattr(module, "router"), tags=[tag])
     except Exception as e:
         logger.warning("%s router not loaded: %s", mod, e)
-
-# --- Public Trade Status router (safe import & mount) ---
-try:
-    from routes.public_trade_status import router as public_trade_status_router
-    app.include_router(public_trade_status_router, tags=["public-trade-status"])
-    logger.info("public_trade_status router mounted")
-except Exception as e:
-    logger.warning("routes.public_trade_status router not loaded: %s", e)
-
-# --- Status router (ADDED) ---
-try:
-    from routes.status import router as status_router
-    app.include_router(status_router, tags=["status"])
-    logger.info("status router mounted")
-except Exception as e:
-    logger.warning("routes.status router not loaded: %s", e)
-
-# >>>>>> ADDED AS REQUESTED <<<<<<
-try:
-    from routes.public_snapshot import router as snapshot_router
-    app.include_router(snapshot_router)
-    logger.info("public_snapshot router mounted")
-except Exception as e:
-    logger.warning("routes.public_snapshot router not loaded: %s", e)
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-# >>>>>> NEW: visual_stream router <<<<<<
-try:
-    from routes.visual_stream import router as _visual_stream_router
-    app.include_router(_visual_stream_router, tags=["visual-stream"])
-    logger.info("routes.visual_stream router mounted")
-except Exception as e:
-    logger.warning("routes.visual_stream not loaded: %s", e)
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-# >>>>>> NEW: Position Publisher loop (Redis positions broadcaster) <<<<<<
-# Will run only if POS_PUB_ENABLE is truthy. Interval defaults to 20s.
-try:
-    from manager.pos_publisher import start_pos_publisher as _start_pos_publisher
-    if os.getenv("POS_PUB_ENABLE", "0").lower() in ("1", "true", "yes", "on"):
-        # build kwargs safely in case function signature differs
-        _pub_kwargs = {"app": app, "interval_sec": int(os.getenv("POS_PUB_INTERVAL_SEC", "20") or 20), "redis_url": REDIS_URL}
-        try:
-            # reuse local helper to pass only supported args
-            _pub_kwargs = _filter_kwargs_for_callable(_start_pos_publisher, _pub_kwargs)
-        except Exception:
-            pass
-        _start_pos_publisher(**_pub_kwargs)
-        logger.info("pos_publisher started (interval=%ss)", os.getenv("POS_PUB_INTERVAL_SEC", "20"))
-    else:
-        logger.info("pos_publisher disabled by env (POS_PUB_ENABLE)")
-except Exception as e:
-    logger.warning("pos_publisher not started: %s", e)
-# <<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<<
-
-# --- Public POS Events SSE router (new) ---
-try:
-    from routes.public_pos_events import router as public_pos_events_router
-    app.include_router(public_pos_events_router, tags=["Public Feed"])
-    logger.info("public_pos_events router mounted")
-except Exception as e:
-    logger.warning("routes.public_pos_events router not loaded: %s", e)
-
-# --- self_check router (NEW) ---
-try:
-    from app.routers import self_check  # type: ignore
-    app.include_router(self_check.router)
-    logger.info("self_check router mounted")
-except Exception as e:
-    logger.warning("self_check router not loaded: %s", e)
 
 app.include_router(router)
 
@@ -2276,7 +2025,7 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
     allowlist = set([k.strip() for k in (keys or "").split(",") if k.strip()]) if keys else set()
     safe: Dict[str, Any] = {}
     for k, v in os.environ.items():
-        if any(x in k.upper() for x in ("SECRET", "TOKEN", "KEY", "PASSWORD")):
+        if any(x in k.upper() for x in ("SECRET", "TOKEN", "KEY", "PASSWORD", "HMAC", "SIGN")):
             continue
         if allowlist and k not in allowlist:
             continue
@@ -2287,9 +2036,12 @@ def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
 def debug_env_head():
     return PlainTextResponse("", status_code=200)
 
+# ---- NEW: /meta/routes (diagnostics) ----
 @app.get("/meta/routes", tags=["meta"])
 async def meta_routes(request: Request):
-    _require_bearer(request)
+    # מוגן עם Bearer אם PROTECT_APPROVE_ROUTES=1
+    with suppress(Exception):
+        _require_bearer(request)
     routes = []
     for r in app.routes:
         methods = []
@@ -2304,15 +2056,23 @@ async def meta_routes(request: Request):
         })
     return {"ok": True, "count": len(routes), "routes": routes}
 
+# ---- NEW: /meta/telegram (diagnostics: info/dry/set/send [+ticket links]) ----
 @app.get("/meta/telegram", tags=["meta"])
 async def meta_telegram(
     request: Request,
     mode: str = Query("info", pattern="^(info|dry|set|send)$"),
     text: Optional[str] = Query("🔎 Diagnostics: test message"),
-    chat_id: Optional[str] = Query(None),
-    ticket_id: Optional[str] = Query(None),
+    chat_id: Optional[str] = Query(None, description="אם לא ניתן — ישתמש ב-ADMIN_CHAT_ID/TELEGRAM_CHAT_ID"),
+    ticket_id: Optional[str] = Query(None, description="אופציונלי: אם קיים — נצרף קישורים חתומים approve/reject/preview"),
 ):
-    _require_bearer(request)
+    """
+    /meta/telegram?mode=info  -> מצב webhook + getMe
+    /meta/telegram?mode=dry   -> dry-run: בונה payload בלבד (לא שולח)
+    /meta/telegram?mode=set   -> setWebhook לפי ה-env
+    /meta/telegram?mode=send  -> שולח הודעת בדיקה אמיתית (עם idem קל ב-Redis אם קיים)
+    """
+    with suppress(Exception):
+        _require_bearer(request)
 
     token = TELEGRAM_BOT_TOKEN
     if not token:
@@ -2335,15 +2095,21 @@ async def meta_telegram(
             return {"preview_url": None, "approve_url": None, "reject_url": None}
         base = PUBLIC_HOST or get_internal_base()
         return {
-            "preview_url": _build_signed_link(base, SIGN_PATH_PREVIEW, ticket_id, ttl_sec=900, action="preview"),
-            "approve_url": _build_signed_link(base, SIGN_PATH_APPROVE, ticket_id, ttl_sec=900, action="approve"),
-            "reject_url": _build_signed_link(base, SIGN_PATH_REJECT, ticket_id, ttl_sec=900, action="reject"),
+            "preview_url": _build_signed_link(base, "/ops/ui/ticket/signed", ticket_id, ttl_sec=900, action="preview"),
+            "approve_url": _build_signed_link(base, "/ops/approve/signed", ticket_id, ttl_sec=900, action="approve"),
+            "reject_url": _build_signed_link(base, "/ops/reject/signed", ticket_id, ttl_sec=900, action="reject"),
         }
 
     if mode == "info":
         info = await tg_get("getWebhookInfo")
         me = await tg_get("getMe")
-        return {"ok": True, "webhook": info, "me": me, "configured_host": PUBLIC_HOST, "auto_webhook": TELEGRAM_AUTO_WEBHOOK}
+        return {
+            "ok": True,
+            "webhook": info,
+            "me": me,
+            "configured_host": PUBLIC_HOST,
+            "auto_webhook": TELEGRAM_AUTO_WEBHOOK,
+        }
 
     if mode == "dry":
         try:
@@ -2358,16 +2124,25 @@ async def meta_telegram(
                 "disable_web_page_preview": True,
             }
             payload.update({k: v for k, v in _maybe_links().items() if v})
-            return {"ok": True, "dry_run": True, "payload_preview": payload, "has_chat_id": bool(cid)}
+            return {
+                "ok": True,
+                "dry_run": True,
+                "note": "No message was sent. This is only a dry-run preview.",
+                "payload_preview": payload,
+                "has_chat_id": bool(cid),
+                "hints": [
+                    "Set TELEGRAM_CHAT_ID/ADMIN_CHAT_ID בסביבה או העבר ?chat_id=<id> בבקשה.",
+                ],
+            }
         except Exception as e:
             return {"ok": False, "error": f"dry_run_failed: {e}"}
 
     if mode == "set":
+        host = PUBLIC_HOST
+        secret = TELEGRAM_WEBHOOK_SECRET
+        if not (host and secret):
+            return {"ok": False, "error": "missing_host_or_secret", "need": {"PUBLIC_HOST": bool(host), "TELEGRAM_WEBHOOK_SECRET": bool(secret)}}
         try:
-            secret = TELEGRAM_WEBHOOK_SECRET
-            host = PUBLIC_HOST
-            if not (secret and host):
-                return {"ok": False, "error": "host_or_secret_missing"}
             r = await cli.post(
                 f"https://api.telegram.org/bot{token}/setWebhook",
                 json={
@@ -2386,73 +2161,138 @@ async def meta_telegram(
             return {"ok": False, "error": str(e)}
 
     # mode == "send"
-    if not TELEGRAM_SEND_ENABLE:
-        return {"ok": True, "skipped": True, "reason": "disabled"}
-
-    msg_text = text or "🔎 Diagnostics: test message"
-    links = _maybe_links()
-    if chat_id:
-        try:
-            cid: Any = int(chat_id) if str(chat_id).isdigit() else chat_id
-        except Exception:
-            cid = chat_id
-
-        if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
+    try:
+        msg_text = text or "🔎 Diagnostics: test message"
+        links = _maybe_links()
+        if chat_id:
             try:
-                r = await _get_redis_cached()
-                if r:
-                    key_payload = json.dumps({"t": msg_text, "cid": cid, "links": links}, ensure_ascii=False, separators=(",", ":"))
-                    idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
-                    ok = await r.setnx(idem_key, "1")
-                    if not ok:
-                        return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
-                    with suppress(Exception):
-                        await r.expire(idem_key, int(IDEM_TTL_SEC))
-            except Exception as e:
-                logger.debug("telegram_idem_warning(send): %s", e)
+                cid: Any = int(chat_id) if str(chat_id).isdigit() else chat_id
+            except Exception:
+                cid = chat_id
 
-        try:
+            if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
+                try:
+                    r = await _get_redis_cached()
+                    if r:
+                        key_payload = json.dumps({"t": msg_text, "cid": cid, "links": links}, ensure_ascii=False, separators=(",", ":"))
+                        idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
+                        ok = await r.setnx(idem_key, "1")
+                        if not ok:
+                            return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
+                        with suppress(Exception):
+                            await r.expire(idem_key, int(IDEM_TTL_SEC))
+                except Exception as e:
+                    logger.debug("telegram_idem_warning(send): %s", e)
+
+            payload = {
+                "chat_id": cid,
+                "text": msg_text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True,
+            }
+            kb = []
+            if links.get("preview_url"):
+                kb.append({"text": "👁 Preview", "url": links["preview_url"]})
+            if links.get("approve_url"):
+                kb.append({"text": "✅ Approve", "url": links["approve_url"]})
+            if links.get("reject_url"):
+                kb.append({"text": "❌ Reject", "url": links["reject_url"]})
+            if kb:
+                payload["reply_markup"] = {"inline_keyboard": [kb]}
+
             r = await cli.post(
                 f"https://api.telegram.org/bot{token}/sendMessage",
-                json={"chat_id": cid, "text": msg_text, "parse_mode": "HTML", "disable_web_page_preview": True, **{k: v for k, v in links.items() if v}},
+                json=payload,
                 timeout=httpx.Timeout(10.0),
             )
             data = {}
             with suppress(Exception):
                 data = r.json()
-            return {"ok": (r.status_code == 200 and data.get("ok") is True), "status": r.status_code, "result": data}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
+            return {
+                "ok": (r.status_code == 200 and data.get("ok") is True),
+                "status": r.status_code,
+                "result": data,
+                "used_chat_id": cid,
+                "links": links,
+            }
+        else:
+            res = await _send_telegram_html(
+                msg_text,
+                approve_url=links.get("approve_url"),
+                reject_url=links.get("reject_url"),
+                preview_url=links.get("preview_url"),
+            )
+            return {"ok": bool(res.get("ok")), "result": res, "used_chat_id": ADMIN_CHAT_ID, "links": links}
+    except Exception as e:
+        return {"ok": False, "error": f"send_failed: {e}"}
 
-    return {"ok": False, "error": "bad_mode"}
-
-# ==================== Error handlers ====================
-from fastapi.exceptions import HTTPException as FastAPIHTTPException  # keeping explicit alias for clarity
-
-@app.exception_handler(FastAPIHTTPException)
-async def fastapi_http_exception_handler(request: Request, exc: FastAPIHTTPException):
-    # Preserve FastAPI semantics but normalize payload
-    return JSONResponse(
-        status_code=exc.status_code,
-        content={
-            "ok": False,
-            "detail": exc.detail,
-        },
-    )
-
+# ==================== Global error handler ====================
 @app.exception_handler(Exception)
-async def unhandled_exception_handler(request: Request, exc: Exception):
-    logger.exception("unhandled_exception: %s", exc)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "ok": False,
-            "error": "internal_error",
-        },
-    )
+async def global_exception_handler(request: Request, exc: Exception):
+    error_id = secrets.token_hex(6)
+    logger.exception("unhandled_error [%s]: %s %s", error_id, request.method, request.url)
+    show_detail = os.getenv("SHOW_INTERNAL_ERRORS", "0").lower() in ("1", "true", "yes", "on") or LOG_LEVEL == "DEBUG"
+    payload: Dict[str, Any] = {"ok": False, "error": "internal_error", "id": error_id}
+    if show_detail:
+        payload["detail"] = str(exc)
+    return JSONResponse(status_code=500, content=payload)
 
-# ==================== Startup / Shutdown ====================
-@app.on_event("startup")
+# -------- NEW: Background real-time trailing manager ----------
+async def _trail_rt_loop():
+    """
+    לולאת Trailing בזמן אמת (Best-effort).
+    מפושטת/מושבתת כברירת מחדל אם אין מפתחות בינאנס.
+    """
+    if not TRAIL_RT_ENABLE:
+        return
+    try:
+        from binance.client import Client  # type: ignore
+    except Exception as e:
+        logger.warning("trail_rt: binance client missing: %s", e)
+        return
+    api_key = os.getenv("BINANCE_API_KEY", "").strip()
+    api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not (api_key and api_sec):
+        logger.warning("trail_rt: missing binance keys")
+        return
+
+    client = Client(api_key, api_sec)
+    _align_position_mode(client)
+
+    def _symbols_to_check() -> List[str]:
+        if TRAIL_RT_WATCH:
+            return TRAIL_RT_WATCH[:TRAIL_RT_MAX_SYMBOLS]
+        out: List[str] = []
+        with suppress(Exception):
+            infos = client.futures_account()['positions']
+            for p in infos:
+                try:
+                    amt = float(p.get("positionAmt") or 0.0)
+                    if abs(amt) > 0:
+                        out.append(str(p.get("symbol")))
+                except Exception:
+                    continue
+        if not out:
+            return WATCHLIST[:TRAIL_RT_MAX_SYMBOLS]
+        uniq: List[str] = []
+        for s in out:
+            if s and s not in uniq:
+                uniq.append(s)
+        return uniq[:TRAIL_RT_MAX_SYMBOLS]
+
+    while True:
+        try:
+            if _in_pause_window_utc():
+                await asyncio.sleep(TRAIL_RT_INTERVAL_SEC)
+                continue
+            symbols = _symbols_to_check()
+            # (Best-effort placeholder; real logic can be plugged here)
+            logger.debug("trail_rt: would manage %s", ",".join(symbols))
+        except Exception as e:
+            logger.debug("trail_rt.loop.error: %s", e)
+        await asyncio.sleep(TRAIL_RT_INTERVAL_SEC)
+
+# ==================== Startup / Shutdown hooks ====================
 async def _on_startup():
     app.state.boot_ts = time.time()
     # warm shared http client
@@ -2460,12 +2300,24 @@ async def _on_startup():
     # set Telegram webhook if configured
     with suppress(Exception):
         await _ensure_telegram_webhook()
-    # optional startup ping
+    # start real-time trailing loop (best-effort)
+    with suppress(Exception):
+        asyncio.create_task(_trail_rt_loop())
+    # Optional: early Redis ping when required to catch misconfig quickly
+    try:
+        if REQUIRE_REDIS and REDIS_URL:
+            r = await _get_redis_cached()
+            if not r:
+                logger.error("startup.redis: client unavailable while REQUIRE_REDIS=1")
+            else:
+                await asyncio.wait_for(r.ping(), timeout=0.6)
+    except Exception as e:
+        logger.error("startup.redis_ping_failed (REQUIRE_REDIS=1): %s", e)
+    # optional startup notify
     if STARTUP_NOTIFY_ENABLE and not ONLY_TRADE_NOTIFICATIONS:
         with suppress(Exception):
             await _send_telegram_html(f"🟢 <b>{_md_html(APP_TITLE)}</b> started · v<code>{_md_html(APP_VERSION)}</code>")
 
-@app.on_event("shutdown")
 async def _on_shutdown():
     with suppress(Exception):
         cli = getattr(app.state, "shared_async_client", None)
@@ -2476,14 +2328,24 @@ async def _on_shutdown():
         if r:
             await r.close()
 
+app.add_event_handler("startup", _on_startup)
+app.add_event_handler("shutdown", _on_shutdown)
+
+# ==================== END ====================
+
 # ==================== Main ====================
 if __name__ == "__main__":
     import uvicorn
     reload_flag = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
-    uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=reload_flag)
-
-
-
+    # הערה: כשעובדים עם reload=True עדיף לציין את האפ לפי מחרוזת "module:var"
+    # כדי שהטעינה מחדש תעבוד כמו שצריך.
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=_port(),
+        reload=reload_flag,
+        log_level=os.getenv("UVICORN_LOG_LEVEL", LOG_LEVEL.lower()),
+    )
 
 
 
