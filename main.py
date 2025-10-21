@@ -428,7 +428,13 @@ async def _security_headers(request: Request, call_next):
     resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
     # Modernize security headers
     resp.headers.setdefault("Permissions-Policy", "browsing-topics=()")
-    resp.headers.setdefault("Cross-Origin-Embedder-Policy", "require-corp")
+    # Make COEP opt-in to avoid breaking embedded resources (e.g. Swagger/Redoc)
+    try:
+        _enable_coep = os.getenv("ENABLE_COEP", "0").lower() in ("1", "true", "yes", "on")
+    except Exception:
+        _enable_coep = False
+    if _enable_coep:
+        resp.headers.setdefault("Cross-Origin-Embedder-Policy", "require-corp")
     resp.headers.setdefault("X-XSS-Protection", "0")
     if os.getenv("ENABLE_HSTS", "0").lower() in ("1", "true", "yes", "on"):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
@@ -1296,12 +1302,7 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     if not (auth.startswith("Bearer ") and auth.split(" ", 1)[1].strip() == API_BEARER_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
     rec, _ = await _load_ticket(ticket_id)
-    if not rec and CONFIRMSTORE_ENABLE:
-        with suppress(Exception):
-            for it in ConfirmStore.pending():
-                if str(it.get("ticket_id")) == str(ticket_id):
-                    rec = it.get("req") or it
-                    break
+    # NOTE: do NOT fall back to ConfirmStore here; UI should rely on primary storage only
     if not rec:
         return _html("⚠️ לא נמצא כרטיס או שפג תוקפו.")
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
@@ -1379,16 +1380,24 @@ async def _try_mark_decided(ticket_id: str, decision: str, ttl: int = 30) -> boo
     Returns True if this is the first handler; False if already handled.
     """
     if not (aioredis and REDIS_URL):
-        # in-memory best-effort
+        # In-memory best-effort (עם GC כדי למנוע גדילה בלתי מוגבלת)
         bucket = getattr(app.state, "_decided_mem", None)
         if bucket is None:
             bucket = {}
             app.state._decided_mem = bucket
+        # GC entries older than 5 minutes
+        now = time.time()
+        for k, ts in list(bucket.items()):
+            try:
+                if now - float(ts) > 300:
+                    bucket.pop(k, None)
+            except Exception:
+                bucket.pop(k, None)
         # Single ANY key so approve/reject can't both win
         key_any = f"{ticket_id}:ANY"
-        if bucket.get(key_any):
+        if key_any in bucket:
             return False
-        bucket[key_any] = time.time()
+        bucket[key_any] = now
         return True
     r = await _get_redis_cached()
     if not r:
@@ -2346,7 +2355,6 @@ if __name__ == "__main__":
         reload=reload_flag,
         log_level=os.getenv("UVICORN_LOG_LEVEL", LOG_LEVEL.lower()),
     )
-
 
 
 
