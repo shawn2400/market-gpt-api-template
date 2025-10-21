@@ -126,7 +126,7 @@ services:
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
       - key: SECURITY_PROTECTED_PATHS
-        value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run"
+        value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json"
 
       - key: ENABLE_CSP
         value: "1"
@@ -1000,4 +1000,5 @@ services:
         value: "https://testnet.binancefuture.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
         value: "3"
+
 
