@@ -1,147 +1,208 @@
-# main.py (ops-approval-web)
+# main.py
 from __future__ import annotations
+import os, hmac, hashlib, time, secrets, ipaddress
+from typing import Dict, Tuple, Optional
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
-import os
-import pathlib
-from typing import Optional
-
-from fastapi import FastAPI, Response, Request, HTTPException
-from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, RedirectResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.gzip import GZipMiddleware
-from fastapi.middleware.cors import CORSMiddleware
-
-# Routers (חייבים להיות קיימים בפרויקט בתיקיית routes/)
-from routes.ops_approve import router as ops_router
-from routes.telegram_ping import router as tg_router
-from routes.ui_grid import router as ui_grid_router
-from routes.streams import router as streams_router
-
+APP_VERSION = os.getenv("OPS_SIGN_VERSION", "0.3.0").strip() or "0.3.0"
 
 # =========================
-# App Meta / Version
+# Key management (KeySet + fallback)
 # =========================
-APP_NAME = "Ops Approval Webhook"
-APP_VERSION = os.getenv("OPS_WEB_VERSION", "0.1.0").strip() or "0.1.0"
+def _parse_keyset(env: str) -> Dict[str, bytes]:
+    """
+    OPS_SIGN_KEYSET="k1:HEX,k2:HEX"  -> {"k1": b"...", "k2": b"..."}
+    רווחים מותרים מסביב לפסיקים/נקודתיים.
+    """
+    ks: Dict[str, bytes] = {}
+    for part in env.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if ":" not in part:
+            raise RuntimeError("Invalid OPS_SIGN_KEYSET item (missing ':'): %r" % part)
+        kid, hexkey = [x.strip() for x in part.split(":", 1)]
+        if not kid or not hexkey:
+            raise RuntimeError("Invalid OPS_SIGN_KEYSET item (empty kid/hex)")
+        try:
+            ks[kid] = bytes.fromhex(hexkey)
+        except ValueError:
+            raise RuntimeError(f"OPS_SIGN_KEYSET item '{kid}' has non-hex key")
+    if not ks:
+        raise RuntimeError("OPS_SIGN_KEYSET provided but empty after parsing")
+    return ks
 
-app = FastAPI(title=APP_NAME, version=APP_VERSION)
+_keyset_env = (os.getenv("OPS_SIGN_KEYSET") or "").strip()
+KEYS: Dict[str, bytes] = {}
+DEFAULT_KID: Optional[str] = None
 
+if _keyset_env:
+    KEYS = _parse_keyset(_keyset_env)
+    # kid ברירת מחדל: הראשון בסטרינג
+    DEFAULT_KID = list(KEYS.keys())[0]
+else:
+    # תאימות לאחור: OPS_SIGN_SECRET (ללא kid)
+    sec_hex = (os.getenv("OPS_SIGN_SECRET") or "").strip()
+    if not sec_hex:
+        raise RuntimeError("Missing OPS_SIGN_KEYSET or OPS_SIGN_SECRET")
+    try:
+        KEYS = {"k1": bytes.fromhex(sec_hex)}
+        DEFAULT_KID = "k1"
+    except ValueError:
+        raise RuntimeError("OPS_SIGN_SECRET must be hex")
 
 # =========================
-# Middleware
+# Anti-replay & policy
 # =========================
-# דחיסה קלה
-app.add_middleware(GZipMiddleware, minimum_size=512)
-
-# CORS (נשלט דרך ENV)
-ENABLE_CORS = os.getenv("ENABLE_CORS", "1").lower() in ("1", "true", "yes", "on")
-CORS_ALLOW_ORIGINS = [o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS", "*") or "*").split(",") if o.strip()]
-if ENABLE_CORS:
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=["*"] if CORS_ALLOW_ORIGINS == ["*"] else CORS_ALLOW_ORIGINS,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-        expose_headers=["*"],
-        max_age=600,
-    )
-
+MAX_SKEW_SEC = int(os.getenv("OPS_SIGN_MAX_SKEW_SEC", "90"))     # טולרנס שעון
+MAX_TTL_SEC  = int(os.getenv("OPS_SIGN_MAX_TTL_SEC", "600"))     # exp מקסימום קדימה
+NONCE_TTL    = int(os.getenv("OPS_SIGN_NONCE_TTL_SEC", "900"))   # זמן חיי nonce
+_seen: Dict[str, int] = {}
 
 # =========================
-# Security Headers (קלילות)
+# IP Allowlist (אופציונלי)
 # =========================
-@app.middleware("http")
-async def security_headers(request: Request, call_next):
-    resp = await call_next(request)
-    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
-    resp.headers.setdefault("X-Frame-Options", "DENY")
-    resp.headers.setdefault("X-XSS-Protection", "1; mode=block")
-    # אם תרצה CSP, אפשר להוסיף כאן בהמשך (למשל ל־/ui בלבד)
-    return resp
+_IPS = [s.strip() for s in (os.getenv("OPS_SIGN_IP_ALLOW", "") or "").split(",") if s.strip()]
+IP_ALLOW: Tuple[ipaddress._BaseNetwork, ...] = tuple(ipaddress.ip_network(x, strict=False) for x in _IPS) if _IPS else tuple()
 
+def _client_ok(ip: str) -> bool:
+    if not IP_ALLOW: return True
+    try:
+        pip = ipaddress.ip_address(ip)
+        return any(pip in net for net in IP_ALLOW)
+    except ValueError:
+        return False
 
 # =========================
-# Health / WhoAmI
+# Helpers
 # =========================
+def _now() -> int:
+    return int(time.time())
+
+def _purge_nonces() -> None:
+    now = _now()
+    bad = [k for k, t in _seen.items() if now - t > NONCE_TTL]
+    for k in bad:
+        _seen.pop(k, None)
+
+def _canon(ticket_id: str, exp: int, nonce: str, ts: int, method: str, path: str) -> str:
+    # סדר קבוע! אל תשנה ללא תאום עם המאמת
+    return f"m={method}&p={path}&ticket_id={ticket_id}&exp={exp}&nonce={nonce}&ts={ts}"
+
+def _hmac_hex(key: bytes, msg: str) -> str:
+    return hmac.new(key, msg.encode(), hashlib.sha256).hexdigest()
+
+def _chk_replay(nonce: str) -> None:
+    _purge_nonces()
+    if nonce in _seen:
+        raise HTTPException(status_code=409, detail="replay_detected")
+    _seen[nonce] = _now()
+
+def _get_key_for_kid(kid: Optional[str]) -> Tuple[str, bytes]:
+    if kid:
+        key = KEYS.get(kid)
+        if not key:
+            raise HTTPException(status_code=400, detail="unknown_kid")
+        return kid, key
+    # kid לא סופק:
+    if len(KEYS) == 1:
+        k = next(iter(KEYS.items()))
+        return k[0], k[1]
+    # יש מספר מפתחות אך לא סופק kid
+    raise HTTPException(status_code=400, detail="kid_required")
+
+# =========================
+# FastAPI
+# =========================
+app = FastAPI(title="Ops Sign Server", version=APP_VERSION)
+
 @app.get("/health")
 async def health():
     return {"ok": True}
 
 @app.get("/readyz", include_in_schema=False)
 async def readyz():
-    return {"ok": True, "service": "ops-approval-web", "version": APP_VERSION}
+    return {"ok": True, "version": APP_VERSION, "keys": len(KEYS)}
 
-@app.get("/__whoami", include_in_schema=False)
-async def whoami():
-    return {"ok": True, "service": "ops-approval-web", "version": APP_VERSION}
+class SignIn(BaseModel):
+    ticket_id: str
+    exp: int              # unix epoch, עתיד, <= MAX_TTL_SEC קדימה
+    method: str = "POST"
+    path: str = "/ops"
+    ts: int | None = None
+    kid: str | None = None  # אם לא נשלח: ישתמש ב-DEFAULT_KID / יחיד
 
+class VerifyIn(BaseModel):
+    ticket_id: str
+    exp: int
+    nonce: str
+    ts: int
+    signature: str
+    method: str = "POST"
+    path: str = "/ops"
+    kid: str | None = None  # אם יש KeySet מרובה—חובה לציין
 
-# =========================
-# Static & UI
-# =========================
-# תיק סטטי אופציונלי: /static → ./static
-_static_dir = pathlib.Path("static")
-if _static_dir.exists():
-    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
-else:
-    # אם אין תקיה—נחזיר הודעה ברורה כשמבקשים /static/*
-    @app.get("/static/{rest_of_path:path}", include_in_schema=False)
-    async def static_missing(rest_of_path: str):
-        raise HTTPException(status_code=404, detail="static directory missing")
+@app.middleware("http")
+async def ip_gate(request: Request, call_next):
+    client_ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or request.client.host
+    if not _client_ok(client_ip):
+        return JSONResponse(status_code=403, content={"ok": False, "detail": "ip_not_allowed"})
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("X-XSS-Protection", "1; mode=block")
+    return resp
 
-# /ui – מזריק __API_TOKEN__ אם קיים
-@app.get("/ui", include_in_schema=False, response_class=HTMLResponse)
-def serve_ui() -> Response:
-    token = os.getenv("API_BEARER_TOKEN", "")
-    index_path = _static_dir / "ui" / "index.html"
-    if not index_path.exists():
-        # Fallback HTML מינימלי כדי שלא יקרוס אם אין קובץ
-        html_fallback = f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<title>Ops UI</title></head>
-<body><h1>Ops UI</h1>
-<p>static/ui/index.html לא נמצא. בדוק את ארטיפקט ה־UI.</p>
-<p>API_BEARER_TOKEN: {"set" if token else "unset"}</p>
-</body></html>"""
-        return HTMLResponse(content=html_fallback, status_code=200)
+@app.post("/sign")
+async def sign(p: SignIn):
+    now = _now()
+    ts = p.ts or now
+    if abs(ts - now) > MAX_SKEW_SEC:
+        raise HTTPException(status_code=400, detail="ts_out_of_range")
+    if p.exp <= now:
+        raise HTTPException(status_code=400, detail="exp_in_past")
+    if (p.exp - now) > MAX_TTL_SEC:
+        raise HTTPException(status_code=400, detail="exp_too_far")
 
-    html = index_path.read_text(encoding="utf-8")
-    # החלפה פשוטה של placeholder אם קיים בקובץ
-    html = html.replace("__API_TOKEN__", token)
-    return HTMLResponse(content=html, status_code=200, media_type="text/html")
+    # בחר מפתח (kid מפורש או ברירת מחדל/יחיד)
+    kid, key = _get_key_for_kid(p.kid or DEFAULT_KID)
 
+    nonce = secrets.token_hex(8)
+    msg = _canon(ticket_id=p.ticket_id, exp=p.exp, nonce=nonce, ts=ts, method=p.method, path=p.path)
+    sig = _hmac_hex(key, msg)
+    return {
+        "ok": True,
+        "kid": kid,
+        "ticket_id": p.ticket_id,
+        "exp": p.exp,
+        "nonce": nonce,
+        "ts": ts,
+        "method": p.method,
+        "path": p.path,
+        "signature": sig,
+        "msg": msg,
+        "alg": "HMAC-SHA256-HEX",
+    }
 
-# redirect root → /ui (נוח)
-@app.get("/", include_in_schema=False)
-async def root_redirect():
-    return RedirectResponse(url="/ui", status_code=302)
+@app.post("/verify")
+async def verify(v: VerifyIn):
+    now = _now()
+    if abs(v.ts - now) > MAX_SKEW_SEC:
+        raise HTTPException(status_code=400, detail="ts_out_of_range")
+    if v.exp <= now:
+        raise HTTPException(status_code=400, detail="expired")
+    if (v.exp - now) > MAX_TTL_SEC:
+        raise HTTPException(status_code=400, detail="exp_too_far")
 
+    kid, key = _get_key_for_kid(v.kid or DEFAULT_KID)
+    msg = _canon(ticket_id=v.ticket_id, exp=v.exp, nonce=v.nonce, ts=v.ts, method=v.method, path=v.path)
+    good = hmac.compare_digest(_hmac_hex(key, msg), v.signature)
+    if not good:
+        raise HTTPException(status_code=400, detail="bad_signature")
 
-# =========================
-# Routers include
-# =========================
-# שים לב: אם אחד מה־routers לא קיים — יווצר ImportError עוד לפני ריצה.
-# אם תרצה טעינה "רכה", אפשר לעטוף ב-try/except ולהדפיס אזהרה במקום.
-app.include_router(ops_router)
-app.include_router(tg_router)
-app.include_router(ui_grid_router)
-app.include_router(streams_router)
-
-
-# =========================
-# Error Handlers (נח)
-# =========================
-@app.exception_handler(HTTPException)
-async def http_exc_handler(request: Request, exc: HTTPException):
-    # הקפד להחזיר JSON קונסיסטנטי
-    return JSONResponse(status_code=exc.status_code, content={"ok": False, "detail": exc.detail})
-
-@app.exception_handler(Exception)
-async def unhandled_exc_handler(request: Request, exc: Exception):
-    # לא לחשוף פרטים בפרודקשן – רק הודעה כללית
-    return JSONResponse(status_code=500, content={"ok": False, "detail": "internal_error"})
-
-
+    _chk_replay(v.nonce)
+    return {"ok": True, "kid": kid}
 
 
