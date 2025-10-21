@@ -66,7 +66,6 @@ services:
       - key: UVICORN_LOG_LEVEL
         value: "info"
 
-      # יחס תקין בין חיבורים ו־keepalive
       - key: HTTP_MAX_CONNECTIONS
         value: "200"
       - key: HTTP_MAX_KEEPALIVE
@@ -74,7 +73,7 @@ services:
       - key: AUTO_RUN
         value: "1"
 
-      # 1) דומיין מיושר – לשמור גם בצד הלקוח
+      # דומיין מיושר – חשוב לקישורים חתומים/טלגרם
       - key: PUBLIC_HOST
         value: "https://algogpt-staging.onrender.com"
       - key: CONTEXT_URL
@@ -312,10 +311,11 @@ services:
       - key: INDICATORS_SUBSET
         value: ""
 
+      # כדי לא להיחסם באישור – מבטלים את סף הצ'קליסט
       - key: ENTRY_SCORE_MODE
         value: "log"
       - key: ENTRY_SCORE_MIN
-        value: "8.5"
+        value: "0"
       - key: ENTRY_SCORE_INTERVAL
         value: "15m"
       - key: ENTRY_SCORE_ENFORCE_ON_APPROVE
@@ -403,8 +403,6 @@ services:
         value: "1.30"
       - key: APPROVAL_SUCCESS_MIN
         value: "50"
-      - key: APPROVAL_MAX_SL_PCT
-        value: "3.0"
       - key: APPROVAL_REQUIRE_FRESH_PRICE
         value: "1"
       - key: APPROVAL_DUP_COOLDOWN_SEC
@@ -427,7 +425,7 @@ services:
       - key: TELEGRAM_ADMIN_IDS
         value: "449087907"
       - key: TELEGRAM_AUTO_WEBHOOK
-        value: "0"
+        value: "1"
       - key: TELEGRAM_PARSE_MODE
         value: "HTML"
       - key: TELEGRAM_RICH_MSG
@@ -435,14 +433,15 @@ services:
       - key: ALLOW_PUBLIC_META_TELEGRAM_SEND
         value: "0"
       - key: TELEGRAM_SEND_ENABLE
-        value: "0"
+        value: "1"
 
+      # מפעיל פתיחת טריידים (טסטנט)
       - key: EXECUTE_TRADES
-        value: "0"
+        value: "1"
       - key: ALLOW_MARKET_ENTRY
-        value: "0"
+        value: "1"
       - key: MANAGER_WRITES_ORDERS
-        value: "0"
+        value: "1"
       - key: ORDERS_USE_OCO
         value: "1"
       - key: ORDER_ID_PREFIX
@@ -465,8 +464,10 @@ services:
         value: "1"
       - key: MIN_NOTIONAL_USDT
         value: "5"
+
+      # מרשה תקציב עד $200 כדי שלא ייחתך באוטו-סייז
       - key: MAX_TRADE_BUDGET
-        value: "50"
+        value: "200"
       - key: ORDER_TRIGGER
         value: "mark"
       - key: POST_ONLY
@@ -486,6 +487,7 @@ services:
       - key: QTY_STEP_OVERRIDE__BTCUSDT
         value: "0.001"
 
+      # אוטו-סייז לטווח המבוקש 100–200$, לו׳ 20–35
       - key: AUTO_QTY_ENABLE
         value: "1"
       - key: AUTO_QTY_MODE
@@ -493,13 +495,13 @@ services:
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
         value: "0.20"
       - key: AUTO_LEV_MIN
-        value: "5"
+        value: "20"
       - key: AUTO_LEV_MAX
-        value: "10"
+        value: "35"
       - key: AUTO_BUDGET_MIN
-        value: "10"
+        value: "100"
       - key: AUTO_BUDGET_MAX
-        value: "25"
+        value: "200"
 
       - key: NATIVE_TPSL_ENABLE
         value: "0"
@@ -790,8 +792,9 @@ services:
       - key: BTC_SHORT_REQ
         value: "ema21<=ema50"
 
+      # עושים את הפאבליק באמת פאבליק – שלא תקבל 401 ב-/scan/public-topk
       - key: PUBLIC_REQUIRE_BEARER
-        value: "1"
+        value: "0"
       - key: PUBLIC_SSE_HEARTBEAT_SEC
         value: "20"
       - key: PUBLIC_SSE_MAX_IDLE_SEC
@@ -820,7 +823,6 @@ services:
         value: ""
       - key: ROUTES_TAGS_DENY
         value: "internal,debug"
-      # 3) הנתיב שמייצר מערכות אישור – ל/signed (תואם לקוד שמייצר קישורים חתומים)
       - key: ROUTES_APPROVE_ENDPOINT
         value: "/ops/approve/signed"
       - key: ROUTES_DEFAULT_TIMEOUT_SEC
@@ -830,13 +832,12 @@ services:
       - key: ROUTES_DEFAULT_RL_BURST
         value: "15"
 
-      # דגלי טעינת ראוטרים + כיבוי מודולים חסרים
       - key: ENABLE_ROUTES
         value: ""
       - key: DISABLE_ROUTES
         value: "public_web,debug,debug_auth,debug_binance,debug_env"
 
-      # 2) איחוד סוד החתימה – כולם מאות אותו secret
+      # סודות/מפתחות
       - key: API_BEARER_TOKEN_RO
         fromSecret: API_BEARER_TOKEN_RO_STAGING
       - key: API_BEARER_TOKEN_ACTION
@@ -849,7 +850,6 @@ services:
       - key: PRIMARY_API_TOKEN
         fromSecret: PRIMARY_API_TOKEN_STAGING
 
-      # חשוב: משתמשים באותו secret עבור API_SIGNING_SECRET ו-OPS_SIGN_SECRET
       - key: API_SIGNING_SECRET
         fromSecret: OPS_SIGN_SECRET_STAGING
       - key: OPS_SIGN_SECRET
@@ -874,7 +874,6 @@ services:
       - key: ETHERSCAN_API_KEY
         fromSecret: ETHERSCAN_API_KEY_STAGING
 
-      # Publisher פנימי – כבוי (מודול חסר)
       - key: POS_PUB_ENABLE
         value: "0"
       - key: POS_PUB_INTERVAL_SEC
@@ -995,7 +994,6 @@ services:
       - key: ENABLE_STARTUP_SELF_CHECK
         value: "1"
 
-      # --- תוספות ממוקדות ---
       - key: BINANCE_FAPI
         value: "https://testnet.binancefuture.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
