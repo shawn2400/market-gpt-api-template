@@ -1,44 +1,146 @@
 # main.py (ops-approval-web)
 from __future__ import annotations
-import os
-from fastapi import FastAPI, Response
-from fastapi.staticfiles import StaticFiles
 
+import os
+import pathlib
+from typing import Optional
+
+from fastapi import FastAPI, Response, Request, HTTPException
+from fastapi.responses import PlainTextResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.middleware.cors import CORSMiddleware
+
+# Routers (חייבים להיות קיימים בפרויקט בתיקיית routes/)
 from routes.ops_approve import router as ops_router
 from routes.telegram_ping import router as tg_router
-
-# ⬇️ חדש
 from routes.ui_grid import router as ui_grid_router
 from routes.streams import router as streams_router
 
-app = FastAPI(title="Ops Approval Webhook", version="0.1.0")
 
+# =========================
+# App Meta / Version
+# =========================
+APP_NAME = "Ops Approval Webhook"
+APP_VERSION = os.getenv("OPS_WEB_VERSION", "0.1.0").strip() or "0.1.0"
+
+app = FastAPI(title=APP_NAME, version=APP_VERSION)
+
+
+# =========================
+# Middleware
+# =========================
+# דחיסה קלה
+app.add_middleware(GZipMiddleware, minimum_size=512)
+
+# CORS (נשלט דרך ENV)
+ENABLE_CORS = os.getenv("ENABLE_CORS", "1").lower() in ("1", "true", "yes", "on")
+CORS_ALLOW_ORIGINS = [o.strip() for o in (os.getenv("CORS_ALLOW_ORIGINS", "*") or "*").split(",") if o.strip()]
+if ENABLE_CORS:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"] if CORS_ALLOW_ORIGINS == ["*"] else CORS_ALLOW_ORIGINS,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+        expose_headers=["*"],
+        max_age=600,
+    )
+
+
+# =========================
+# Security Headers (קלילות)
+# =========================
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    resp = await call_next(request)
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("X-Frame-Options", "DENY")
+    resp.headers.setdefault("X-XSS-Protection", "1; mode=block")
+    # אם תרצה CSP, אפשר להוסיף כאן בהמשך (למשל ל־/ui בלבד)
+    return resp
+
+
+# =========================
+# Health / WhoAmI
+# =========================
 @app.get("/health")
 async def health():
     return {"ok": True}
 
+@app.get("/readyz", include_in_schema=False)
+async def readyz():
+    return {"ok": True, "service": "ops-approval-web", "version": APP_VERSION}
+
 @app.get("/__whoami", include_in_schema=False)
 async def whoami():
-    return {"ok": True, "service": "ops-approval-web", "version": "0.1.0"}
+    return {"ok": True, "service": "ops-approval-web", "version": APP_VERSION}
 
-# ⬇️ סטטיים + UI
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
-@app.get("/ui", include_in_schema=False)
+# =========================
+# Static & UI
+# =========================
+# תיק סטטי אופציונלי: /static → ./static
+_static_dir = pathlib.Path("static")
+if _static_dir.exists():
+    app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+else:
+    # אם אין תקיה—נחזיר הודעה ברורה כשמבקשים /static/*
+    @app.get("/static/{rest_of_path:path}", include_in_schema=False)
+    async def static_missing(rest_of_path: str):
+        raise HTTPException(status_code=404, detail="static directory missing")
+
+# /ui – מזריק __API_TOKEN__ אם קיים
+@app.get("/ui", include_in_schema=False, response_class=HTMLResponse)
 def serve_ui() -> Response:
-    token = os.getenv("API_BEARER_TOKEN","")
-    path = os.path.join("static","ui","index.html")
-    with open(path, "r", encoding="utf-8") as f:
-        html = f.read()
-    html = html.replace("__API_TOKEN__", token)
-    return Response(content=html, media_type="text/html")
+    token = os.getenv("API_BEARER_TOKEN", "")
+    index_path = _static_dir / "ui" / "index.html"
+    if not index_path.exists():
+        # Fallback HTML מינימלי כדי שלא יקרוס אם אין קובץ
+        html_fallback = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>Ops UI</title></head>
+<body><h1>Ops UI</h1>
+<p>static/ui/index.html לא נמצא. בדוק את ארטיפקט ה־UI.</p>
+<p>API_BEARER_TOKEN: {"set" if token else "unset"}</p>
+</body></html>"""
+        return HTMLResponse(content=html_fallback, status_code=200)
 
-# ⬇️ ראוטרים
+    html = index_path.read_text(encoding="utf-8")
+    # החלפה פשוטה של placeholder אם קיים בקובץ
+    html = html.replace("__API_TOKEN__", token)
+    return HTMLResponse(content=html, status_code=200, media_type="text/html")
+
+
+# redirect root → /ui (נוח)
+@app.get("/", include_in_schema=False)
+async def root_redirect():
+    return RedirectResponse(url="/ui", status_code=302)
+
+
+# =========================
+# Routers include
+# =========================
+# שים לב: אם אחד מה־routers לא קיים — יווצר ImportError עוד לפני ריצה.
+# אם תרצה טעינה "רכה", אפשר לעטוף ב-try/except ולהדפיס אזהרה במקום.
 app.include_router(ops_router)
 app.include_router(tg_router)
 app.include_router(ui_grid_router)
 app.include_router(streams_router)
 
+
+# =========================
+# Error Handlers (נח)
+# =========================
+@app.exception_handler(HTTPException)
+async def http_exc_handler(request: Request, exc: HTTPException):
+    # הקפד להחזיר JSON קונסיסטנטי
+    return JSONResponse(status_code=exc.status_code, content={"ok": False, "detail": exc.detail})
+
+@app.exception_handler(Exception)
+async def unhandled_exc_handler(request: Request, exc: Exception):
+    # לא לחשוף פרטים בפרודקשן – רק הודעה כללית
+    return JSONResponse(status_code=500, content={"ok": False, "detail": "internal_error"})
 
 
 
