@@ -2,6 +2,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from base64 import b64encode  # NEW: for HTTP Signatures digest/signature
+
 import os
 import json
 import time
@@ -308,10 +310,141 @@ ETA_SMART_ENABLE = os.getenv("ETA_SMART_ENABLE", "1").lower() in ("1", "true", "
 ETA_VELOCITY_WINDOW = int(os.getenv("ETA_VELOCITY_WINDOW", "30"))
 TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1")).split(",") if t.strip()]
 
-# HMAC secret for signed links
+# HMAC secret for signed links (GET links)
 HMAC_SECRET = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
 
 # ==================== Security helpers ====================
+def _get_hmac_key_bytes() -> Optional[bytes]:
+    """
+    מקור הסוד לחתימות:
+    - API_SIGNING_SECRET או OPS_SIGN_SECRET (כמו קודם)
+    - SECRET_HEX (לנוחות התאמה לסקריפטי הבדיקה שלך)
+    - WEBHOOK_HMAC_SECRET (fallback)
+    תומך או HEX (64 תווים) או טקסט raw.
+    """
+    cand = (
+        os.getenv("API_SIGNING_SECRET")
+        or os.getenv("OPS_SIGN_SECRET")
+        or os.getenv("SECRET_HEX")
+        or os.getenv("WEBHOOK_HMAC_SECRET")
+        or ""
+    ).strip()
+    if not cand:
+        return None
+    try:
+        if len(cand) == 64 and all(c in "0123456789abcdefABCDEF" for c in cand):
+            return bytes.fromhex(cand)
+    except Exception:
+        pass
+    return cand.encode("utf-8")
+
+def _sha256_b64(data: bytes) -> str:
+    return b64encode(hashlib.sha256(data).digest()).decode()
+
+def _parse_signature_auth(h: str) -> Optional[Dict[str, Any]]:
+    """
+    פירוק Authorization: Signature keyId="…",algorithm="hmac-sha256",headers="…",signature="…"
+    """
+    if not h or not h.lower().startswith("signature "):
+        return None
+    s = h[len("Signature "):].strip()
+    parts: Dict[str, str] = {}
+    for kv in re.split(r'\s*,\s*', s):
+        if "=" not in kv:
+            continue
+        k, v = kv.split("=", 1)
+        v = v.strip()
+        if v.startswith('"') and v.endswith('"'):
+            v = v[1:-1]
+        parts[k.strip()] = v
+    if not {"keyId", "algorithm", "headers", "signature"}.issubset(parts.keys()):
+        return None
+    return {
+        "keyId": parts["keyId"],
+        "algorithm": parts["algorithm"].lower(),
+        "headers": [x.strip().lower() for x in parts["headers"].split() if x.strip()],
+        "signature": parts["signature"],
+    }
+
+def _build_sig_string(method: str, path: str, headers_lower: Dict[str, str], headers_order: List[str]) -> str:
+    """
+    בניית מחרוזת החתימה בהתאם ל־headers= מתוך ה־Authorization,
+    לדוגמה: (request-target) host x-request-timestamp x-request-nonce digest
+    """
+    lines: List[str] = []
+    for hname in headers_order:
+        if hname == "(request-target)":
+            lines.append(f"(request-target): {method.lower()} {path}")
+        else:
+            val = headers_lower.get(hname, "")
+            lines.append(f"{hname}: {val}")
+    return "\n".join(lines)
+
+def _verify_http_signature(request: Request, body: bytes, *, route_path: str) -> Tuple[bool, str]:
+    """
+    אימות POST חתום:
+    - Authorization: Signature …
+    - אימות Digest או x-content-sha256 (אם קיים)
+    - בניית sig-string לפי headers= ובדיקת HMAC-SHA256 (Base64)
+    הערות:
+      * אימות ts/nonce לא מחייב כברירת מחדל (ניתן להחמיר ע"י ENV בהמשך).
+    """
+    auth = request.headers.get("authorization") or request.headers.get("Authorization")
+    info = _parse_signature_auth(auth or "")
+    if not info:
+        return False, "missing_or_bad_authorization_signature"
+    if info["algorithm"] not in ("hmac-sha256",):
+        return False, "unsupported_algorithm"
+
+    hdrs_lower = {k.lower(): v for k, v in request.headers.items()}
+    # Digest / x-content-sha256 (optional but recommended)
+    if "digest" in hdrs_lower:
+        try:
+            scheme, b64v = (hdrs_lower["digest"] or "").split("=", 1)
+            if scheme.strip().lower() != "sha-256":
+                return False, "unsupported_digest_scheme"
+            want = b64v.strip()
+            got = _sha256_b64(body)
+            if want != got:
+                return False, "bad_digest"
+        except Exception:
+            return False, "bad_digest_format"
+    elif "x-content-sha256" in hdrs_lower:
+        want = hdrs_lower["x-content-sha256"].strip()
+        got = _sha256_b64(body)
+        if want != got:
+            return False, "bad_x_content_sha256"
+
+    # Build signature string per headers=
+    method = request.method
+    path = route_path
+    try:
+        sigstr = _build_sig_string(method, path, hdrs_lower, info["headers"])
+    except Exception as e:
+        return False, f"sig_string_build_failed:{e}"
+
+    # Verify HMAC-SHA256 base64
+    key = _get_hmac_key_bytes()
+    if not key:
+        return False, "server_signing_secret_missing"
+    mac = hmac.new(key, sigstr.encode(), hashlib.sha256).digest()
+    calc = b64encode(mac).decode()
+    if calc != info["signature"]:
+        return False, "bad_signature"
+
+    # Optional anti-replay via timestamp
+    enforce_ts = os.getenv("SIG_TS_ENFORCE", "0").lower() in ("1", "true", "yes", "on")
+    if enforce_ts:
+        try:
+            skew = int(os.getenv("SIG_TS_SKEW_SEC", "900") or 900)
+            ts = int(hdrs_lower.get("x-request-timestamp", "0"))
+            now = int(time.time())
+            if abs(now - ts) > max(0, skew):
+                return False, "timestamp_out_of_window"
+        except Exception:
+            return False, "timestamp_bad_format"
+    return True, "ok"
+
 def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
     # שדרוג: נסיון לפענח hex באורך 64, ואם נכשל — להשתמש כטקסט רגיל
     key: bytes
@@ -392,12 +525,10 @@ def _get_shared_async_client() -> httpx.AsyncClient:
         if cli and not cli.is_closed:
             return cli
         timeout = httpx.Timeout(15.0)
-        # Keep max_connections >= max_keepalive_connections (sane defaults)
         limits = httpx.Limits(
             max_connections=int(os.getenv("HTTP_MAX_CONNECTIONS", "200")),
             max_keepalive_connections=int(os.getenv("HTTP_MAX_KEEPALIVE", "50")),
         )
-        # Enable HTTP/2 where available for better connection reuse
         cli = httpx.AsyncClient(
             timeout=timeout,
             limits=limits,
@@ -426,9 +557,7 @@ async def _security_headers(request: Request, call_next):
     resp.headers.setdefault("X-Frame-Options", "DENY")
     resp.headers.setdefault("Cross-Origin-Opener-Policy", "same-origin")
     resp.headers.setdefault("Cross-Origin-Resource-Policy", "same-site")
-    # Modernize security headers
     resp.headers.setdefault("Permissions-Policy", "browsing-topics=()")
-    # Make COEP opt-in to avoid breaking embedded resources (e.g. Swagger/Redoc)
     try:
         _enable_coep = os.getenv("ENABLE_COEP", "0").lower() in ("1", "true", "yes", "on")
     except Exception:
@@ -487,7 +616,6 @@ async def _public_rate_limit(request: Request, call_next):
         if p.startswith(k):
             over = await _rl_hit(k, int(win), int(rps) * int(win), ip)
             if over:
-                # Friendlier rate limit with Retry-After hint
                 return JSONResponse(
                     {"ok": False, "error": "rate_limited"},
                     status_code=429,
@@ -568,7 +696,6 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
             if r:
                 key_payload = json.dumps({"t": text, "a": approve_url, "r": reject_url, "p": preview_url}, ensure_ascii=False, separators=(",", ":"))
                 idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
-
                 ok = await r.setnx(idem_key, "1")
                 if not ok:
                     return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
@@ -910,7 +1037,6 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     clean = _filter_kwargs_for_callable(execute_trade_live, base_kwargs)
     try:
         res = await execute_trade_live(**clean)  # type: ignore
-        # Normalize schema to include 'entered' when possible
         return {"entered": bool(res.get("ok")), **res}
     except Exception as e:
         return {"ok": False, "entered": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
@@ -1190,7 +1316,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
 
     # Soft slip-estimate gauge (best-effort)
     with suppress(Exception):
-        # get price + book spread
         cli = _get_shared_async_client()
         px = await get_last_price_async(symbol) or 0.0
         spread_pct = 0.0
@@ -1204,7 +1329,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
                     spread_pct = abs(ask - bid) / ((ask + bid) / 2.0) * 100.0
         except Exception:
             pass
-        # atr% from klines
         atr_pct = 0.0
         kl = await _fetch_klines_http(symbol, "15m", 120)
         if kl:
@@ -1261,17 +1385,14 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     }
 
 def _decide_flow_by_mode(ticket: Dict[str, Any]) -> str:
-    # prefer explicit mode hint in note
     mode = _parse_mode(ticket.get("note"))
     if mode in ("MARKET", "HYBRID", "AUTO"):
         return mode
-    # optional external policy from utils.exec_decider
     if callable(decide_execution_mode):
         with suppress(Exception):
             m = decide_execution_mode(ticket)  # type: ignore
             if isinstance(m, str) and m.upper() in ("MARKET", "HYBRID", "AUTO"):
                 return m.upper()
-    # fallback
     return "HYBRID" if os.getenv("TP_LADDER_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on") else "MARKET"
 
 def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLResponse:
@@ -1295,14 +1416,12 @@ def _render_ticket_html(ticket_id: str, rec: Dict[str, Any], base: str) -> HTMLR
 
 @router.get("/ops/ui/ticket")
 async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
-    # Strict bearer requirement for UI regardless of PROTECT_APPROVE_ROUTES env
     if not API_BEARER_TOKEN:
         raise HTTPException(status_code=503, detail="Route protection enabled but API_BEARER_TOKEN missing")
     auth = request.headers.get("Authorization", "") if request else ""
     if not (auth.startswith("Bearer ") and auth.split(" ", 1)[1].strip() == API_BEARER_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
     rec, _ = await _load_ticket(ticket_id)
-    # NOTE: do NOT fall back to ConfirmStore here; UI should rely on primary storage only
     if not rec:
         return _html("⚠️ לא נמצא כרטיס או שפג תוקפו.")
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
@@ -1343,6 +1462,49 @@ async def reject_signed(ticket_id: str = Query(...), exp: str = Query(...), sig:
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _reject_core(ticket_id)
 
+# === NEW: Signed POST endpoints (HTTP Signatures) ===
+@router.post("/ops/approve/signed")
+async def approve_signed_post(request: Request, payload: Dict[str, Any] = Body(...)):
+    """
+    תמיכה ב־POST חתום לנתיב /ops/approve/signed.
+    נדרש Authorization: Signature … ו־Digest או x-content-sha256 (מומלץ).
+    גוף צפוי: {"approve": true, "ticket_id": "...", "exp": <optional>}
+    """
+    raw = await request.body()
+    ok, reason = _verify_http_signature(request, raw, route_path="/ops/approve/signed")
+    if not ok:
+        raise HTTPException(status_code=401, detail="Bad signature")
+    try:
+        ticket_id = str(payload.get("ticket_id") or "").strip()
+        approved = bool(payload.get("approve") is True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="bad_payload")
+    if not (approved and ticket_id):
+        raise HTTPException(status_code=422, detail="missing_fields")
+    return await _approve_core(ticket_id)
+
+@router.post("/ops/reject/signed")
+async def reject_signed_post(request: Request, payload: Dict[str, Any] = Body(...)):
+    """
+    תמיכה ב־POST חתום לנתיב /ops/reject/signed.
+    נדרש Authorization: Signature … ו־Digest או x-content-sha256 (מומלץ).
+    גוף צפוי: {"approve": false, "ticket_id": "...", "exp": <optional>}
+    """
+    raw = await request.body()
+    ok, reason = _verify_http_signature(request, raw, route_path="/ops/reject/signed")
+    if not ok:
+        raise HTTPException(status_code=401, detail="Bad signature")
+    try:
+        ticket_id = str(payload.get("ticket_id") or "").strip()
+        approved = bool(payload.get("approve") is True)
+    except Exception:
+        raise HTTPException(status_code=422, detail="bad_payload")
+    if not ticket_id:
+        raise HTTPException(status_code=422, detail="missing_fields")
+    if approved:
+        raise HTTPException(status_code=422, detail="approve_true_on_reject_endpoint")
+    return await _reject_core(ticket_id)
+
 # --- בטוח: עטיפת smart_manage_now (אם קיים במודול חיצוני) ---
 async def _smart_manage_now(symbol: str,
                             offset_bps: Optional[int] = None,
@@ -1369,7 +1531,6 @@ async def _smart_manage_now(symbol: str,
     try:
         if inspect.iscoroutinefunction(fn):  # type: ignore[arg-type]
             return await fn(**params)  # type: ignore[misc]
-        # במקרה של sync
         return await asyncio.to_thread(lambda: fn(**params))  # type: ignore[misc]
     except Exception as e:
         return {"ok": False, "error": "smart_manage_now_failed", "detail": f"{e}"}
@@ -1380,12 +1541,10 @@ async def _try_mark_decided(ticket_id: str, decision: str, ttl: int = 30) -> boo
     Returns True if this is the first handler; False if already handled.
     """
     if not (aioredis and REDIS_URL):
-        # In-memory best-effort (עם GC כדי למנוע גדילה בלתי מוגבלת)
         bucket = getattr(app.state, "_decided_mem", None)
         if bucket is None:
             bucket = {}
             app.state._decided_mem = bucket
-        # GC entries older than 5 minutes
         now = time.time()
         for k, ts in list(bucket.items()):
             try:
@@ -1393,7 +1552,6 @@ async def _try_mark_decided(ticket_id: str, decision: str, ttl: int = 30) -> boo
                     bucket.pop(k, None)
             except Exception:
                 bucket.pop(k, None)
-        # Single ANY key so approve/reject can't both win
         key_any = f"{ticket_id}:ANY"
         if key_any in bucket:
             return False
@@ -1402,7 +1560,6 @@ async def _try_mark_decided(ticket_id: str, decision: str, ttl: int = 30) -> boo
     r = await _get_redis_cached()
     if not r:
         return True
-    # Single ANY key in Redis too
     key_any = f"{NS}:decided:{ticket_id}:ANY"
     ok = await r.setnx(key_any, "1")
     if ok:
@@ -1411,7 +1568,6 @@ async def _try_mark_decided(ticket_id: str, decision: str, ttl: int = 30) -> boo
     return bool(ok)
 
 async def _approve_core(ticket_id: str):
-    # duplicate-protect
     if not await _try_mark_decided(ticket_id, "approve"):
         return _html("⚠️ בקשה זו כבר טופלה (כפילות נמנעה).")
 
@@ -1422,7 +1578,6 @@ async def _approve_core(ticket_id: str):
         for k in ("blocked_by_rr_min", "blocked_by_velocity", "velocity_error"):
             ticket.pop(k, None)
 
-    # --- Checklist Gate (ENTRY_SCORE_MIN) ---
     ENTRY_SCORE_MIN = float(os.getenv("ENTRY_SCORE_MIN", "0") or 0)
     if ENTRY_SCORE_MIN > 0 and compute_pretrade_score is not None:
         try:
@@ -1460,7 +1615,6 @@ async def _approve_core(ticket_id: str):
                     inc_scan_passed()
         except Exception as e:
             logger.warning("checklist_gate_failed (permissive allow): %s", e)
-    # --- סוף ה-Checklist Gate ---
 
     t2 = await _apply_auto_qty_on_ticket_async(ticket)
     if t2 is None:
@@ -1477,13 +1631,11 @@ async def _approve_core(ticket_id: str):
     )
     ok = bool(exec_res.get("ok"))
     entered = bool(exec_res.get("entered"))
-    # Avoid double-entry: fallback to MARKET only if nothing was entered yet
     if (not ok) and (not entered) and flow in ("HYBRID", "AUTO") and (os.getenv("PROPOSE_BLOCK_ON_FAIL", "0").lower() not in ("1", "true", "yes", "on")):
         retry_res = await _execute_trade(ticket)
         ok = bool(retry_res.get("ok"))
         exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
 
-    # === Metrics ===
     try:
         if ok:
             inc_approve_ok()
@@ -1527,7 +1679,6 @@ async def _approve_core(ticket_id: str):
     return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.") if ok else _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
 
 async def _reject_core(ticket_id: str):
-    # duplicate-protect
     if not await _try_mark_decided(ticket_id, "reject"):
         return _html("⚠️ בקשה זו כבר טופלה (כפילות נמנעה).")
 
@@ -1535,7 +1686,6 @@ async def _reject_core(ticket_id: str):
     if not ticket:
         return _html("⚠️ קישור שגוי או שפג תוקף האישור/דחייה.")
 
-    # === Metrics ===
     try:
         inc_reject()
     except Exception:
@@ -1687,7 +1837,8 @@ def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -
         minus_dm_s = _wilder_smooth(minus_dm, period)
         if not (atr_series and plus_dm_s and minus_dm_s):
             return {"atr": 0.0, "adx": 0.0, "price": closes[-1]}
-        atr = attr = atr_series[-1]
+        # FIX: remove stray 'attr' and return the correct 'atr'
+        atr = atr_series[-1]
         plus_di = [(p / atr_series[i]) * 100 if atr_series[i] > 0 else 0.0 for i, p in enumerate(plus_dm_s)]
         minus_di = [(m / atr_series[i]) * 100 if atr_series[i] > 0 else 0.0 for i, m in enumerate(minus_dm_s)]
         dx = []
@@ -1697,7 +1848,7 @@ def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -
             dx.append((d / s) * 100 if s > 0 else 0.0)
         adx_series = _wilder_smooth(dx, period)
         adx = adx_series[-1] if adx_series else 0.0
-        return {"atr": float(attr), "adx": float(adx), "price": float(closes[-1])}
+        return {"atr": float(atr), "adx": float(adx), "price": float(closes[-1])}
     except Exception:
         return {"atr": 0.0, "adx": 0.0, "price": 0.0}
 
@@ -1831,7 +1982,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     if any(x <= 0 for x in splits):
         raise HTTPException(status_code=422, detail="splits must be > 0")
 
-    # === החלפה: ניהול בעזרת tp_helper (BE + TP + Trail) ===
     try:
         from utils.tp_helper import manage_once_place_all  # type: ignore
     except Exception as e:
@@ -1859,7 +2009,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     except Exception as e:
         return {"ok": False, "error": "manage_once_place_all_failed", "detail": f"{e}"}
 
-    # (NEW 2.2) סימון כשה-Structural SL באמת השפיע (רק אם merged_stop != be_price)
     try:
         computed = (res or {}).get("computed", {}) or {}
         be_price = computed.get("be_price")
@@ -2018,315 +2167,21 @@ def health_fallback():
 def health_head():
     return PlainTextResponse("", status_code=200)
 
-@app.get("/readyz/strict", tags=["meta"])
-async def readyz_strict():
-    try:
-        r = await _get_redis_cached()
-        if r:
-            await asyncio.wait_for(r.ping(), timeout=0.6)
-    except Exception as e:
-        logger.warning("readyz.strict.redis_ping_failed: %s", e)
-        return PlainTextResponse("redis_fail", status_code=503)
+@app.get("/readyz", tags=["meta"])
+def readyz_route():
     return PlainTextResponse("ok", status_code=200)
 
-@app.get("/debug/env", tags=["debug"])
-def debug_env(keys: Optional[str] = None) -> Dict[str, Any]:
-    allowlist = set([k.strip() for k in (keys or "").split(",") if k.strip()]) if keys else set()
-    safe: Dict[str, Any] = {}
-    for k, v in os.environ.items():
-        if any(x in k.upper() for x in ("SECRET", "TOKEN", "KEY", "PASSWORD", "HMAC", "SIGN")):
-            continue
-        if allowlist and k not in allowlist:
-            continue
-        safe[k] = v
-    return {"ok": True, "env": safe}
-
-@app.head("/debug/env", tags=["debug"])
-def debug_env_head():
-    return PlainTextResponse("", status_code=200)
-
-# ---- NEW: /meta/routes (diagnostics) ----
-@app.get("/meta/routes", tags=["meta"])
-async def meta_routes(request: Request):
-    # מוגן עם Bearer אם PROTECT_APPROVE_ROUTES=1
-    with suppress(Exception):
-        _require_bearer(request)
-    routes = []
-    for r in app.routes:
-        methods = []
-        try:
-            methods = sorted(list(r.methods)) if getattr(r, "methods", None) else []
-        except Exception:
-            methods = []
-        routes.append({
-            "path": getattr(r, "path", None),
-            "name": getattr(r, "name", None),
-            "methods": methods,
-        })
-    return {"ok": True, "count": len(routes), "routes": routes}
-
-# ---- NEW: /meta/telegram (diagnostics: info/dry/set/send [+ticket links]) ----
-@app.get("/meta/telegram", tags=["meta"])
-async def meta_telegram(
-    request: Request,
-    mode: str = Query("info", pattern="^(info|dry|set|send)$"),
-    text: Optional[str] = Query("🔎 Diagnostics: test message"),
-    chat_id: Optional[str] = Query(None, description="אם לא ניתן — ישתמש ב-ADMIN_CHAT_ID/TELEGRAM_CHAT_ID"),
-    ticket_id: Optional[str] = Query(None, description="אופציונלי: אם קיים — נצרף קישורים חתומים approve/reject/preview"),
-):
-    """
-    /meta/telegram?mode=info  -> מצב webhook + getMe
-    /meta/telegram?mode=dry   -> dry-run: בונה payload בלבד (לא שולח)
-    /meta/telegram?mode=set   -> setWebhook לפי ה-env
-    /meta/telegram?mode=send  -> שולח הודעת בדיקה אמיתית (עם idem קל ב-Redis אם קיים)
-    """
-    with suppress(Exception):
-        _require_bearer(request)
-
-    token = TELEGRAM_BOT_TOKEN
-    if not token:
-        return {"ok": False, "error": "telegram_token_missing"}
-
-    cli = _get_shared_async_client()
-
-    async def tg_get(path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        try:
-            r = await cli.get(f"https://api.telegram.org/bot{token}/{path}", params=params, timeout=httpx.Timeout(10.0))
-            j = {}
-            with suppress(Exception):
-                j = r.json()
-            return {"status": r.status_code, "data": j}
-        except Exception as e:
-            return {"status": 0, "error": str(e)}
-
-    def _maybe_links() -> Dict[str, Optional[str]]:
-        if not ticket_id:
-            return {"preview_url": None, "approve_url": None, "reject_url": None}
-        base = PUBLIC_HOST or get_internal_base()
-        return {
-            "preview_url": _build_signed_link(base, "/ops/ui/ticket/signed", ticket_id, ttl_sec=900, action="preview"),
-            "approve_url": _build_signed_link(base, "/ops/approve/signed", ticket_id, ttl_sec=900, action="approve"),
-            "reject_url": _build_signed_link(base, "/ops/reject/signed", ticket_id, ttl_sec=900, action="reject"),
-        }
-
-    if mode == "info":
-        info = await tg_get("getWebhookInfo")
-        me = await tg_get("getMe")
-        return {
-            "ok": True,
-            "webhook": info,
-            "me": me,
-            "configured_host": PUBLIC_HOST,
-            "auto_webhook": TELEGRAM_AUTO_WEBHOOK,
-        }
-
-    if mode == "dry":
-        try:
-            default_chat = ADMIN_CHAT_ID if ADMIN_CHAT_ID else None
-            cid: Any = chat_id or default_chat
-            if cid and str(cid).isdigit():
-                cid = int(cid)
-            payload = {
-                "chat_id": cid,
-                "text": text or "🔎 Diagnostics: dry-run",
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            }
-            payload.update({k: v for k, v in _maybe_links().items() if v})
-            return {
-                "ok": True,
-                "dry_run": True,
-                "note": "No message was sent. This is only a dry-run preview.",
-                "payload_preview": payload,
-                "has_chat_id": bool(cid),
-                "hints": [
-                    "Set TELEGRAM_CHAT_ID/ADMIN_CHAT_ID בסביבה או העבר ?chat_id=<id> בבקשה.",
-                ],
-            }
-        except Exception as e:
-            return {"ok": False, "error": f"dry_run_failed: {e}"}
-
-    if mode == "set":
-        host = PUBLIC_HOST
-        secret = TELEGRAM_WEBHOOK_SECRET
-        if not (host and secret):
-            return {"ok": False, "error": "missing_host_or_secret", "need": {"PUBLIC_HOST": bool(host), "TELEGRAM_WEBHOOK_SECRET": bool(secret)}}
-        try:
-            r = await cli.post(
-                f"https://api.telegram.org/bot{token}/setWebhook",
-                json={
-                    "url": f"{host}/telegram/webhook",
-                    "secret_token": secret,
-                    "drop_pending_updates": True,
-                    "max_connections": 40,
-                },
-                timeout=httpx.Timeout(15.0),
-            )
-            data = {}
-            with suppress(Exception):
-                data = r.json()
-            return {"ok": (r.status_code == 200 and data.get("ok") is True), "status": r.status_code, "result": data}
-        except Exception as e:
-            return {"ok": False, "error": str(e)}
-
-    # mode == "send"
-    try:
-        msg_text = text or "🔎 Diagnostics: test message"
-        links = _maybe_links()
-        if chat_id:
-            try:
-                cid: Any = int(chat_id) if str(chat_id).isdigit() else chat_id
-            except Exception:
-                cid = chat_id
-
-            if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
-                try:
-                    r = await _get_redis_cached()
-                    if r:
-                        key_payload = json.dumps({"t": msg_text, "cid": cid, "links": links}, ensure_ascii=False, separators=(",", ":"))
-                        idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
-                        ok = await r.setnx(idem_key, "1")
-                        if not ok:
-                            return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
-                        with suppress(Exception):
-                            await r.expire(idem_key, int(IDEM_TTL_SEC))
-                except Exception as e:
-                    logger.debug("telegram_idem_warning(send): %s", e)
-
-            payload = {
-                "chat_id": cid,
-                "text": msg_text,
-                "parse_mode": "HTML",
-                "disable_web_page_preview": True,
-            }
-            kb = []
-            if links.get("preview_url"):
-                kb.append({"text": "👁 Preview", "url": links["preview_url"]})
-            if links.get("approve_url"):
-                kb.append({"text": "✅ Approve", "url": links["approve_url"]})
-            if links.get("reject_url"):
-                kb.append({"text": "❌ Reject", "url": links["reject_url"]})
-            if kb:
-                payload["reply_markup"] = {"inline_keyboard": [kb]}
-
-            r = await cli.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                json=payload,
-                timeout=httpx.Timeout(10.0),
-            )
-            data = {}
-            with suppress(Exception):
-                data = r.json()
-            return {
-                "ok": (r.status_code == 200 and data.get("ok") is True),
-                "status": r.status_code,
-                "result": data,
-                "used_chat_id": cid,
-                "links": links,
-            }
-        else:
-            res = await _send_telegram_html(
-                msg_text,
-                approve_url=links.get("approve_url"),
-                reject_url=links.get("reject_url"),
-                preview_url=links.get("preview_url"),
-            )
-            return {"ok": bool(res.get("ok")), "result": res, "used_chat_id": ADMIN_CHAT_ID, "links": links}
-    except Exception as e:
-        return {"ok": False, "error": f"send_failed: {e}"}
-
-# ==================== Global error handler ====================
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    error_id = secrets.token_hex(6)
-    logger.exception("unhandled_error [%s]: %s %s", error_id, request.method, request.url)
-    show_detail = os.getenv("SHOW_INTERNAL_ERRORS", "0").lower() in ("1", "true", "yes", "on") or LOG_LEVEL == "DEBUG"
-    payload: Dict[str, Any] = {"ok": False, "error": "internal_error", "id": error_id}
-    if show_detail:
-        payload["detail"] = str(exc)
-    return JSONResponse(status_code=500, content=payload)
-
-# -------- NEW: Background real-time trailing manager ----------
-async def _trail_rt_loop():
-    """
-    לולאת Trailing בזמן אמת (Best-effort).
-    מפושטת/מושבתת כברירת מחדל אם אין מפתחות בינאנס.
-    """
-    if not TRAIL_RT_ENABLE:
-        return
-    try:
-        from binance.client import Client  # type: ignore
-    except Exception as e:
-        logger.warning("trail_rt: binance client missing: %s", e)
-        return
-    api_key = os.getenv("BINANCE_API_KEY", "").strip()
-    api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
-    if not (api_key and api_sec):
-        logger.warning("trail_rt: missing binance keys")
-        return
-
-    client = Client(api_key, api_sec)
-    _align_position_mode(client)
-
-    def _symbols_to_check() -> List[str]:
-        if TRAIL_RT_WATCH:
-            return TRAIL_RT_WATCH[:TRAIL_RT_MAX_SYMBOLS]
-        out: List[str] = []
-        with suppress(Exception):
-            infos = client.futures_account()['positions']
-            for p in infos:
-                try:
-                    amt = float(p.get("positionAmt") or 0.0)
-                    if abs(amt) > 0:
-                        out.append(str(p.get("symbol")))
-                except Exception:
-                    continue
-        if not out:
-            return WATCHLIST[:TRAIL_RT_MAX_SYMBOLS]
-        uniq: List[str] = []
-        for s in out:
-            if s and s not in uniq:
-                uniq.append(s)
-        return uniq[:TRAIL_RT_MAX_SYMBOLS]
-
-    while True:
-        try:
-            if _in_pause_window_utc():
-                await asyncio.sleep(TRAIL_RT_INTERVAL_SEC)
-                continue
-            symbols = _symbols_to_check()
-            # (Best-effort placeholder; real logic can be plugged here)
-            logger.debug("trail_rt: would manage %s", ",".join(symbols))
-        except Exception as e:
-            logger.debug("trail_rt.loop.error: %s", e)
-        await asyncio.sleep(TRAIL_RT_INTERVAL_SEC)
-
-# ==================== Startup / Shutdown hooks ====================
+# ==================== Lifecycle ====================
+@app.on_event("startup")
 async def _on_startup():
-    app.state.boot_ts = time.time()
-    # warm shared http client
-    _get_shared_async_client()
-    # set Telegram webhook if configured
+    try:
+        app.state.boot_ts = time.time()
+    except Exception:
+        pass
     with suppress(Exception):
         await _ensure_telegram_webhook()
-    # start real-time trailing loop (best-effort)
-    with suppress(Exception):
-        asyncio.create_task(_trail_rt_loop())
-    # Optional: early Redis ping when required to catch misconfig quickly
-    try:
-        if REQUIRE_REDIS and REDIS_URL:
-            r = await _get_redis_cached()
-            if not r:
-                logger.error("startup.redis: client unavailable while REQUIRE_REDIS=1")
-            else:
-                await asyncio.wait_for(r.ping(), timeout=0.6)
-    except Exception as e:
-        logger.error("startup.redis_ping_failed (REQUIRE_REDIS=1): %s", e)
-    # optional startup notify
-    if STARTUP_NOTIFY_ENABLE and not ONLY_TRADE_NOTIFICATIONS:
-        with suppress(Exception):
-            await _send_telegram_html(f"🟢 <b>{_md_html(APP_TITLE)}</b> started · v<code>{_md_html(APP_VERSION)}</code>")
 
+@app.on_event("shutdown")
 async def _on_shutdown():
     with suppress(Exception):
         cli = getattr(app.state, "shared_async_client", None)
@@ -2335,29 +2190,17 @@ async def _on_shutdown():
     with suppress(Exception):
         r = getattr(app.state, "redis", None)
         if r:
-            await r.close()
+            await r.aclose()
 
-app.add_event_handler("startup", _on_startup)
-app.add_event_handler("shutdown", _on_shutdown)
-
-# ==================== END ====================
-
-# ==================== Main ====================
+# ==================== Entrypoint ====================
 if __name__ == "__main__":
     import uvicorn
-    reload_flag = os.getenv("UVICORN_RELOAD", "0").lower() in ("1", "true", "yes", "on")
-    # הערה: כשעובדים עם reload=True עדיף לציין את האפ לפי מחרוזת "module:var"
-    # כדי שהטעינה מחדש תעבוד כמו שצריך.
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=_port(),
-        reload=reload_flag,
-        log_level=os.getenv("UVICORN_LOG_LEVEL", LOG_LEVEL.lower()),
+        reload=os.getenv("UVICORN_RELOAD", "0") in ("1", "true", "yes", "on"),
     )
-
-
-
 
 
 
