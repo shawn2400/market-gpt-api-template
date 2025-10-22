@@ -7,6 +7,7 @@ uvicorn==0.30.6
 gunicorn==22.0.0
 pydantic==2.8.2
 pydantic-core==2.20.1
+python-multipart==0.0.9
 
 # =========================
 # Exchange / Trading
@@ -62,8 +63,6 @@ matplotlib==3.9.2
 # =========================
 pytest==8.2.2
 jsonschema==4.23.0
-
-
 
 
 
