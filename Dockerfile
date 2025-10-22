@@ -31,7 +31,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONOPTIMIZE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/app \
-    APP_MODULE=main:app \
     WEB_CONCURRENCY=1 \
     GUNICORN_TIMEOUT=180 \
     GUNICORN_GRACEFUL_TIMEOUT=45 \
@@ -51,29 +50,33 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
     libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
  && rm -rf /var/lib/apt/lists/*
 
-# deps from builder
+# תלויות מפאזה 1
 COPY --from=builder /install /usr/local
 
-# non-root user
+# משתמש לא־רוט
 RUN useradd -ms /bin/bash appuser
 
 WORKDIR /app
 COPY . .
 
-# version file (optional)
+# קובץ קונפיג ל־gunicorn (מכיל autodiscovery למודול)
+COPY gunicorn_conf.py /app/gunicorn_conf.py
+
+# גרסת אפליקציה לשקיפות
 RUN printf "%s\n" "${APP_VERSION}" > /app/VERSION || true
 
-# create needed dirs & permissions
+# תיקיות והרשאות
 RUN mkdir -p /app/.cache/matplotlib /app/static/ultra /app/logs /app/data \
  && chown -R appuser:appuser /app
 
 USER appuser
 
 EXPOSE 10000
-HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
-  CMD curl -fsS http://127.0.0.1:${PORT:-10000}/health || exit 1
 
-# Important: rely on gunicorn_conf.py (wsgi_app) instead of passing ${APP_MODULE} as arg
+# בריאות בתוך הקונטיינר – תואם לנתיב /readyz (כמו ב-Render)
+HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
+  CMD curl -fsS http://127.0.0.1:${PORT:-10000}/readyz || exit 1
+
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["gunicorn","-c","/app/gunicorn_conf.py"]
 
