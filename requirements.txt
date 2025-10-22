@@ -13,7 +13,7 @@ python-multipart==0.0.9
 # Exchange / Trading
 # =========================
 python-binance==1.0.19
-httpx[http2]==0.27.2   # תומך ב-HTTP/2 ומתקין h2/hpack/hyperframe
+httpx[http2]==0.27.2
 aiohttp==3.9.5
 websockets==11.0.3
 dateparser==1.2.0
@@ -63,6 +63,7 @@ matplotlib==3.9.2
 # =========================
 pytest==8.2.2
 jsonschema==4.23.0
+
 
 
 
