@@ -1,4 +1,3 @@
-# utils/metrics_tracker.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import time
@@ -7,6 +6,9 @@ import functools
 import inspect
 from contextlib import asynccontextmanager, contextmanager
 from typing import Dict, Any, Optional, List, Callable
+
+from prometheus_client import Counter, Summary, Histogram
+import os  # (נשאר גם כאן לצורך שימוש פנימי בהמשך)
 
 _START_TIME = time.time()
 _SENT_TELEGRAM = 0
@@ -153,6 +155,45 @@ def inc_struct_sl_applied() -> None:
     global _STRUCT_SL_APPLIED
     _STRUCT_SL_APPLIED += 1
 
+# -------------------- Prometheus metrics (Realtime manage) --------------------
+POS_BE_TRIGGER = Counter(
+    "pos_live_manage_be_trigger_total",
+    "Count of BE triggers",
+    ["symbol", "side", "timeframe", "market"],
+)
+POS_GRACE_VIOLATION = Counter(
+    "pos_live_manage_grace_violation_total",
+    "Count of Grace MAE cap violations",
+    ["symbol", "side", "timeframe", "market"],
+)
+POS_TRAIL_ADJUST = Counter(
+    "pos_live_manage_trail_adjust_total",
+    "Count of trail adjustments",
+    ["symbol", "side", "timeframe", "market"],
+)
+
+_SL_BPS_BUCKETS = (
+    0.25, 0.5, 1.0, 1.5, 2.0,
+    3.0, 5.0, 8.0, 13.0, 21.0, 34.0, 55.0
+)
+POS_SL_STEP_BPS = Histogram(
+    "pos_live_manage_sl_step_bps",
+    "SL step size (basis points of last/target price)",
+    ["symbol", "side", "timeframe", "market"],
+    buckets=_SL_BPS_BUCKETS,
+)
+
+_ATR_PCT_BUCKETS = (
+    0.0005, 0.0010, 0.0020, 0.0030, 0.0050,
+    0.0080, 0.0120, 0.0150, 0.0200, 0.0300, 0.0500
+)
+POS_ATR_PCT = Histogram(
+    "pos_live_manage_atr_pct",
+    "ATR as fraction of price (e.g., 0.012 = 1.2%)",
+    ["symbol", "timeframe", "market"],
+    buckets=_ATR_PCT_BUCKETS,
+)
+
 # -------------------- Lightweight Histograms --------------------
 def _csv_floats(env: str, default: List[float]) -> List[float]:
     s = (os.getenv(env, "") or "").strip()
@@ -261,6 +302,44 @@ def observe_tp_ladders(n: int) -> None:
         _LAST_TP_LADDERS = int(n)
     except Exception:
         _LAST_TP_LADDERS = None
+
+# -------------------- Prometheus helpers (labels with tf/market) --------------------
+def _df_tf() -> str:
+    return os.getenv("DEFAULT_INTERVAL", os.getenv("ENTRY_SCORE_INTERVAL", "15m"))
+
+def _df_mkt() -> str:
+    return os.getenv("DEFAULT_MARKET", "futures").lower()
+
+def observe_sl_step_bps(symbol: str, side: str, step_bps: float,
+                        timeframe: str | None = None,
+                        market: str | None = None) -> None:
+    """
+    שלח גודל צעד SL בהזזה נתונה ל-Histogram (ב-bps).
+    """
+    try:
+        POS_SL_STEP_BPS.labels(
+            symbol=str(symbol).upper(),
+            side=str(side).upper(),
+            timeframe=(timeframe or _df_tf()),
+            market=(market or _df_mkt()),
+        ).observe(float(step_bps))
+    except Exception:
+        pass
+
+def observe_atr_pct(symbol: str, atr_frac: float,
+                    timeframe: str | None = None,
+                    market: str | None = None) -> None:
+    """
+    שלח ATR/Price (חלק עשרוני, לדוגמה 0.012 = 1.2%) להיסטוגרמה.
+    """
+    try:
+        POS_ATR_PCT.labels(
+            symbol=str(symbol).upper(),
+            timeframe=(timeframe or _df_tf()),
+            market=(market or _df_mkt()),
+        ).observe(float(atr_frac))
+    except Exception:
+        pass
 
 # -------------------- Observe (ctx + decorator) --------------------
 @contextmanager
@@ -509,7 +588,10 @@ __all__ = [
     "observe_http_ctx","observe_http_ctx_async","observe_http",
     "observe_callback_rate","observe_be_distance_bps","observe_tp_ladders",
     "inc_event",
+    # חדשים לפרומתאוס:
+    "observe_sl_step_bps","observe_atr_pct",
 ]
+
 
 
 
