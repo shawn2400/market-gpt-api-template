@@ -73,12 +73,13 @@ services:
       - key: AUTO_RUN
         value: "1"
 
+      # חשוב: עדכון ה־HOST ל־docker
       - key: PUBLIC_HOST
-        value: "https://algogpt.onrender.com"
+        value: "https://algogpt-docker.onrender.com"
       - key: CONTEXT_URL
-        value: "https://algogpt.onrender.com"
+        value: "https://algogpt-docker.onrender.com"
       - key: WEBHOOK_HOST
-        value: "https://algogpt.onrender.com"
+        value: "https://algogpt-docker.onrender.com"
 
       - key: DOCS_URL
         value: "/docs"
@@ -88,17 +89,18 @@ services:
         value: "/openapi.json"
       - key: ENABLE_READONLY_HTTP
         value: "1"
+      # כדי למנוע בלבול עם נתיבים שלא קיימים — משאיר ריק
       - key: READONLY_ENDPOINTS
-        value: "summary,prices_top,news_cache,health,meta_telegram"
+        value: ""
       - key: OPENAPI_HIDE_PATTERNS
         value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
       - key: OPENAPI_PUBLIC_MAX_OPS
         value: "30"
 
       - key: CORS_ALLOW_ORIGINS
-        value: "https://algogpt.onrender.com"
+        value: "https://algogpt-docker.onrender.com"
       - key: CORS_ALLOW_ORIGINS_STRICT
-        value: "https://algogpt.onrender.com"
+        value: "https://algogpt-docker.onrender.com"
       - key: CORS_ALLOW_HEADERS
         value: "*"
       - key: CORS_ALLOW_METHODS
@@ -117,8 +119,9 @@ services:
       - key: TRUST_XFF
         value: "1"
 
+      # רק נתיבים שקיימים בפועל בבילד
       - key: SECURITY_PUBLIC_PATHS
-        value: "/ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/routes/approve/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/health,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/public/pos-events/stream,/internal/self-check/signed"
+        value: "/readyz,/version,/scan/public-now,/scan/public-topk,/topk,/ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/public/ticket/inspect"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
       - key: SECURITY_PROTECTED_PATHS
@@ -482,9 +485,9 @@ services:
       - key: GRACE_ENABLE
         value: "1"
       - key: GRACE_TIME_SEC
-        value: "420"          # 7 דקות חלון תיקון
+        value: "420"
       - key: GRACE_MAX_MAE_ATR
-        value: "1.2"          # MAE עד 1.2×ATR לפני הגנה קשיחה
+        value: "1.2"
       - key: PERCENT_GUARD_ENABLE
         value: "1"
       - key: PERCENT_PRICE_GUARD_BPS
@@ -553,9 +556,9 @@ services:
       - key: ATR_MIN_DELTA
         value: "0.02"
       - key: HYSTERESIS_ATR_FRAC
-        value: "0.2"          # מזיזים SL רק אם ≥ 0.2×ATR
+        value: "0.2"
       - key: SL_MIN_STEP_BPS
-        value: "3"            # מינימום הזזה 3 bps
+        value: "3"
       - key: BE_ARM_PCT
         value: "0.6"
       - key: BE_GUARD_ENABLE
@@ -563,11 +566,11 @@ services:
       - key: BE_GUARD_EVERY_SEC
         value: "20"
       - key: BE_TRIGGER_REQUIRE_ADX
-        value: "22"           # ADX מינימלי ל-BE
+        value: "22"
       - key: BE_TRIGGER_PROG_TO_TP1_PCT
-        value: "0.35"         # % התקדמות ל-TP1 כדי לזרוע BE
+        value: "0.35"
       - key: PROG_TO_TP1_FALLBACK_PCT
-        value: "0.60"         # fallback אם אין TP1: % תנועה “מספיק טובה” מהכניסה
+        value: "0.60"
       - key: TRAIL_IN_CHOP
         value: "1"
       - key: TP_SL_REFRESH_SEC
@@ -776,8 +779,9 @@ services:
         value: "1"
       - key: MANAGER_INTERVAL_SEC
         value: "30"
+      # הפעלה — זה התיקון “מהשורש”
       - key: ALLOW_MANAGE_OPEN_TRADES
-        value: "0"
+        value: "1"
 
       - key: AUTO_BE_BPS
         value: "8"
@@ -971,5 +975,5 @@ services:
       - key: HALT_TRADING_ON_DEGRADED_HEALTH
         value: "1"
       - key: HEALTH_RECOVERY_GRACE_SEC
-      ...
+        value: "120"
 
