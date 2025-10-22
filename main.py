@@ -147,8 +147,8 @@ STARTUP_NOTIFY_ENABLE = os.getenv("STARTUP_NOTIFY_ENABLE", "0").lower() in ("1",
 HEALTH_TP1_ENABLE = os.getenv("HEALTH_TP1_ENABLE", "0").lower() in ("1", "true", "yes", "on")
 
 # ========= Auto ranges defaults (lev/budget) =========
-AUTO_LEV_MIN = int(os.getenv("AUTO_LEV_MIN", "15") or 15)
-AUTO_LEV_MAX = int(os.getenv("AUTO_LEV_MAX", "25") or 25)
+AUTO_LEV_MIN = int(os.getenv("AUTO_LEV_MIN", "20") or 20)
+AUTO_LEV_MAX = int(os.getenv("AUTO_LEV_MAX", "35") or 35)
 AUTO_BUDGET_MIN = float(os.getenv("AUTO_BUDGET_MIN", "100") or 100.0)
 AUTO_BUDGET_MAX = float(os.getenv("AUTO_BUDGET_MAX", "200") or 200.0)
 
@@ -514,13 +514,14 @@ def _get_hmac_key_bytes() -> Optional[bytes]:
     """
     מקור הסוד לחתימות:
     - API_SIGNING_SECRET או OPS_SIGN_SECRET (כמו קודם)
-    - SECRET_HEX (לנוחות התאמה לסקריפטי הבדיקה שלך)
+    - SIGNING_SECRET_HEX / SECRET_HEX (תמיכה גם בשם שהשתמשת בו בסקריפט)
     - WEBHOOK_HMAC_SECRET (fallback)
     תומך או HEX (64 תווים) או טקסט raw.
     """
     cand = (
         os.getenv("API_SIGNING_SECRET")
         or os.getenv("OPS_SIGN_SECRET")
+        or os.getenv("SIGNING_SECRET_HEX")
         or os.getenv("SECRET_HEX")
         or os.getenv("WEBHOOK_HMAC_SECRET")
         or ""
@@ -1687,6 +1688,22 @@ async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), s
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     return _render_ticket_html(ticket_id, rec, base)
 
+# === NEW: Public ticket inspect (200 if exists, 404 if not) ===
+@router.get("/public/ticket/inspect", tags=["public"])
+async def public_ticket_inspect(ticket_id: str = Query(...)):
+    """
+    החזרה מהירה אם כרטיס קיים (200) או לא קיים/פג (404).
+    תואם לשורת הבדיקה:
+    curl -s -o /dev/null -w "inspect=%{http_code}\\n" "$HOST/public/ticket/inspect?ticket_id=$TID"
+    """
+    rec, _ = await _load_ticket(ticket_id)
+    if rec:
+        return JSONResponse({
+            "ok": True, "ticket_id": ticket_id, "found": True,
+            "key": f"{NS}:ticket:{ticket_id}", "data": rec
+        })
+    return JSONResponse({"ok": True, "ticket_id": ticket_id, "found": False}, status_code=404)
+
 def _maybe_protect_routes(request: Request) -> None:
     _require_bearer(request)
 
@@ -2223,9 +2240,16 @@ async def _on_startup():
     _ensure_public_fallbacks()
     with suppress(Exception):
         await _resolve_binance_endpoints()
+    # הפעלה אוטומטית של Webhook לטלגרם אם הופעל ב־ENV
+    with suppress(Exception):
+        await _ensure_telegram_webhook()
     with suppress(Exception):
         if STARTUP_NOTIFY_ENABLE and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID:
             await _send_telegram_html("🟢 <b>AlgoGPT API</b> started.")
+
+@app.get("/version")
+async def version():
+    return {"ok": True, "version": APP_VERSION}
 
 @app.get("/")
 async def root():
@@ -2235,7 +2259,6 @@ async def root():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=bool(os.getenv("RELOAD", "0") in ("1","true","yes","on")))
-
 
 
 
