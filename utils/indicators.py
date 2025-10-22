@@ -3,12 +3,10 @@ from __future__ import annotations
 import pandas as pd
 import numpy as np
 from typing import Dict, Any, List, Optional
-import os, math, datetime as _dt
+import httpx
+import os
 
-# ====== הקוד שלך נשאר (ema/rsi/atr/adx/macd/bollinger/prepare_indicators_for_backtest) ======
-# ... (השאר כמו אצלך) ...
-
-# --- BEGIN: תוכן המקורי שלך (מקוצר כאן לצורך הדוגמא) ---
+# ========= אינדיקטורים (כמו אצלך) =========
 def _to_float_series(x: pd.Series) -> pd.Series:
     if isinstance(x, pd.Series):
         s = pd.to_numeric(x, errors="coerce")
@@ -18,10 +16,11 @@ def _to_float_series(x: pd.Series) -> pd.Series:
     return s.astype(float)
 
 def _rma(series: pd.Series, period: int) -> pd.Series:
-    if period <= 0 or series is None or series.empty:
-        return pd.Series(dtype=float)
+    s = _to_float_series(series)
+    if period <= 0 or s.empty:
+        return pd.Series(index=s.index, dtype=float)
     alpha = 1.0 / float(period)
-    return _to_float_series(series).ewm(alpha=alpha, adjust=False).mean()
+    return s.ewm(alpha=alpha, adjust=False).mean()
 
 def ema(series: pd.Series, period: int) -> pd.Series:
     s = _to_float_series(series)
@@ -100,7 +99,10 @@ def bollinger_bands(series: pd.Series, period: int = 20, std_factor: float = 2.0
     return sma, upper, lower
 
 def prepare_indicators_for_backtest(df: pd.DataFrame) -> pd.DataFrame:
-    cols = ["open","high","low","close","volume","ema_21","ema_50","rsi","atr","adx","macd","macd_signal","macd_hist","bb_mid","bb_upper","bb_lower"]
+    cols = ["open","high","low","close","volume",
+            "ema_21","ema_50","rsi","atr","adx",
+            "macd","macd_signal","macd_hist",
+            "bb_mid","bb_upper","bb_lower"]
     if df is None or df.empty:
         return pd.DataFrame(columns=cols)
     base = df.copy()
@@ -123,103 +125,73 @@ def prepare_indicators_for_backtest(df: pd.DataFrame) -> pd.DataFrame:
         if c not in base.columns:
             base[c] = np.nan
     return base[cols]
-# --- END: תוכן המקורי שלך ---
 
-# ===== Regime evaluator (ASYNC) =====
-import httpx
+__all__ = [
+    "ema","rsi","atr","adx","macd","bollinger_bands","prepare_indicators_for_backtest"
+]
 
-_BINANCE_HTTP = os.getenv("BINANCE_FUTURES_HTTP_BASE", os.getenv("BINANCE_FAPI", "https://fapi.binance.com")).rstrip("/")
+# ========= eval_regime (חדש) =========
+_BINANCE_HTTP = os.getenv("BINANCE_FAPI", "https://fapi.binance.com").rstrip("/")
 
-_tf_map = {
+_INTERVAL_MAP = {
     "1m":"1m","3m":"3m","5m":"5m","15m":"15m","30m":"30m",
     "1h":"1h","2h":"2h","4h":"4h","6h":"6h","8h":"8h","12h":"12h",
     "1d":"1d","3d":"3d","1w":"1w","1M":"1M"
 }
 
-async def _fetch_klines(symbol: str, interval: str, limit: int = 200) -> pd.DataFrame:
-    iv = _tf_map.get(interval, "15m")
-    url = f"{_BINANCE_HTTP}/fapi/v1/klines"
-    params = {"symbol": symbol.upper(), "interval": iv, "limit": int(limit)}
-    async with httpx.AsyncClient(timeout=15.0) as cli:
-        r = await cli.get(url, params=params)
-        r.raise_for_status()
-        data = r.json()
-    # columns: open time, o,h,l,c, v, close time, ...
-    arr = []
-    for k in data:
-        arr.append({
-            "t": int(k[0]),
-            "open": float(k[1]), "high": float(k[2]), "low": float(k[3]), "close": float(k[4]), "volume": float(k[5])
-        })
-    df = pd.DataFrame(arr)
-    return df
-
-def _expr_bool(expr: str, ema21: float, ema50: float) -> bool:
-    """
-    תומך בביטויים פשוטים כמו:
-      "ema21>=ema50", "ema21>ema50", "ema21<=ema50", "ema21<ema50"
-    """
-    e = (expr or "").replace(" ", "").lower()
-    if not e:
+def _parse_req(expr: str, ema21: float, ema50: float) -> bool:
+    expr = (expr or "").replace(" ", "").lower()
+    if not expr:
         return False
-    if ">=" in e:
-        l, r = e.split(">=")
-        return (l=="ema21" and r=="ema50" and ema21 >= ema50)
-    if "<=" in e:
-        l, r = e.split("<=")
-        return (l=="ema21" and r=="ema50" and ema21 <= ema50)
-    if ">" in e:
-        l, r = e.split(">")
-        return (l=="ema21" and r=="ema50" and ema21 > ema50)
-    if "<" in e:
-        l, r = e.split("<")
-        return (l=="ema21" and r=="ema50" and ema21 < ema50)
+    # תומך רק בהשוואות EMA בסיסיות:
+    # ema21>=ema50  |  ema21>ema50  |  ema21<=ema50  |  ema21<ema50  |  ema21==ema50
+    left, op, right = "ema21", None, "ema50"
+    if ">=" in expr: op = ">="; parts = expr.split(">=")
+    elif "<=" in expr: op = "<="; parts = expr.split("<=")
+    elif "==" in expr: op = "=="; parts = expr.split("==")
+    elif ">" in expr:  op = ">";  parts = expr.split(">")
+    elif "<" in expr:  op = "<";  parts = expr.split("<")
+    else:
+        return False
+    if len(parts) != 2: return False
+    l = parts[0].strip()
+    r = parts[1].strip()
+    def val(x: str) -> float:
+        if x == "ema21": return float(ema21)
+        if x == "ema50": return float(ema50)
+        try: return float(x)
+        except: return float("nan")
+    lv = val(l); rv = val(r)
+    if op == ">=": return lv >= rv
+    if op == "<=": return lv <= rv
+    if op == ">":  return lv > rv
+    if op == "<":  return lv < rv
+    if op == "==": return lv == rv
     return False
 
 async def eval_regime(symbol: str, long_req: str = "ema21>=ema50", short_req: str = "ema21<=ema50", timeframe: str = "15m") -> Dict[str, Any]:
     """
-    מחזיר {"want": "LONG"/"SHORT"/"NEUTRAL", "ema21":..., "ema50":...}
+    מחזיר {"want": "LONG"/"SHORT"/"NEUTRAL", "ema21": ..., "ema50": ..., "tf": timeframe}
+    מושך klines ציבורי מ-Binance Futures (לא דורש API key).
     """
-    df = await _fetch_klines(symbol, timeframe, limit=120)
-    if df.empty:
-        return {"want": "NEUTRAL"}
-    # EMA על close
-    df["ema21"] = ema(df["close"], 21)
-    df["ema50"] = ema(df["close"], 50)
-    ema21_v = float(df["ema21"].iloc[-1])
-    ema50_v = float(df["ema50"].iloc[-1])
+    tf = _INTERVAL_MAP.get(timeframe, "15m")
+    url = f"{_BINANCE_HTTP}/fapi/v1/klines"
+    params = {"symbol": symbol.upper(), "interval": tf, "limit": 120}
+    async with httpx.AsyncClient(timeout=10.0) as cli:
+        r = await cli.get(url, params=params)
+        r.raise_for_status()
+        kl = r.json()  # [ [openTime,open,high,low,close,volume,...], ... ]
+    if not kl or len(kl) < 60:
+        return {"want":"NEUTRAL","tf":tf,"reason":"insufficient_data"}
+    closes = pd.Series([float(x[4]) for x in kl], dtype=float)
+    e21 = ema(closes, 21).iloc[-1]
+    e50 = ema(closes, 50).iloc[-1]
     want = "NEUTRAL"
-    is_long  = _expr_bool(long_req, ema21_v, ema50_v)
-    is_short = _expr_bool(short_req, ema21_v, ema50_v)
-    if is_long and not is_short:
+    if _parse_req(long_req, e21, e50):
         want = "LONG"
-    elif is_short and not is_long:
+    elif _parse_req(short_req, e21, e50):
         want = "SHORT"
-    return {"want": want, "ema21": ema21_v, "ema50": ema50_v, "timeframe": timeframe}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+    return {"want": want, "ema21": float(e21), "ema50": float(e50), "tf": tf}
 
 
 
