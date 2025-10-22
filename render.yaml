@@ -480,7 +480,7 @@ services:
       - key: SL_MONOTONIC
         value: "1"
 
-      # === שינוי מהשורש: SL מיידי ===
+      # === SL מיידי (ללא חלון חסד)
       - key: STRUCT_SL_ENABLE
         value: "1"
       - key: GRACE_ENABLE
@@ -530,8 +530,10 @@ services:
         value: "1"
       - key: TP_REARM_TICK
         value: "1"
+
+      # === סקאלפרי/צמוד יותר
       - key: PROFIT_LOCK_STEPS
-        value: "1.0,1.5,2.0"
+        value: "0.8,1.2,1.8"      # (היה 1.0,1.5,2.0)
 
       - key: STRUCT_SL_LOOKBACK
         value: "50"
@@ -540,19 +542,20 @@ services:
       - key: STRUCT_SL_RIGHT
         value: "3"
       - key: STRUCT_SL_BUFFER_BPS
-        value: "5"
+        value: "3"                # (היה 5)
       - key: STRUCT_SL_MERGE_MODE
         value: "tight"
       - key: TIME_STOP_MIN
         value: "20"
       - key: TIME_STOP_KEEP_PROFIT_MIN_PCT
         value: "0.5"
+
       - key: PROFILE_BASE_BE_BPS
-        value: "5"
+        value: "4"                # (היה 5)
       - key: TRAIL_ENABLE
         value: "1"
       - key: TRAIL_ATR_MULT
-        value: "1.6"
+        value: "1.4"              # (היה 1.6)
       - key: ATR_UPDATE_COOLDOWN_SEC
         value: "20"
       - key: ATR_MIN_DELTA
@@ -561,57 +564,59 @@ services:
         value: "0.2"
       - key: SL_MIN_STEP_BPS
         value: "3"
+
       - key: BE_ARM_PCT
-        value: "0.6"
+        value: "0.45"             # (היה 0.6)
       - key: BE_GUARD_ENABLE
         value: "1"
       - key: BE_GUARD_EVERY_SEC
         value: "20"
       - key: BE_TRIGGER_REQUIRE_ADX
-        value: "22"
+        value: "20"               # (היה 22)
       - key: BE_TRIGGER_PROG_TO_TP1_PCT
         value: "0.35"
       - key: PROG_TO_TP1_FALLBACK_PCT
         value: "0.60"
-      - key: TRAIL_IN_CHOP
-        value: "1"
+
       - key: TP_SL_REFRESH_SEC
-        value: "420"
+        value: "60"               # (היה 420)
+
       - key: MANAGER_REISSUE_ENABLE
-        value: "0"
+        value: "1"                # (היה 0)
       - key: MANAGER_REISSUE_POLICY
         value: "cancel_replace"
+
       - key: TRAIL_PAUSE_WINDOWS
         value: "22:00-02:00Z,11:30-12:00Z"
       - key: AUTO_TRAIL_ADX_MIN
-        value: "22"
+        value: "20"               # (היה 22)
       - key: AUTO_TRAIL_ATRPCT_MAX
-        value: "0.015"
+        value: "0.02"             # (היה 0.015)
       - key: BE_BASE_BPS
-        value: "5"
+        value: "4"                # (היה 5)
       - key: BE_ADX_FACTOR
         value: "0.2"
       - key: BE_MIN_BPS
         value: "2"
       - key: BE_MAX_BPS
-        value: "25"
+        value: "18"               # (היה 25)
       - key: BE_STAIR_STEPS
         value: "1"
       - key: BE_STAIR_FACTOR
         value: "0.5"
       - key: TRAIL_DEFAULT_ATR_MULT
-        value: "1.6"
+        value: "1.4"              # (היה 1.6)
 
       - key: TRAIL_RT_ENABLE
         value: "1"
       - key: TRAIL_RT_INTERVAL_SEC
         value: "20"
       - key: TRAIL_RT_ATR_MULT
-        value: "1.6"
+        value: "1.4"              # (היה 1.6)
       - key: TRAIL_RT_MIN_CALLBACK
-        value: "0.1"
+        value: "0.08"             # (היה 0.1)
       - key: TRAIL_RT_MAX_CALLBACK
-        value: "5.0"
+        value: "1.0"              # (היה 5.0)
       - key: TRAIL_RT_PRICE_SRC
         value: "MARK_PRICE"
       - key: TRAIL_RT_MAX_SYMBOLS
@@ -780,8 +785,7 @@ services:
       - key: TRADE_MANAGER_ENABLE
         value: "1"
       - key: MANAGER_INTERVAL_SEC
-        value: "30"
-      # כבר פעיל כדי לנהל פוזיציות פתוחות אוטומטית
+        value: "20"               # (היה 30)
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
@@ -790,11 +794,11 @@ services:
       - key: AUTO_ATR_MULT
         value: "1.6"
       - key: AUTO_TP_PCTS
-        value: "3,6,12"
+        value: "2.5,4.5,7.5"      # (היה 3,6,12)
       - key: AUTO_TP_SPLITS
-        value: "0.278,0.333,0.389"
+        value: "0.34,0.33,0.33"   # (היה 0.278,0.333,0.389)
       - key: AUTO_POLL_SEC
-        value: "45"
+        value: "30"               # (היה 45)
 
       - key: BTC_GATE_ENABLE
         value: "1"
