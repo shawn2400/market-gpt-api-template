@@ -343,8 +343,10 @@ TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
 NS = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
-REQUIRE_REDIS = os.getenv("REQUIRE_REDIS", "1").lower() in ("1", "true", "yes", "on")
-CONFIRMSTORE_ENABLE = os.getenv("CONFIRMSTORE_ENABLE", "0").lower() in ("1", "true", "yes", "on")
+# אם אין REDIS_URL – אל תכפה Redis גם אם הסביבה דרשה; נגלוש לזיכרון
+_REQUIRE_REDIS_ENV = os.getenv("REQUIRE_REDIS", "1").lower() in ("1", "true", "yes", "on")
+REQUIRE_REDIS = _REQUIRE_REDIS_ENV and bool(REDIS_URL)
+CONFIRMSTORE_ENABLE = os.getenv("CONFIRMSTORE_ENABLE", "0").lower() in ("1", "true", "yes", "on") or (not REDIS_URL)
 
 # ====== Public Cache & Rate limit config ======
 PUBLIC_CACHE_MAX_AGE = int(os.getenv("PUBLIC_CACHE_MAX_AGE", "20") or "20")
@@ -1296,21 +1298,29 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         raise HTTPException(status_code=422, detail="Missing fields (symbol/side).")
     tid = payload.get("ticket_id") or f"T_{secrets.token_hex(4)}"
 
+    # שמירה על תאימות טייפים בסיסית
+    with suppress(Exception):
+        if isinstance(payload.get("tp_splits"), str):
+            payload["tp_splits"] = [float(x) for x in str(payload["tp_splits"]).split(",") if x.strip()]
+
     # Smart ETA for TP levels (best-effort)
     if ETA_SMART_ENABLE and (payload.get("tp1") or payload.get("tp2") or payload.get("tp3")):
         price_now = None
         with suppress(Exception):
             price_now = await get_last_price_async(symbol)
         def _smart(symbol: str, side: str, price_now: Optional[float], tps: List[Optional[float]]) -> Dict[str, Any]:
-            if not price_now:
+            try:
+                if not price_now:
+                    return {}
+                out: Dict[str, Any] = {}
+                for i, tp in enumerate(tps, start=1):
+                    if tp and tp > 0:
+                        dist_bps = abs((tp - price_now) / price_now) * 10_000
+                        out[f"eta_tp{i}_min"] = max(1, int(dist_bps / max(1, ETA_VELOCITY_WINDOW)))
+                out.setdefault("eta_open_min", out.get("eta_tp1_min", 2))
+                return out
+            except Exception:
                 return {}
-            out: Dict[str, Any] = {}
-            for i, tp in enumerate(tps, start=1):
-                if tp and tp > 0:
-                    dist_bps = abs((tp - price_now) / price_now) * 10_000
-                    out[f"eta_tp{i}_min"] = max(1, int(dist_bps / max(1, ETA_VELOCITY_WINDOW)))
-            out.setdefault("eta_open_min", out.get("eta_tp1_min", 2))
-            return out
         etas = _smart(symbol, side, price_now, [payload.get("tp1"), payload.get("tp2"), payload.get("tp3")])
         payload.update(etas)
 
@@ -1360,13 +1370,20 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
                 persisted = True
         except Exception as e:
             logger.warning("redis_set_failed: %s", e)
+    # גלישה לזיכרון אם אין Redis או נכשל
     if not persisted:
-        if REQUIRE_REDIS:
+        if REQUIRE_REDIS and REDIS_URL:
+            # במקרה הזה באמת נכשלה תלות שנדרשה מפורשות – נחזיר 503, לא 500
+            logger.error("ticket_persist_failed: REQUIRE_REDIS=true but Redis unavailable")
             raise HTTPException(status_code=503, detail="storage_unavailable: redis_required")
-        if CONFIRMSTORE_ENABLE:
-            with suppress(Exception):
+        if CONFIRMSTORE_ENABLE or (not REDIS_URL):
+            try:
                 ConfirmStore.create(dict(req_body))
-            persisted = True
+                persisted = True
+            except Exception as e:
+                logger.exception("confirmstore_create_failed: %s", e)
+            with suppress(Exception):
+                persisted = bool(ConfirmStore.pending())
 
     # Metrics: approvals_created_total++
     with suppress(Exception):
@@ -1397,8 +1414,11 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         notional = float(budget or 0.0)
         if notional <= 0 and px > 0 and qty > 0 and lev > 0:
             notional = float(px) * float(qty) / max(1.0, float(lev))
-        est_bps = estimate_impact_slip_bps(spread_pct, atr_pct, notional, max_bps=float(os.getenv("IMPACT_SLIP_BPS_MAX", "25") or 25.0))
-        set_last_slip_estimate_bps(float(est_bps))
+        try:
+            est_bps = estimate_impact_slip_bps(spread_pct, atr_pct, notional, max_bps=float(os.getenv("IMPACT_SLIP_BPS_MAX", "25") or 25.0))
+            set_last_slip_estimate_bps(float(est_bps))
+        except Exception:
+            pass
 
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     preview_url = _build_signed_link(base, "/ops/ui/ticket/signed", tid, ttl_sec=900, action="preview")
@@ -1412,27 +1432,34 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
-            # FIX: f-string index typo corrected here
-            row = f"• TP{i}: <code>{req_body[f'tp{i}']}</code>"
+            # FIX: f-string שגוי; שימוש נכון במפתח + escape
+            try:
+                row = f"• TP{i}: <code>{_md_html(str(req_body[f'tp{i}']))}</code>"
+            except Exception:
+                row = f"• TP{i}: <code>{_md_html(str(req_body.get(f'tp{i}')))}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
                 row += f"  ETA:<code>{req_body[f'eta_tp{i}_min']}m</code>"
             if req_body.get(f"prob_tp{i}_pct") is not None:
                 row += f"  P(s):<code>{req_body[f'prob_tp{i}_pct']}%</code>"
             lines.append(row)
     if req_body.get("sl") is not None:
-        lines.append(f"• SL: <code>{req_body['sl']}</code>")
+        lines.append(f"• SL: <code>{_md_html(req_body['sl'])}</code>")
     if req_body.get("tp_splits"):
-        lines.append(f"• TP Splits: <code>{req_body['tp_splits']}</code>")
+        lines.append(f"• TP Splits: <code>{_md_html(req_body['tp_splits'])}</code>")
     if req_body.get("prob_overall_pct") is not None:
-        lines.append(f"• Success %: <code>{req_body['prob_overall_pct']}%</code>")
+        lines.append(f"• Success %: <code>{_md_html(req_body['prob_overall_pct'])}%</code>")
     if req_body.get("expiry_ts") is not None:
-        lines.append(f"• Expires: <code>{req_body['expiry_ts']}</code>")
+        lines.append(f"• Expires: <code>{_md_html(req_body['expiry_ts'])}</code>")
     if note:
         lines.append(f"• Note: {_md_html(note)}")
     lines.append("— — —")
     lines.append("בחר:")
     pretty = "\n".join(lines)
-    tg_resp = await _send_telegram_html(pretty, approve_url=approve_url or None, reject_url=reject_url or None, preview_url=preview_url or None)
+    try:
+        tg_resp = await _send_telegram_html(pretty, approve_url=approve_url or None, reject_url=reject_url or None, preview_url=preview_url or None)
+    except Exception as e:
+        logger.warning("telegram_send_failed (non-fatal): %s", e)
+        tg_resp = {"ok": False, "skipped": True, "error": str(e)}
 
     return {
         "ok": True,
