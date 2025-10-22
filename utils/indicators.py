@@ -1,12 +1,12 @@
 # utils/indicators.py
 from __future__ import annotations
-import pandas as pd
+import os, ast
+from typing import Dict, Any, Optional, List
 import numpy as np
-from typing import Dict, Any, List, Optional
+import pandas as pd
 import httpx
-import os
 
-# ========= אינדיקטורים (כמו אצלך) =========
+# ===================== אינדיקטורים מהירים =====================
 def _to_float_series(x: pd.Series) -> pd.Series:
     if isinstance(x, pd.Series):
         s = pd.to_numeric(x, errors="coerce")
@@ -40,8 +40,8 @@ def rsi(series: pd.Series, period: int = 14) -> pd.Series:
     with np.errstate(divide="ignore", invalid="ignore"):
         rs = avg_gain / avg_loss.replace(0.0, np.nan)
     rs = rs.replace([np.inf, -np.inf], np.nan).fillna(np.inf)
-    rsi_val = 100.0 - (100.0 / (1.0 + rs))
-    return rsi_val.clip(0.0, 100.0)
+    out = 100.0 - (100.0 / (1.0 + rs))
+    return out.clip(0.0, 100.0)
 
 def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     if df is None or df.empty or period <= 0:
@@ -49,8 +49,8 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     h = _to_float_series(df.get("high", np.nan))
     l = _to_float_series(df.get("low", np.nan))
     c = _to_float_series(df.get("close", np.nan))
-    prev_c = c.shift(1)
-    tr = pd.concat([(h - l), (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
+    pc = c.shift(1)
+    tr = pd.concat([(h - l), (h - pc).abs(), (l - pc).abs()], axis=1).max(axis=1)
     tr = tr.fillna((h - l))
     return _rma(tr, period)
 
@@ -60,15 +60,14 @@ def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
     h = _to_float_series(df.get("high", np.nan))
     l = _to_float_series(df.get("low", np.nan))
     c = _to_float_series(df.get("close", np.nan))
-    up_move = h.diff()
-    down_move = -l.diff()
-    plus_dm = up_move.where((up_move > down_move) & (up_move > 0.0), 0.0).fillna(0.0)
-    minus_dm = down_move.where((down_move > up_move) & (down_move > 0.0), 0.0).fillna(0.0)
-    prev_c = c.shift(1)
-    tr = pd.concat([(h - l), (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
+    up = h.diff(); down = -l.diff()
+    plus_dm  = up.where((up > down) & (up > 0.0), 0.0).fillna(0.0)
+    minus_dm = down.where((down > up) & (down > 0.0), 0.0).fillna(0.0)
+    pc = c.shift(1)
+    tr = pd.concat([(h - l), (h - pc).abs(), (l - pc).abs()], axis=1).max(axis=1)
     tr = tr.fillna((h - l))
     atr_r = _rma(tr, period).replace(0.0, np.nan)
-    plus_di = 100.0 * (_rma(plus_dm, period) / atr_r)
+    plus_di  = 100.0 * (_rma(plus_dm, period)  / atr_r)
     minus_di = 100.0 * (_rma(minus_dm, period) / atr_r)
     denom = (plus_di + minus_di).replace(0.0, np.nan)
     dx = (np.abs(plus_di - minus_di) / denom) * 100.0
@@ -80,12 +79,11 @@ def macd(series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
     if s.empty:
         empty = pd.Series(index=s.index, dtype=float)
         return empty, empty, empty
-    ema_fast = ema(s, fast)
-    ema_slow = ema(s, slow)
-    macd_line = ema_fast - ema_slow
-    signal_line = ema(macd_line, signal)
-    hist = macd_line - signal_line
-    return macd_line, signal_line, hist
+    ef = ema(s, fast); es = ema(s, slow)
+    line = ef - es
+    sig  = ema(line, signal)
+    hist = line - sig
+    return line, sig, hist
 
 def bollinger_bands(series: pd.Series, period: int = 20, std_factor: float = 2.0, ddof: int = 0):
     s = _to_float_series(series)
@@ -94,9 +92,7 @@ def bollinger_bands(series: pd.Series, period: int = 20, std_factor: float = 2.0
         return empty, empty, empty
     sma = s.rolling(window=period, min_periods=period).mean()
     std = s.rolling(window=period, min_periods=period).std(ddof=ddof)
-    upper = sma + std_factor * std
-    lower = sma - std_factor * std
-    return sma, upper, lower
+    return sma, sma + std_factor*std, sma - std_factor*std
 
 def prepare_indicators_for_backtest(df: pd.DataFrame) -> pd.DataFrame:
     cols = ["open","high","low","close","volume",
@@ -113,24 +109,19 @@ def prepare_indicators_for_backtest(df: pd.DataFrame) -> pd.DataFrame:
     base["rsi"]    = rsi(base["close"], 14)
     base["atr"]    = atr(base, 14)
     base["adx"]    = adx(base, 14)
-    macd_line, macd_sig, macd_hist = macd(base["close"], 12, 26, 9)
-    base["macd"] = macd_line
-    base["macd_signal"] = macd_sig
-    base["macd_hist"] = macd_hist
-    bb_mid, bb_up, bb_low = bollinger_bands(base["close"], 20, 2.0, ddof=0)
-    base["bb_mid"] = bb_mid
-    base["bb_upper"] = bb_up
-    base["bb_lower"] = bb_low
+    m, s, h = macd(base["close"], 12, 26, 9)
+    base["macd"] = m; base["macd_signal"] = s; base["macd_hist"] = h
+    mid, up, lo = bollinger_bands(base["close"], 20, 2.0, ddof=0)
+    base["bb_mid"] = mid; base["bb_upper"] = up; base["bb_lower"] = lo
     for c in cols:
-        if c not in base.columns:
-            base[c] = np.nan
+        if c not in base.columns: base[c] = np.nan
     return base[cols]
 
 __all__ = [
     "ema","rsi","atr","adx","macd","bollinger_bands","prepare_indicators_for_backtest"
 ]
 
-# ========= eval_regime (חדש) =========
+# ===================== eval_regime – שפת כללים =====================
 _BINANCE_HTTP = os.getenv("BINANCE_FAPI", "https://fapi.binance.com").rstrip("/")
 
 _INTERVAL_MAP = {
@@ -139,62 +130,138 @@ _INTERVAL_MAP = {
     "1d":"1d","3d":"3d","1w":"1w","1M":"1M"
 }
 
-def _parse_req(expr: str, ema21: float, ema50: float) -> bool:
-    expr = (expr or "").replace(" ", "").lower()
-    if not expr:
-        return False
-    # תומך רק בהשוואות EMA בסיסיות:
-    # ema21>=ema50  |  ema21>ema50  |  ema21<=ema50  |  ema21<ema50  |  ema21==ema50
-    left, op, right = "ema21", None, "ema50"
-    if ">=" in expr: op = ">="; parts = expr.split(">=")
-    elif "<=" in expr: op = "<="; parts = expr.split("<=")
-    elif "==" in expr: op = "=="; parts = expr.split("==")
-    elif ">" in expr:  op = ">";  parts = expr.split(">")
-    elif "<" in expr:  op = "<";  parts = expr.split("<")
-    else:
-        return False
-    if len(parts) != 2: return False
-    l = parts[0].strip()
-    r = parts[1].strip()
-    def val(x: str) -> float:
-        if x == "ema21": return float(ema21)
-        if x == "ema50": return float(ema50)
-        try: return float(x)
-        except: return float("nan")
-    lv = val(l); rv = val(r)
-    if op == ">=": return lv >= rv
-    if op == "<=": return lv <= rv
-    if op == ">":  return lv > rv
-    if op == "<":  return lv < rv
-    if op == "==": return lv == rv
-    return False
+def _norm_logic(expr: str) -> str:
+    e = (expr or "")
+    repl = {
+        " AND ": " and ", " and ": " and ", "&": " and ",
+        " OR ": " or ",  " or ": " or ",  "|": " or ",
+        " NOT ": " not ", " not ": " not ", "!": " not ",
+    }
+    ee = " " + e + " "
+    for k, v in repl.items(): ee = ee.replace(k, v)
+    # תמיכה באותיות גדולות/קטנות
+    ee = ee.replace("AND", " and ").replace("OR", " or ").replace("NOT", " not ")
+    return ee.strip()
 
-async def eval_regime(symbol: str, long_req: str = "ema21>=ema50", short_req: str = "ema21<=ema50", timeframe: str = "15m") -> Dict[str, Any]:
+_ALLOWED_NODES = (
+    ast.Expression, ast.BoolOp, ast.UnaryOp, ast.BinOp,
+    ast.And, ast.Or, ast.Not, ast.USub,  # not / סימן מינוס לטווחים
+    ast.Compare, ast.Name, ast.Load, ast.Constant,
+    ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Eq, ast.NotEq,
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,  # חישוב מספרי פשוט
+    ast.Call, ast.Tuple, ast.List
+)
+
+def _safe_eval_bool(expr: str, vars_map: Dict[str, float]) -> bool:
     """
-    מחזיר {"want": "LONG"/"SHORT"/"NEUTRAL", "ema21": ..., "ema50": ..., "tf": timeframe}
-    מושך klines ציבורי מ-Binance Futures (לא דורש API key).
+    מפרש תנאי לוגי עם שמות משתנים מוגבלים:
+    שמות מותרים: ema21, ema50, adx, atrpct, rsi, macd_hist
+    דוגמאות:
+        "ema21 >= ema50 and adx >= 20"
+        "adx >= 22 and atrpct <= 0.015"
+        "rsi > 55 or (macd_hist > 0 and ema21 > ema50)"
     """
+    expr = _norm_logic(expr)
+    if not expr: return False
+
+    # פונקציות עזר (אופציונלי — לטווחים)
+    def between(x, lo, hi): return (x >= lo) and (x <= hi)
+
+    allowed_names = {**vars_map, "between": between}
+    node = ast.parse(expr, mode="eval")
+    for sub in ast.walk(node):
+        if not isinstance(sub, _ALLOWED_NODES):
+            raise ValueError(f"illegal token: {type(sub).__name__}")
+        if isinstance(sub, ast.Name) and sub.id not in allowed_names:
+            raise ValueError(f"unknown identifier: {sub.id}")
+    val = eval(compile(node, "<expr>", "eval"), {"__builtins__": {}}, allowed_names)  # noqa: S307
+    return bool(val)
+
+async def eval_regime(symbol: str,
+                      long_req: Optional[str] = None,
+                      short_req: Optional[str] = None,
+                      neutral_req: Optional[str] = None,
+                      timeframe: str = "15m") -> Dict[str, Any]:
+    """
+    מחזיר {"want": "LONG"/"SHORT"/"NEUTRAL", "vars": {...}, "matched": "...", "tf": timeframe}
+    כללי ברירת מחדל יילקחו מה-ENV:
+      LONG_REQ, SHORT_REQ, NEUTRAL_REQ   (נפוץ: ema21>=ema50 / ema21<=ema50)
+    נתונים זמינים בתוך הכלל:
+      ema21, ema50, adx, atrpct, rsi, macd_hist
+    """
+    # === טעינת env ===
+    long_req   = (long_req   or os.getenv("LONG_REQ")   or os.getenv("BTC_LONG_REQ")  or "ema21>=ema50")
+    short_req  = (short_req  or os.getenv("SHORT_REQ")  or os.getenv("BTC_SHORT_REQ") or "ema21<=ema50")
+    neutral_req = (neutral_req or os.getenv("NEUTRAL_REQ") or "")
+
     tf = _INTERVAL_MAP.get(timeframe, "15m")
     url = f"{_BINANCE_HTTP}/fapi/v1/klines"
-    params = {"symbol": symbol.upper(), "interval": tf, "limit": 120}
+    params = {"symbol": symbol.upper(), "interval": tf, "limit": 200}
     async with httpx.AsyncClient(timeout=10.0) as cli:
         r = await cli.get(url, params=params)
         r.raise_for_status()
-        kl = r.json()  # [ [openTime,open,high,low,close,volume,...], ... ]
+        kl = r.json()
+
     if not kl or len(kl) < 60:
-        return {"want":"NEUTRAL","tf":tf,"reason":"insufficient_data"}
-    closes = pd.Series([float(x[4]) for x in kl], dtype=float)
-    e21 = ema(closes, 21).iloc[-1]
-    e50 = ema(closes, 50).iloc[-1]
-    want = "NEUTRAL"
-    if _parse_req(long_req, e21, e50):
-        want = "LONG"
-    elif _parse_req(short_req, e21, e50):
-        want = "SHORT"
-    return {"want": want, "ema21": float(e21), "ema50": float(e50), "tf": tf}
+        return {"want":"NEUTRAL","reason":"insufficient_data","tf":tf,"vars":{}}
 
+    # בניית DF
+    close = pd.Series([float(x[4]) for x in kl], dtype=float)
+    high  = pd.Series([float(x[2]) for x in kl], dtype=float)
+    low   = pd.Series([float(x[3]) for x in kl], dtype=float)
+    df = pd.DataFrame({"close": close, "high": high, "low": low})
 
+    # חישובים
+    e21 = float(ema(close, 21).iloc[-1])
+    e50 = float(ema(close, 50).iloc[-1])
+    _adx = float(adx(pd.DataFrame({"high":high,"low":low,"close":close}), 14).iloc[-1])
+    _atr = float(atr(pd.DataFrame({"high":high,"low":low,"close":close}), 14).iloc[-1])
+    _rsi = float(rsi(close, 14).iloc[-1])
+    _,_,_mh = macd(close, 12, 26, 9)
+    _mhv = float(_mh.iloc[-1])
+    last_close = float(close.iloc[-1])
+    atrpct = (_atr / last_close) if last_close > 0 else float("nan")
 
+    vars_map = {
+        "ema21": e21,
+        "ema50": e50,
+        "adx": _adx,
+        "atrpct": atrpct,  # יחס ATR למחיר (למשל <= 0.015)
+        "rsi": _rsi,
+        "macd_hist": _mhv,
+    }
+
+    # ADX/ATR% “שער” מה-ENV (אופציונלי)
+    adx_min = float(os.getenv("REGIME_ADX_MIN", os.getenv("ADX_MIN","0") or 0) or 0)
+    atrpct_max = float(os.getenv("REGIME_ATRPCT_MAX", os.getenv("AUTO_TRAIL_ATRPCT_MAX","10") or 10) or 10)
+    gated_out = False
+    gate_reason: List[str] = []
+    if adx_min > 0 and not (_adx >= adx_min):
+        gated_out = True; gate_reason.append(f"adx<{adx_min}")
+    if atrpct_max < 10 and not (atrpct <= atrpct_max):
+        gated_out = True; gate_reason.append(f"atrpct>{atrpct_max}")
+
+    # התאמת כללים
+    want = "NEUTRAL"; matched = None
+    try:
+        if long_req and _safe_eval_bool(long_req, vars_map) and not gated_out:
+            want, matched = "LONG", long_req
+        elif short_req and _safe_eval_bool(short_req, vars_map) and not gated_out:
+            want, matched = "SHORT", short_req
+        elif neutral_req and _safe_eval_bool(neutral_req, vars_map):
+            want, matched = "NEUTRAL", neutral_req
+        else:
+            want = "NEUTRAL"
+    except Exception as e:
+        return {"want":"NEUTRAL","error":f"rule_parse:{e}","tf":tf,"vars":vars_map}
+
+    return {
+        "want": want,
+        "tf": tf,
+        "vars": vars_map,
+        "matched": matched,
+        **({"gated_by": gate_reason} if gate_reason else {})
+    }
 
 
 
