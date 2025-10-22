@@ -1,4 +1,3 @@
-# routes/manager.py
 from __future__ import annotations
 import os, json, time, hashlib, asyncio, logging, math
 from pathlib import Path
