@@ -971,20 +971,5 @@ services:
       - key: HALT_TRADING_ON_DEGRADED_HEALTH
         value: "1"
       - key: HEALTH_RECOVERY_GRACE_SEC
-        value: "120"
-
-      - key: KILL_SWITCH_ENABLE
-        value: "1"
-      - key: KILL_SWITCH_REASON
-        value: "auto-guard"
-
-      - key: ENABLE_SELF_CHECK
-        value: "1"
-      - key: ENABLE_STARTUP_SELF_CHECK
-        value: "1"
-
-      - key: BINANCE_FAPI
-        value: "https://fapi.binance.com"
-      - key: PUBLIC_STREAM_INTERVAL_SEC
-        value: "3"
+      ...
 
