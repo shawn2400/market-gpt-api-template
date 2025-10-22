@@ -1215,8 +1215,27 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
             _align_position_mode(cli_)
             with suppress(Exception):
                 cli_.futures_change_leverage(symbol=symbol, leverage=leverage)
+            # עיגול ל-LOT_SIZE גם ב-HYBRID כדי למנוע -1111 Precision
+            with suppress(Exception):
+                if qty > 0:
+                    qty = _round_to_lot_size(cli_, symbol, qty)
     except Exception:
         pass
+    # בונים תוכנית מינימלית (plan) אם הדרייבר דורש זאת
+    def _build_min_plan(t: Dict[str, Any], side_: str) -> Dict[str, Any]:
+        splits = t.get("tp_splits")
+        if not splits and tp_targets:
+            n = len(tp_targets)
+            splits = [1.0] if n == 1 else ([0.5, 0.5] if n == 2 else [0.30, 0.30, 0.40][:n])
+        return {
+            "mode": "HYBRID",
+            "entry": None,
+            "tp_targets": tp_targets or None,
+            "sl_targets": sl_targets or None,
+            "tp_splits": splits or None,
+            "reduce_only": False,
+        }
+
     base_kwargs: Dict[str, Any] = dict(
         symbol=symbol,
         side=side,
@@ -1236,6 +1255,14 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     )
     # allow partial kwargs according to the callable signature
     clean = _filter_kwargs_for_callable(execute_trade_live, base_kwargs)
+    # אם execute_trade_live דורש plan ולא סופק – נוסיף plan ברירת מחדל
+    try:
+        sig = inspect.signature(execute_trade_live)  # type: ignore
+        if "plan" in sig.parameters and "plan" not in clean:
+            clean["plan"] = _build_min_plan(ticket, side)
+    except Exception:
+        pass
+
     try:
         res = await execute_trade_live(**clean)  # type: ignore
         return {"entered": bool(res.get("ok")), **res}
@@ -2177,226 +2204,37 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
 @router.post("/manage-once/signed")
 async def manage_once_signed(request: Request, payload: Dict[str, Any] = Body(...)):
     """
-    מאפשר להפעיל ניהול חד-פעמי (BE/TP/Trail) באמצעות POST חתום
-    באותה שיטת Authorization: Signature / Digest כמו /ops/approve.signed.
-    כך אין צורך ב-Bearer.
+    מאפשר להפעיל ניהול חד-פעמי (place-all TPs/SL/Trail) בחתימה צד-לקוח.
+    צריך לשלוח Authorization: Signature … ו-Digest/x-content-sha256.
     """
     raw = await request.body()
     ok, _reason = _verify_http_signature(request, raw, route_path="/manage-once/signed")
     if not ok:
         raise HTTPException(status_code=401, detail="Bad signature")
-    # מסמן ל-manage_once לדלג על Bearer
+    # Flag to skip bearer check in manage_once
     request.state._signed_override = True  # type: ignore[attr-defined]
-    # מוודא קלט מינימלי
-    if not isinstance(payload, dict):
-        raise HTTPException(status_code=422, detail="bad_payload")
-    symbol = (payload.get("symbol") or "").upper().strip()
-    if not symbol:
-        raise HTTPException(status_code=422, detail="missing symbol")
     return await manage_once(request, payload)
 
-@router.get("/ops/digest/expired")
-async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = None):
-    """
-    מאגד רשומות כרטיס שפגו/טופלו מה־Redis log (או ריק אם אין), במסגרת חלון השעות המבוקש.
-    מוגן ב־Bearer אם PROTECT_DIGEST_ROUTES=1 (דיפולט).
-    """
-    if os.getenv("PROTECT_DIGEST_ROUTES", "1").lower() in ("1", "true", "yes", "on"):
-        _require_bearer(request)
-    now = time.time()
-    since = now - (hours * 3600)
-    out: List[Dict[str, Any]] = []
-    if aioredis and REDIS_URL:
-        try:
-            r = await _get_redis_cached()
-            if r:
-                for key in (f"{NS}:expired_log", f"{NS}:expired_log_bad"):
-                    items = await r.lrange(key, 0, 999)
-                    for raw in items or []:
-                        with suppress(Exception):
-                            obj = json.loads(raw)
-                            if float(obj.get("ts", 0)) >= since:
-                                out.append(obj)
-        except Exception as e:
-            return JSONResponse({"ok": False, "error": "redis_read_failed", "detail": str(e)}, status_code=503)
-    return {"ok": True, "count": len(out), "data": out}
+# =============== Mount router and startup hooks ===============
+app.include_router(router)
 
-# ==================== Telegram webhook (optional) ====================
-@router.post("/telegram/webhook")
-async def telegram_webhook(request: Request):
-    """
-    מקבל עדכוני טלגרם. אנחנו לא תלויים בזה ל-approve/reject, אבל משאירים לצורכי future UX.
-    מוודאים את ה-secret header אם הוגדר.
-    """
-    if TELEGRAM_WEBHOOK_SECRET:
-        sec = request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
-        if sec != TELEGRAM_WEBHOOK_SECRET:
-            raise HTTPException(status_code=401, detail="bad telegram secret")
-    try:
-        payload = await request.json()
-    except Exception:
-        payload = {}
-    # no-op; עונים 200 כדי למנוע retries
-    return {"ok": True, "received": bool(payload)}
-
-# ==================== Public helpers & routes ====================
-# Redis DI-style getter compatible with FastAPI Depends (optional: uses same redis as above)
-async def _dep_get_redis():
-    return await _get_redis_cached()
-
-def _ns() -> str:
-    return NS
-
-async def _load_ticket_from_redis_any(r, ticket_id: str) -> Tuple[bool, Optional[dict], Optional[str]]:
-    """
-    מנסה להביא מידע על כרטיס ממפתחות שכיחים.
-    מחזיר: (found, data, key_used)
-    """
-    if not r:
-        return False, None, None
-    candidates = [
-        f"{_ns()}:ticket:{ticket_id}",
-        f"{_ns()}:ops:ticket:{ticket_id}",
-        f"ticket:{ticket_id}",
-        f"ops:ticket:{ticket_id}",
-        f"{_ns()}:confirm:{ticket_id}",
-        f"confirm:{ticket_id}",
-    ]
-    for key in candidates:
-        try:
-            raw = await r.get(key)
-        except Exception:
-            raw = None
-        if not raw:
-            continue
-        try:
-            obj = json.loads(raw)
-        except Exception:
-            # אולי נשמר כטקסט רגיל
-            obj = {"raw": raw}
-        # תבניות שכיחות לאחסון
-        data = (
-            (obj.get("req") if isinstance(obj, dict) else None)
-            or (obj.get("data") if isinstance(obj, dict) else None)
-            or obj
-        )
-        return True, data, key
-    return False, None, None
-
-@app.get("/readyz/strict")
-async def readyz_strict():
-    """
-    בדיקת מוכנות קשיחה: Redis + Binance HTTP.
-    מחזיר 200 אם הכל ירוק, אחרת 503 עם פירוט.
-    """
-    details: Dict[str, Any] = {"ok": True, "binance": {}, "redis": {}}
-    # Redis
-    try:
-        r = await _get_redis_cached()
-        if r:
-            pong = await r.ping()
-            details["redis"] = {"ok": bool(pong)}
-        else:
-            details["redis"] = {"ok": False, "reason": "not_configured"}
-            details["ok"] = False
-    except Exception as e:
-        details["redis"] = {"ok": False, "error": str(e)}
-        details["ok"] = False
-    # Binance HTTP candidates (נבחן את הבחירה העדכנית)
-    try:
+@app.on_event("startup")
+async def _on_startup():
+    _ensure_public_fallbacks()
+    with suppress(Exception):
         await _resolve_binance_endpoints()
-        fut_ok = await _http_ready(_fut_http(), path="/fapi/v1/ping", timeout=6.0)
-        spot_ok = await _http_ready(_spot_http(), path="/api/v3/ping", timeout=6.0)
-        details["binance"] = {
-            "futures_http": _fut_http(),
-            "spot_http": _spot_http(),
-            "futures_ws": _fut_ws(),
-            "futures_ok": bool(fut_ok),
-            "spot_ok": bool(spot_ok),
-        }
-        if not (fut_ok and spot_ok):
-            details["ok"] = False
-    except Exception as e:
-        details["binance"] = {"ok": False, "error": str(e)}
-        details["ok"] = False
-    status = 200 if details.get("ok") else 503
-    return JSONResponse(details, status_code=status)
+    with suppress(Exception):
+        if STARTUP_NOTIFY_ENABLE and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID:
+            await _send_telegram_html("🟢 <b>AlgoGPT API</b> started.")
 
-@router.get("/public/ticket/inspect")
-async def public_ticket_inspect(ticket_id: str = Query(...), r=Depends(_dep_get_redis)):
-    """
-    בדיקה ציבורית אם כרטיס קיים (ללוג/טסטים). מחזיר 200 אם נמצא, 404 אם לא.
-    לעולם לא זורק 500—תמיד JSON מסודר.
-    """
-    try:
-        if r:
-            found, data, key = await _load_ticket_from_redis_any(r, ticket_id)
-            if found:
-                # פריסה רדודה של הנתונים להצגה
-                show = data.get("req") if isinstance(data, dict) and "req" in data else data
-                return JSONResponse({"ok": True, "ticket_id": ticket_id, "found": True, "key": key, "data": show}, status_code=200)
-    except Exception as e:
-        # גם בכשל Redis נחזיר 404-לוגי
-        logger.debug("public_ticket_inspect.redis_error: %s", e)
-    # זיכרון (ConfirmStore) כ־fallback
-    if CONFIRMSTORE_ENABLE:
-        with suppress(Exception):
-            for it in ConfirmStore.pending():
-                if str(it.get("ticket_id")) == str(ticket_id):
-                    return JSONResponse({"ok": True, "ticket_id": ticket_id, "found": True, "key": "memory", "data": it.get("req") or it}, status_code=200)
-    return JSONResponse({"ok": True, "ticket_id": ticket_id, "found": False, "key": None, "data": None}, status_code=404)
-
-# ==================== Root & meta ====================
 @app.get("/")
 async def root():
     return {"ok": True, "app": APP_TITLE, "version": APP_VERSION}
 
-@app.get("/version")
-async def version():
-    return {"ok": True, "version": APP_VERSION}
-
-@app.get("/healthz")
-async def healthz():
-    return PlainTextResponse("ok", status_code=200)
-
-# ==================== Startup / Shutdown ====================
-@app.on_event("startup")
-async def on_startup():
-    try:
-        _ensure_public_fallbacks()
-    except Exception as e:
-        logger.warning("ensure_public_fallbacks_failed: %s", e)
-    try:
-        await _resolve_binance_endpoints()
-    except Exception as e:
-        logger.warning("resolve_binance_endpoints_failed: %s", e)
-    try:
-        if STARTUP_NOTIFY_ENABLE:
-            await _send_telegram_html(f"🤖 <b>{_md_html(APP_TITLE)}</b> is up · v<code>{_md_html(APP_VERSION)}</code>")
-    except Exception as e:
-        logger.info("startup_notify_failed: %s", e)
-    try:
-        await _ensure_telegram_webhook()
-    except Exception as e:
-        logger.info("ensure_telegram_webhook_failed: %s", e)
-
-@app.on_event("shutdown")
-async def on_shutdown():
-    cli = getattr(app.state, "shared_async_client", None)
-    if cli and not cli.is_closed:
-        with suppress(Exception):
-            await cli.aclose()
-
-# ==================== Mount router ====================
-app.include_router(router)
-
-# (optional) local dev server
+# -------------- run via uvicorn --------------
 if __name__ == "__main__":
-    import uvicorn  # type: ignore
-    uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False)
-
-
-
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=bool(os.getenv("RELOAD", "0") in ("1","true","yes","on")))
 
 
 
