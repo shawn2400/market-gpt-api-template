@@ -17,11 +17,10 @@ def _env_override_float(key: str) -> Optional[float]:
 class TradeClient:
     """
     לקוח מסחר דק מול Binance Futures:
-    - קריאת פוזיציה פעילה (positionRisk)
-    - ביטול הזמנות reduceOnly (לא חובה – אפשר להחליף במחק הזמנות יעודי אם יש לך)
-    - הצבת SL/BE/TP כ־STOP_MARKET/TAKE_PROFIT_MARKET
+    - קריאת פוזיציה פעילה
+    - הצבת SL/BE/TP כ־STOP_MARKET/TAKE_PROFIT_MARKET (reduceOnly)
     - פתיחה/סגירה MARKET
-    - כיבוד tickSize/stepSize כדי למנוע Precision errors.
+    - כיבוד tickSize/stepSize כדי למנוע Precision errors
     """
     def __init__(self):
         self.cli = BinanceFuturesExec()
@@ -33,17 +32,16 @@ class TradeClient:
         now = time.time()
         if s in self._filters_cache and now - self._filters_cache_ts.get(s, 0) < EXCHANGE_INFO_TTL:
             return self._filters_cache[s]
-        # exchangeInfo → filters
-        info = self.cli.get("/fapi/v1/exchangeInfo", {}, signed=False)
-        flt = {}
-        for sym in (info or {}).get("symbols", []):
+        info = self.cli.get("/fapi/v1/exchangeInfo", {}, signed=False) or {}
+        flt: Dict[str, Any] = {}
+        for sym in info.get("symbols", []):
             if (sym.get("symbol") or "").upper() == s:
                 for f in sym.get("filters", []):
                     if f.get("filterType") == "PRICE_FILTER":
                         flt["tickSize"] = float(f.get("tickSize") or 0)
-                    if f.get("filterType") == "LOT_SIZE":
+                    elif f.get("filterType") == "LOT_SIZE":
                         flt["stepSize"] = float(f.get("stepSize") or 0)
-                    if f.get("filterType") == "MIN_NOTIONAL":
+                    elif f.get("filterType") == "MIN_NOTIONAL":
                         flt["minNotional"] = float(f.get("notional") or 0)
                 break
         self._filters_cache[s] = flt
@@ -72,7 +70,6 @@ class TradeClient:
 
     # ===== API =====
     async def get_position(self, symbol: str) -> Dict[str, Any]:
-        # נחפש את הסמל מתוך positionRisk
         data = self.cli.get("/fapi/v2/positionRisk", {}, signed=True)
         s = symbol.upper()
         for row in data or []:
@@ -81,34 +78,22 @@ class TradeClient:
         return {}
 
     async def cancel_all_reduce_only(self, symbol: str) -> None:
-        # אין endpoint ישיר ל"בטל כל reduceOnly".
-        # בפועל לרוב מספיק לכתוב הזמנות חדשות ב-GTC ולהחליף. אם יש לך מודול cancel – חבר אותו כאן.
+        # אם יש לך מחיקת הזמנות קיימת – חבר לכאן. כרגע no-op.
         return None
 
     async def place_stop_loss_or_be(self, symbol: str, side: str, stop_price: float, trigger: str = "mark") -> Dict[str, Any]:
-        """
-        SL/BE כסוג STOP_MARKET – הצד הוא צד הסגירה (הפוך מכיוון הפוזיציה).
-        """
         sp = self._round_price(symbol, float(stop_price))
-        # צד סגירה: אם LONG פתוח – הסגירה היא SELL; אם SHORT – הסגירה היא BUY.
-        close_side = "SELL" if side.upper() == "BUY" else "BUY"
-        # כמות: נאסוף מכמות הפוזיציה (סגירה מלאה)
         pos = await self.get_position(symbol)
-        qty = abs(float(pos.get("positionAmt") or 0.0))
-        qty = self._round_qty(symbol, qty)
+        qty = self._round_qty(symbol, abs(float(pos.get("positionAmt") or 0.0)))
         if qty <= 0: raise RuntimeError("no position qty to protect")
-        kind = "STOP_MARKET"
-        return self.cli.order_tp_or_sl_market(symbol.upper(), close_side, sp, qty, kind=kind, position_side="BOTH", reduce_only=True)
+        close_side = "SELL" if side.upper() == "BUY" else "BUY"
+        return self.cli.order_tp_or_sl_market(symbol.upper(), close_side, sp, qty, kind="STOP_MARKET", position_side="BOTH", reduce_only=True)
 
     async def place_take_profit(self, symbol: str, side: str, tp_price: float, split: Optional[float], idx: int, trigger: str="mark") -> Dict[str, Any]:
-        """
-        TP כמימוש TAKE_PROFIT_MARKET (ב-Futures). נשתמש בכמות split*|qty|.
-        """
         pp = self._round_price(symbol, float(tp_price))
         pos = await self.get_position(symbol)
         base_qty = abs(float(pos.get("positionAmt") or 0.0))
-        use_qty = base_qty * float(split if (split is not None) else 1.0)
-        use_qty = self._round_qty(symbol, use_qty)
+        use_qty = self._round_qty(symbol, base_qty * float(split if (split is not None) else 1.0))
         if use_qty <= 0: raise RuntimeError("tp split qty after rounding is 0")
         close_side = "SELL" if side.upper() == "BUY" else "BUY"
         return self.cli.order_tp_or_sl_market(symbol.upper(), close_side, pp, use_qty, kind="TAKE_PROFIT_MARKET", position_side="BOTH", reduce_only=True)
@@ -129,5 +114,3 @@ class TradeClient:
         q = self._round_qty(symbol, float(qty))
         if q <= 0: raise RuntimeError("qty after rounding is 0")
         return self.cli.order_market(symbol.upper(), side.upper(), q, position_side="BOTH", reduce_only=False)
-
-
