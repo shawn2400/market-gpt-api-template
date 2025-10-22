@@ -373,7 +373,7 @@ TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_
 HMAC_SECRET = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
 
 # HTTP/2 enable toggle (used also for httpx fallback logic)
-HTTP2_ENABLE = os.getenv("HTTP2_ENABLE", "1").lower() in ("1", "true", "yes", "on")
+HTTP2_ENABLE = os.getenv("HTTP2_ENABLE", "1").lower() in ("1", "true", "yes", "on")  # kept for backwards-compat; runtime flag added below
 
 # ==================== Binance endpoints auto-fallback (HTTP/WS) ====================
 # ENV (קיימים אצלך ונשמרים): BINANCE_FUTURES_HTTP_BASE, BINANCE_FUTURES_WS_BASE, BINANCE_SPOT_HTTP_BASE
@@ -429,6 +429,13 @@ def _binance_candidate_sets() -> Dict[str, List[str]]:
 
 _shared_client_lock = threading.Lock()
 
+def _http2_enabled_runtime() -> bool:
+    """
+    קובע דינמית אם להפעיל HTTP/2 לפי ENV בזמן אמת (ולא בזמן import),
+    כדי למנוע אזהרות h2 גם אחרי ריסטרט כששינית את הסביבה.
+    """
+    return os.getenv("HTTP2_ENABLE", "1").lower() in ("1", "true", "yes", "on")
+
 def _get_shared_async_client() -> httpx.AsyncClient:
     cli: Optional[httpx.AsyncClient] = getattr(app.state, "shared_async_client", None)
     if cli and not cli.is_closed:
@@ -446,7 +453,7 @@ def _get_shared_async_client() -> httpx.AsyncClient:
             timeout=timeout,
             limits=limits,
             headers={"User-Agent": f"algogpt/{APP_VERSION}"},
-            http2=HTTP2_ENABLE,
+            http2=_http2_enabled_runtime(),
         )
         app.state.shared_async_client = cli
         return cli
@@ -568,7 +575,7 @@ def _build_sig_string(method: str, path: str, headers_lower: Dict[str, str], hea
 def _verify_http_signature(request: Request, body: bytes, *, route_path: str) -> Tuple[bool, str]:
     """
     אימות POST חתום:
-    - Authorization: Signature …
+    - Authorization: Signature … 
     - אימות Digest או x-content-sha256 (אם קיים)
     - בניית sig-string לפי headers= ובדיקת HMAC-SHA256 (Base64)
     הערות:
@@ -2046,7 +2053,13 @@ def _in_pause_window_utc(now: Optional[time.struct_time] = None) -> bool:
 
 @router.post("/manage-once")
 async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
-    _require_bearer(request)
+    # אם הגיעו דרך נתיב חתום – דולג Bearer
+    try:
+        if not getattr(request.state, "_signed_override", False):
+            _require_bearer(request)
+    except Exception:
+        _require_bearer(request)
+
     symbol = (payload.get("symbol") or "").upper().strip()
     if not symbol:
         raise HTTPException(status_code=422, detail="missing symbol")
@@ -2157,6 +2170,28 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     }
     return result
 
+# ===== Signed manage-once (HTTP Signatures) =====
+@router.post("/manage-once/signed")
+async def manage_once_signed(request: Request, payload: Dict[str, Any] = Body(...)):
+    """
+    מאפשר להפעיל ניהול חד-פעמי (BE/TP/Trail) באמצעות POST חתום
+    באותה שיטת Authorization: Signature / Digest כמו /ops/approve.signed.
+    כך אין צורך ב-Bearer.
+    """
+    raw = await request.body()
+    ok, _reason = _verify_http_signature(request, raw, route_path="/manage-once/signed")
+    if not ok:
+        raise HTTPException(status_code=401, detail="Bad signature")
+    # מסמן ל-manage_once לדלג על Bearer
+    request.state._signed_override = True  # type: ignore[attr-defined]
+    # מוודא קלט מינימלי
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=422, detail="bad_payload")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="missing symbol")
+    return await manage_once(request, payload)
+
 @router.get("/ops/digest/expired")
 async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = None):
     if os.getenv("PROTECT_DIGEST_ROUTES", "1").lower() in ("1", "true", "yes", "on"):
@@ -2248,8 +2283,6 @@ async def _on_startup():
 if __name__ == "__main__":
     import uvicorn  # type: ignore
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000") or 10000), reload=False)
-
-
 
 
 
