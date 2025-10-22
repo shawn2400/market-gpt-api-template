@@ -40,7 +40,7 @@ except Exception:
 # ----------------------------------------------------------------------------------------
 
 import httpx
-from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter
+from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter, Depends
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response as StarletteResponse
@@ -2239,6 +2239,113 @@ async def telegram_webhook(request: Request):
     # no-op; עונים 200 כדי למנוע retries
     return {"ok": True, "received": bool(payload)}
 
+# ==================== Public helpers & routes ====================
+# Redis DI-style getter compatible with FastAPI Depends (optional: uses same redis as above)
+async def _dep_get_redis():
+    return await _get_redis_cached()
+
+def _ns() -> str:
+    return NS
+
+async def _load_ticket_from_redis_any(r, ticket_id: str) -> Tuple[bool, Optional[dict], Optional[str]]:
+    """
+    מנסה להביא מידע על כרטיס ממפתחות שכיחים.
+    מחזיר: (found, data, key_used)
+    """
+    if not r:
+        return False, None, None
+    candidates = [
+        f"{_ns()}:ticket:{ticket_id}",
+        f"{_ns()}:ops:ticket:{ticket_id}",
+        f"ticket:{ticket_id}",
+        f"ops:ticket:{ticket_id}",
+        f"{_ns()}:confirm:{ticket_id}",
+        f"confirm:{ticket_id}",
+    ]
+    for key in candidates:
+        try:
+            raw = await r.get(key)
+        except Exception:
+            raw = None
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            # אולי נשמר כטקסט רגיל
+            obj = {"raw": raw}
+        # תבניות שכיחות לאחסון
+        data = (
+            (obj.get("req") if isinstance(obj, dict) else None)
+            or (obj.get("data") if isinstance(obj, dict) else None)
+            or obj
+        )
+        return True, data, key
+    return False, None, None
+
+@app.get("/readyz/strict")
+async def readyz_strict():
+    """
+    בדיקת מוכנות קשיחה: Redis + Binance HTTP.
+    מחזיר 200 אם הכל ירוק, אחרת 503 עם פירוט.
+    """
+    details: Dict[str, Any] = {"ok": True, "binance": {}, "redis": {}}
+    # Redis
+    try:
+        r = await _get_redis_cached()
+        if r:
+            pong = await r.ping()
+            details["redis"] = {"ok": bool(pong)}
+        else:
+            details["redis"] = {"ok": False, "reason": "not_configured"}
+            details["ok"] = False
+    except Exception as e:
+        details["redis"] = {"ok": False, "error": str(e)}
+        details["ok"] = False
+    # Binance HTTP candidates (נבחן את הבחירה העדכנית)
+    try:
+        await _resolve_binance_endpoints()
+        fut_ok = await _http_ready(_fut_http(), path="/fapi/v1/ping", timeout=6.0)
+        spot_ok = await _http_ready(_spot_http(), path="/api/v3/ping", timeout=6.0)
+        details["binance"] = {
+            "futures_http": _fut_http(),
+            "spot_http": _spot_http(),
+            "futures_ws": _fut_ws(),
+            "futures_ok": bool(fut_ok),
+            "spot_ok": bool(spot_ok),
+        }
+        if not (fut_ok and spot_ok):
+            details["ok"] = False
+    except Exception as e:
+        details["binance"] = {"ok": False, "error": str(e)}
+        details["ok"] = False
+    status = 200 if details.get("ok") else 503
+    return JSONResponse(details, status_code=status)
+
+@router.get("/public/ticket/inspect")
+async def public_ticket_inspect(ticket_id: str = Query(...), r=Depends(_dep_get_redis)):
+    """
+    בדיקה ציבורית אם כרטיס קיים (ללוג/טסטים). מחזיר 200 אם נמצא, 404 אם לא.
+    לעולם לא זורק 500—תמיד JSON מסודר.
+    """
+    try:
+        if r:
+            found, data, key = await _load_ticket_from_redis_any(r, ticket_id)
+            if found:
+                # פריסה רדודה של הנתונים להצגה
+                show = data.get("req") if isinstance(data, dict) and "req" in data else data
+                return JSONResponse({"ok": True, "ticket_id": ticket_id, "found": True, "key": key, "data": show}, status_code=200)
+    except Exception as e:
+        # גם בכשל Redis נחזיר 404-לוגי
+        logger.debug("public_ticket_inspect.redis_error: %s", e)
+    # זיכרון (ConfirmStore) כ־fallback
+    if CONFIRMSTORE_ENABLE:
+        with suppress(Exception):
+            for it in ConfirmStore.pending():
+                if str(it.get("ticket_id")) == str(ticket_id):
+                    return JSONResponse({"ok": True, "ticket_id": ticket_id, "found": True, "key": "memory", "data": it.get("req") or it}, status_code=200)
+    return JSONResponse({"ok": True, "ticket_id": ticket_id, "found": False, "key": None, "data": None}, status_code=404)
+
 # ==================== Root & meta ====================
 @app.get("/")
 async def root():
@@ -2286,7 +2393,8 @@ app.include_router(router)
 # (optional) local dev server
 if __name__ == "__main__":
     import uvicorn  # type: ignore
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "10000") or 10000), reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False)
+
 
 
 
