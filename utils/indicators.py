@@ -1,4 +1,3 @@
-# utils/indicators.py
 from __future__ import annotations
 import os, ast
 from typing import Dict, Any, Optional, List
@@ -194,6 +193,8 @@ async def eval_regime(symbol: str,
     neutral_req = (neutral_req or os.getenv("NEUTRAL_REQ") or "")
 
     tf = _INTERVAL_MAP.get(timeframe, "15m")
+    market_label = os.getenv("DEFAULT_MARKET", "futures").lower()
+
     url = f"{_BINANCE_HTTP}/fapi/v1/klines"
     params = {"symbol": symbol.upper(), "interval": tf, "limit": 200}
     async with httpx.AsyncClient(timeout=10.0) as cli:
@@ -220,6 +221,15 @@ async def eval_regime(symbol: str,
     _mhv = float(_mh.iloc[-1])
     last_close = float(close.iloc[-1])
     atrpct = (_atr / last_close) if last_close > 0 else float("nan")
+
+    # דיווח מטריקה: ATR כיחס למחיר לפי סמל/טיים-פריים/שוק
+    try:
+        from utils.metrics_tracker import observe_atr_pct  # import מקומי כדי לא לשבור import-time
+        if atrpct == atrpct and atrpct > 0.0:  # בדיקת NaN
+            observe_atr_pct(symbol=symbol, atr_frac=float(atrpct),
+                            timeframe=tf, market=market_label)
+    except Exception:
+        pass
 
     vars_map = {
         "ema21": e21,
@@ -270,9 +280,6 @@ async def eval_regime(symbol: str,
         "matched": matched,
         **({"gated_by": gate_reason} if gate_reason else {})
     }
-
-
-
 
 
 
