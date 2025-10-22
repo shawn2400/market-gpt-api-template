@@ -1,0 +1,74 @@
+services:
+  - type: web
+    name: n8n-gateway
+    env: docker
+    region: frankfurt
+    plan: standard
+    autoDeploy: true
+    dockerfilePath: null
+    runtime: image
+    image:
+      url: n8nio/n8n:latest
+    healthCheckPath: /
+    numInstances: 1
+
+    disk:
+      name: data
+      mountPath: /home/node/.n8n
+      sizeGB: 1
+
+    envVars:
+      # ==== Base URLs / Networking ====
+      - key: N8N_HOST
+        value: "n8n-gateway.onrender.com"    # שנה לשם הדומיין של השירות ב-Render
+      - key: N8N_PROTOCOL
+        value: "https"
+      - key: N8N_PORT
+        value: "5678"
+      - key: N8N_EDITOR_BASE_URL
+        value: "https://n8n-gateway.onrender.com"
+      - key: WEBHOOK_URL
+        value: "https://n8n-gateway.onrender.com/"
+
+      # ==== Timezone ====
+      - key: GENERIC_TIMEZONE
+        value: "Asia/Jerusalem"
+
+      # ==== Security ====
+      - key: N8N_BASIC_AUTH_ACTIVE
+        value: "true"
+      - key: N8N_BASIC_AUTH_USER
+        value: "ops"
+      - key: N8N_BASIC_AUTH_PASSWORD
+        fromSecret: N8N_BASIC_AUTH_PASSWORD       # צור סוד ב-Render
+      - key: N8N_ENCRYPTION_KEY
+        fromSecret: N8N_ENCRYPTION_KEY            # צור סוד: מחרוזת אקראית ארוכה (32–64 תווים)
+
+      # ==== (Optional but recommended) Database for persistence ====
+      # אם יש לך Postgres, מלא את הערכים הבאים. אם אין — n8n יעבוד על קבצים בדיסק.
+      # - key: DB_TYPE
+      #   value: "postgresdb"
+      # - key: DB_POSTGRESDB_HOST
+      #   fromSecret: N8N_DB_HOST
+      # - key: DB_POSTGRESDB_PORT
+      #   value: "5432"
+      # - key: DB_POSTGRESDB_DATABASE
+      #   fromSecret: N8N_DB_NAME
+      # - key: DB_POSTGRESDB_USER
+      #   fromSecret: N8N_DB_USER
+      # - key: DB_POSTGRESDB_PASSWORD
+      #   fromSecret: N8N_DB_PASS
+
+      # ==== Connection to your AlgoGPT (staging) ====
+      - key: ALGOGPT_API_BASE
+        value: "https://algogpt-staging.onrender.com"
+      - key: OPS_SIGN_KEY_ID
+        value: "api"
+      - key: OPS_SIGN_SECRET_HEX
+        fromSecret: OPS_SIGN_SECRET_HEX_STAGING    # זהה לסוד אצל AlgoGPT (hex)
+
+      # ==== Hardening / Misc ====
+      - key: QUEUE_BULL_REDIS_TIMEOUT_THRESHOLD
+        value: "10000"    # סביר; אם תחבר Redis ל-n8n, תוכל להגדיר REDIS_*
+      - key: EXECUTIONS_PROCESS
+        value: "main"     # פשוט ויציב לשלב ראשון
