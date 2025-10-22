@@ -388,21 +388,18 @@ services:
       - key: APPROVAL_ENABLED
         value: "1"
       - key: REQUIRE_TELEGRAM_APPROVAL
-        value: "0"
+        value: "1"
       - key: AUTO_OPEN_ON_APPROVE
         value: "1"
 
-      - key: SINK_ENFORCE_APPROVALS
-        value: "0"
-      - key: APPROVE_BEFORE_GATE
-        value: "0"
-
+      - key: PROPOSE_BLOCK_ON_FAIL
+        value: "1"
       - key: APPROVAL_REQUIRE_WATCHLIST
         value: "0"
       - key: APPROVAL_RR_MIN
-        value: "1.30"
+        value: "0"
       - key: APPROVAL_SUCCESS_MIN
-        value: "50"
+        value: "0"
       - key: APPROVAL_REQUIRE_FRESH_PRICE
         value: "1"
       - key: APPROVAL_DUP_COOLDOWN_SEC
@@ -492,7 +489,7 @@ services:
       - key: AUTO_QTY_MODE
         value: "notional"
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
-        value: "0.20"
+        value: "0.15"
       - key: AUTO_LEV_MIN
         value: "20"
       - key: AUTO_LEV_MAX
@@ -993,5 +990,6 @@ services:
         value: "https://testnet.binancefuture.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
         value: "3"
+
 
 
