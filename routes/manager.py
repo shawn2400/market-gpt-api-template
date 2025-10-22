@@ -1,8 +1,8 @@
 # routes/manager.py
 from __future__ import annotations
-import os, json, time, hashlib, asyncio, logging
+import os, json, time, hashlib, asyncio, logging, math
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 
 import httpx
 from fastapi import APIRouter, HTTPException, Header, Body
@@ -62,7 +62,7 @@ except Exception:
     get_positions_snapshot = None
 
 try:
-    # הערכת רג'ים/טרנדים
+    # הערכת רג'ים/טרנדים (כולל שפת כללים מורחבת)
     from utils.indicators import eval_regime  # type: ignore
 except Exception:
     eval_regime = None
@@ -103,11 +103,12 @@ MANAGER_WRITES_ORDERS = os.getenv("MANAGER_WRITES_ORDERS", "1").lower() in ("1",
 NATIVE_TPSL_ENABLE    = os.getenv("NATIVE_TPSL_ENABLE", "0").lower() in ("1","true","yes","on")
 ORDER_TRIGGER         = os.getenv("ORDER_TRIGGER", "mark").lower()  # mark|last
 
-# Auto-Flip
+# Auto-Flip (כללים גמישים)
 AUTO_FLIP_ENABLE   = os.getenv("AUTO_FLIP_ENABLE", "1").lower() in ("1","true","yes","on")
-BTC_LONG_REQ       = os.getenv("BTC_LONG_REQ", "ema21>=ema50")
-BTC_SHORT_REQ      = os.getenv("BTC_SHORT_REQ", "ema21<=ema50")
-AUTO_FLIP_NEUTRAL  = os.getenv("AUTO_FLIP_NEUTRAL", "1").lower() in ("1","true","yes","on")  # מאפשר neutral אם אין תנאי ברור
+AUTO_FLIP_NEUTRAL  = os.getenv("AUTO_FLIP_NEUTRAL", "1").lower() in ("1","true","yes","on")
+LONG_REQ           = os.getenv("LONG_REQ",  os.getenv("BTC_LONG_REQ",  "ema21>=ema50"))
+SHORT_REQ          = os.getenv("SHORT_REQ", os.getenv("BTC_SHORT_REQ", "ema21<=ema50"))
+NEUTRAL_REQ        = os.getenv("NEUTRAL_REQ", "")
 
 # BE/TP/Trail פרופיל דיפולטי אם ליבה לא זמינה
 PROFILE_BASE_BE_BPS   = float(os.getenv("PROFILE_BASE_BE_BPS", "5"))
@@ -117,6 +118,19 @@ TRAIL_ATR_MULT        = float(os.getenv("TRAIL_ATR_MULT", os.getenv("TRAIL_DEFAU
 
 # Anti-replay settings (לרוטי החלטות)
 ANTI_REPLAY_REQUIRE_SIGNATURE = os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "1").lower() in ("1","true","yes","on")
+
+# ===== Binance / WS =====
+BINANCE_WS_BASE = os.getenv("BINANCE_FUTURES_WS_BASE", os.getenv("BINANCE_FAPI", "wss://fstream.binance.com")).rstrip("/")
+USE_WS          = os.getenv("USE_WS", "1").lower() in ("1","true","yes","on")
+WS_KEEPALIVE_SEC= int(os.getenv("WS_KEEPALIVE_SEC", "25"))
+
+# === WS Auto-Flip parameters (בקרות עומס/יציבות) ===
+AF_EVAL_COOLDOWN_SEC   = int(os.getenv("AUTOFLIP_EVAL_COOLDOWN_SEC", "20"))    # קירור בין הערכות פר-סימבול
+AF_FLIP_COOLDOWN_SEC   = int(os.getenv("AUTOFLIP_FLIP_COOLDOWN_SEC", "120"))   # קירור בין פליפים פר-סימבול
+AF_MOVE_TRIGGER_BPS    = float(os.getenv("AUTOFLIP_MOVE_BPS", "3"))            # הערכה רק אם זזנו ≥ X bps מהמחיר שנבחן לאחרונה
+AF_MAX_SYMBOLS         = int(os.getenv("AUTOFLIP_MAX_SYMBOLS", "20"))          # מקסימום סימבולים שנטפל בהם “חי”
+AF_PRICE_TTL_SEC       = int(os.getenv("PRICE_WS_FRESH_TTL", "60"))            # טריות mark price
+AF_WATCHLIST           = [s.strip().upper() for s in (os.getenv("WATCHLIST", "") or "").split(",") if s.strip()]
 
 # ===== ConfirmStore (תורים/אישורים) =====
 try:
@@ -143,6 +157,14 @@ LAST_TICK_TS: int = 0
 LAST_CREATED: List[str] = []
 LAST_PENDING: int = 0
 LAST_ERROR: Optional[str] = None
+
+# === WS Auto-Flip runtime ===
+_WS_TASK: Optional[asyncio.Task] = None
+PRICE_MAP: Dict[str, float] = {}            # סימבול -> מחיר MARK אחרון
+LAST_PRICE_TS: Dict[str, float] = {}        # סימבול -> UNIX ts של מחיר אחרון
+AF_LAST_EVAL: Dict[str, float] = {}         # סימבול -> ts הערכה אחרונה
+AF_LAST_EVAL_PX: Dict[str, float] = {}      # סימבול -> מחיר שבו הערכנו
+AF_LAST_FLIP: Dict[str, float] = {}         # סימבול -> ts פליפ אחרון
 
 # ===== Helpers =====
 def _bearer_ok(auth_header: Optional[str]) -> bool:
@@ -463,6 +485,7 @@ async def ops_manager_health():
         "native_tpsl_enable": NATIVE_TPSL_ENABLE,
         "order_trigger": ORDER_TRIGGER,
         "auto_flip_enable": AUTO_FLIP_ENABLE,
+        "ws_autoflip": bool(USE_WS and AUTO_FLIP_ENABLE),
     }
 
 # --- Tickets list / decision ---
@@ -596,17 +619,13 @@ async def _do_rewrite_native_tpsl(symbol: str) -> Dict[str, Any]:
             if not pos or float(pos.get("positionAmt") or 0.0) == 0.0:
                 return {"ok": False, "error": "no_active_position"}
             await cli.cancel_all_reduce_only(sym)  # type: ignore (בטל TP/SL קיימים)
-            # דוגמת חישוב פשוטה (רצוי להשתמש בקוד החישוב המלא שלך אם קיים):
             entry = float(pos.get("entryPrice") or 0.0)
             side  = "BUY" if float(pos.get("positionAmt", 0)) > 0 else "SELL"
-            # TP% בסיסי
             tp_pcts = SMART_MANAGE_PCTS
             splits  = SMART_MANAGE_SPLITS
-            # SL ברירת מחדל: BE בלבד (תואם דרישה “BE גם לפני TP1” אם תרצה)
             be_bps = PROFILE_BASE_BE_BPS
             be_price = entry * (1.0 + (be_bps/10000.0) * (1 if side=="BUY" else -1))
             await cli.place_stop_loss_or_be(sym, side, be_price, trigger=ORDER_TRIGGER)  # type: ignore
-            # מדרגות TP:
             for i, pct in enumerate(tp_pcts, start=1):
                 tp_price = entry * (1.0 + (pct/100.0) * (1 if side=="BUY" else -1))
                 qty_split = splits[i-1] if i-1 < len(splits) else None
@@ -719,8 +738,7 @@ async def _tick_once() -> Dict[str, Any]:
                 created.append(tid)
 
         # 2) ניהול “חד-פעמי” מחזורי עבור סמלים רלוונטיים (אם כתיבה מופעלת)
-        if MANAGER_WRITES_ORDERS and pm_manage_once or position_ops_manage_once:
-            # אם יש פוזיציות—נהל אותן; אם אין snapshot, דלג בשקט
+        if MANAGER_WRITES_ORDERS and (pm_manage_once or position_ops_manage_once):
             symbols: List[str] = []
             if get_positions_snapshot:
                 try:
@@ -732,8 +750,6 @@ async def _tick_once() -> Dict[str, Any]:
                             symbols.append(sym)
                 except Exception as e:
                     logger.debug("get_positions_snapshot failed: %s", e)
-
-            # הרץ manage_once עבור כל סמל פתוח
             for sym in symbols:
                 try:
                     if position_ops_manage_once:
@@ -743,8 +759,8 @@ async def _tick_once() -> Dict[str, Any]:
                 except Exception as e:
                     logger.debug("periodic manage_once for %s failed: %s", sym, e)
 
-        # 3) Auto-Flip/Neutral (אם מופעל)
-        if AUTO_FLIP_ENABLE and get_positions_snapshot:
+        # 3) Auto-Flip/Neutral (fallback מחזורי — WS עושה את העבודה החיה)
+        if AUTO_FLIP_ENABLE and get_positions_snapshot and not (USE_WS and _WS_TASK and not _WS_TASK.done()):
             try:
                 snap = await get_positions_snapshot()
                 for row in (snap or []):
@@ -756,32 +772,25 @@ async def _tick_once() -> Dict[str, Any]:
                     desired = None
                     if eval_regime:
                         try:
-                            reg = await eval_regime(symbol=sym, long_req=BTC_LONG_REQ, short_req=BTC_SHORT_REQ, timeframe=DEFAULT_TF)  # type: ignore
-                            # reg: {"want":"LONG"/"SHORT"/"NEUTRAL", ...}
+                            reg = await eval_regime(symbol=sym, long_req=LONG_REQ, short_req=SHORT_REQ, neutral_req=NEUTRAL_REQ, timeframe=DEFAULT_TF)  # type: ignore
                             want = str(reg.get("want","")).upper()
                             if want == "LONG":  desired = "BUY"
                             elif want == "SHORT": desired = "SELL"
                             elif AUTO_FLIP_NEUTRAL:
                                 desired = "NEUTRAL"
                         except Exception as e:
-                            logger.debug("eval_regime failed for %s: %s", sym, e)
-
+                            logger.debug("eval_regime failed (tick) for %s: %s", sym, e)
                     if desired and desired != side_now:
-                        # נבצע flip/neutral בזהירות:
                         try:
                             if TradeClient:
                                 cli = TradeClient()  # type: ignore
-                                # סגירה ל-neutral
                                 await cli.close_position_market(sym)  # type: ignore
                                 if desired in ("BUY","SELL"):
-                                    # פתיחה בכיוון הרצוי עם ברירות מחדל
-                                    qty = abs(amt)
-                                    if qty <= 0 and DEFAULT_QTY > 0:
-                                        qty = DEFAULT_QTY
+                                    qty = abs(amt) or DEFAULT_QTY
                                     await cli.open_market(sym, desired, qty=qty, leverage=DEFAULT_LEVERAGE)  # type: ignore
                                 await emit(sym, "auto_flip", from_side=side_now, to=desired)
                         except Exception as e:
-                            logger.debug("auto_flip %s failed: %s", sym, e)
+                            logger.debug("auto_flip (tick) %s failed: %s", sym, e)
 
         pend = _get_pending_safe()
         TICK_COUNT += 1
@@ -794,10 +803,151 @@ async def _tick_once() -> Dict[str, Any]:
         logger.error("tick error: %s", e)
         return {"ok": False, "error": str(e), "created": created}
 
+# === WS Auto-Flip: price intake + gated eval + flip ===
+def _should_eval(symbol: str, price: float, now_ts: float) -> bool:
+    last_ts = AF_LAST_EVAL.get(symbol, 0.0)
+    if now_ts - last_ts < AF_EVAL_COOLDOWN_SEC:
+        return False
+    prev_px = AF_LAST_EVAL_PX.get(symbol, 0.0)
+    if prev_px > 0:
+        delta_bps = abs(price - prev_px) / prev_px * 10000.0
+        if delta_bps < AF_MOVE_TRIGGER_BPS:
+            return False
+    return True
+
+def _flip_cooldown_ok(symbol: str, now_ts: float) -> bool:
+    lt = AF_LAST_FLIP.get(symbol, 0.0)
+    return (now_ts - lt) >= AF_FLIP_COOLDOWN_SEC
+
+async def _maybe_eval_and_flip(symbol: str) -> None:
+    if not (AUTO_FLIP_ENABLE and eval_regime and TradeClient):
+        return
+    price = PRICE_MAP.get(symbol)
+    ts = LAST_PRICE_TS.get(symbol, 0.0)
+    now_ts = time.time()
+    if not price or now_ts - ts > AF_PRICE_TTL_SEC:
+        return
+    if not _should_eval(symbol, price, now_ts):
+        return
+    # הערכת רז'ים עם כללים מה-ENV (גייטים של ADX/ATR% נעשים כבר ב-eval_regime)
+    try:
+        reg = await eval_regime(symbol=symbol, long_req=LONG_REQ, short_req=SHORT_REQ, neutral_req=NEUTRAL_REQ, timeframe=DEFAULT_TF)  # type: ignore
+    except Exception as e:
+        logger.debug("eval_regime (ws) failed for %s: %s", symbol, e)
+        return
+    want = str(reg.get("want","")).upper()
+    AF_LAST_EVAL[symbol] = now_ts
+    AF_LAST_EVAL_PX[symbol] = price
+
+    # יש פוזיציה פעילה? מה הצד?
+    side_now = None
+    amt = 0.0
+    try:
+        if get_positions_snapshot:
+            snap = await get_positions_snapshot()
+            for row in (snap or []):
+                if str(row.get("symbol","")).upper() == symbol:
+                    amt = float(row.get("positionAmt") or 0.0)
+                    side_now = ("BUY" if amt > 0 else "SELL") if amt != 0 else None
+                    break
+    except Exception:
+        pass
+
+    desired = None
+    if want == "LONG":  desired = "BUY"
+    elif want == "SHORT": desired = "SELL"
+    elif AUTO_FLIP_NEUTRAL:
+        desired = "NEUTRAL"
+
+    if not desired or desired == side_now:
+        return
+    if not _flip_cooldown_ok(symbol, now_ts):
+        return
+
+    # בצע Flip/Neutral בזהירות
+    try:
+        cli = TradeClient()  # type: ignore
+        await cli.close_position_market(symbol)  # type: ignore
+        if desired in ("BUY","SELL"):
+            qty = abs(amt) or DEFAULT_QTY
+            await cli.open_market(symbol, desired, qty=qty, leverage=DEFAULT_LEVERAGE)  # type: ignore
+        AF_LAST_FLIP[symbol] = now_ts
+        await emit(symbol, "auto_flip", from_side=side_now or "FLAT", to=desired)
+        logger.info("WS auto-flip %s -> %s (was %s) px=%.4f", symbol, desired, side_now, price)
+    except Exception as e:
+        logger.debug("WS auto_flip %s failed: %s", symbol, e)
+
+async def _symbols_to_track() -> List[str]:
+    # מסימבולים עם פוזיציות פעילות + WATCHLIST; הגבל כמות
+    wanted: Set[str] = set()
+    try:
+        if get_positions_snapshot:
+            snap = await get_positions_snapshot()
+            for row in (snap or []):
+                sym = str(row.get("symbol") or "").upper()
+                amt = float(row.get("positionAmt") or 0.0)
+                if sym and abs(amt) != 0.0:
+                    wanted.add(sym)
+    except Exception:
+        pass
+    for s in AF_WATCHLIST:
+        if s: wanted.add(s.upper())
+    out = sorted(list(wanted))
+    if len(out) > AF_MAX_SYMBOLS:
+        out = out[:AF_MAX_SYMBOLS]
+    return out
+
+async def _ws_autoflip_loop():
+    # משתמשים בערוץ !markPrice@arr שמחזיר מערך של כל הסימבולים – אנו מסננים ל-WATCHLIST/פוזיציות כדי להיות חסכוניים
+    url = f"{BINANCE_WS_BASE}/ws/!markPrice@arr"
+    backoff = 1.0
+    while True:
+        if not (MANAGER_ENABLE and AUTO_FLIP_ENABLE and USE_WS):
+            await asyncio.sleep(2.0)
+            continue
+        try:
+            import websockets  # type: ignore
+            async with websockets.connect(url, ping_interval=WS_KEEPALIVE_SEC*0.8, ping_timeout=WS_KEEPALIVE_SEC) as ws:  # noqa: E722
+                logger.info("WS connected: %s", url)
+                backoff = 1.0
+                while True:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=WS_KEEPALIVE_SEC*1.2)
+                    now_ts = time.time()
+                    data = None
+                    try:
+                        data = json.loads(raw)
+                    except Exception:
+                        continue
+
+                    # פורמט !markPrice@arr = list[ { "s": "BTCUSDT", "p": "65000.1", ... }, ... ]
+                    if isinstance(data, list):
+                        track = set([s.upper() for s in (await _symbols_to_track())])
+                        for it in data:
+                            s = str(it.get("s","")).upper()
+                            if not s or (track and s not in track):
+                                continue
+                            try:
+                                p = float(it.get("p") or it.get("markPrice") or 0.0)
+                                if p > 0:
+                                    PRICE_MAP[s] = p
+                                    LAST_PRICE_TS[s] = now_ts
+                            except Exception:
+                                pass
+                        # הפעלה חכמה: רק לסימבולים שאנו עוקבים אחריהם
+                        for s in track:
+                            await _maybe_eval_and_flip(s)
+                    else:
+                        # תרחישים אחרים — מתעלמים
+                        pass
+        except Exception as e:
+            logger.warning("WS loop error: %s", e)
+            await asyncio.sleep(min(30.0, backoff))
+            backoff = min(30.0, backoff*1.7)
+
 async def _manager_loop():
-    logger.info("manager_loop start: enable=%s interval=%ss ingest_dir=%s alerts_ingest=%s writes_orders=%s native_tpsl=%s auto_flip=%s",
+    logger.info("manager_loop start: enable=%s interval=%ss ingest_dir=%s alerts_ingest=%s writes_orders=%s native_tpsl=%s auto_flip=%s ws=%s",
                 MANAGER_ENABLE, MANAGER_INTERVAL_SEC, INGEST_DIR,
-                ALERTS_INGEST_URL or "DISABLED", MANAGER_WRITES_ORDERS, NATIVE_TPSL_ENABLE, AUTO_FLIP_ENABLE)
+                ALERTS_INGEST_URL or "DISABLED", MANAGER_WRITES_ORDERS, NATIVE_TPSL_ENABLE, AUTO_FLIP_ENABLE, USE_WS)
     while True:
         try:
             await _tick_once()
@@ -809,17 +959,27 @@ async def _manager_loop():
 async def _startup():
     if MANAGER_ENABLE:
         asyncio.create_task(_manager_loop())
+    # הפעל WS Auto-Flip במקביל (אם הופעל)
+    global _WS_TASK
+    if MANAGER_ENABLE and AUTO_FLIP_ENABLE and USE_WS and _WS_TASK is None:
+        try:
+            _WS_TASK = asyncio.create_task(_ws_autoflip_loop())
+        except Exception as e:
+            logger.error("ws_autoflip start failed: %s", e)
 
 def main() -> None:
     if not MANAGER_ENABLE:
         print("MANAGER_ENABLE=0 — exiting.")
         return
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
-        asyncio.run(_manager_loop())
+        loop.create_task(_manager_loop())
+        if AUTO_FLIP_ENABLE and USE_WS:
+            loop.create_task(_ws_autoflip_loop())
+        loop.run_forever()
     except KeyboardInterrupt:
         pass
 
-if __name__ == "__main__":
-    main()
 
 
