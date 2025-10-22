@@ -142,7 +142,6 @@ services:
       - key: SIG_TS_SKEW_SEC
         value: "900"
 
-      # ===== Redis OFF (memory only) =====
       - key: RATE_LIMIT_ENABLE
         value: "1"
       - key: RL_FAIL_OPEN
@@ -197,7 +196,6 @@ services:
       - key: SETEX_STRICT
         value: "0"
 
-      # ===== Binance mainnet =====
       - key: DEFAULT_MARKET
         value: "futures"
       - key: POSITION_MODE_OVERRIDE
@@ -479,6 +477,12 @@ services:
         value: "1"
       - key: SL_MONOTONIC
         value: "1"
+      - key: STRUCT_SL_ENABLE
+        value: "0"
+      - key: GRACE_TIME_SEC
+        value: "420"
+      - key: GRACE_MAX_MAE_ATR
+        value: "1.2"
       - key: PERCENT_GUARD_ENABLE
         value: "1"
       - key: PERCENT_PRICE_GUARD_BPS
@@ -491,8 +495,8 @@ services:
         value: "0.50"
       - key: STOP_BAND_BPS
         value: "20"
-      - key: TP_BE_ONLY_AFTER_TP1
-        value: "0"
+      - key: TP_BE_OFFSET_BPS
+        value: "12"
       - key: STREAM_TP_BE
         value: "1"
 
@@ -521,8 +525,7 @@ services:
         value: "1"
       - key: PROFIT_LOCK_STEPS
         value: "1.0,1.5,2.0"
-      - key: STRUCT_SL_ENABLE
-        value: "0"   # דינמי לגמרי; לא להציב SL מבני קשיח בתחילת טרייד
+
       - key: STRUCT_SL_LOOKBACK
         value: "50"
       - key: STRUCT_SL_LEFT
@@ -553,8 +556,6 @@ services:
         value: "1"
       - key: BE_GUARD_EVERY_SEC
         value: "20"
-      - key: TP_BE_OFFSET_BPS
-        value: "12"
       - key: TRAIL_IN_CHOP
         value: "1"
       - key: TP_SL_REFRESH_SEC
@@ -566,7 +567,7 @@ services:
       - key: TRAIL_PAUSE_WINDOWS
         value: "22:00-02:00Z,11:30-12:00Z"
       - key: AUTO_TRAIL_ADX_MIN
-        value: "14"
+        value: "22"
       - key: AUTO_TRAIL_ATRPCT_MAX
         value: "0.015"
       - key: BE_BASE_BPS
@@ -584,7 +585,6 @@ services:
       - key: TRAIL_DEFAULT_ATR_MULT
         value: "1.6"
 
-      # === RT Trailing & Auto-Flip (תואם קוד ניהול חי) ===
       - key: TRAIL_RT_ENABLE
         value: "1"
       - key: TRAIL_RT_INTERVAL_SEC
@@ -617,7 +617,6 @@ services:
       - key: AUTOFLIP_MAX_SYMBOLS
         value: "20"
 
-      # כללי רג׳ים (כולל נייטרל וחסמי ADX/ATR%)
       - key: LONG_REQ
         value: "ema21>=ema50 and adx>=22 and atrpct<=0.02"
       - key: SHORT_REQ
@@ -832,7 +831,6 @@ services:
       - key: DISABLE_ROUTES
         value: ""
 
-      # ===== Secrets (production) =====
       - key: API_BEARER_TOKEN_RO
         fromSecret: API_BEARER_TOKEN_RO_PROD
       - key: API_BEARER_TOKEN_ACTION
@@ -882,9 +880,9 @@ services:
       - key: POS_EVENTS_EXPIRE_SEC
         value: "43200"
       - key: POS_EVENTS_TELEGRAM_ENABLE
-        value: "1"            # הפעלת דיווחי טלגרם מה־events
+        value: "1"
       - key: POS_EVENTS_TELEGRAM_LEVEL
-        value: "info"         # פתיחה/TP/SL/הזזות/סיכומים
+        value: "info"
 
       - key: DYNAMIC_CONTROL_ENABLE
         value: "1"
@@ -976,6 +974,5 @@ services:
       - key: BINANCE_FAPI
         value: "https://fapi.binance.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
-        value: "3"   
-
+        value: "3"
 
