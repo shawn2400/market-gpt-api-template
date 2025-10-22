@@ -976,6 +976,6 @@ services:
       - key: BINANCE_FAPI
         value: "https://fapi.binance.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
-        value: "3"   # תוקן (הוסר ה"+")
+        value: "3"   
 
 
