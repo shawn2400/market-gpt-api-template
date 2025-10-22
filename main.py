@@ -1412,7 +1412,8 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
-            row = f"• TP{i}: <code>{req_body[f'tp{i]']}</code>"
+            # FIX: f-string index typo corrected here
+            row = f"• TP{i}: <code>{req_body[f'tp{i}']}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
                 row += f"  ETA:<code>{req_body[f'eta_tp{i}_min']}m</code>"
             if req_body.get(f"prob_tp{i}_pct") is not None:
@@ -2262,7 +2263,6 @@ if __name__ == "__main__":
         port=_port(),
         reload=os.getenv("UVICORN_RELOAD", "0") in ("1", "true", "yes", "on"),
     )
-
 
 
 
