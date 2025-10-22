@@ -417,7 +417,7 @@ services:
       - key: MANAGER_WRITES_ORDERS
         value: "1"
       - key: ORDERS_USE_OCO
-        value: "0"   # חשוב: בפיוצ'רס אין OCO מלא → משתמשים ב-STOP/TAKE_PROFIT נפרדים
+        value: "0"
       - key: ORDER_ID_PREFIX
         value: "ALG"
       - key: ORDER_ID_INCLUDE_TS
@@ -476,7 +476,7 @@ services:
         value: "200"
 
       - key: NATIVE_TPSL_ENABLE
-        value: "1"    # <<< הופעל
+        value: "1"
       - key: SL_MONOTONIC
         value: "1"
       - key: PERCENT_GUARD_ENABLE
@@ -522,7 +522,7 @@ services:
       - key: PROFIT_LOCK_STEPS
         value: "1.0,1.5,2.0"
       - key: STRUCT_SL_ENABLE
-        value: "1"
+        value: "0"   # דינמי לגמרי; לא להציב SL מבני קשיח בתחילת טרייד
       - key: STRUCT_SL_LOOKBACK
         value: "50"
       - key: STRUCT_SL_LEFT
@@ -584,6 +584,7 @@ services:
       - key: TRAIL_DEFAULT_ATR_MULT
         value: "1.6"
 
+      # === RT Trailing & Auto-Flip (תואם קוד ניהול חי) ===
       - key: TRAIL_RT_ENABLE
         value: "1"
       - key: TRAIL_RT_INTERVAL_SEC
@@ -602,6 +603,29 @@ services:
         value: "0.2"
       - key: TRAIL_RT_WATCHLIST
         value: ""
+
+      - key: AUTO_FLIP_ENABLE
+        value: "1"
+      - key: AUTO_FLIP_NEUTRAL
+        value: "1"
+      - key: AUTOFLIP_EVAL_COOLDOWN_SEC
+        value: "20"
+      - key: AUTOFLIP_FLIP_COOLDOWN_SEC
+        value: "120"
+      - key: AUTOFLIP_MOVE_BPS
+        value: "3"
+      - key: AUTOFLIP_MAX_SYMBOLS
+        value: "20"
+
+      # כללי רג׳ים (כולל נייטרל וחסמי ADX/ATR%)
+      - key: LONG_REQ
+        value: "ema21>=ema50 and adx>=22 and atrpct<=0.02"
+      - key: SHORT_REQ
+        value: "ema21<=ema50 and adx>=22 and atrpct<=0.02"
+      - key: NEUTRAL_REQ
+        value: "between(rsi,45,55) or abs(macd_hist)<0.05"
+      - key: REGIME_ADX_MIN_15m
+        value: "22"
 
       - key: HEALTH_ALERTS_ENABLE
         value: "1"
@@ -654,7 +678,7 @@ services:
       - key: READINESS_CHECK_BINANCE
         value: "1"
       - key: READINESS_CHECK_REDIS
-        value: "0"   # ללא Redis
+        value: "0"
       - key: READINESS_CHECK_SQLITE
         value: "0"
       - key: READINESS_FAIL_GRACE_SEC
@@ -662,7 +686,7 @@ services:
       - key: READINESS_BINANCE_RETRY
         value: "1"
       - key: READINESS_REDIS_RETRY
-        value: "0"   # ללא Redis
+        value: "0"
       - key: SQLITE_PATH
         value: "/app/data/state.db"
 
@@ -858,9 +882,9 @@ services:
       - key: POS_EVENTS_EXPIRE_SEC
         value: "43200"
       - key: POS_EVENTS_TELEGRAM_ENABLE
-        value: "0"
+        value: "1"            # הפעלת דיווחי טלגרם מה־events
       - key: POS_EVENTS_TELEGRAM_LEVEL
-        value: "none"
+        value: "info"         # פתיחה/TP/SL/הזזות/סיכומים
 
       - key: DYNAMIC_CONTROL_ENABLE
         value: "1"
@@ -952,5 +976,6 @@ services:
       - key: BINANCE_FAPI
         value: "https://fapi.binance.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
-        value: "3"
+        value: "3"   # תוקן (הוסר ה"+")
+
 
