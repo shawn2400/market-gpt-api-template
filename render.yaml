@@ -226,10 +226,11 @@ services:
         value: "25"
       - key: USE_WS
         value: "1"
+      - key: USER_STREAM_ENABLE
+        value: "1"                # ← היה 0: עכשיו זמן־אמת אמיתי
+
       - key: EXCHANGE_INFO_TTL_SEC
         value: "900"
-      - key: USER_STREAM_ENABLE
-        value: "0"
 
       - key: ENABLE_AI_ROUTES
         value: "1"
@@ -508,7 +509,7 @@ services:
         value: "1"
 
       - key: TP_LADDER_ON_APPROVE
-        value: "1"
+        value: "0"                # ← היה 1: לא להצמיד סולם קשיח
       - key: SMART_MANAGE_ON_APPROVE
         value: "1"
 
@@ -521,7 +522,7 @@ services:
       - key: SMART_MANAGE_TRAIL_ATR_MULT
         value: "1.6"
       - key: LADDER_TP_ENABLE
-        value: "1"
+        value: "0"                # ← היה 1: מבטל ליידרים קבועים
       - key: LADDER_SL_ENABLE
         value: "1"
       - key: TP_MAX_LADDERS
@@ -794,9 +795,9 @@ services:
       - key: AUTO_ATR_MULT
         value: "1.6"
       - key: AUTO_TP_PCTS
-        value: "2.5,4.5,7.5"
+        value: ""                 # ← היה 2.5,4.5,7.5 : מבטל TP קבוע
       - key: AUTO_TP_SPLITS
-        value: "0.34,0.33,0.33"
+        value: ""                 # ← היה 0.34,0.33,0.33 : מבטל חלוקות קבועות
       - key: AUTO_POLL_SEC
         value: "30"
 
@@ -982,4 +983,5 @@ services:
         value: "1"
       - key: HEALTH_RECOVERY_GRACE_SEC
         value: "120"
+
 
