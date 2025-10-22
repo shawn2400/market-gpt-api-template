@@ -16,9 +16,11 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY requirements.txt .
 
+# התקנה בשכבת build (ל-prefix /install כדי להעביר לשכבת הריצה)
 RUN python -m pip install --upgrade pip setuptools wheel \
  && pip install --prefix=/install --no-cache-dir --upgrade-strategy eager -r requirements.txt \
  && pip check
+
 
 # ================================
 # === Stage 2: Runtime layer  ====
@@ -26,6 +28,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 FROM python:3.11-slim
 
 ARG APP_VERSION=2.18.0
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PYTHONOPTIMIZE=1 \
@@ -42,8 +45,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     DEBIAN_FRONTEND=noninteractive \
     PORT=10000 \
     APP_VERSION=${APP_VERSION} \
-    ALGOGPT_VERSION=${APP_VERSION}
+    ALGOGPT_VERSION=${APP_VERSION} \
+    HTTP2_ENABLE=1
 
+# ספריות ריצה הנדרשות ל־numpy/scipy/matplotlib/Pillow ועוד
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     tini ca-certificates tzdata bash curl git \
     libopenblas0-openmp liblapack3 \
@@ -57,10 +62,9 @@ COPY --from=builder /install /usr/local
 RUN useradd -ms /bin/bash appuser
 
 WORKDIR /app
-COPY . .
 
-# קובץ קונפיג ל־gunicorn (מכיל autodiscovery למודול)
-COPY gunicorn_conf.py /app/gunicorn_conf.py
+# העתקת קוד האפליקציה (כולל gunicorn_conf.py אם קיים ברפוזיטורי)
+COPY . .
 
 # גרסת אפליקציה לשקיפות
 RUN printf "%s\n" "${APP_VERSION}" > /app/VERSION || true
@@ -73,12 +77,13 @@ USER appuser
 
 EXPOSE 10000
 
-# בריאות בתוך הקונטיינר – תואם לנתיב /readyz (כמו ב-Render)
+# בריאות בתוך הקונטיינר – תואם לנתיב /readyz
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
   CMD curl -fsS http://127.0.0.1:${PORT:-10000}/readyz || exit 1
 
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["gunicorn","-c","/app/gunicorn_conf.py"]
+
 
 
 
