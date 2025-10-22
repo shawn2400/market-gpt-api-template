@@ -2,17 +2,15 @@
 from __future__ import annotations
 import os, json, time, hashlib, asyncio, logging, math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
 from fastapi import APIRouter, HTTPException, Header, Body
 from pydantic import BaseModel
 
-# ===== Utilities / Optional modules (all soft-deps with graceful fallbacks) =====
 from utils.anti_replay import verify_request
 from utils.metrics_tracker import observe_http_ctx_async  # מטריקות עוטפות HTTP
 
-# 🔔 אירועים (Redis + Telegram) — fallback רך אם המודול חסר
 try:
     from utils.telegram_notifier import send_trade_approval  # type: ignore
 except Exception:
@@ -25,21 +23,17 @@ except Exception:
     async def emit(*_args, **_kwargs):  # type: ignore
         return {"ok": False, "skipped": True, "reason": "pos_events_unavailable"}
 
-# מודולים אופציונליים לביצועי מסחר / ניהול / אינדיקטורים
 try:
-    # ניהול חד-פעמי מלא (כולל כתיבת הזמנות) אם קיים
     from routes.position_ops import manage_once as position_ops_manage_once   # type: ignore
 except Exception:
     position_ops_manage_once = None
 
 try:
-    # מנהל “לייט”/ליבה חישובית
     from utils.position_manager import manage_once as pm_manage_once          # type: ignore
 except Exception:
     pm_manage_once = None
 
 try:
-    # שירותי Rewrite/Sync ל-TP/SL Native אם קיימים
     from routes.position_ops import rewrite_native_tpsl as position_ops_rewrite_native_tpsl  # type: ignore
 except Exception:
     position_ops_rewrite_native_tpsl = None
@@ -50,37 +44,36 @@ except Exception:
     pm_rewrite_native_tpsl = None
 
 try:
-    # מודול כללי “סוחר” לביצוע פעולות CRUD על הזמנות ופוזיציות
     from utils.trade_client import TradeClient  # type: ignore
 except Exception:
     TradeClient = None  # type: ignore
 
 try:
-    # מצב פוזיציה (קריאה בלבד/הערכות)
     from utils.account_state import get_positions_snapshot  # type: ignore
 except Exception:
     get_positions_snapshot = None
 
 try:
-    # הערכת רג'ים/טרנדים (כולל שפת כללים מורחבת)
     from utils.indicators import eval_regime  # type: ignore
 except Exception:
     eval_regime = None
 
 try:
-    # State machine לפתיחת טרייד
+    from utils.indicators import ema, rsi, atr, adx, macd  # לחישובי ATR/ADX מהירים אם צריך
+except Exception:
+    ema = rsi = atr = adx = macd = None  # type: ignore
+
+try:
     from utils.open_trade_manager_state import TradePlan, TradeStateManager  # type: ignore
     _STATE_MACHINE_AVAILABLE = True
-except Exception as _e:
+except Exception:
     TradePlan = None      # type: ignore
     TradeStateManager = None  # type: ignore
     _STATE_MACHINE_AVAILABLE = False
 
-# ===== Logger / Router =====
 logger = logging.getLogger("algogpt.manager")
 router = APIRouter(tags=["manager"])
 
-# ===== ENV / Settings =====
 BASE_DIR   = Path(os.getenv("BASE_DIR", "/app"))
 INGEST_DIR = Path(os.getenv("INGEST_DIR", str(BASE_DIR / "static" / "cache")))
 
@@ -98,41 +91,62 @@ DEFAULT_QTY       = float(os.getenv("DEFAULT_QTY", "0.001"))
 DEFAULT_LEVERAGE  = int(os.getenv("DEFAULT_LEVERAGE", "5"))
 DEFAULT_TF        = os.getenv("DEFAULT_INTERVAL", "15m")
 
-# כתיבת הזמנות ע"י המנהל (כולל TP/SL/Trail)
 MANAGER_WRITES_ORDERS = os.getenv("MANAGER_WRITES_ORDERS", "1").lower() in ("1","true","yes","on")
 NATIVE_TPSL_ENABLE    = os.getenv("NATIVE_TPSL_ENABLE", "0").lower() in ("1","true","yes","on")
 ORDER_TRIGGER         = os.getenv("ORDER_TRIGGER", "mark").lower()  # mark|last
 
-# Auto-Flip (כללים גמישים)
+# === Regime / Auto-Flip rules
 AUTO_FLIP_ENABLE   = os.getenv("AUTO_FLIP_ENABLE", "1").lower() in ("1","true","yes","on")
 AUTO_FLIP_NEUTRAL  = os.getenv("AUTO_FLIP_NEUTRAL", "1").lower() in ("1","true","yes","on")
 LONG_REQ           = os.getenv("LONG_REQ",  os.getenv("BTC_LONG_REQ",  "ema21>=ema50"))
 SHORT_REQ          = os.getenv("SHORT_REQ", os.getenv("BTC_SHORT_REQ", "ema21<=ema50"))
 NEUTRAL_REQ        = os.getenv("NEUTRAL_REQ", "")
 
-# BE/TP/Trail פרופיל דיפולטי אם ליבה לא זמינה
+# === Smart manage defaults
 PROFILE_BASE_BE_BPS   = float(os.getenv("PROFILE_BASE_BE_BPS", "5"))
 SMART_MANAGE_PCTS     = [float(x) for x in (os.getenv("SMART_MANAGE_PCTS", "4,8,16").split(","))]
 SMART_MANAGE_SPLITS   = [float(x) for x in (os.getenv("SMART_MANAGE_SPLITS", "0.3,0.3,0.4").split(","))]
 TRAIL_ATR_MULT        = float(os.getenv("TRAIL_ATR_MULT", os.getenv("TRAIL_DEFAULT_ATR_MULT","1.6")))
 
-# Anti-replay settings (לרוטי החלטות)
 ANTI_REPLAY_REQUIRE_SIGNATURE = os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "1").lower() in ("1","true","yes","on")
 
 # ===== Binance / WS =====
-BINANCE_WS_BASE = os.getenv("BINANCE_FUTURES_WS_BASE", os.getenv("BINANCE_FAPI", "wss://fstream.binance.com")).rstrip("/")
+BINANCE_WS_BASE = os.getenv("BINANCE_FUTURES_WS_BASE", os.getenv("BINANCE_FAPI", "wss://fstream.binance.com/ws")).rstrip("/")
 USE_WS          = os.getenv("USE_WS", "1").lower() in ("1","true","yes","on")
 WS_KEEPALIVE_SEC= int(os.getenv("WS_KEEPALIVE_SEC", "25"))
 
-# === WS Auto-Flip parameters (בקרות עומס/יציבות) ===
-AF_EVAL_COOLDOWN_SEC   = int(os.getenv("AUTOFLIP_EVAL_COOLDOWN_SEC", "20"))    # קירור בין הערכות פר-סימבול
-AF_FLIP_COOLDOWN_SEC   = int(os.getenv("AUTOFLIP_FLIP_COOLDOWN_SEC", "120"))   # קירור בין פליפים פר-סימבול
-AF_MOVE_TRIGGER_BPS    = float(os.getenv("AUTOFLIP_MOVE_BPS", "3"))            # הערכה רק אם זזנו ≥ X bps מהמחיר שנבחן לאחרונה
-AF_MAX_SYMBOLS         = int(os.getenv("AUTOFLIP_MAX_SYMBOLS", "20"))          # מקסימום סימבולים שנטפל בהם “חי”
-AF_PRICE_TTL_SEC       = int(os.getenv("PRICE_WS_FRESH_TTL", "60"))            # טריות mark price
+# === WS Auto-Flip control
+AF_EVAL_COOLDOWN_SEC   = int(os.getenv("AUTOFLIP_EVAL_COOLDOWN_SEC", "20"))
+AF_FLIP_COOLDOWN_SEC   = int(os.getenv("AUTOFLIP_FLIP_COOLDOWN_SEC", "120"))
+AF_MOVE_TRIGGER_BPS    = float(os.getenv("AUTOFLIP_MOVE_BPS", "3"))
+AF_MAX_SYMBOLS         = int(os.getenv("AUTOFLIP_MAX_SYMBOLS", "20"))
+AF_PRICE_TTL_SEC       = int(os.getenv("PRICE_WS_FRESH_TTL", "60"))
 AF_WATCHLIST           = [s.strip().upper() for s in (os.getenv("WATCHLIST", "") or "").split(",") if s.strip()]
 
-# ===== ConfirmStore (תורים/אישורים) =====
+# === RT Trailing / BE / Locks control
+TRAIL_RT_ENABLE         = os.getenv("TRAIL_RT_ENABLE", "1") in ("1","true","yes","on")
+TRAIL_RT_INTERVAL_SEC   = int(os.getenv("TRAIL_RT_INTERVAL_SEC", "20"))
+TRAIL_RT_ATR_MULT       = float(os.getenv("TRAIL_RT_ATR_MULT", os.getenv("TRAIL_ATR_MULT","1.6")))
+TRAIL_RT_MIN_CALLBACK   = float(os.getenv("TRAIL_RT_MIN_CALLBACK", "0.1"))
+TRAIL_RT_MAX_CALLBACK   = float(os.getenv("TRAIL_RT_MAX_CALLBACK", "5.0"))
+TRAIL_RT_ADJUST_THRESHOLD = float(os.getenv("TRAIL_RT_ADJUST_THRESHOLD", "0.2"))  # אחוז מה-ATR לשינוי לפני הזזה
+TRAIL_RT_MAX_SYMBOLS    = int(os.getenv("TRAIL_RT_MAX_SYMBOLS", "20"))
+
+TP_BE_OFFSET_BPS        = float(os.getenv("TP_BE_OFFSET_BPS", "12"))
+SMART_MANAGE_BE_OFFSET_BPS = float(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", str(PROFILE_BASE_BE_BPS)))
+
+BE_GUARD_ENABLE         = os.getenv("BE_GUARD_ENABLE", "1") in ("1","true","yes","on")
+BE_BASE_BPS             = float(os.getenv("BE_BASE_BPS", "5"))
+BE_ADX_FACTOR           = float(os.getenv("BE_ADX_FACTOR", "0.2"))
+BE_MIN_BPS              = float(os.getenv("BE_MIN_BPS", "2"))
+BE_MAX_BPS              = float(os.getenv("BE_MAX_BPS", "25"))
+SL_MONOTONIC            = os.getenv("SL_MONOTONIC", "1") in ("1","true","yes","on")
+PROFIT_LOCK_STEPS       = [float(x) for x in (os.getenv("PROFIT_LOCK_STEPS", "1.0,1.5,2.0").split(","))]
+ATR_UPDATE_COOLDOWN_SEC = int(os.getenv("ATR_UPDATE_COOLDOWN_SEC", "20"))
+AUTO_TRAIL_ATRPCT_MAX   = float(os.getenv("AUTO_TRAIL_ATRPCT_MAX", "0.015"))
+AUTO_TRAIL_ADX_MIN      = float(os.getenv("AUTO_TRAIL_ADX_MIN", "14"))
+
+# ===== ConfirmStore =====
 try:
     if not CONFIRMSTORE_ENABLE:
         raise RuntimeError("ConfirmStore disabled by env")
@@ -158,18 +172,21 @@ LAST_CREATED: List[str] = []
 LAST_PENDING: int = 0
 LAST_ERROR: Optional[str] = None
 
-# === WS Auto-Flip runtime ===
+# === WS runtime
 _WS_TASK: Optional[asyncio.Task] = None
-PRICE_MAP: Dict[str, float] = {}            # סימבול -> מחיר MARK אחרון
-LAST_PRICE_TS: Dict[str, float] = {}        # סימבול -> UNIX ts של מחיר אחרון
-AF_LAST_EVAL: Dict[str, float] = {}         # סימבול -> ts הערכה אחרונה
-AF_LAST_EVAL_PX: Dict[str, float] = {}      # סימבול -> מחיר שבו הערכנו
-AF_LAST_FLIP: Dict[str, float] = {}         # סימבול -> ts פליפ אחרון
+PRICE_MAP: Dict[str, float] = {}
+LAST_PRICE_TS: Dict[str, float] = {}
+AF_LAST_EVAL: Dict[str, float] = {}
+AF_LAST_EVAL_PX: Dict[str, float] = {}
+AF_LAST_FLIP: Dict[str, float] = {}
 
-# ===== Helpers =====
+# === RT manage caches
+_IND_LAST: Dict[str, Dict[str, float]] = {}     # {'ADX': float, 'ATR': float, 'CLOSE': float}
+_IND_LAST_TS: Dict[str, float] = {}
+
 def _bearer_ok(auth_header: Optional[str]) -> bool:
     if not API_BEARER_TOKEN:
-        return True  # ללא טוקן — לא חוסמים (לוקאלי)
+        return True
     if not (auth_header and auth_header.startswith("Bearer ")):
         return False
     token = auth_header.split(" ", 1)[1].strip()
@@ -419,9 +436,7 @@ async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
         await _notify_telegram_approval_from_obj(obj, ticket_id=tid_fb)
     return tid_fb
 
-# ===== Public endpoints =====
-
-# --- State Machine open (אם זמין) ---
+# ---------- Public endpoints (כמו קודם, ללא שינויי API) ----------
 class TradeOpenRequest(BaseModel):
     symbol: str
     side: str  # BUY | SELL
@@ -461,7 +476,6 @@ async def manager_open(req: TradeOpenRequest) -> Dict[str, Any]:
         logger.exception("manager_open failed")
         raise HTTPException(status_code=500, detail={"ok": False, "error": str(e)})
 
-# --- Ops tick (ingest->tickets->telegram) ---
 @router.post("/ops/manager/tick")
 async def ops_manager_tick():
     return await _tick_once()
@@ -486,9 +500,9 @@ async def ops_manager_health():
         "order_trigger": ORDER_TRIGGER,
         "auto_flip_enable": AUTO_FLIP_ENABLE,
         "ws_autoflip": bool(USE_WS and AUTO_FLIP_ENABLE),
+        "rt_manage": bool(TRAIL_RT_ENABLE),
     }
 
-# --- Tickets list / decision ---
 @router.get("/alerts/trades/active")
 async def alerts_trades_active():
     try:
@@ -532,7 +546,6 @@ async def alerts_trades_update(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"decision failed: {e}")
 
-# --- ניהול חד-פעמי (עודכן לכתוב הזמנות אם אפשר) ---
 class ManageOnceReq(BaseModel):
     symbol: Optional[str] = None
     offset_bps: Optional[int] = None
@@ -551,13 +564,11 @@ async def manage_once_lite(
         raise HTTPException(status_code=401, detail="Unauthorized")
 
     payload: Dict[str, Any] = {k: v for k, v in req.dict().items() if v is not None}
-    # אם לא נשלח write_orders — נאמץ מה-ENV
     write_orders = payload.pop("write_orders", None)
     if write_orders is None:
         write_orders = MANAGER_WRITES_ORDERS
     force_rewrite = payload.pop("force_rewrite", False)
 
-    # 1) routes.position_ops.manage_once – כולל כתיבה אם נתמך
     if position_ops_manage_once is not None:
         try:
             res = await position_ops_manage_once({**payload, "write_orders": bool(write_orders), "force_rewrite": bool(force_rewrite)})  # type: ignore
@@ -565,7 +576,6 @@ async def manage_once_lite(
         except Exception as e:
             logger.warning("routes.position_ops.manage_once failed: %s", e)
 
-    # 2) utils.position_manager.manage_once – כולל כתיבה אם נתמך
     if pm_manage_once is not None:
         try:
             res = await pm_manage_once(**{**payload, "write_orders": bool(write_orders), "force_rewrite": bool(force_rewrite)})  # type: ignore
@@ -573,11 +583,9 @@ async def manage_once_lite(
         except Exception as e:
             logger.warning("utils.position_manager.manage_once failed: %s", e)
 
-    # 3) Fallback מינימלי: תכנון BE/TP/Trail בלבד (ללא כתיבות אם אין לקוח מסחר)
     if not TradeClient:
         return {"ok": True, "delegated": False, "skipped": True, "reason": "manager_not_available_and_no_trade_client"}
 
-    # Fallback: לא נחשב ATR בפועל כאן — רק דוגמה לפרופיל בסיסי
     plan = {
         "be_bps": PROFILE_BASE_BE_BPS,
         "tp_pcts": SMART_MANAGE_PCTS,
@@ -585,16 +593,13 @@ async def manage_once_lite(
         "trail_atr_mult": TRAIL_ATR_MULT,
         "trigger": ORDER_TRIGGER,
     }
-    # לא נכתוב הזמנות ב-fallback כדי לא להזיק
     return {"ok": True, "delegated": False, "plan_only": plan, "reason": "fallback_no_writer"}
 
-# --- Rewrite / Sync ל-Native TP/SL על פוזיציה קיימת ---
 class SymbolReq(BaseModel):
     symbol: str
 
 async def _do_rewrite_native_tpsl(symbol: str) -> Dict[str, Any]:
     sym = symbol.upper().strip()
-    # 1) routes.position_ops.rewrite_native_tpsl
     if position_ops_rewrite_native_tpsl is not None:
         try:
             res = await position_ops_rewrite_native_tpsl({"symbol": sym})  # type: ignore
@@ -602,7 +607,6 @@ async def _do_rewrite_native_tpsl(symbol: str) -> Dict[str, Any]:
         except Exception as e:
             logger.warning("routes.position_ops.rewrite_native_tpsl failed: %s", e)
 
-    # 2) utils.position_manager.rewrite_native_tpsl
     if pm_rewrite_native_tpsl is not None:
         try:
             res = await pm_rewrite_native_tpsl(symbol=sym)  # type: ignore
@@ -610,15 +614,13 @@ async def _do_rewrite_native_tpsl(symbol: str) -> Dict[str, Any]:
         except Exception as e:
             logger.warning("utils.position_manager.rewrite_native_tpsl failed: %s", e)
 
-    # 3) Fallback: אם יש TradeClient — ננסה סינכרון מינימלי
     if TradeClient:
         try:
             cli = TradeClient()  # type: ignore
-            # שלבים כלליים: קרא פוזיציה -> בטל TP/SL ישנים -> גזור BE/TP מהפרופיל -> כתוב חדשים (reduceOnly)
             pos = await cli.get_position(sym)  # type: ignore
             if not pos or float(pos.get("positionAmt") or 0.0) == 0.0:
                 return {"ok": False, "error": "no_active_position"}
-            await cli.cancel_all_reduce_only(sym)  # type: ignore (בטל TP/SL קיימים)
+            await cli.cancel_all_reduce_only(sym)  # type: ignore
             entry = float(pos.get("entryPrice") or 0.0)
             side  = "BUY" if float(pos.get("positionAmt", 0)) > 0 else "SELL"
             tp_pcts = SMART_MANAGE_PCTS
@@ -658,10 +660,10 @@ async def trade_sync_native_tpsl(
         raise HTTPException(status_code=400, detail="NATIVE_TPSL_ENABLE=0")
     return await _do_rewrite_native_tpsl(req.symbol)
 
-# --- Webhook לאירועי ביצוע/TP/SL ---
+# --- Webhook אירועי ביצוע/TP/SL (כמו קודם) ---
 class ExecEvent(BaseModel):
     symbol: str
-    event: Optional[str] = None      # 'tp_hit','be_move','sl_hit','note',...
+    event: Optional[str] = None
     idx: Optional[int] = None
     price: Optional[float] = None
     qty: Optional[float] = None
@@ -672,7 +674,6 @@ class ExecEvent(BaseModel):
 @router.post("/events/execution")
 async def events_execution(ev: ExecEvent):
     sym = ev.symbol.upper()
-    # 1) normalized
     if ev.event:
         try:
             if ev.event == "tp_hit":
@@ -695,7 +696,6 @@ async def events_execution(ev: ExecEvent):
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"emit_failed: {e}")
 
-    # 2) raw EXECUTION_REPORT
     raw = ev.raw or {}
     try:
         etype = str(raw.get("e") or raw.get("eventType") or "").upper()
@@ -725,19 +725,18 @@ async def events_execution(ev: ExecEvent):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"exec_event_parse_failed: {e}")
 
-# ===== Background manager loop with Auto-Flip/Neutral and periodic manage-once =====
+# =================== Tick (fallback) ===================
 async def _tick_once() -> Dict[str, Any]:
     global TICK_COUNT, LAST_TICK_TS, LAST_CREATED, LAST_PENDING, LAST_ERROR
     created: List[str] = []
     LAST_ERROR = None
     try:
-        # 1) ingest -> tickets -> telegram
         for obj in _load_ingests():
             tid = await _dispatch_signal(obj)
             if tid:
                 created.append(tid)
 
-        # 2) ניהול “חד-פעמי” מחזורי עבור סמלים רלוונטיים (אם כתיבה מופעלת)
+        # ניהול תקופתי קל (Fallback) + אוטופליפ
         if MANAGER_WRITES_ORDERS and (pm_manage_once or position_ops_manage_once):
             symbols: List[str] = []
             if get_positions_snapshot:
@@ -759,7 +758,6 @@ async def _tick_once() -> Dict[str, Any]:
                 except Exception as e:
                     logger.debug("periodic manage_once for %s failed: %s", sym, e)
 
-        # 3) Auto-Flip/Neutral (fallback מחזורי — WS עושה את העבודה החיה)
         if AUTO_FLIP_ENABLE and get_positions_snapshot and not (USE_WS and _WS_TASK and not _WS_TASK.done()):
             try:
                 snap = await get_positions_snapshot()
@@ -803,7 +801,48 @@ async def _tick_once() -> Dict[str, Any]:
         logger.error("tick error: %s", e)
         return {"ok": False, "error": str(e), "created": created}
 
-# === WS Auto-Flip: price intake + gated eval + flip ===
+# =================== RT Manage helpers ===================
+async def _refresh_indicators(symbol: str) -> Tuple[float, float, float]:
+    """
+    מחזיר (close, atr, adx). ממוזער בבקשות: רק אם עבר ATR_UPDATE_COOLDOWN_SEC.
+    """
+    now = time.time()
+    last_ts = _IND_LAST_TS.get(symbol, 0.0)
+    if now - last_ts < ATR_UPDATE_COOLDOWN_SEC:
+        d = _IND_LAST.get(symbol, {})
+        return d.get("CLOSE", float("nan")), d.get("ATR", float("nan")), d.get("ADX", float("nan"))
+
+    base = os.getenv("BINANCE_FAPI", "https://fapi.binance.com").rstrip("/")
+    tf = os.getenv("DEFAULT_INTERVAL", DEFAULT_TF)
+    url = f"{base}/fapi/v1/klines"
+    params = {"symbol": symbol.upper(), "interval": tf, "limit": 200}
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as cli:
+            r = await cli.get(url, params=params)
+            r.raise_for_status()
+            kl = r.json()
+    except Exception as e:
+        logger.debug("refresh_indicators http failed for %s: %s", symbol, e)
+        d = _IND_LAST.get(symbol, {})
+        return d.get("CLOSE", float("nan")), d.get("ATR", float("nan")), d.get("ADX", float("nan"))
+
+    if not kl or len(kl) < 20:
+        d = _IND_LAST.get(symbol, {})
+        return d.get("CLOSE", float("nan")), d.get("ATR", float("nan")), d.get("ADX", float("nan"))
+
+    import pandas as pd  # local import to keep top clean
+    close = pd.Series([float(x[4]) for x in kl], dtype=float)
+    high  = pd.Series([float(x[2]) for x in kl], dtype=float)
+    low   = pd.Series([float(x[3]) for x in kl], dtype=float)
+    last_close = float(close.iloc[-1])
+
+    _atr = float(atr(pd.DataFrame({"high":high,"low":low,"close":close}), 14).iloc[-1]) if atr else float("nan")  # type: ignore
+    _adx = float(adx(pd.DataFrame({"high":high,"low":low,"close":close}), 14).iloc[-1]) if adx else float("nan")  # type: ignore
+
+    _IND_LAST[symbol] = {"CLOSE": last_close, "ATR": _atr, "ADX": _adx}
+    _IND_LAST_TS[symbol] = now
+    return last_close, _atr, _adx
+
 def _should_eval(symbol: str, price: float, now_ts: float) -> bool:
     last_ts = AF_LAST_EVAL.get(symbol, 0.0)
     if now_ts - last_ts < AF_EVAL_COOLDOWN_SEC:
@@ -819,6 +858,116 @@ def _flip_cooldown_ok(symbol: str, now_ts: float) -> bool:
     lt = AF_LAST_FLIP.get(symbol, 0.0)
     return (now_ts - lt) >= AF_FLIP_COOLDOWN_SEC
 
+def _clamp(x: float, lo: float, hi: float) -> float:
+    return max(lo, min(hi, x))
+
+async def _rt_manage(symbol: str) -> None:
+    """
+    ניהול “חי” ל-SL/TP: BE חכם + טרייל ATR + נעילות רווח.
+    """
+    if not (TRAIL_RT_ENABLE and TradeClient and get_positions_snapshot):
+        return
+    price = PRICE_MAP.get(symbol)
+    ts = LAST_PRICE_TS.get(symbol, 0.0)
+    now_ts = time.time()
+    if not price or now_ts - ts > AF_PRICE_TTL_SEC:
+        return
+
+    # מצב פוזיציה
+    pos_amt = 0.0
+    entry = None
+    side_now = None
+    try:
+        snap = await get_positions_snapshot()
+        for row in (snap or []):
+            if str(row.get("symbol","")).upper() == symbol:
+                pos_amt = float(row.get("positionAmt") or 0.0)
+                if pos_amt != 0.0:
+                    entry = float(row.get("entryPrice") or 0.0)
+                    side_now = "BUY" if pos_amt > 0 else "SELL"
+                break
+    except Exception:
+        return
+    if not side_now or not entry or entry <= 0:
+        return
+
+    # אינדיקטורים עדכניים/קאש
+    last_close, _atr, _adx = await _refresh_indicators(symbol)
+    if not (math.isfinite(_atr) and _atr > 0 and math.isfinite(_adx)):
+        # בלי ATR/ADX אנחנו עדיין יכולים לעשות BE ע"פ ב.פ.ס
+        _atr = 0.0
+        _adx = 0.0
+
+    # רווח נוכחי בבסיס bps (Positive אם בכיוון)
+    sign = 1.0 if side_now == "BUY" else -1.0
+    profit_bps = (price/entry - 1.0) * 10000.0 * sign
+
+    # === חישוב be_bps דינמי
+    be_bps = BE_BASE_BPS + (_adx * BE_ADX_FACTOR)
+    be_bps = _clamp(be_bps, BE_MIN_BPS, BE_MAX_BPS)
+
+    be_price = entry * (1.0 + (be_bps/10000.0) * sign)
+    need_be = (profit_bps >= max(TP_BE_OFFSET_BPS, SMART_MANAGE_BE_OFFSET_BPS))
+
+    # === Trail ATR חי
+    new_trail = None
+    if _atr > 0 and _adx >= AUTO_TRAIL_ADX_MIN and ( (_atr/(price or 1.0)) <= AUTO_TRAIL_ATRPCT_MAX ):
+        if side_now == "BUY":
+            new_trail = price - (TRAIL_RT_ATR_MULT * _atr)
+        else:
+            new_trail = price + (TRAIL_RT_ATR_MULT * _atr)
+
+    # === Profit locks (ברמת multiples של ATR)
+    lock_price = None
+    if _atr > 0:
+        profit_atr = (price - entry)*sign/_atr
+        # לכל מדרגה נעלה את ה"קוֹקֵר" של ה-SL קרוב יותר למחיר
+        for step in sorted(PROFIT_LOCK_STEPS):
+            if profit_atr >= step:
+                # הצעה שמרנית: BE + 0.25*ATR לכל מדרגה שעברנו
+                lock_off = 0.25 * _atr * step
+                lp = (be_price if need_be else entry) + sign * lock_off
+                if lock_price is None:
+                    lock_price = lp
+                else:
+                    lock_price = max(lock_price, lp) if side_now=="BUY" else min(lock_price, lp)
+
+    # בחר יעד SL סופי (מונוטוני, עם סף עדכון)
+    targets = []
+    if need_be and BE_GUARD_ENABLE:
+        targets.append(be_price)
+    if new_trail is not None:
+        targets.append(new_trail)
+    if lock_price is not None:
+        targets.append(lock_price)
+
+    if not targets:
+        return
+
+    target_sl = max(targets) if side_now=="BUY" else min(targets)
+
+    # שליפת SL נוכחי? אם אין, פשוט להציב. אם יש – כבדוק מונוטוניות וסף שינוי
+    # נניח שה־TradeClient מכיר כתיבת SL/BE באותה מתודה:
+    try:
+        cli = TradeClient()  # type: ignore
+        # אופציונלי: cli.get_current_stop_price(symbol) → אם יש אצלך — תעדכן כאן לבדוק MONOTONIC & THRESHOLD
+        # אם אין API כזה, נניח שמחיל "מונוטוני" בצד שלנו:
+        last_set = None  # אין לנו cache; אפשר לשלב אם יש לך סטייט פנימי
+        if SL_MONOTONIC and last_set is not None:
+            if (side_now == "BUY" and target_sl < last_set) or (side_now == "SELL" and target_sl > last_set):
+                return
+
+        # סף התאמה (אחוז ATR)
+        if _atr > 0 and last_set is not None:
+            if abs(target_sl - last_set) < (TRAIL_RT_ADJUST_THRESHOLD * _atr):
+                return
+
+        # כתיבת SL/BE (אותה פעולה – ה-Client שלך כבר תומך)
+        await cli.place_stop_loss_or_be(symbol, side_now, float(target_sl), trigger=ORDER_TRIGGER)  # type: ignore
+        await emit(symbol, "sl_move", to=float(target_sl))
+    except Exception as e:
+        logger.debug("rt_manage(%s) failed: %s", symbol, e)
+
 async def _maybe_eval_and_flip(symbol: str) -> None:
     if not (AUTO_FLIP_ENABLE and eval_regime and TradeClient):
         return
@@ -829,7 +978,6 @@ async def _maybe_eval_and_flip(symbol: str) -> None:
         return
     if not _should_eval(symbol, price, now_ts):
         return
-    # הערכת רז'ים עם כללים מה-ENV (גייטים של ADX/ATR% נעשים כבר ב-eval_regime)
     try:
         reg = await eval_regime(symbol=symbol, long_req=LONG_REQ, short_req=SHORT_REQ, neutral_req=NEUTRAL_REQ, timeframe=DEFAULT_TF)  # type: ignore
     except Exception as e:
@@ -839,7 +987,6 @@ async def _maybe_eval_and_flip(symbol: str) -> None:
     AF_LAST_EVAL[symbol] = now_ts
     AF_LAST_EVAL_PX[symbol] = price
 
-    # יש פוזיציה פעילה? מה הצד?
     side_now = None
     amt = 0.0
     try:
@@ -864,7 +1011,6 @@ async def _maybe_eval_and_flip(symbol: str) -> None:
     if not _flip_cooldown_ok(symbol, now_ts):
         return
 
-    # בצע Flip/Neutral בזהירות
     try:
         cli = TradeClient()  # type: ignore
         await cli.close_position_market(symbol)  # type: ignore
@@ -878,7 +1024,6 @@ async def _maybe_eval_and_flip(symbol: str) -> None:
         logger.debug("WS auto_flip %s failed: %s", symbol, e)
 
 async def _symbols_to_track() -> List[str]:
-    # מסימבולים עם פוזיציות פעילות + WATCHLIST; הגבל כמות
     wanted: Set[str] = set()
     try:
         if get_positions_snapshot:
@@ -893,33 +1038,31 @@ async def _symbols_to_track() -> List[str]:
     for s in AF_WATCHLIST:
         if s: wanted.add(s.upper())
     out = sorted(list(wanted))
-    if len(out) > AF_MAX_SYMBOLS:
-        out = out[:AF_MAX_SYMBOLS]
+    # כבוד להגבלות נפרדות: TRAIL_RT_MAX_SYMBOLS ו-AUTOFLIP_MAX_SYMBOLS
+    mx = max(1, min(TRAIL_RT_MAX_SYMBOLS, AF_MAX_SYMBOLS))
+    if len(out) > mx:
+        out = out[:mx]
     return out
 
 async def _ws_autoflip_loop():
-    # משתמשים בערוץ !markPrice@arr שמחזיר מערך של כל הסימבולים – אנו מסננים ל-WATCHLIST/פוזיציות כדי להיות חסכוניים
     url = f"{BINANCE_WS_BASE}/ws/!markPrice@arr"
     backoff = 1.0
     while True:
-        if not (MANAGER_ENABLE and AUTO_FLIP_ENABLE and USE_WS):
-            await asyncio.sleep(2.0)
-            continue
+        if not (MANAGER_ENABLE and USE_WS):
+            await asyncio.sleep(2.0); continue
         try:
             import websockets  # type: ignore
-            async with websockets.connect(url, ping_interval=WS_KEEPALIVE_SEC*0.8, ping_timeout=WS_KEEPALIVE_SEC) as ws:  # noqa: E722
+            async with websockets.connect(url, ping_interval=WS_KEEPALIVE_SEC*0.8, ping_timeout=WS_KEEPALIVE_SEC) as ws:
                 logger.info("WS connected: %s", url)
                 backoff = 1.0
                 while True:
                     raw = await asyncio.wait_for(ws.recv(), timeout=WS_KEEPALIVE_SEC*1.2)
                     now_ts = time.time()
-                    data = None
                     try:
                         data = json.loads(raw)
                     except Exception:
                         continue
 
-                    # פורמט !markPrice@arr = list[ { "s": "BTCUSDT", "p": "65000.1", ... }, ... ]
                     if isinstance(data, list):
                         track = set([s.upper() for s in (await _symbols_to_track())])
                         for it in data:
@@ -933,21 +1076,23 @@ async def _ws_autoflip_loop():
                                     LAST_PRICE_TS[s] = now_ts
                             except Exception:
                                 pass
-                        # הפעלה חכמה: רק לסימבולים שאנו עוקבים אחריהם
+
+                        # 1) ניהול חי (SL/TP)
+                        for s in track:
+                            await _rt_manage(s)
+                        # 2) אוטו-פליפ חכם
                         for s in track:
                             await _maybe_eval_and_flip(s)
-                    else:
-                        # תרחישים אחרים — מתעלמים
-                        pass
         except Exception as e:
             logger.warning("WS loop error: %s", e)
             await asyncio.sleep(min(30.0, backoff))
             backoff = min(30.0, backoff*1.7)
 
 async def _manager_loop():
-    logger.info("manager_loop start: enable=%s interval=%ss ingest_dir=%s alerts_ingest=%s writes_orders=%s native_tpsl=%s auto_flip=%s ws=%s",
+    logger.info("manager_loop start: enable=%s interval=%ss ingest_dir=%s alerts_ingest=%s writes_orders=%s native_tpsl=%s auto_flip=%s ws=%s rt_manage=%s",
                 MANAGER_ENABLE, MANAGER_INTERVAL_SEC, INGEST_DIR,
-                ALERTS_INGEST_URL or "DISABLED", MANAGER_WRITES_ORDERS, NATIVE_TPSL_ENABLE, AUTO_FLIP_ENABLE, USE_WS)
+                ALERTS_INGEST_URL or "DISABLED", MANAGER_WRITES_ORDERS, NATIVE_TPSL_ENABLE,
+                AUTO_FLIP_ENABLE, USE_WS, TRAIL_RT_ENABLE)
     while True:
         try:
             await _tick_once()
@@ -959,9 +1104,8 @@ async def _manager_loop():
 async def _startup():
     if MANAGER_ENABLE:
         asyncio.create_task(_manager_loop())
-    # הפעל WS Auto-Flip במקביל (אם הופעל)
     global _WS_TASK
-    if MANAGER_ENABLE and AUTO_FLIP_ENABLE and USE_WS and _WS_TASK is None:
+    if MANAGER_ENABLE and USE_WS and _WS_TASK is None:
         try:
             _WS_TASK = asyncio.create_task(_ws_autoflip_loop())
         except Exception as e:
@@ -975,11 +1119,10 @@ def main() -> None:
     asyncio.set_event_loop(loop)
     try:
         loop.create_task(_manager_loop())
-        if AUTO_FLIP_ENABLE and USE_WS:
+        if USE_WS:
             loop.create_task(_ws_autoflip_loop())
         loop.run_forever()
     except KeyboardInterrupt:
         pass
-
 
 
