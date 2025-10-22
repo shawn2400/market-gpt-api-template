@@ -118,7 +118,7 @@ services:
         value: "1"
 
       - key: SECURITY_PUBLIC_PATHS
-        value: "/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/approve,/ops/reject/signed,/ops/ui/ticket/signed,/public/ticket/inspect,/public/pos-events/stream"
+        value: "/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/public/ticket/inspect,/public/pos-events/stream"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
       - key: SECURITY_PROTECTED_PATHS
@@ -129,7 +129,6 @@ services:
       - key: CSP_POLICY
         value: "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https:; base-uri 'none'; frame-ancestors 'none'"
 
-      # --- חתימה/אנטי-ריפליי כבוי זמנית ---
       - key: ANTI_REPLAY_ENABLE
         value: "0"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
@@ -979,5 +978,4 @@ services:
         value: "1"
       - key: HEALTH_RECOVERY_GRACE_SEC
         value: "120"
-
 
