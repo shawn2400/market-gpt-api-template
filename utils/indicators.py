@@ -139,16 +139,15 @@ def _norm_logic(expr: str) -> str:
     }
     ee = " " + e + " "
     for k, v in repl.items(): ee = ee.replace(k, v)
-    # תמיכה באותיות גדולות/קטנות
     ee = ee.replace("AND", " and ").replace("OR", " or ").replace("NOT", " not ")
     return ee.strip()
 
 _ALLOWED_NODES = (
     ast.Expression, ast.BoolOp, ast.UnaryOp, ast.BinOp,
-    ast.And, ast.Or, ast.Not, ast.USub,  # not / סימן מינוס לטווחים
+    ast.And, ast.Or, ast.Not, ast.USub,
     ast.Compare, ast.Name, ast.Load, ast.Constant,
     ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Eq, ast.NotEq,
-    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,  # חישוב מספרי פשוט
+    ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
     ast.Call, ast.Tuple, ast.List
 )
 
@@ -159,15 +158,15 @@ def _safe_eval_bool(expr: str, vars_map: Dict[str, float]) -> bool:
     דוגמאות:
         "ema21 >= ema50 and adx >= 20"
         "adx >= 22 and atrpct <= 0.015"
-        "rsi > 55 or (macd_hist > 0 and ema21 > ema50)"
+        "between(rsi,45,55) or abs(macd_hist) < 0.05"
     """
     expr = _norm_logic(expr)
     if not expr: return False
 
-    # פונקציות עזר (אופציונלי — לטווחים)
+    # פונקציות עזר
     def between(x, lo, hi): return (x >= lo) and (x <= hi)
+    allowed_names = {**vars_map, "between": between, "abs": abs}
 
-    allowed_names = {**vars_map, "between": between}
     node = ast.parse(expr, mode="eval")
     for sub in ast.walk(node):
         if not isinstance(sub, _ALLOWED_NODES):
@@ -190,8 +189,8 @@ async def eval_regime(symbol: str,
       ema21, ema50, adx, atrpct, rsi, macd_hist
     """
     # === טעינת env ===
-    long_req   = (long_req   or os.getenv("LONG_REQ")   or os.getenv("BTC_LONG_REQ")  or "ema21>=ema50")
-    short_req  = (short_req  or os.getenv("SHORT_REQ")  or os.getenv("BTC_SHORT_REQ") or "ema21<=ema50")
+    long_req    = (long_req    or os.getenv("LONG_REQ")    or os.getenv("BTC_LONG_REQ")  or "ema21>=ema50")
+    short_req   = (short_req   or os.getenv("SHORT_REQ")   or os.getenv("BTC_SHORT_REQ") or "ema21<=ema50")
     neutral_req = (neutral_req or os.getenv("NEUTRAL_REQ") or "")
 
     tf = _INTERVAL_MAP.get(timeframe, "15m")
@@ -231,15 +230,24 @@ async def eval_regime(symbol: str,
         "macd_hist": _mhv,
     }
 
-    # ADX/ATR% “שער” מה-ENV (אופציונלי)
-    adx_min = float(os.getenv("REGIME_ADX_MIN", os.getenv("ADX_MIN","0") or 0) or 0)
+    # ADX/ATR% “שער” מה-ENV (אופציונלי) + תמיכה פר-טייםפריים
+    tf_key = tf.lower()
+    adx_tf_override = os.getenv(f"REGIME_ADX_MIN_{tf_key}", None)
+    if adx_tf_override not in (None, ""):
+        adx_min = float(adx_tf_override)
+    else:
+        adx_min = float(os.getenv("REGIME_ADX_MIN", os.getenv("ADX_MIN","0") or 0) or 0)
+
     atrpct_max = float(os.getenv("REGIME_ATRPCT_MAX", os.getenv("AUTO_TRAIL_ATRPCT_MAX","10") or 10) or 10)
+
     gated_out = False
     gate_reason: List[str] = []
+    # שערים חלים על LONG/SHORT בלבד (NEUTRAL נבדק תמיד)
     if adx_min > 0 and not (_adx >= adx_min):
-        gated_out = True; gate_reason.append(f"adx<{adx_min}")
+        gate_reason.append(f"adx<{adx_min}")
     if atrpct_max < 10 and not (atrpct <= atrpct_max):
-        gated_out = True; gate_reason.append(f"atrpct>{atrpct_max}")
+        gate_reason.append(f"atrpct>{atrpct_max}")
+    gated_out = bool(gate_reason)
 
     # התאמת כללים
     want = "NEUTRAL"; matched = None
@@ -262,7 +270,6 @@ async def eval_regime(symbol: str,
         "matched": matched,
         **({"gated_by": gate_reason} if gate_reason else {})
     }
-
 
 
 
