@@ -434,6 +434,8 @@ services:
         value: "0"
       - key: TELEGRAM_SEND_ENABLE
         value: "1"
+      - key: HTTP2_ENABLE
+        value: "1"   # מאופשר כי requirements מתקין http2
 
       - key: EXECUTE_TRADES
         value: "1"
@@ -949,7 +951,7 @@ services:
       - key: LOAD_SHED_ENABLE
         value: "1"
       - key: LOAD_SCHED_P95_HARD_MS
-        value: "1500"  # שמרתי מפתח מקורי — אם יש שלך בשם אחר תשאיר אותו
+        value: "1500"
       - key: LOAD_SHED_QUEUE_MAX
         value: "200"
       - key: LOAD_SHED_REJECT_PCT_STEP
