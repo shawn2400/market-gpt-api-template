@@ -73,7 +73,6 @@ services:
       - key: AUTO_RUN
         value: "1"
 
-      # חשוב: docker HOST
       - key: PUBLIC_HOST
         value: "https://algogpt-docker.onrender.com"
       - key: CONTEXT_URL
@@ -118,9 +117,8 @@ services:
       - key: TRUST_XFF
         value: "1"
 
-      # נתיבים ציבוריים שקיימים בפועל + זרם אירועים
       - key: SECURITY_PUBLIC_PATHS
-        value: "/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/public/ticket/inspect,/public/pos-events/stream"
+        value: "/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/approve,/ops/reject/signed,/ops/ui/ticket/signed,/public/ticket/inspect,/public/pos-events/stream"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
       - key: SECURITY_PROTECTED_PATHS
@@ -131,16 +129,17 @@ services:
       - key: CSP_POLICY
         value: "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https:; base-uri 'none'; frame-ancestors 'none'"
 
+      # --- חתימה/אנטי-ריפליי כבוי זמנית ---
       - key: ANTI_REPLAY_ENABLE
-        value: "1"
+        value: "0"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
-        value: "1"
+        value: "0"
       - key: ANTI_REPLAY_SKEW_SEC
         value: "60"
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
       - key: SIG_TS_ENFORCE
-        value: "1"
+        value: "0"
       - key: SIG_TS_SKEW_SEC
         value: "900"
 
@@ -227,7 +226,7 @@ services:
       - key: USE_WS
         value: "1"
       - key: USER_STREAM_ENABLE
-        value: "1"                # ← היה 0: עכשיו זמן־אמת אמיתי
+        value: "1"
 
       - key: EXCHANGE_INFO_TTL_SEC
         value: "900"
@@ -481,7 +480,6 @@ services:
       - key: SL_MONOTONIC
         value: "1"
 
-      # === SL מיידי (ללא חלון חסד)
       - key: STRUCT_SL_ENABLE
         value: "1"
       - key: GRACE_ENABLE
@@ -509,7 +507,7 @@ services:
         value: "1"
 
       - key: TP_LADDER_ON_APPROVE
-        value: "0"                # ← היה 1: לא להצמיד סולם קשיח
+        value: "0"
       - key: SMART_MANAGE_ON_APPROVE
         value: "1"
 
@@ -522,7 +520,7 @@ services:
       - key: SMART_MANAGE_TRAIL_ATR_MULT
         value: "1.6"
       - key: LADDER_TP_ENABLE
-        value: "0"                # ← היה 1: מבטל ליידרים קבועים
+        value: "0"
       - key: LADDER_SL_ENABLE
         value: "1"
       - key: TP_MAX_LADDERS
@@ -532,7 +530,6 @@ services:
       - key: TP_REARM_TICK
         value: "1"
 
-      # === סקאלפרי/צמוד יותר
       - key: PROFIT_LOCK_STEPS
         value: "0.8,1.2,1.8"
 
@@ -786,7 +783,6 @@ services:
         value: "1"
       - key: MANAGER_INTERVAL_SEC
         value: "20"
-      # כבר פעיל כדי לנהל פוזיציות פתוחות אוטומטית
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
@@ -795,9 +791,9 @@ services:
       - key: AUTO_ATR_MULT
         value: "1.6"
       - key: AUTO_TP_PCTS
-        value: ""                 # ← היה 2.5,4.5,7.5 : מבטל TP קבוע
+        value: ""
       - key: AUTO_TP_SPLITS
-        value: ""                 # ← היה 0.34,0.33,0.33 : מבטל חלוקות קבועות
+        value: ""
       - key: AUTO_POLL_SEC
         value: "30"
 
@@ -811,7 +807,7 @@ services:
         value: "ema21<=ema50"
 
       - key: PUBLIC_REQUIRE_BEARER
-        value: "0"
+        value: "1"
       - key: PUBLIC_SSE_HEARTBEAT_SEC
         value: "20"
       - key: PUBLIC_SSE_MAX_IDLE_SEC
@@ -841,7 +837,7 @@ services:
       - key: ROUTES_TAGS_DENY
         value: "internal,debug"
       - key: ROUTES_APPROVE_ENDPOINT
-        value: "/ops/approve/signed"
+        value: "/ops/approve"
       - key: ROUTES_DEFAULT_TIMEOUT_SEC
         value: "30"
       - key: ROUTES_DEFAULT_RL_RPS
