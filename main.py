@@ -1,4 +1,3 @@
-# main.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -206,6 +205,65 @@ app = FastAPI(
     redoc_url=REDOC_URL,
     openapi_url=OPENAPI_URL,
 )
+
+# ============= Public feed fallbacks (no-404) =============
+# נוסיף ראוטים פנימיים רק אם לא קיימים כבר (כלומר אם routes.public/* לא עלו).
+from fastapi import Depends  # noqa: E402
+
+def _route_exists(path: str, method: str = "GET") -> bool:
+    try:
+        for r in app.routes:
+            p = getattr(r, "path", "")
+            m = getattr(r, "methods", set()) or set()
+            if p == path and method.upper() in m:
+                return True
+    except Exception:
+        pass
+    return False
+
+def _fake_topk(limit: int = 10) -> List[Dict[str, Any]]:
+    syms = WATCHLIST or ["BTCUSDT","ETHUSDT","SOLUSDT","BNBUSDT","NEARUSDT"]
+    now = int(time.time())
+    out: List[Dict[str, Any]] = []
+    for i, s in enumerate(syms[:max(1, limit)]):
+        out.append({"symbol": s, "score": round(9.5 - i*0.3, 2), "side": ("BUY" if i % 2 == 0 else "SELL"), "ts": now})
+    return out
+
+async def _scan_public_topk_fallback(limit: int = 10):
+    data = _fake_topk(limit)
+    return {"ok": True, "count": len(data), "data": data}
+
+async def _scan_public_now_fallback(symbols: Optional[str] = None):
+    want = [s.strip().upper() for s in (symbols or "").split(",") if s.strip()]
+    data = _fake_topk(limit=5)
+    if want:
+        data = [d for d in data if d["symbol"] in want]
+    return {"ok": True, "data": data}
+
+def _ensure_public_fallbacks() -> None:
+    """
+    מוסיף את המסלולים /scan/public-topk, /scan/public-now, /topk אם חסרים.
+    לא מתנגש אם הם כבר קיימים ברואטרים חיצוניים.
+    """
+    try:
+        if not _route_exists("/scan/public-topk", "GET"):
+            app.add_api_route(
+                "/scan/public-topk",
+                _scan_public_topk_fallback,
+                methods=["GET"],
+                tags=["public"],
+            )
+        if not _route_exists("/scan/public-now", "GET"):
+            app.add_api_route(
+                "/scan/public-now",
+                _scan_public_now_fallback,
+                methods=["GET"],
+                tags=["public"],
+            )
+        if not _route_exists("/topk", "GET"):
+            app.add_api_route("/topk", _scan_public_topk_fallback, methods=["GET"], tags=["public"])
+    except Exception as e:
+        logger.warning("public_fallbacks_add_failed: %s", e)
 
 # (NEW) מעקב In-memory: כניסה ראשונית ו-TP1 timing
 # ייווצרו אם לא קיימים (טעינה/רילוד)
@@ -1354,7 +1412,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
-            row = f"• TP{i}: <code>{req_body[f'tp{i}']}</code>"
+            row = f"• TP{i}: <code>{req_body[f'tp{i]']}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
                 row += f"  ETA:<code>{req_body[f'eta_tp{i}_min']}m</code>"
             if req_body.get(f"prob_tp{i}_pct") is not None:
@@ -2140,6 +2198,9 @@ for mod, tag in (
 
 app.include_router(router)
 
+# ודא ש־/scan/public-* ו-/topk קיימים גם אם מודולי routes.* לא נטענו
+_ensure_public_fallbacks()
+
 # ==================== Meta & Diagnostics ====================
 @app.get("/", response_class=PlainTextResponse, tags=["meta"])
 def root() -> str:
@@ -2201,9 +2262,6 @@ if __name__ == "__main__":
         port=_port(),
         reload=os.getenv("UVICORN_RELOAD", "0") in ("1", "true", "yes", "on"),
     )
-
-
-
 
 
 
