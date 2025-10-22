@@ -142,7 +142,7 @@ services:
       - key: SIG_TS_SKEW_SEC
         value: "900"
 
-      # ===== Redis OFF (memory only)
+      # ===== Redis OFF (memory only) =====
       - key: RATE_LIMIT_ENABLE
         value: "1"
       - key: RL_FAIL_OPEN
@@ -417,7 +417,7 @@ services:
       - key: MANAGER_WRITES_ORDERS
         value: "1"
       - key: ORDERS_USE_OCO
-        value: "1"
+        value: "0"   # חשוב: בפיוצ'רס אין OCO מלא → משתמשים ב-STOP/TAKE_PROFIT נפרדים
       - key: ORDER_ID_PREFIX
         value: "ALG"
       - key: ORDER_ID_INCLUDE_TS
@@ -476,7 +476,7 @@ services:
         value: "200"
 
       - key: NATIVE_TPSL_ENABLE
-        value: "0"
+        value: "1"    # <<< הופעל
       - key: SL_MONOTONIC
         value: "1"
       - key: PERCENT_GUARD_ENABLE
@@ -654,7 +654,7 @@ services:
       - key: READINESS_CHECK_BINANCE
         value: "1"
       - key: READINESS_CHECK_REDIS
-        value: "0"
+        value: "0"   # ללא Redis
       - key: READINESS_CHECK_SQLITE
         value: "0"
       - key: READINESS_FAIL_GRACE_SEC
@@ -662,7 +662,7 @@ services:
       - key: READINESS_BINANCE_RETRY
         value: "1"
       - key: READINESS_REDIS_RETRY
-        value: "0"
+        value: "0"   # ללא Redis
       - key: SQLITE_PATH
         value: "/app/data/state.db"
 
@@ -953,6 +953,4 @@ services:
         value: "https://fapi.binance.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
         value: "3"
-
-
 
