@@ -32,10 +32,12 @@ services:
       - key: MODE
         value: "hybrid"
 
+      # Render מצפה שהאפליקציה תקשיב על $PORT
       - key: PORT
         value: "10000"
+      # לוודא מודול ASGI תקין (אם קובץ main.py בשורש הפרויקט)
       - key: APP_MODULE
-        value: "algogpt.main:app"
+        value: "main:app"
       - key: PYTHONPATH
         value: "/app"
 
@@ -91,9 +93,6 @@ services:
         value: "1"
       - key: READONLY_ENDPOINTS
         value: "summary,prices_top,news_cache,health,meta_telegram"
-      # שורה זו גרמה בעבר להיעלמות חלק מראוטרים — משאירים בלי include-tags
-      # - key: OPENAPI_INCLUDE_TAGS
-      #   value: "..."
       - key: OPENAPI_HIDE_PATTERNS
         value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
       - key: OPENAPI_PUBLIC_MAX_OPS
@@ -312,7 +311,6 @@ services:
       - key: INDICATORS_SUBSET
         value: ""
 
-      # לא לחסום באישור
       - key: ENTRY_SCORE_MODE
         value: "log"
       - key: ENTRY_SCORE_MIN
@@ -436,7 +434,7 @@ services:
       - key: TELEGRAM_SEND_ENABLE
         value: "1"
 
-      # מפעיל פתיחת טריידים (טסטנט)
+      # מסחר בטסטנט מופעל
       - key: EXECUTE_TRADES
         value: "1"
       - key: ALLOW_MARKET_ENTRY
@@ -466,13 +464,12 @@ services:
       - key: MIN_NOTIONAL_USDT
         value: "5"
 
-      # מרשה תקציב עד $200
       - key: MAX_TRADE_BUDGET
         value: "200"
       - key: ORDER_TRIGGER
         value: "mark"
       - key: POST_ONLY
-        value: "0"   # לא לחסום כניסה מהירה
+        value: "0"
 
       - key: REST_COOLDOWN_SEC
         value: "10"
@@ -488,7 +485,7 @@ services:
       - key: QTY_STEP_OVERRIDE__BTCUSDT
         value: "0.001"
 
-      # אוטו-סייז לטווח 100–200$, לו׳ 20–35
+      # אוטו-סייז 100–200$ ל׳ 20–35
       - key: AUTO_QTY_ENABLE
         value: "1"
       - key: AUTO_QTY_MODE
@@ -793,6 +790,7 @@ services:
       - key: BTC_SHORT_REQ
         value: "ema21<=ema50"
 
+      # ציבורי באמת – שלא תקבל 401
       - key: PUBLIC_REQUIRE_BEARER
         value: "0"
       - key: PUBLIC_SSE_HEARTBEAT_SEC
@@ -995,4 +993,5 @@ services:
         value: "https://testnet.binancefuture.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
         value: "3"
+
 
