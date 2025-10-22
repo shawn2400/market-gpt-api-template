@@ -435,7 +435,7 @@ services:
       - key: TELEGRAM_SEND_ENABLE
         value: "1"
       - key: HTTP2_ENABLE
-        value: "1"   # מאופשר כי requirements מתקין http2
+        value: "1"
 
       - key: EXECUTE_TRADES
         value: "1"
@@ -993,4 +993,5 @@ services:
         value: "https://testnet.binancefuture.com"
       - key: PUBLIC_STREAM_INTERVAL_SEC
         value: "3"
+
 
