@@ -134,6 +134,9 @@ _inline_env_defaults: Dict[str, str] = {
     "PRICE_PROTECT": "1",
     "USE_WS": "1",
     "WS_KEEPALIVE_SEC": "25",
+    # --- NEW: Signed-POST timestamp enforcement knobs (default permissive) ---
+    "SIG_TS_ENFORCE": "0",
+    "SIG_TS_SKEW_SEC": "900",
 }
 for _k, _v in _inline_env_defaults.items():
     os.environ.setdefault(_k, _v)
@@ -170,10 +173,11 @@ AUTO_TRAIL_ATRPCT_MAX = float(os.getenv("AUTO_TRAIL_ATRPCT_MAX", "0") or 0.0)
 # === תחזוקת TP: Merge / Rearm / Anti-stale (imports + ENV) ===
 try:
     from utils.tp_helper import (  # type: ignore
-        maybe_merge_close_tps, maybe_rearm_on_bounce, anti_stale_nudge
+        maybe_merge_close_tps, maybe_rearm_on_bounce, anti_stale_nudge, manage_once_place_all
     )
 except Exception:
     maybe_merge_close_tps = maybe_rearm_on_bounce = anti_stale_nudge = None  # type: ignore
+    manage_once_place_all = None  # type: ignore
 
 TP_MERGE_TICK_BAND = int(os.getenv("TP_MERGE_TICK_BAND", "1") or 1)
 TP_REARM_TICK = int(os.getenv("TP_REARM_TICK", "1") or 1)
@@ -907,7 +911,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                 data = r.json()
             if r.status_code < 400 and data.get("ok"):
                 return {"ok": True, "status": r.status_code, "result": data.get("result")}
-            # http2 -> http1 fallback, best-effort
+            # retry on 429/5xx
             if r.status_code in (429, 500, 502, 503, 504):
                 ra = 0.0
                 with suppress(Exception):
@@ -1230,6 +1234,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         position_side=pos_side,
         reduce_only=bool(ticket.get("reduce_only", False)),
     )
+    # allow partial kwargs according to the callable signature
     clean = _filter_kwargs_for_callable(execute_trade_live, base_kwargs)
     try:
         res = await execute_trade_live(**clean)  # type: ignore
@@ -1872,7 +1877,7 @@ async def _approve_core(ticket_id: str):
                 "splits": [float(x) for x in (os.getenv("SMART_MANAGE_SPLITS") or "0.30,0.30,0.40").split(",") if x.strip()],
                 "atr_mult": float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None,
             }
-            if sm.get("enable", True):
+            if sm.get("enable", True) and manage_once_place_all:
                 await _smart_manage_now(
                     str(ticket.get("symbol", "")).upper(),
                     offset_bps=sm.get("offset_bps"),
@@ -2113,10 +2118,8 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     if any(x <= 0 for x in splits):
         raise HTTPException(status_code=422, detail="splits must be > 0")
 
-    try:
-        from utils.tp_helper import manage_once_place_all  # type: ignore
-    except Exception as e:
-        return {"ok": False, "error": "tp_helper_missing", "detail": str(e)}
+    if not manage_once_place_all:
+        return {"ok": False, "error": "tp_helper_missing", "detail": "manage_once_place_all not available"}
 
     try:
         res = manage_once_place_all(
@@ -2194,90 +2197,91 @@ async def manage_once_signed(request: Request, payload: Dict[str, Any] = Body(..
 
 @router.get("/ops/digest/expired")
 async def digest_expired(hours: int = Query(6, ge=1, le=48), request: Request = None):
+    """
+    מאגד רשומות כרטיס שפגו/טופלו מה־Redis log (או ריק אם אין), במסגרת חלון השעות המבוקש.
+    מוגן ב־Bearer אם PROTECT_DIGEST_ROUTES=1 (דיפולט).
+    """
     if os.getenv("PROTECT_DIGEST_ROUTES", "1").lower() in ("1", "true", "yes", "on"):
         _require_bearer(request)
-    if not (aioredis and REDIS_URL and TELEGRAM_BOT_TOKEN and ADMIN_CHAT_ID):
-        return {"ok": False, "error": "digest_dependencies_missing"}
-    try:
-        r = await _get_redis_cached()
-        if not r:
-            return {"ok": False, "error": "redis_unavailable"}
-        key_good = f"{NS}:expired_log"
-        key_bad = f"{NS}:expired_log_bad"
-        items: List[str] = []
-        with suppress(Exception):
-            items.extend(await r.lrange(key_good, 0, 2000) or [])
-        with suppress(Exception):
-            items.extend(await r.lrange(key_bad, 0, 2000) or [])
-        now = time.time()
-        since = now - (hours * 3600)
-        events: List[Dict[str, Any]] = []
-        for it in items:
-            try:
-                obj = json.loads(it)
-                if float(obj.get("ts", 0)) >= since:
-                    events.append(obj)
-            except Exception:
-                continue
-        events.sort(key=lambda x: x.get("ts", 0), reverse=True)
-        total = len(events)
-        if total == 0:
-            await _send_telegram_html(f"ℹ️ No expired approvals in last {hours}h.")
-            return {"ok": True, "sent": True, "count": 0}
-        from collections import Counter as _C
-        by_sym: _C = _C((str(e.get("symbol", "")).upper(), str(e.get("side", "")).upper()) for e in events)
-        lines = [f"⏱️ <b>Expired approvals</b> (last {hours}h) · total: <b>{total}</b>"]
-        for (sym, side), cnt in by_sym.most_common(20):
-            lines.append(f"• {sym} {side}: <code>{cnt}</code>")
-        lines.append("— — —")
-        lines.append("<b>Last events</b>:")
-        for e in events[:5]:
-            t = int(e.get("ts", now))
-            idem = e.get("idem", "")
-            sym = str(e.get("symbol", "")).upper()
-            side = str(e.get("side", "")).upper()
-            lines.append(f"• {time.strftime('%Y-%m-%d %H:%M:%S', time.gmtime(t))}Z · {sym} {side} · <code>{idem}</code>")
-        await _send_telegram_html("\n".join(lines))
-        return {"ok": True, "sent": True, "count": total}
-    except Exception as e:
-        logger.warning("digest_expired_failed: %s", e)
-        return {"ok": False, "error": str(e)}
+    now = time.time()
+    since = now - (hours * 3600)
+    out: List[Dict[str, Any]] = []
+    if aioredis and REDIS_URL:
+        try:
+            r = await _get_redis_cached()
+            if r:
+                for key in (f"{NS}:expired_log", f"{NS}:expired_log_bad"):
+                    items = await r.lrange(key, 0, 999)
+                    for raw in items or []:
+                        with suppress(Exception):
+                            obj = json.loads(raw)
+                            if float(obj.get("ts", 0)) >= since:
+                                out.append(obj)
+        except Exception as e:
+            return JSONResponse({"ok": False, "error": "redis_read_failed", "detail": str(e)}, status_code=503)
+    return {"ok": True, "count": len(out), "data": out}
 
-async def _telegram_webhook_core(request: Request) -> Dict[str, Any]:
-    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
-    TELEGRAM_WEBHOOK_SECRET_ = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
-    if TELEGRAM_WEBHOOK_SECRET_ and secret != TELEGRAM_WEBHOOK_SECRET_:
-        raise HTTPException(status_code=401, detail="Bad secret")
-    _ = await request.body()
-    return {"ok": True}
-
-@app.post("/telegram/webhook")
+# ==================== Telegram webhook (optional) ====================
+@router.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
-    return await _telegram_webhook_core(request)
+    """
+    מקבל עדכוני טלגרם. אנחנו לא תלויים בזה ל-approve/reject, אבל משאירים לצורכי future UX.
+    מוודאים את ה-secret header אם הוגדר.
+    """
+    if TELEGRAM_WEBHOOK_SECRET:
+        sec = request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
+        if sec != TELEGRAM_WEBHOOK_SECRET:
+            raise HTTPException(status_code=401, detail="bad telegram secret")
+    try:
+        payload = await request.json()
+    except Exception:
+        payload = {}
+    # no-op; עונים 200 כדי למנוע retries
+    return {"ok": True, "received": bool(payload)}
 
-@app.post("/telegram/hook")
-async def telegram_hook_alias(request: Request):
-    return await _telegram_webhook_core(request)
+# ==================== Root & meta ====================
+@app.get("/")
+async def root():
+    return {"ok": True, "app": APP_TITLE, "version": APP_VERSION}
 
-# ---- small ping route (listed in SECURITY_PUBLIC_PATHS) ----
-@app.get("/telegram/ping", tags=["meta"])
-async def telegram_ping():
-    return {"ok": True, "pong": True}
+@app.get("/version")
+async def version():
+    return {"ok": True, "version": APP_VERSION}
 
-# ===== Mount router & public fallbacks =====
-app.include_router(router)
-_ensure_public_fallbacks()
+@app.get("/healthz")
+async def healthz():
+    return PlainTextResponse("ok", status_code=200)
 
-# ===== Startup tasks =====
+# ==================== Startup / Shutdown ====================
 @app.on_event("startup")
-async def _on_startup():
-    with suppress(Exception):
-        app.state.boot_ts = time.time()
-    # Binance endpoints auto-fallback (best-effort; non-fatal)
-    with suppress(Exception):
+async def on_startup():
+    try:
+        _ensure_public_fallbacks()
+    except Exception as e:
+        logger.warning("ensure_public_fallbacks_failed: %s", e)
+    try:
         await _resolve_binance_endpoints()
-    with suppress(Exception):
+    except Exception as e:
+        logger.warning("resolve_binance_endpoints_failed: %s", e)
+    try:
+        if STARTUP_NOTIFY_ENABLE:
+            await _send_telegram_html(f"🤖 <b>{_md_html(APP_TITLE)}</b> is up · v<code>{_md_html(APP_VERSION)}</code>")
+    except Exception as e:
+        logger.info("startup_notify_failed: %s", e)
+    try:
         await _ensure_telegram_webhook()
+    except Exception as e:
+        logger.info("ensure_telegram_webhook_failed: %s", e)
+
+@app.on_event("shutdown")
+async def on_shutdown():
+    cli = getattr(app.state, "shared_async_client", None)
+    if cli and not cli.is_closed:
+        with suppress(Exception):
+            await cli.aclose()
+
+# ==================== Mount router ====================
+app.include_router(router)
 
 # (optional) local dev server
 if __name__ == "__main__":
