@@ -15,38 +15,36 @@ services:
 
     envVars:
       - key: APP_NAME
-        value: "algogpt"
+        value: algogpt
       - key: APP_TITLE
-        value: "AlgoGPT Service (staging)"
+        value: AlgoGPT Service (staging)
       - key: ALGOGPT_VERSION
         value: "2.18.0"
       - key: INSTANCE_ID
-        value: "algogpt-staging"
+        value: algogpt-staging
       - key: INSTANCE
-        value: "algogpt-staging"
+        value: algogpt-staging
       - key: APP_INSTANCE
-        value: "algogpt-staging"
+        value: algogpt-staging
       - key: SERVICE_INSTANCE
-        value: "algogpt-staging"
+        value: algogpt-staging
 
       - key: MODE
-        value: "hybrid"
+        value: hybrid
 
-      # Render מצפה שהאפליקציה תקשיב על $PORT
       - key: PORT
         value: "10000"
-      # לוודא מודול ASGI תקין (אם קובץ main.py בשורש הפרויקט)
       - key: APP_MODULE
-        value: "main:app"
+        value: main:app
       - key: PYTHONPATH
-        value: "/app"
+        value: /app
 
       - key: ULTRATOP_MODE
-        value: "mount"
+        value: mount
       - key: ULTRATOP_PREFIX
-        value: "/ultra"
+        value: /ultra
       - key: ULTRATOP_STATIC_DIR
-        value: "/app/static/ultra"
+        value: /app/static/ultra
 
       - key: WEB_CONCURRENCY
         value: "1"
@@ -62,11 +60,11 @@ services:
         value: "50"
 
       - key: LOG_LEVEL
-        value: "INFO"
+        value: INFO
       - key: UVICORN_ACCESS_LOG
         value: "false"
       - key: UVICORN_LOG_LEVEL
-        value: "info"
+        value: info
 
       - key: HTTP_MAX_CONNECTIONS
         value: "200"
@@ -75,33 +73,32 @@ services:
       - key: AUTO_RUN
         value: "1"
 
-      # דומיין מיושר
       - key: PUBLIC_HOST
-        value: "https://algogpt-staging.onrender.com"
+        value: https://algogpt-staging.onrender.com
       - key: CONTEXT_URL
-        value: "https://algogpt-staging.onrender.com"
+        value: https://algogpt-staging.onrender.com
       - key: WEBHOOK_HOST
-        value: "https://algogpt-staging.onrender.com"
+        value: https://algogpt-staging.onrender.com
 
       - key: DOCS_URL
-        value: "/docs"
+        value: /docs
       - key: REDOC_URL
-        value: "/redoc"
+        value: /redoc
       - key: OPENAPI_URL
-        value: "/openapi.json"
+        value: /openapi.json
       - key: ENABLE_READONLY_HTTP
         value: "1"
       - key: READONLY_ENDPOINTS
-        value: "summary,prices_top,news_cache,health,meta_telegram"
+        value: summary,prices_top,news_cache,health,meta_telegram
       - key: OPENAPI_HIDE_PATTERNS
-        value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
+        value: /_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
       - key: OPENAPI_PUBLIC_MAX_OPS
         value: "30"
 
       - key: CORS_ALLOW_ORIGINS
-        value: "https://algogpt-staging.onrender.com"
+        value: https://algogpt-staging.onrender.com
       - key: CORS_ALLOW_ORIGINS_STRICT
-        value: "https://algogpt-staging.onrender.com"
+        value: https://algogpt-staging.onrender.com
       - key: CORS_ALLOW_HEADERS
         value: "*"
       - key: CORS_ALLOW_METHODS
@@ -121,11 +118,11 @@ services:
         value: "1"
 
       - key: SECURITY_PUBLIC_PATHS
-        value: "/ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/routes/approve/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/health,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/public/pos-events/stream,/internal/self-check/signed"
+        value: /ops/approve/signed,/ops/reject/signed,/ops/ui/ticket/signed,/routes/approve/signed,/readyz,/readyz/strict,/telegram/webhook,/telegram/hook,/telegram/ping,/health,/topk,/topk.csv,/scan/public-now,/scan/public-topk,/scan/public-topk/web,/scan/public-now/web,/scan/public-stream,/public/sse-ticket,/public/ticket/inspect,/alerts/ingest,/alerts/trades/update,/alerts/trades/active/scan-top-volume,/scan/now,/meta/version,/public/pos-events/stream,/internal/self-check/signed
       - key: SECURITY_PUBLIC_PREFIXES
-        value: "/public,/price,/static,/risk"
+        value: /public,/price,/static,/risk
       - key: SECURITY_PROTECTED_PATHS
-        value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json"
+        value: /ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json
 
       - key: ENABLE_CSP
         value: "1"
@@ -140,13 +137,17 @@ services:
         value: "60"
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
+      - key: SIG_TS_ENFORCE
+        value: "1"
+      - key: SIG_TS_SKEW_SEC
+        value: "900"
 
       - key: RATE_LIMIT_ENABLE
         value: "1"
       - key: RL_FAIL_OPEN
         value: "0"
       - key: RATE_LIMIT_BACKEND
-        value: "redis"
+        value: redis
       - key: PUBLIC_TOPK_RPS
         value: "2"
       - key: PUBLIC_TOPK_WINDOW
@@ -158,7 +159,7 @@ services:
       - key: PUBLIC_CACHE_MAX_AGE
         value: "20"
       - key: PUBLIC_CACHE_PATHS
-        value: "/scan/public-topk,/scan/public-now,/topk"
+        value: /scan/public-topk,/scan/public-now,/topk
 
       - key: PUBLIC_WEB_RPS
         value: "2"
@@ -173,7 +174,7 @@ services:
       - key: PUBLIC_SSE_MAX_CONNS_PER_IP
         value: "2"
       - key: PUBLIC_RL_NS
-        value: "ops-supervisor-web:rl:staging"
+        value: ops-supervisor-web:rl:staging
 
       - key: EXECUTOR_RL_RPS
         value: "2"
@@ -182,7 +183,7 @@ services:
       - key: EXECUTOR_RL_WINDOW
         value: "3"
       - key: EXECUTOR_RL_NS
-        value: "ops-executor:rl:staging"
+        value: ops-executor:rl:staging
 
       - key: REQUIRE_REDIS
         value: "1"
@@ -205,38 +206,38 @@ services:
       - key: REDIS_PING_RETRY_BACKOFF_SEC
         value: "0.6"
       - key: REDIS_CLIENT_NAME
-        value: "algogpt-staging"
+        value: algogpt-staging
       - key: REDIS_RETRY_ON_TIMEOUT
         value: "1"
       - key: REDIS_SSL_NO_VERIFY
         value: "0"
       - key: REDIS_SSL_CERT_REQS
-        value: "required"
+        value: required
       - key: REDIS_SSL_CA_CERTS
-        value: "/etc/ssl/certs/ca-certificates.crt"
+        value: /etc/ssl/certs/ca-certificates.crt
       - key: REDIS_NAMESPACE
-        value: "ops-supervisor-web:staging"
+        value: ops-supervisor-web:staging
       - key: REDIS_URL
         fromSecret: REDIS_URL_STAGING
       - key: ALGOGPT_REDIS_URL
         fromSecret: REDIS_URL_STAGING
 
       - key: DEFAULT_MARKET
-        value: "futures"
+        value: futures
       - key: POSITION_MODE_OVERRIDE
-        value: "hedge"
+        value: hedge
       - key: BINANCE_MARGIN_TYPE_DEFAULT
-        value: "ISOLATED"
+        value: ISOLATED
       - key: BINANCE_FUTURES_HTTP_BASE
-        value: "https://testnet.binancefuture.com"
+        value: https://testnet.binancefuture.com
       - key: BINANCE_FUTURES_WS_BASE
-        value: "wss://stream.testnet.binancefuture.com/ws"
+        value: wss://stream.testnet.binancefuture.com/ws
       - key: BINANCE_SPOT_HTTP_BASE
-        value: "https://testnet.binance.vision"
+        value: https://testnet.binance.vision
       - key: BINANCE_TESTNET
         value: "true"
       - key: BINANCE_WORKING_TYPE
-        value: "MARK_PRICE"
+        value: MARK_PRICE
       - key: BINANCE_HTTP_TIMEOUT
         value: "10.0"
       - key: BINANCE_MAX_RETRIES
@@ -260,11 +261,11 @@ services:
         value: "0"
 
       - key: SCAN_SOURCE
-        value: "binance-futures"
+        value: binance-futures
       - key: UNIVERSE_MODE
-        value: "exchange"
+        value: exchange
       - key: SCAN_INTERVALS
-        value: "5m,15m,1h,4h"
+        value: 5m,15m,1h,4h
       - key: SCAN_MAX_SYMBOLS
         value: "80"
       - key: SCAN_MAX_LIMIT
@@ -285,7 +286,7 @@ services:
         value: "0"
 
       - key: INDICATOR_INTERVALS
-        value: "15m,1h,4h,1d"
+        value: 15m,1h,4h,1d
       - key: ENABLE_INDICATOR_EXIT
         value: "1"
       - key: ADX_MIN
@@ -312,11 +313,11 @@ services:
         value: ""
 
       - key: ENTRY_SCORE_MODE
-        value: "log"
+        value: log
       - key: ENTRY_SCORE_MIN
         value: "0"
       - key: ENTRY_SCORE_INTERVAL
-        value: "15m"
+        value: 15m
       - key: ENTRY_SCORE_ENFORCE_ON_APPROVE
         value: "0"
       - key: CHECKLIST_LOG_FEATURES
@@ -353,18 +354,18 @@ services:
         value: "1.5"
 
       - key: ALLOWLIST_MODE
-        value: "off"
+        value: off
       - key: SYMBOLS_ALLOWLIST_PATH
-        value: "config/symbols_allowlist.json"
+        value: config/symbols_allowlist.json
       - key: WATCHLIST
-        value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT"
+        value: BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT
 
       - key: SCAN_CRON_ENABLE
         value: "1"
       - key: SCAN_CRON_EVERY_SEC
         value: "60"
       - key: SCAN_CRON_TIMEFRAME
-        value: "15m"
+        value: 15m
       - key: SCAN_CRON_KLINES
         value: "150"
       - key: SCAN_CRON_LIMIT
@@ -414,7 +415,7 @@ services:
       - key: ONLY_TRADE_NOTIFICATIONS
         value: "1"
       - key: NOTIFY_LEVEL
-        value: "critical"
+        value: critical
       - key: STARTUP_NOTIFY_ENABLE
         value: "0"
       - key: ADMIN_CHAT_ID
@@ -426,7 +427,7 @@ services:
       - key: TELEGRAM_AUTO_WEBHOOK
         value: "1"
       - key: TELEGRAM_PARSE_MODE
-        value: "HTML"
+        value: HTML
       - key: TELEGRAM_RICH_MSG
         value: "0"
       - key: ALLOW_PUBLIC_META_TELEGRAM_SEND
@@ -434,7 +435,6 @@ services:
       - key: TELEGRAM_SEND_ENABLE
         value: "1"
 
-      # מסחר בטסטנט מופעל
       - key: EXECUTE_TRADES
         value: "1"
       - key: ALLOW_MARKET_ENTRY
@@ -444,7 +444,7 @@ services:
       - key: ORDERS_USE_OCO
         value: "1"
       - key: ORDER_ID_PREFIX
-        value: "ALG"
+        value: ALG
       - key: ORDER_ID_INCLUDE_TS
         value: "1"
       - key: ORDER_BACKOFF_BASE_MS
@@ -458,7 +458,7 @@ services:
       - key: ORD_VERIFY_TIMEOUT_MS
         value: "800"
       - key: ORD_CANCEL_STRATEGY
-        value: "MINIMAL"
+        value: MINIMAL
       - key: MAX_TRADES_PER_TICK
         value: "1"
       - key: MIN_NOTIONAL_USDT
@@ -467,7 +467,7 @@ services:
       - key: MAX_TRADE_BUDGET
         value: "200"
       - key: ORDER_TRIGGER
-        value: "mark"
+        value: mark
       - key: POST_ONLY
         value: "0"
 
@@ -485,11 +485,10 @@ services:
       - key: QTY_STEP_OVERRIDE__BTCUSDT
         value: "0.001"
 
-      # אוטו-סייז 100–200$ ל׳ 20–35
       - key: AUTO_QTY_ENABLE
         value: "1"
       - key: AUTO_QTY_MODE
-        value: "notional"
+        value: notional
       - key: AUTO_QTY_MARGIN_BUFFER_PCT
         value: "0.20"
       - key: AUTO_LEV_MIN
@@ -530,9 +529,9 @@ services:
       - key: SMART_MANAGE_BE_OFFSET_BPS
         value: "5"
       - key: SMART_MANAGE_PCTS
-        value: "4,8,16"
+        value: 4,8,16
       - key: SMART_MANAGE_SPLITS
-        value: "0.30,0.30,0.40"
+        value: 0.30,0.30,0.40
       - key: SMART_MANAGE_TRAIL_ATR_MULT
         value: "1.6"
       - key: LADDER_TP_ENABLE
@@ -546,7 +545,7 @@ services:
       - key: TP_REARM_TICK
         value: "1"
       - key: PROFIT_LOCK_STEPS
-        value: "1.0,1.5,2.0"
+        value: 1.0,1.5,2.0
       - key: STRUCT_SL_ENABLE
         value: "1"
       - key: STRUCT_SL_LOOKBACK
@@ -558,7 +557,7 @@ services:
       - key: STRUCT_SL_BUFFER_BPS
         value: "5"
       - key: STRUCT_SL_MERGE_MODE
-        value: "tight"
+        value: tight
       - key: TIME_STOP_MIN
         value: "20"
       - key: TIME_STOP_KEEP_PROFIT_MIN_PCT
@@ -588,9 +587,9 @@ services:
       - key: MANAGER_REISSUE_ENABLE
         value: "0"
       - key: MANAGER_REISSUE_POLICY
-        value: "cancel_replace"
+        value: cancel_replace
       - key: TRAIL_PAUSE_WINDOWS
-        value: "22:00-02:00Z,11:30-12:00Z"
+        value: 22:00-02:00Z,11:30-12:00Z
       - key: AUTO_TRAIL_ADX_MIN
         value: "14"
       - key: AUTO_TRAIL_ATRPCT_MAX
@@ -621,7 +620,7 @@ services:
       - key: TRAIL_RT_MAX_CALLBACK
         value: "5.0"
       - key: TRAIL_RT_PRICE_SRC
-        value: "MARK_PRICE"
+        value: MARK_PRICE
       - key: TRAIL_RT_MAX_SYMBOLS
         value: "20"
       - key: TRAIL_RT_ADJUST_THRESHOLD
@@ -645,7 +644,7 @@ services:
       - key: HEALTH_TP1_ONLY_WITH_POSITION
         value: "1"
       - key: TP1_TAGS
-        value: "TP1,tp1,tp_1,TAKE_PROFIT_1"
+        value: TP1,tp1,tp_1,TAKE_PROFIT_1
       - key: OPS_DIGEST_INTERVAL_HOURS
         value: "6"
       - key: OPS_HEARTBEAT_ENABLE
@@ -670,7 +669,7 @@ services:
       - key: ETA_VELOCITY_WINDOW
         value: "30"
       - key: DEFAULT_INTERVAL
-        value: "15m"
+        value: 15m
 
       - key: GUARDER_ENABLE
         value: "1"
@@ -690,22 +689,22 @@ services:
       - key: READINESS_REDIS_RETRY
         value: "1"
       - key: SQLITE_PATH
-        value: "/app/data/state.db"
+        value: /app/data/state.db
 
       - key: PROM_METRICS_ENABLE
         value: "1"
       - key: PROM_METRICS_PATH
-        value: "/metrics"
+        value: /metrics
       - key: METRICS_PROTECT
         value: "1"
       - key: PUBLIC_METRICS_REQUIRE_BEARER
         value: "1"
       - key: HTTP_LATENCY_BUCKETS
-        value: "0.05,0.1,0.25,0.5,1,2,5"
+        value: 0.05,0.1,0.25,0.5,1,2,5
       - key: TP1_TIME_BUCKETS
-        value: "30,60,120,300,600,1200,3600"
+        value: 30,60,120,300,600,1200,3600
       - key: SLIP_BPS_BUCKETS
-        value: "1,2,5,10,20,50,100"
+        value: 1,2,5,10,20,50,100
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER_STAGING
 
@@ -740,7 +739,7 @@ services:
       - key: KELLY_LITE_CAP
         value: "0.5"
       - key: SESSION_RULES
-        value: "02:00-06:00Z=OFF,12:30-13:00Z=REDUCE_50"
+        value: 02:00-06:00Z=OFF,12:30-13:00Z=REDUCE_50
       - key: GAP_SHOCK_BPS
         value: "80"
 
@@ -749,9 +748,9 @@ services:
       - key: PNL_TRACKING
         value: "true"
       - key: PARAMS_DIR
-        value: "params/optimized"
+        value: params/optimized
       - key: DATABASE_URL
-        value: "sqlite:////app/data/algogpt.db"
+        value: sqlite:////app/data/algogpt.db
       - key: PRICE_CACHE_TTL_MS
         value: "250"
       - key: PRICE_MAX_AGE_SEC
@@ -775,22 +774,21 @@ services:
       - key: AUTO_ATR_MULT
         value: "1.6"
       - key: AUTO_TP_PCTS
-        value: "3,6,12"
+        value: 3,6,12
       - key: AUTO_TP_SPLITS
-        value: "0.278,0.333,0.389"
+        value: 0.278,0.333,0.389
       - key: AUTO_POLL_SEC
         value: "45"
 
       - key: BTC_GATE_ENABLE
         value: "1"
       - key: BTC_GATE_TF
-        value: "15m"
+        value: 15m
       - key: BTC_LONG_REQ
-        value: "ema21>=ema50"
+        value: ema21>=ema50
       - key: BTC_SHORT_REQ
-        value: "ema21<=ema50"
+        value: ema21<=ema50
 
-      # ציבורי באמת – שלא תקבל 401
       - key: PUBLIC_REQUIRE_BEARER
         value: "0"
       - key: PUBLIC_SSE_HEARTBEAT_SEC
@@ -801,9 +799,9 @@ services:
         value: "0"
 
       - key: POLICY_DSL_PATH
-        value: "policies/dynamic_policy.yaml"
+        value: policies/dynamic_policy.yaml
       - key: POLICY_SCHEMA_PATH
-        value: "config/policy_schema.json"
+        value: config/policy_schema.json
 
       - key: ROUTES_AUTO_DISCOVERY
         value: "1"
@@ -812,17 +810,17 @@ services:
       - key: ROUTES_ALLOW
         value: "*"
       - key: ROUTES_DENY
-        value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
+        value: /_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*
       - key: ROUTES_PUBLIC_PREFIX
-        value: "/public"
+        value: /public
       - key: ROUTES_PROTECTED_PREFIXES
-        value: "/ops,/manager,/routes,/webhook,/guard"
+        value: /ops,/manager,/routes,/webhook,/guard
       - key: ROUTES_TAGS_REQUIRE
         value: ""
       - key: ROUTES_TAGS_DENY
-        value: "internal,debug"
+        value: internal,debug
       - key: ROUTES_APPROVE_ENDPOINT
-        value: "/ops/approve/signed"
+        value: /ops/approve/signed
       - key: ROUTES_DEFAULT_TIMEOUT_SEC
         value: "30"
       - key: ROUTES_DEFAULT_RL_RPS
@@ -835,7 +833,7 @@ services:
       - key: DISABLE_ROUTES
         value: ""
 
-      # סודות/מפתחות
+      # Secrets
       - key: API_BEARER_TOKEN_RO
         fromSecret: API_BEARER_TOKEN_RO_STAGING
       - key: API_BEARER_TOKEN_ACTION
@@ -877,9 +875,9 @@ services:
       - key: POS_EVENTS_ENABLE
         value: "1"
       - key: POS_EVENTS_KEY
-        value: "pos:events:staging"
+        value: pos:events:staging
       - key: POS_EVENTS_CHAN
-        value: "pos:events:chan:staging"
+        value: pos:events:chan:staging
       - key: POS_EVENTS_MAX
         value: "300"
       - key: POS_EVENTS_EXPIRE_SEC
@@ -887,12 +885,12 @@ services:
       - key: POS_EVENTS_TELEGRAM_ENABLE
         value: "0"
       - key: POS_EVENTS_TELEGRAM_LEVEL
-        value: "none"
+        value: none
 
       - key: DYNAMIC_CONTROL_ENABLE
         value: "1"
       - key: DYNAMIC_SAFETY_MODE
-        value: "on"
+        value: on
       - key: DYNAMIC_TARGET_P95_MS
         value: "900"
       - key: DYNAMIC_ERROR_RATE_MAX_PCT
@@ -982,7 +980,7 @@ services:
       - key: KILL_SWITCH_ENABLE
         value: "1"
       - key: KILL_SWITCH_REASON
-        value: "auto-guard"
+        value: auto-guard
 
       - key: ENABLE_SELF_CHECK
         value: "1"
@@ -990,8 +988,9 @@ services:
         value: "1"
 
       - key: BINANCE_FAPI
-        value: "https://testnet.binancefuture.com"
+        value: https://testnet.binancefuture.com
       - key: PUBLIC_STREAM_INTERVAL_SEC
         value: "3"
+
 
 
