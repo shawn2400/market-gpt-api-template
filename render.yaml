@@ -479,10 +479,12 @@ services:
         value: "1"
       - key: STRUCT_SL_ENABLE
         value: "0"
+      - key: GRACE_ENABLE
+        value: "1"
       - key: GRACE_TIME_SEC
-        value: "420"
+        value: "420"          # 7 דקות חלון תיקון
       - key: GRACE_MAX_MAE_ATR
-        value: "1.2"
+        value: "1.2"          # MAE עד 1.2×ATR לפני הגנה קשיחה
       - key: PERCENT_GUARD_ENABLE
         value: "1"
       - key: PERCENT_PRICE_GUARD_BPS
@@ -550,12 +552,22 @@ services:
         value: "20"
       - key: ATR_MIN_DELTA
         value: "0.02"
+      - key: HYSTERESIS_ATR_FRAC
+        value: "0.2"          # מזיזים SL רק אם ≥ 0.2×ATR
+      - key: SL_MIN_STEP_BPS
+        value: "3"            # מינימום הזזה 3 bps
       - key: BE_ARM_PCT
         value: "0.6"
       - key: BE_GUARD_ENABLE
         value: "1"
       - key: BE_GUARD_EVERY_SEC
         value: "20"
+      - key: BE_TRIGGER_REQUIRE_ADX
+        value: "22"           # ADX מינימלי ל-BE
+      - key: BE_TRIGGER_PROG_TO_TP1_PCT
+        value: "0.35"         # % התקדמות ל-TP1 כדי לזרוע BE
+      - key: PROG_TO_TP1_FALLBACK_PCT
+        value: "0.60"         # fallback אם אין TP1: % תנועה “מספיק טובה” מהכניסה
       - key: TRAIL_IN_CHOP
         value: "1"
       - key: TP_SL_REFRESH_SEC
