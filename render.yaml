@@ -117,12 +117,14 @@ services:
       - key: TRUST_XFF
         value: 1
 
+      # הוספנו את /ui/snapshot ו-/ui/snapshot/idle לציבורי (לטעינה עצלה)
       - key: SECURITY_PUBLIC_PATHS
-        value: /readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/public/ticket/inspect,/public/pos-events/stream,/manage-once/signed,/manage-once/multi/signed,/ops/manager/health
+        value: /readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/public/ticket/inspect,/public/pos-events/stream,/manage-once/signed,/manage-once/multi/signed,/ops/manager/health,/ui/snapshot,/ui/snapshot/idle
+      # הוספנו /admin להגנה
       - key: SECURITY_PUBLIC_PREFIXES
         value: /public,/price,/static,/risk
       - key: SECURITY_PROTECTED_PATHS
-        value: /ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json
+        value: /ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json,/admin
 
       - key: ENABLE_CSP
         value: 1
@@ -831,7 +833,7 @@ services:
       - key: ROUTES_PUBLIC_PREFIX
         value: /public
       - key: ROUTES_PROTECTED_PREFIXES
-        value: /ops,/manager,/routes,/webhook,/guard
+        value: /ops,/manager,/routes,/webhook,/guard,/admin
       - key: ROUTES_TAGS_REQUIRE
         value: ""
       - key: ROUTES_TAGS_DENY
@@ -1001,6 +1003,13 @@ services:
 
       - key: BINANCE_FAPI
         value: https://fapi.binance.com
+
+      # === Lazy UI Sampler (לפי הקוד החדש) ===
+      - key: UI_POLL_MS
+        value: 2000
+      - key: UI_IDLE_STOP_SEC
+        value: 30
+
 
 
 
