@@ -1,53 +1,55 @@
+# utils/anti_spam.py
 import os, json, time, threading
 
-# Persist simple anti-spam state on disk (atomic write)
-PATH = "/tmp/tg_cooldown.json"
-LOCK = threading.Lock()
-COOLDOWN_SEC = int(os.getenv("TG_COOLDOWN_SEC", "1800"))  # default: 30m
+_PATH = "/tmp/tg_cooldown.json"
+_LOCK = threading.Lock()
+_COOLDOWN_SEC = int(os.getenv("TG_COOLDOWN_SEC", "1800"))  # 30m default
 
 def _load():
     try:
-        with open(PATH, "r") as f:
+        with open(_PATH, "r") as f:
             return json.load(f)
     except Exception:
         return {}
 
 def _save(data):
-    tmp = PATH + ".tmp"
+    tmp = _PATH + ".tmp"
     with open(tmp, "w") as f:
         json.dump(data, f)
-    os.replace(tmp, PATH)
+    os.replace(tmp, _PATH)
 
-def should_gate(key: str, cooldown: int = COOLDOWN_SEC) -> bool:
-    """
-    Return True if we should send now (cooldown passed), False otherwise.
-    """
+def should_gate(key: str, cooldown: int | None = None) -> bool:
+    """Return True if allowed to send now (cooldown passed), else False."""
     now = time.time()
-    with LOCK:
+    cd = _COOLDOWN_SEC if cooldown is None else int(cooldown)
+    with _LOCK:
         data = _load()
         last = data.get(key)
-        if last and now - float(last) < cooldown:
+        if last and now - float(last) < cd:
             return False
         data[key] = now
         _save(data)
         return True
 
-def telegram_send_guarded(send_func, text: str, key: str, cooldown: int = COOLDOWN_SEC, **kw) -> bool:
+def telegram_send_guarded(send_func, text: str, key: str, cooldown: int | None = None, **kw) -> bool:
     """
-    Gate + global silent switch. Returns True if actually sent.
-    TG_SILENT=1 -> suppress everything.
+    TG_SILENT=1 -> suppress all.
+    Gate by (key, cooldown). Returns True if actually sent.
     """
     if os.getenv("TG_SILENT") == "1":
         return False
     if not should_gate(key, cooldown=cooldown):
         return False
-    send_func(text, **kw)
-    return True
+    try:
+        send_func(text, **kw)
+        return True
+    except Exception:
+        return False
 
-def notify_once(send_func, symbol: str, etype: str, text: str, key_suffix: str = "", cooldown: int = COOLDOWN_SEC, **kw) -> bool:
+def notify_once(send_func, symbol: str, etype: str, text: str, suffix: str = "", cooldown: int | None = None, **kw) -> bool:
     """
-    Convenience: stable key like SYMBOL:EVENT[:SUFFIX]
-    Example: notify_once(telegram_send, "BTCUSDT", "BE_ARMED", msg, key_suffix="109065.0")
+    Stable dedupe key: SYMBOL:EVENT[:SUFFIX]
+    Used to avoid repeated BE/SL messages for same rounded price.
     """
-    key = f"{symbol}:{etype}" + (f":{key_suffix}" if key_suffix else "")
+    key = f"{symbol}:{etype}" + (f":{suffix}" if suffix else "")
     return telegram_send_guarded(send_func, text, key, cooldown=cooldown, **kw)
