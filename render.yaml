@@ -785,6 +785,22 @@ services:
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
+      # === אימוץ אוטומטי של טריידים ידניים, ללא אישור ===
+      - key: ADOPT_MANUAL_ENABLE
+        value: "1"           # הפעלה
+      - key: ADOPT_MODE
+        value: execute       # אין אישור; אימוץ וניהול מיידיים
+      - key: ADOPT_MIN_USDT
+        value: "10"          # מינימום אימוץ
+      - key: ADOPT_SYMBOL_ALLOWLIST
+        value: "*"           # כל הסימבולים, לא רק WATCHLIST
+      - key: ADOPT_MARKET
+        value: futures       # מאמץ פוזיציות Futures
+      - key: ADOPT_POSITION_MODE
+        value: hedge         # תואם ל-POSITION_MODE_OVERRIDE
+      - key: ADOPT_NATIVE_TPSL
+        value: "1"           # להצמדת TP/SL מקוריים אם קיימים
+
       - key: AUTO_BE_BPS
         value: "8"
       - key: AUTO_ATR_MULT
