@@ -1,4 +1,3 @@
-# main.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -354,6 +353,10 @@ PUBLIC_TOPK_RPS = int(os.getenv("PUBLIC_TOPK_RPS", "2") or "2")
 PUBLIC_TOPK_WINDOW = int(os.getenv("PUBLIC_TOPK_WINDOW", "3") or "3")
 PUBLIC_NOW_RPS = int(os.getenv("PUBLIC_NOW_RPS", "2") or "2")
 PUBLIC_NOW_WINDOW = int(os.getenv("PUBLIC_NOW_WINDOW", "3") or "3")
+
+# UI knobs for root() payload
+UI_POLL_MS = int(os.getenv("UI_POLL_MS", "2500") or 2500)
+UI_IDLE_STOP_SEC = int(os.getenv("UI_IDLE_STOP_SEC", "3600") or 3600)
 
 # Digest config
 PUBLIC_TOPK_DIGEST_ENABLE = os.getenv("PUBLIC_TOPK_DIGEST_ENABLE", "0").lower() in ("1", "true", "yes", "on")
@@ -2287,19 +2290,62 @@ async def manage_once_signed(symbol: str = Query(...), exp: str = Query(...), si
     }
     return await manage_once(_Req(), payload)  # type: ignore
 
-# ----------------- Mount router & startup -----------------
+# ----------------- Mount router (כבר קיים מעל) & STARTUP/SHUTDOWN -----------------
 app.include_router(router)
 
 @app.on_event("startup")
 async def _on_startup():
-    _ensure_public_fallbacks()
+    try:
+        # מוודא שקצות הציבור זמינים (topk/now) גם אם ראוטרים חיצוניים לא נטענו
+        _ensure_public_fallbacks()
+    except Exception as e:
+        logger.warning("public_fallbacks.ensure.failed: %s", e)
+
+    # פותרים כתובות Binance ברקע (לא חוסם את ההעלאה)
+    try:
+        asyncio.create_task(_resolve_binance_endpoints())
+    except Exception as e:
+        logger.warning("binance_endpoints.bootstrap.failed: %s", e)
+
+    # מגדיר Webhook לטלגרם (אם מופעל ב-ENV) – ברקע כדי לא לעכב startup
+    try:
+        asyncio.create_task(_ensure_telegram_webhook())
+    except Exception as e:
+        logger.warning("telegram_webhook.ensure.failed: %s", e)
+
+    logger.info("startup.ready v=%s http2=%s redis=%s",
+                APP_VERSION, _http2_enabled_runtime(), bool(aioredis and REDIS_URL))
+
+@app.on_event("shutdown")
+async def _on_shutdown():
+    # סוגרים httpx.AsyncClient משותף
     with suppress(Exception):
-        await _resolve_binance_endpoints()
+        cli = getattr(app.state, "shared_async_client", None)
+        if cli and not cli.is_closed:
+            await cli.aclose()
+
+    # סוגרים Redis אם נפתח
     with suppress(Exception):
-        await _ensure_telegram_webhook()
-    if STARTUP_NOTIFY_ENABLE:
-        with suppress(Exception):
-            await _send_telegram_html(f"🚀 <b>{_md_html(APP_TITLE)}</b> is up (v{_md_html(APP_VERSION)})")
+        r = getattr(app.state, "redis", None)
+        if r:
+            await r.aclose()
+
+    logger.info("shutdown.complete")
+
+# ----------------- LIGHTWEIGHT ROOTS (תמיד זמינים) -----------------
+@app.get("/", include_in_schema=False)
+async def root():
+    return {
+        "ok": True,
+        "name": APP_TITLE,
+        "version": APP_VERSION,
+        "ts": int(time.time()),
+        "ui": {"poll_ms": UI_POLL_MS, "idle_stop_sec": UI_IDLE_STOP_SEC},
+    }
+
+@app.get("/version", tags=["public"])
+async def version():
+    return {"name": APP_TITLE, "version": APP_VERSION}
 
 # ==================== __main__ ====================
 if __name__ == "__main__":
@@ -2313,8 +2359,6 @@ if __name__ == "__main__":
         workers=int(os.getenv("UVICORN_WORKERS", "1") or 1),
         http="h11" if not _http2_enabled_runtime() else "auto",
     )
-
-
 
 
 
