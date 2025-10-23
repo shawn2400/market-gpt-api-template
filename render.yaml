@@ -117,7 +117,6 @@ services:
       - key: TRUST_XFF
         value: 1
 
-      # הוספתי את הראוטים החתומים ל־public:
       - key: SECURITY_PUBLIC_PATHS
         value: /readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/public/ticket/inspect,/public/pos-events/stream,/manage-once/signed,/manage-once/multi/signed,/ops/manager/health
       - key: SECURITY_PUBLIC_PREFIXES
@@ -130,7 +129,6 @@ services:
       - key: CSP_POLICY
         value: "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https:; base-uri 'none'; frame-ancestors 'none'"
 
-      # Anti-replay / signing — hardened
       - key: ANTI_REPLAY_ENABLE
         value: 1
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
@@ -144,7 +142,6 @@ services:
       - key: SIG_TS_SKEW_SEC
         value: 900
 
-      # Rate limiting
       - key: RATE_LIMIT_ENABLE
         value: 1
       - key: RL_FAIL_OPEN
@@ -199,7 +196,6 @@ services:
       - key: SETEX_STRICT
         value: 0
 
-      # Exchange / market
       - key: DEFAULT_MARKET
         value: futures
       - key: POSITION_MODE_OVERRIDE
@@ -239,7 +235,6 @@ services:
       - key: PRICE_MONITOR_DISABLE
         value: 0
 
-      # Scanner
       - key: SCAN_SOURCE
         value: binance-futures
       - key: UNIVERSE_MODE
@@ -340,7 +335,6 @@ services:
       - key: WATCHLIST
         value: BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT
 
-      # Scan cron
       - key: SCAN_CRON_ENABLE
         value: 1
       - key: SCAN_CRON_EVERY_SEC
@@ -366,7 +360,6 @@ services:
       - key: DEFAULT_STAKE_USDT
         value: 25
 
-      # Approvals
       - key: APPROVAL_ENABLED
         value: 1
       - key: REQUIRE_TELEGRAM_APPROVAL
@@ -391,7 +384,6 @@ services:
       - key: APPROVAL_DUP_COOLDOWN_SEC
         value: 0
 
-      # Ops / notifications
       - key: OPS_TICKET_TTL_SEC
         value: 900
       - key: ONLY_TRADE_NOTIFICATIONS
@@ -419,7 +411,6 @@ services:
       - key: HTTP2_ENABLE
         value: 1
 
-      # Orders / execution
       - key: EXECUTE_TRADES
         value: 1
       - key: MANAGER_WRITES_ORDERS
@@ -463,13 +454,11 @@ services:
       - key: RETRY_JITTER
         value: 1
 
-      # Per-symbol overrides
       - key: PRICE_DP_OVERRIDE__BTCUSDT
         value: 1
       - key: QTY_STEP_OVERRIDE__BTCUSDT
         value: 0.001
 
-      # Auto sizing
       - key: AUTO_QTY_ENABLE
         value: 1
       - key: AUTO_QTY_MODE
@@ -485,7 +474,6 @@ services:
       - key: AUTO_BUDGET_MAX
         value: 200
 
-      # Native TP/SL + guards
       - key: NATIVE_TPSL_ENABLE
         value: 1
       - key: SL_MONOTONIC
@@ -522,7 +510,6 @@ services:
       - key: SMART_MANAGE_ON_APPROVE
         value: 1
 
-      # Smart manage defaults / profiles (ייושר מול הקוד)
       - key: SMART_MANAGE_BE_OFFSET_BPS
         value: 5
       - key: SMART_MANAGE_PCTS
@@ -561,7 +548,6 @@ services:
       - key: TIME_STOP_KEEP_PROFIT_MIN_PCT
         value: 0.5
 
-      # Global trailing / BE tuning (ensure no duplicates conflict)
       - key: PROFILE_BASE_BE_BPS
         value: 5
       - key: TRAIL_ENABLE
@@ -618,7 +604,6 @@ services:
       - key: TRAIL_DEFAULT_ATR_MULT
         value: 1.4
 
-      # Real-time trailing (WS)
       - key: TRAIL_RT_ENABLE
         value: 1
       - key: TRAIL_RT_INTERVAL_SEC
@@ -638,7 +623,6 @@ services:
       - key: TRAIL_RT_WATCHLIST
         value: ""
 
-      # Auto-flip
       - key: AUTO_FLIP_ENABLE
         value: 1
       - key: AUTO_FLIP_NEUTRAL
@@ -661,7 +645,6 @@ services:
       - key: REGIME_ADX_MIN_15m
         value: 22
 
-      # Health / ops
       - key: HEALTH_ALERTS_ENABLE
         value: 1
       - key: HEALTH_ALERTS_COOLDOWN_SEC
@@ -698,7 +681,6 @@ services:
       - key: DIGEST_SEND_TELEGRAM
         value: 0
 
-      # ETA
       - key: ETA_SMART_ENABLE
         value: 1
       - key: ETA_VELOCITY_WINDOW
@@ -706,13 +688,11 @@ services:
       - key: DEFAULT_INTERVAL
         value: 15m
 
-      # Guarder
       - key: GUARDER_ENABLE
         value: 1
       - key: GUARDER_INTERVAL_SEC
         value: 45
 
-      # Readiness
       - key: READINESS_CHECK_BINANCE
         value: 1
       - key: READINESS_CHECK_REDIS
@@ -728,7 +708,6 @@ services:
       - key: SQLITE_PATH
         value: /app/data/state.db
 
-      # Metrics
       - key: PROM_METRICS_ENABLE
         value: 1
       - key: PROM_METRICS_PATH
@@ -746,7 +725,6 @@ services:
       - key: METRICS_BEARER
         fromSecret: METRICS_BEARER_PROD
 
-      # Risk caps (overrides applied)
       - key: DAILY_LOSS_CAP_USDT
         value: 150
       - key: KILL_ON_CAP
@@ -799,7 +777,6 @@ services:
       - key: PRICE_SCAN_INTERVAL
         value: 60
 
-      # Manager loop
       - key: MANAGER_ENABLE
         value: 1
       - key: TRADE_MANAGER_ENABLE
@@ -809,7 +786,6 @@ services:
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: 1
 
-      # Auto-manage defaults
       - key: AUTO_BE_BPS
         value: 8
       - key: AUTO_ATR_MULT
@@ -821,7 +797,6 @@ services:
       - key: AUTO_POLL_SEC
         value: 30
 
-      # BTC regime gates
       - key: BTC_GATE_ENABLE
         value: 1
       - key: BTC_GATE_TF
@@ -831,7 +806,6 @@ services:
       - key: BTC_SHORT_REQ
         value: ema21<=ema50
 
-      # Public SSE
       - key: PUBLIC_REQUIRE_BEARER
         value: 1
       - key: PUBLIC_SSE_HEARTBEAT_SEC
@@ -841,13 +815,11 @@ services:
       - key: PUBLIC_SSE_GZIP
         value: 0
 
-      # Dynamic policy
       - key: POLICY_DSL_PATH
         value: policies/dynamic_policy.yaml
       - key: POLICY_SCHEMA_PATH
         value: config/policy_schema.json
 
-      # Routes / RBAC
       - key: ROUTES_AUTO_DISCOVERY
         value: 1
       - key: ROUTES_NEED_TG_APPROVAL
@@ -878,7 +850,6 @@ services:
       - key: DISABLE_ROUTES
         value: ""
 
-      # Secrets / tokens (רק fromSecret – ללא כפילויות sync:false)
       - key: API_BEARER_TOKEN_RO
         fromSecret: API_BEARER_TOKEN_RO_PROD
       - key: API_BEARER_TOKEN_ACTION
@@ -912,7 +883,6 @@ services:
       - key: ETHERSCAN_API_KEY
         fromSecret: ETHERSCAN_API_KEY_PROD
 
-      # Public positions/events
       - key: POS_PUB_ENABLE
         value: 1
       - key: POS_PUB_INTERVAL_SEC
@@ -933,7 +903,6 @@ services:
       - key: POS_EVENTS_TELEGRAM_LEVEL
         value: info
 
-      # Adaptive controls
       - key: DYNAMIC_CONTROL_ENABLE
         value: 1
       - key: DYNAMIC_SAFETY_MODE
@@ -1011,7 +980,6 @@ services:
       - key: HEALTH_RECOVERY_GRACE_SEC
         value: 120
 
-      # Smart-manage profiles (base + extreme)
       - key: PROFILE_BASE_PCTS
         value: 3,6,10,16
       - key: PROFILE_BASE_SPLITS
@@ -1031,8 +999,8 @@ services:
       - key: PROFILE_EXTREME_ATR_MULT
         value: 1.6
 
-      # התאמה לפונקציית אינדיקטורים בקוד
       - key: BINANCE_FAPI
         value: https://fapi.binance.com
+
 
 
