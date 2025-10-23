@@ -980,4 +980,3 @@ services:
         value: "1"
       - key: HEALTH_RECOVERY_GRACE_SEC
         value: "120"
-
