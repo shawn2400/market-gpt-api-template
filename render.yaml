@@ -8,10 +8,10 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /readyz
 
-    disk:
-      name: data
-      mountPath: /app/data
-      sizeGB: 1
+    disks:
+      - name: data
+        mountPath: /app/data
+        sizeGB: 1
 
     envVars:
       - key: APP_NAME
