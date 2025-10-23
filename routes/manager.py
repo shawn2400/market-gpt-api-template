@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os, json, time, hashlib, asyncio, logging, math
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from math import copysign
 
 import httpx
@@ -11,7 +11,16 @@ from pydantic import BaseModel
 
 # ===== Utilities / Optional modules (all soft-deps with graceful fallbacks) =====
 from utils.anti_replay import verify_request
-from utils.metrics_tracker import observe_http_ctx_async  # מטריקות עוטפות HTTP
+try:
+    from utils.metrics_tracker import observe_http_ctx_async  # מטריקות עוטפות HTTP
+except Exception:
+    # Fallback: no-op async context manager when metrics module is unavailable
+    from contextlib import asynccontextmanager
+
+    @asynccontextmanager
+    async def observe_http_ctx_async(*_args, **_kwargs):  # type: ignore
+        yield
+
 
 # 🔔 אירועים (Redis + Telegram) — fallback רך אם המודול חסר
 try:
@@ -122,10 +131,11 @@ LONG_REQ           = os.getenv("LONG_REQ",  os.getenv("BTC_LONG_REQ",  "ema21>=e
 SHORT_REQ          = os.getenv("SHORT_REQ", os.getenv("BTC_SHORT_REQ", "ema21<=ema50"))
 NEUTRAL_REQ        = os.getenv("NEUTRAL_REQ", "")
 
-# === Smart manage defaults
+# === Smart manage defaults (PATCHED)
 PROFILE_BASE_BE_BPS   = float(os.getenv("PROFILE_BASE_BE_BPS", "5"))
-SMART_MANAGE_PCTS     = [float(x) for x in (os.getenv("SMART_MANAGE_PCTS", "4,8,16").split(","))]
-SMART_MANAGE_SPLITS   = [float(x) for x in (os.getenv("SMART_MANAGE_SPLITS", "0.3,0.3,0.4").split(","))]
+# 4 TPs by default (align with main.py & signed /manage-once) — strip to be robust to spaces/empty items
+SMART_MANAGE_PCTS     = [float(x) for x in os.getenv("SMART_MANAGE_PCTS", "3,6,10,16").split(",") if x.strip()]
+SMART_MANAGE_SPLITS   = [float(x) for x in os.getenv("SMART_MANAGE_SPLITS", "0.25,0.25,0.25,0.25").split(",") if x.strip()]
 TRAIL_ATR_MULT        = float(os.getenv("TRAIL_ATR_MULT", os.getenv("TRAIL_DEFAULT_ATR_MULT","1.6")))
 
 ANTI_REPLAY_REQUIRE_SIGNATURE = os.getenv("ANTI_REPLAY_REQUIRE_SIGNATURE", "1").lower() in ("1","true","yes","on")
@@ -221,18 +231,26 @@ _LIVE: Dict[str, Dict[str, Any]] = {}  # {sym: {start_ts, entry, last_sl, armed_
 
 # ===== Prometheus metrics =====
 _PROM_PREFIX = "pos_live_manage"
-POS_LIVE_DECISION = Counter(f"{_PROM_PREFIX}_decision_total",
-                            "Live-manage decisions taken",
-                            ["symbol","side","action"])  # action ∈ {grace_skip,grace_cap,be_armed,trail_move,lock_move}
-POS_LIVE_ERRORS   = Counter(f"{_PROM_PREFIX}_errors_total",
-                            "Live-manage errors",
-                            ["symbol","where"])
-POS_LIVE_SL_STEP  = Summary(f"{_PROM_PREFIX}_sl_step_abs",
-                            "Observed absolute SL step size (price units)",
-                            ["symbol","side","action"])
-POS_LIVE_ATR_ABS  = Summary(f"{_PROM_PREFIX}_atr_abs",
-                            "Observed absolute ATR (price units) during decisions",
-                            ["symbol","side"])
+POS_LIVE_DECISION = Counter(
+    f"{_PROM_PREFIX}_decision_total",
+    "Live-manage decisions taken",
+    ["symbol","side","action"]
+)
+POS_LIVE_ERRORS   = Counter(
+    f"{_PROM_PREFIX}_errors_total",
+    "Live-manage errors",
+    ["symbol","where"]
+)
+POS_LIVE_SL_STEP  = Summary(
+    f"{_PROM_PREFIX}_sl_step_abs",
+    "Observed absolute SL step size (price units)",
+    ["symbol","side","action"]
+)
+POS_LIVE_ATR_ABS  = Summary(
+    f"{_PROM_PREFIX}_atr_abs",
+    "Observed absolute ATR (price units) during decisions",
+    ["symbol","side"]
+)
 
 def _bearer_ok(auth_header: Optional[str]) -> bool:
     if not API_BEARER_TOKEN:
@@ -242,7 +260,7 @@ def _bearer_ok(auth_header: Optional[str]) -> bool:
     token = auth_header.split(" ", 1)[1].strip()
     return token == API_BEARER_TOKEN
 
-def _entry_score_block_info(obj: Dict[str, Any]) -> Dict[str, float | bool | str]:
+def _entry_score_block_info(obj: Dict[str, Any]) -> Dict[str, Union[float, bool, str]]:
     try:
         min_req = float(os.getenv("ENTRY_SCORE_MIN", "0") or 0)
     except Exception:
@@ -596,6 +614,41 @@ async def alerts_trades_update(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"decision failed: {e}")
 
+# ==================== NEW: smart_manage_now thin-wrapper ====================
+async def smart_manage_now(symbol: str,
+                           offset_bps: int = 5,
+                           pcts: Optional[List[float]] = None,
+                           splits: Optional[List[float]] = None,
+                           atr_mult: Optional[float] = None) -> Dict[str, Any]:
+    """
+    מציב/מעדכן SL דינמי (ATR), BE אחרי TP1, ופורס TP-Ladder Reduce-Only.
+    קודם ננסה להשתמש בנתיב הרשמי של הראוטר (/manage-once), ואם לא – ב-PositionManager.
+    """
+    # ניסיון דרך הראוטר (מונע צורך ב-Bearer כי אנחנו קוראים פנימית)
+    if position_ops_manage_once:
+        class _Req:  # bypass bearer inside app
+            state = type("S", (), {"_signed_override": True})
+        payload = {
+            "symbol": str(symbol).upper(),
+            "offset_bps": int(offset_bps),
+            "pcts": list(pcts or [3, 6, 10, 16]),
+            "splits": list(splits or [0.25, 0.25, 0.25, 0.25]),
+            "atr_mult": float(atr_mult if atr_mult is not None else 1.6),
+            "write_orders": True,
+            "force_rewrite": False,
+        }
+        return await position_ops_manage_once(_Req(), payload)  # type: ignore
+    # ניסיון דרך PositionManager אם קיים
+    if pm_manage_once:
+        return await pm_manage_once(symbol=str(symbol).upper(),
+                                    offset_bps=int(offset_bps),
+                                    pcts=list(pcts or [3,6,10,16]),
+                                    splits=list(splits or [0.25,0.25,0.25,0.25]),
+                                    atr_mult=float(atr_mult if atr_mult is not None else 1.6),
+                                    write_orders=True,
+                                    force_rewrite=False)
+    return {"ok": True, "delegated": False, "skipped": True, "reason": "smart_manage_now_not_available"}
+
 class ManageOnceReq(BaseModel):
     symbol: Optional[str] = None
     offset_bps: Optional[int] = None
@@ -621,7 +674,10 @@ async def manage_once_lite(
 
     if position_ops_manage_once is not None:
         try:
-            res = await position_ops_manage_once({**payload, "write_orders": bool(write_orders), "force_rewrite": bool(force_rewrite)})  # type: ignore
+            # routes.position_ops.manage_once(request, payload) signature expects a Request-like first arg.
+            class _Req:  # bypass bearer inside app
+                state = type("S", (), {"_signed_override": True})
+            res = await position_ops_manage_once(_Req(), {**payload, "write_orders": bool(write_orders), "force_rewrite": bool(force_rewrite)})  # type: ignore
             return {"ok": True, "delegated": True, "result": res, "writer": "routes.position_ops.manage_once"}
         except Exception as e:
             logger.warning("routes.position_ops.manage_once failed: %s", e)
@@ -719,7 +775,7 @@ async def manage_once_route(
     except Exception:
         pass
 
-    placed: Dict[str, Any] | None = None
+    placed: Optional[Dict[str, Any]] = None
 
     # 4) Raise to BE once triggered
     if (mark - be_trigger) * sign >= -1e-12 and (current_sl_px is None or (current_sl_px - be_price) * sign < -1e-12):
@@ -742,11 +798,12 @@ async def manage_once_route(
         except Exception as e:
             return {"ok": False, "error": f"place_be_failed: {e}"}
 
-    # 5) Trail by offset_bps after BE
+    # 5) Trail by offset_bps after BE (PATCHED formula)
     be_done = current_sl_px is not None and ((current_sl_px - be_price) * sign) >= -1e-12
     if be_done:
         # BUY: mark*(1 - bps/10000); SELL: mark*(1 + bps/10000)
-        target_sl = mark * (1.0 - trail_bps/10000.0 * sign * -1.0)
+        # Correct formula with sign → below mark for BUY, above for SELL:
+        target_sl = mark * (1.0 - (sign * trail_bps / 10000.0))
         # Never go beyond BE the wrong way:
         target_sl = max(target_sl, be_price) if side=="BUY" else min(target_sl, be_price)
         if current_sl_px is None or (target_sl - current_sl_px) * sign > 1e-12:
@@ -795,7 +852,10 @@ async def _do_rewrite_native_tpsl(symbol: str) -> Dict[str, Any]:
     sym = symbol.upper().strip()
     if position_ops_rewrite_native_tpsl is not None:
         try:
-            res = await position_ops_rewrite_native_tpsl({"symbol": sym})  # type: ignore
+            # routes.position_ops.rewrite_native_tpsl expects (request_like, payload)
+            class _Req:  # bypass bearer inside app (matches other internal calls)
+                state = type("S", (), {"_signed_override": True})
+            res = await position_ops_rewrite_native_tpsl(_Req(), {"symbol": sym})  # type: ignore
             return {"ok": True, "delegated": True, "result": res, "writer": "routes.position_ops.rewrite_native_tpsl"}
         except Exception as e:
             logger.warning("routes.position_ops.rewrite_native_tpsl failed: %s", e)
@@ -945,7 +1005,10 @@ async def _tick_once() -> Dict[str, Any]:
             for sym in symbols:
                 try:
                     if position_ops_manage_once:
-                        await position_ops_manage_once({"symbol": sym, "write_orders": True, "force_rewrite": False})  # type: ignore
+                        # routes.position_ops.manage_once(request_like, payload)
+                        class _Req:
+                            state = type("S", (), {"_signed_override": True})
+                        await position_ops_manage_once(_Req(), {"symbol": sym, "write_orders": True, "force_rewrite": False})  # type: ignore
                     elif pm_manage_once:
                         await pm_manage_once(symbol=sym, write_orders=True, force_rewrite=False)  # type: ignore
                 except Exception as e:
@@ -1024,7 +1087,13 @@ async def _refresh_indicators(symbol: str) -> Tuple[float, float, float]:
         d = _IND_LAST.get(symbol, {})
         return d.get("CLOSE", float("nan")), d.get("ATR", float("nan")), d.get("ADX", float("nan"))
 
-    import pandas as pd  # local import to keep top clean
+    # local import; if pandas not installed, fall back to last cached values
+    try:
+        import pandas as pd  # type: ignore
+    except Exception:
+        d = _IND_LAST.get(symbol, {})
+        return d.get("CLOSE", float("nan")), d.get("ATR", float("nan")), d.get("ADX", float("nan"))
+
     close = pd.Series([float(x[4]) for x in kl], dtype=float)
     high  = pd.Series([float(x[2]) for x in kl], dtype=float)
     low   = pd.Series([float(x[3]) for x in kl], dtype=float)
@@ -1259,7 +1328,7 @@ async def _maybe_eval_and_flip(symbol: str) -> None:
         if get_positions_snapshot:
             snap = await get_positions_snapshot()
             for row in (snap or []):
-                if str(row.get("symbol","")).upper() == symbol:
+                if str(row.get("symbol") or "").upper() == symbol:
                     amt = float(row.get("positionAmt") or 0.0)
                     side_now = ("BUY" if amt > 0 else "SELL") if amt != 0 else None
                     break
@@ -1311,7 +1380,12 @@ async def _symbols_to_track() -> List[str]:
     return out
 
 async def _ws_autoflip_loop():
-    url = f"{BINANCE_WS_BASE}/ws/!markPrice@arr"
+    # הימנע מכפילות "/ws/ws" כאשר ה־BASE כבר כולל "/ws"
+    if BINANCE_WS_BASE.endswith("/ws"):
+        url = f"{BINANCE_WS_BASE}/!markPrice@arr"
+    else:
+        url = f"{BINANCE_WS_BASE}/ws/!markPrice@arr"
+
     backoff = 1.0
     while True:
         if not (MANAGER_ENABLE and USE_WS):
@@ -1398,6 +1472,6 @@ def main() -> None:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
-
+    # EOF
 
 
