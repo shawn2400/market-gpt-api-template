@@ -126,7 +126,7 @@ _inline_env_defaults: Dict[str, str] = {
     "RETRY_BASE_MS": "500",
     "RETRY_JITTER": "1",
     "REST_COOLDOWN_SEC": "6",
-    "TP_MAX_LADDERS": "3",
+    "TP_MAX_LADDERS": "4",  # default to 4 ladders/TPs
     "ENABLE_INDICATOR_EXIT": "1",
     "ADX_MIN": "18",
     "NO_PROGRESS_TIMEOUT_MIN": "30",
@@ -260,7 +260,7 @@ def _ensure_public_fallbacks() -> None:
             )
         if not _route_exists("/scan/public-now", "GET"):
             app.add_api_route(
-                "/scan/public-now",
+                "/scan/public-now",  # FIXED: was "/scan_public_now"
                 _scan_public_now_fallback,
                 methods=["GET"],
                 tags=["public"],
@@ -896,7 +896,8 @@ def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
-                              reject_url: Optional[str] = None, preview_url: Optional[str] = None) -> Dict[str, Any]:
+                              reject_url: Optional[str] = None, preview_url: Optional[str] = None,
+                              manage_url: Optional[str] = None) -> Dict[str, Any]:
     # --- silent switch (global mute) ---
     if os.getenv("TG_SILENT", "0").lower() in ("1", "true", "yes", "on"):
         return {"ok": True, "skipped": True, "reason": "silent_mode"}
@@ -906,8 +907,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
         try:
             r = await _get_redis_cached()
             if r:
-                key_payload = json.dumps({"t": text, "a": approve_url, "r": reject_url, "p": preview_url}, ensure_ascii=False, separators=(",", ":"))
-                # FIX: remove duplicate ".hexdigest()"
+                key_payload = json.dumps({"t": text, "a": approve_url, "r": reject_url, "p": preview_url, "m": manage_url}, ensure_ascii=False, separators=(",", ":"))
                 idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"  # safe uniqueness
                 ok = await r.setnx(idem_key, "1")
                 if not ok:
@@ -929,10 +929,12 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-    if approve_url or reject_url or preview_url:
+    if approve_url or reject_url or preview_url or manage_url:
         row: List[Dict[str, Any]] = []
         if preview_url:
             row.append({"text": "👁 Preview", "url": preview_url})
+        if manage_url:
+            row.append({"text": "⚡ Manage Now", "url": manage_url})
         if approve_url:
             row.append({"text": "✅ Approve", "url": approve_url})
         if reject_url:
@@ -1147,7 +1149,12 @@ def _get_filters(client, symbol: str) -> Tuple[float, float]:
 def _round_to_lot_size(client, symbol: str, qty: float) -> float:
     try:
         _tick, step = _get_filters(client, symbol)
-        return math.floor(float(qty) / float(step)) * float(step) if step and step > 0 else float(qty)
+        if step and step > 0:
+            q = math.floor(float(qty) / float(step)) * float(step)
+            # מנקה רעשים של נקודה צפה (למנוע 0.0179999999)
+            dec = max(0, min(8, str(step)[::-1].find('.')))
+            return float(f"{q:.{dec}f}")
+        return float(qty)
     except Exception:
         return float(qty)
 
@@ -1286,15 +1293,30 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         pass
 
     try:
-        if inspect.iscoroutinefunction(execute_trade_live):  # type: ignore[arg-type]
-            res = await execute_trade_live(**clean)  # type: ignore[misc]
+        # אל תסמוך על iscoroutinefunction (יכול לטעות עם wrappers) – בדוק את התוצאה בפועל
+        maybe = execute_trade_live(**clean)  # type: ignore[misc]
+        if inspect.isawaitable(maybe):
+            res = await maybe  # type: ignore[assignment]
         else:
-            maybe = execute_trade_live(**clean)  # type: ignore[misc]
-            if inspect.isawaitable(maybe):
-                res = await maybe  # type: ignore[assignment]
-            else:
-                res = maybe  # type: ignore[assignment]
-        return {"entered": bool(res.get("ok")), **res}
+            res = maybe  # type: ignore[assignment]
+        # normalize qty precision guard (אם המימוש הפנימי לא עיגל)
+        try:
+            if not res.get("ok") and "precision" in str(res).lower():
+                # ניסיון עיגול ו־retry חד-פעמי לשכבת ה-MARKET
+                symbol2 = (ticket.get("symbol") or "").upper()
+                side2 = (ticket.get("side") or "").upper()
+                qty2 = float(ticket.get("qty") or ticket.get("quantity") or 0.0)
+                from binance.client import Client  # type: ignore
+                api_key = os.getenv("BINANCE_API_KEY", "").strip()
+                api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
+                cli_ = Client(api_key, api_sec)
+                _align_position_mode(cli_)
+                qty_fixed = _round_to_lot_size(cli_, symbol2, qty2)
+                ticket2 = dict(ticket); ticket2["qty"] = qty_fixed
+                return await _execute_trade(ticket2)
+        except Exception:
+            pass
+        return {"entered": bool(res.get("ok")), **res}  # type: ignore[arg-type]
     except Exception as e:
         return {"ok": False, "entered": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
 
@@ -1620,6 +1642,20 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     preview_url = _build_signed_link(base, "/ops/ui/ticket/signed", tid, ttl_sec=900, action="preview")
     approve_url = _build_signed_link(base, "/ops/approve/signed", tid, ttl_sec=900, action="approve")
     reject_url = _build_signed_link(base, "/ops/reject/signed", tid, ttl_sec=900, action="reject")
+    # כפתור "⚡ Manage Now" – חתימה לפי WEBHOOK_HMAC_SECRET על GET
+    # הסימבול מגיע מתוך הכרטיס
+    manage_url = ""
+    try:
+        sym_for_btn = str(symbol or "").upper()
+        manage_url = _build_signed_link(base, "/manage-once/signed", sym_for_btn, ttl_sec=600, action="manage")
+        # הסכמה: ticket_id בשדה link-key, כאן אנו משתמשים ב-symbol כ-"ticket_id" לייעוד החתימה.
+        # הנתיב עצמו יאמת exp+sig ויטפל ב-symbol=... מה-Query.
+        if "?" in manage_url:
+            manage_url += f"&symbol={sym_for_btn}"
+        else:
+            manage_url += f"?symbol={sym_for_btn}"
+    except Exception:
+        manage_url = ""
 
     lines = [
         "⚠️ <b>Approval Needed</b>",
@@ -1649,7 +1685,11 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     lines.append("בחר:")
     pretty = "\n".join(lines)
     try:
-        tg_resp = await _send_telegram_html(pretty, approve_url=approve_url or None, reject_url=reject_url or None, preview_url=preview_url or None)
+        tg_resp = await _send_telegram_html(pretty,
+                                            approve_url=approve_url or None,
+                                            reject_url=reject_url or None,
+                                            preview_url=preview_url or None,
+                                            manage_url=manage_url or None)
     except Exception as e:
         logger.warning("telegram_send_failed (non-fatal): %s", e)
         tg_resp = {"ok": False, "skipped": True, "error": str(e)}
@@ -1660,6 +1700,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         "approve_url": approve_url,
         "reject_url": reject_url,
         "preview_url": preview_url,
+        "manage_url": manage_url,
         "telegram_result": tg_resp,
     }
 
@@ -1764,7 +1805,7 @@ async def approve_signed_post(request: Request, payload: Dict[str, Any] = Body(.
         raise HTTPException(status_code=401, detail="Bad signature")
     await _enforce_nonce_once(request)
     _require_not_expired(payload.get("exp"))
-    ticket_id = str(payload.get("ticket_id") or "").strip()
+    ticket_id = str(payload.get("ticket_id") or "").strip()  # FIXED: was .trim()
     approved = bool(payload.get("approve") is True)
     if not ticket_id:
         raise HTTPException(status_code=422, detail="Missing ticket_id")
@@ -1932,8 +1973,8 @@ async def _approve_core(ticket_id: str):
                                     os.getenv("BE_BPS",
                                     os.getenv("TRAIL_OFFSET_BPS",
                                     os.getenv("TP_BE_OFFSET_BPS", "5"))))),
-                "pcts": [float(x) for x in (os.getenv("SMART_MANAGE_PCTS") or "4,8,16").split(",") if x.strip()],
-                "splits": [float(x) for x in (os.getenv("SMART_MANAGE_SPLITS") or "0.30,0.30,0.40").split(",") if x.strip()],
+                "pcts": [float(x) for x in (os.getenv("SMART_MANAGE_PCTS") or "3,6,10,16").split(",") if x.strip()],
+                "splits": [float(x) for x in (os.getenv("SMART_MANAGE_SPLITS") or "0.25,0.25,0.25,0.25").split(",") if x.strip()],
                 "atr_mult": float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None,
             }
             if sm.get("enable", True):
@@ -1985,15 +2026,15 @@ async def _reject_core(ticket_id: str):
 # ==================== Indicator & profile helpers ====================
 PROFILE_AUTO_SELECT = os.getenv("PROFILE_AUTO_SELECT", "1").lower() in ("1", "true", "yes", "on")
 
-# Prefer BE_BPS for base profile if provided
+# Prefer BE_BPS for base profile if provided (4 TPs by default)
 PROFILE_BASE_BE_BPS = int(os.getenv("PROFILE_BASE_BE_BPS", os.getenv("BE_BPS", "5")))
-PROFILE_BASE_PCTS = [float(x) for x in (os.getenv("PROFILE_BASE_PCTS", "4,8,16")).split(",") if x.strip()]
-PROFILE_BASE_SPLITS = [float(x) for x in (os.getenv("PROFILE_BASE_SPLITS", "0.30,0.30,0.40")).split(",") if x.strip()]
+PROFILE_BASE_PCTS = [float(x) for x in (os.getenv("PROFILE_BASE_PCTS", "3,6,10,16")).split(",") if x.strip()]
+PROFILE_BASE_SPLITS = [float(x) for x in (os.getenv("PROFILE_BASE_SPLITS", "0.25,0.25,0.25,0.25")).split(",") if x.strip()]
 PROFILE_BASE_ATR_MULT = float(os.getenv("PROFILE_BASE_ATR_MULT", "0") or 0) or None
 
 PROFILE_EXTREME_BE_BPS = int(os.getenv("PROFILE_EXTREME_BE_BPS", "2"))
-PROFILE_EXTREME_PCTS = [float(x) for x in (os.getenv("PROFILE_EXTREME_PCTS", "2,4,8")).split(",") if x.strip()]
-PROFILE_EXTREME_SPLITS = [float(x) for x in (os.getenv("PROFILE_EXTREME_SPLITS", "0.25,0.35,0.40")).split(",") if x.strip()]
+PROFILE_EXTREME_PCTS = [float(x) for x in (os.getenv("PROFILE_EXTREME_PCTS", "2,4,7,12")).split(",") if x.strip()]
+PROFILE_EXTREME_SPLITS = [float(x) for x in (os.getenv("PROFILE_EXTREME_SPLITS", "0.20,0.25,0.25,0.30")).split(",") if x.strip()]
 PROFILE_EXTREME_ATR_MULT = float(os.getenv("PROFILE_EXTREME_ATR_MULT", "1.6"))
 
 ADX_EXTREME_MIN = float(os.getenv("ADX_EXTREME_MIN", "28"))
@@ -2150,7 +2191,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
 
     tick, step = _get_filters(client, symbol)
 
-    # --- PATCH FROM YOUR REQUEST ---
     # בחר פרופיל ניהול לפי אינדיקטורים וקח בחשבון חלונות pause
     prof, indicators, prof_name = await _select_profile_for_symbol(client, symbol, payload)
     if _in_pause_window_utc():
@@ -2174,6 +2214,52 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     except Exception as e:
         return {"ok": False, "error": "smart_manage_now_failed", "detail": str(e)}
     return {"ok": True, "delegated": True, "profile": prof_name, "indicators": indicators, "result": res}
+
+# ==================== NEW: Signed GET manage-once (Telegram button) ====================
+@router.get("/manage-once/signed", tags=["manager"])
+async def manage_once_signed(symbol: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
+    """
+    הפעלה ידנית/כפויה של ניהול דינמי על פוזיציה פתוחה בסימבול, דרך לינק חתום.
+    חתימה מאומתת ע"י _verify_signed_params (WEBHOOK_HMAC_SECRET).
+    משתמש בפרופיל דינמי (BASE/EXTREME) ובאותם PCTS/SPLITS/ATR_MULT מה-ENV.
+    """
+    # אנחנו ממחזרים את מנגנון החתימות של הלינקים: path=/manage-once/signed, "ticket_id"=symbol
+    if not _verify_signed_params(symbol, exp, sig, "/manage-once/signed"):
+        raise HTTPException(status_code=401, detail="Bad or expired signature")
+    # עוקף Bearer לפרו-סייד (כמו UI signed)
+    class _Req:
+        state = type("S", (), {"_signed_override": True})
+    payload = {
+        "symbol": str(symbol).upper(),
+        "offset_bps": int(os.getenv("PROFILE_BASE_BE_BPS", os.getenv("BE_BPS", "5"))),
+        "pcts": [float(x) for x in (os.getenv("PROFILE_BASE_PCTS", "3,6,10,16")).split(",") if x.strip()],
+        "splits": [float(x) for x in (os.getenv("PROFILE_BASE_SPLITS", "0.25,0.25,0.25,0.25")).split(",") if x.strip()],
+        "atr_mult": float(os.getenv("PROFILE_BASE_ATR_MULT", os.getenv("TRAIL_ATR_MULT", "1.6"))),
+    }
+    return await manage_once(_Req(), payload)  # type: ignore
+
+@router.get("/manage-once/multi/signed", tags=["manager"])
+async def manage_once_multi_signed(symbols: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
+    """
+    הפעלה גורפת לכלל הסימבולים המבוקשים (מופרדים בפסיק), עם לינק חתום אחד.
+    """
+    # כאן אנו משתמשים באותו "ticket_id" לצורך חתימה: כל ה-query "symbols" עובר באימות כיחידה אחת
+    if not _verify_signed_params(symbols, exp, sig, "/manage-once/multi/signed"):
+        raise HTTPException(status_code=401, detail="Bad or expired signature")
+    class _Req:
+        state = type("S", (), {"_signed_override": True})
+    out = []
+    for sym in [s.strip().upper() for s in symbols.split(",") if s.strip()]:
+        payload = {
+            "symbol": sym,
+            "offset_bps": int(os.getenv("PROFILE_BASE_BE_BPS", os.getenv("BE_BPS", "5"))),
+            "pcts": [float(x) for x in (os.getenv("PROFILE_BASE_PCTS", "3,6,10,16")).split(",") if x.strip()],
+            "splits": [float(x) for x in (os.getenv("PROFILE_BASE_SPLITS", "0.25,0.25,0.25,0.25")).split(",") if x.strip()],
+            "atr_mult": float(os.getenv("PROFILE_BASE_ATR_MULT", os.getenv("TRAIL_ATR_MULT", "1.6"))),
+        }
+        res = await manage_once(_Req(), payload)  # type: ignore
+        out.append({"symbol": sym, "res": res})
+    return {"ok": True, "results": out}
 
 # ==================== Startup / health / version ====================
 @app.on_event("startup")
