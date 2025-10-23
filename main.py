@@ -223,6 +223,23 @@ with suppress(Exception):
     if getattr(_routes_ops_ui, "router", None):
         app.include_router(_routes_ops_ui.router)
 
+# ---- Auto-discovery of all other routes.* modules (smart & dynamic) ----
+ROUTES_AUTOLOAD = os.getenv("ROUTES_AUTOLOAD", "1").lower() in ("1","true","yes","on")
+ROUTES_AUTOLOAD_MODE = (os.getenv("ROUTES_AUTOLOAD_MODE") or "eager").strip().lower()  # eager | background
+
+def _routes_autoload_now():
+    try:
+        from utils.routes_autoload import autoload_routes  # type: ignore
+    except Exception as e:
+        logger.warning("routes_autoload: loader missing (%s) — skipping", e)
+        return
+    try:
+        # You can narrow with envs: ROUTES_ALLOW, ROUTES_DENY, ROUTES_VERBOSE
+        autoload_routes(app, package="routes")
+        logger.info("routes_autoload: completed")
+    except Exception as e:
+        logger.warning("routes_autoload: failed: %s", e)
+
 # ============= Public feed fallbacks (no-404) =============
 def _route_exists(path: str, method: str = "GET") -> bool:
     try:
@@ -2315,6 +2332,20 @@ async def _on_startup():
 
     logger.info("startup.ready v=%s http2=%s redis=%s",
                 APP_VERSION, _http2_enabled_runtime(), bool(aioredis and REDIS_URL))
+
+    # Auto-load routes package (depending on mode)
+    if ROUTES_AUTOLOAD:
+        if ROUTES_AUTOLOAD_MODE in ("background", "bg", "async"):
+            try:
+                asyncio.create_task(asyncio.to_thread(_routes_autoload_now))
+                logger.info("routes_autoload: scheduled (background)")
+            except Exception as e:
+                logger.warning("routes_autoload: background schedule failed: %s", e)
+                # fallback to immediate
+                _routes_autoload_now()
+        else:
+            # eager (safe & deterministic before traffic)
+            _routes_autoload_now()
 
 @app.on_event("shutdown")
 async def _on_shutdown():
