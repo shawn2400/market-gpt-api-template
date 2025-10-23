@@ -1,3 +1,4 @@
+# routes/manager.py
 from __future__ import annotations
 import os, json, time, hashlib, asyncio, logging, math
 from pathlib import Path
@@ -24,6 +25,13 @@ try:
 except Exception:
     async def emit(*_args, **_kwargs):  # type: ignore
         return {"ok": False, "skipped": True, "reason": "pos_events_unavailable"}
+
+# ---- Anti-spam for Telegram (BE/SL notifications) ----
+try:
+    from utils.anti_spam import notify_once as _notify_once  # type: ignore
+except Exception:
+    def _notify_once(*_args, **_kwargs):  # type: ignore
+        return False
 
 try:
     from routes.position_ops import manage_once as position_ops_manage_once   # type: ignore
@@ -637,6 +645,149 @@ async def manage_once_lite(
     }
     return {"ok": True, "delegated": False, "plan_only": plan, "reason": "fallback_no_writer"}
 
+# ======== NEW: Direct manage-once (writer fallback) ========
+class ManageOnceDirectReq(BaseModel):
+    symbol: str
+    be_bps: float = float(os.getenv("PROFILE_BASE_BE_BPS", "5"))
+    trail_offset_bps: float = float(os.getenv("TRAIL_OFFSET_BPS", "30"))  # 30bps = 0.30%
+    place_tps: bool = True
+    tp_pcts: Optional[List[float]] = None   # fallback SMART_MANAGE_PCTS
+    tp_splits: Optional[List[float]] = None # fallback SMART_MANAGE_SPLITS
+    working_trigger: str = os.getenv("ORDER_TRIGGER", "mark")  # mark|last
+
+@router.post("/manage-once")
+async def manage_once_route(
+    req: ManageOnceDirectReq = Body(...),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
+) -> Dict[str, Any]:
+    """
+    Dynamic live manage (fallback writer) — raises SL to BE after trigger and trails by bps.
+    Works even if position_ops / position_manager are unavailable.
+    """
+    if not _bearer_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    if not TradeClient:
+        return {"ok": True, "delegated": False, "skipped": True, "reason": "trade_client_unavailable"}
+
+    symbol = req.symbol.upper().strip()
+    be_bps = float(req.be_bps)
+    trail_bps = float(req.trail_offset_bps)
+    tp_pcts = (req.tp_pcts if req.tp_pcts else SMART_MANAGE_PCTS)
+    splits  = (req.tp_splits if req.tp_splits else SMART_MANAGE_SPLITS)
+    trigger = str(req.working_trigger or ORDER_TRIGGER).lower()
+
+    cli = TradeClient()  # type: ignore
+
+    # 1) Snapshot position
+    try:
+        pos = await cli.get_position(symbol)  # type: ignore
+    except Exception as e:
+        return {"ok": False, "error": f"get_position_failed: {e}"}
+
+    if not pos or float(pos.get("positionAmt") or 0.0) == 0.0:
+        return {"ok": True, "skipped": True, "reason": "no_open_position"}
+
+    amt = float(pos.get("positionAmt") or 0.0)
+    entry = float(pos.get("entryPrice") or 0.0)
+    side  = "BUY" if amt > 0 else "SELL"
+    sign  = 1.0 if side == "BUY" else -1.0
+
+    # 2) Prices
+    try:
+        mark_info = await cli.get_mark_price(symbol)  # type: ignore
+        mark = float(mark_info.get("price") or mark_info.get("markPrice") or 0.0)
+    except Exception:
+        # fallback: use entry as ref to avoid crashing
+        mark = entry
+
+    be_trigger = entry * (1.0 + (be_bps/10000.0) * sign)
+    be_price   = entry  # BE itself (stop at entry)
+
+    # 3) Detect current closePosition SL (for reuse/compare)
+    current_sl_px: Optional[float] = None
+    try:
+        oo = await cli.get_open_orders(symbol)  # type: ignore
+        for o in (oo or []):
+            if str(o.get("type","")).upper() in ("STOP_MARKET","STOP") \
+               and str(o.get("side","")).upper() == ("SELL" if side=="BUY" else "BUY") \
+               and str(o.get("closePosition","false")).lower() == "true":
+                try:
+                    current_sl_px = float(o.get("stopPrice") or 0.0)
+                except Exception:
+                    pass
+                break
+    except Exception:
+        pass
+
+    placed: Dict[str, Any] | None = None
+
+    # 4) Raise to BE once triggered
+    if (mark - be_trigger) * sign >= -1e-12 and (current_sl_px is None or (current_sl_px - be_price) * sign < -1e-12):
+        try:
+            res = await cli.place_stop_loss_or_be(symbol, side, float(be_price), trigger=trigger)  # type: ignore
+            placed = {"action": "BE_SET", "price": float(be_price), "order": res}
+            # anti-spam: BE notify only once per rounded price
+            rounded = f"{float(be_price):.1f}"
+            try:
+                _notify_once(
+                    send_trade_approval if callable(send_trade_approval) else (lambda *_a, **_k: None),
+                    symbol, "BE_ARMED",
+                    f"⚙️ BE armed · {symbol}\n• @ {be_bps:.2f} bps\n{time.strftime('%Y-%m-%d %H:%M:%SZ', time.gmtime())}",
+                    suffix=rounded, cooldown=int(os.getenv("TG_COOLDOWN_SEC","1800")),
+                    disable_notification=True
+                )
+            except Exception:
+                pass
+            current_sl_px = float(be_price)
+        except Exception as e:
+            return {"ok": False, "error": f"place_be_failed: {e}"}
+
+    # 5) Trail by offset_bps after BE
+    be_done = current_sl_px is not None and ((current_sl_px - be_price) * sign) >= -1e-12
+    if be_done:
+        # BUY: mark*(1 - bps/10000); SELL: mark*(1 + bps/10000)
+        target_sl = mark * (1.0 - trail_bps/10000.0 * sign * -1.0)
+        # Never go beyond BE the wrong way:
+        target_sl = max(target_sl, be_price) if side=="BUY" else min(target_sl, be_price)
+        if current_sl_px is None or (target_sl - current_sl_px) * sign > 1e-12:
+            try:
+                res2 = await cli.place_stop_loss_or_be(symbol, side, float(target_sl), trigger=trigger)  # type: ignore
+                placed = {"action": "SL_TRAIL", "price": float(target_sl), "order": res2}
+                await emit(symbol, "sl_move", frm=(float(current_sl_px) if current_sl_px is not None else None), to=float(target_sl))
+                current_sl_px = float(target_sl)
+            except Exception as e:
+                return {"ok": False, "error": f"place_trail_failed: {e}"}
+
+    # 6) (Optional) TP legs — reduceOnly LIMITs, only if we have a position
+    tp_info: List[Dict[str, Any]] = []
+    if req.place_tps and abs(amt) > 0.0:
+        try:
+            # Make sure reduce-only TPs do not exceed position size
+            await cli.cancel_all_reduce_only(symbol)  # type: ignore
+            for i, pct in enumerate(tp_pcts, start=1):
+                px = entry * (1.0 + (pct/100.0) * sign)
+                split = splits[i-1] if i-1 < len(splits) else None
+                res3 = await cli.place_take_profit(symbol, side, float(px), split=split, idx=i, trigger=trigger)  # type: ignore
+                tp_info.append({"i": i, "price": float(px), "split": split, "order": res3})
+        except Exception as e:
+            # do not fail the whole manage-once if TP placement had an issue
+            tp_info.append({"error": f"tp_place_failed: {e}"})
+
+    return {
+        "ok": True,
+        "delegated": False,
+        "symbol": symbol,
+        "side": side,
+        "entry": entry,
+        "mark": mark,
+        "be_trigger": be_trigger,
+        "be_price": be_price,
+        "be_done": be_done,
+        "current_sl": current_sl_px,
+        **({"placed": placed} if placed else {}),
+        **({"tp": tp_info} if tp_info else {}),
+    }
+
 class SymbolReq(BaseModel):
     symbol: str
 
@@ -1247,5 +1398,6 @@ def main() -> None:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
+
 
 
