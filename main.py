@@ -1,3 +1,4 @@
+# main.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -126,7 +127,7 @@ _inline_env_defaults: Dict[str, str] = {
     "RETRY_BASE_MS": "500",
     "RETRY_JITTER": "1",
     "REST_COOLDOWN_SEC": "6",
-    "TP_MAX_LADDERS": "4",  # default to 4 ladders/TPs
+    "TP_MAX_LADDERS": "4",
     "ENABLE_INDICATOR_EXIT": "1",
     "ADX_MIN": "18",
     "NO_PROGRESS_TIMEOUT_MIN": "30",
@@ -165,14 +166,13 @@ TRAIL_RT_ADJUST_THRESHOLD = float(os.getenv("TRAIL_RT_ADJUST_THRESHOLD", "0.2") 
 TRAIL_RT_WATCH = [s.strip().upper() for s in (os.getenv("TRAIL_RT_WATCHLIST", "") or "").split(",") if s.strip()]
 
 # ===== NEW knobs from request =====
-# Map TG_COOLDOWN_SEC -> IDEM_TTL_SEC if provided (anti-spam cooldown)
 IDEM_TTL_SEC = int(os.getenv("IDEM_TTL_SEC", os.getenv("TG_COOLDOWN_SEC", "60")) or 60)
 USE_REDIS_IDEM = os.getenv("USE_REDIS_IDEM", "0").lower() in ("1", "true", "yes", "on")
 TRAIL_PAUSE_WINDOWS = (os.getenv("TRAIL_PAUSE_WINDOWS", "") or "").strip()   # e.g. "22:00-02:00Z,11:30-12:00Z"
 AUTO_TRAIL_ADX_MIN = float(os.getenv("AUTO_TRAIL_ADX_MIN", "0") or 0.0)
 AUTO_TRAIL_ATRPCT_MAX = float(os.getenv("AUTO_TRAIL_ATRPCT_MAX", "0") or 0.0)
 
-# === תחזוקת TP: Merge / Rearm / Anti-stale (imports + ENV) ===
+# === תחזוקת TP (imports + ENV) ===
 try:
     from utils.tp_helper import (  # type: ignore
         maybe_merge_close_tps, maybe_rearm_on_bounce, anti_stale_nudge, manage_once_place_all
@@ -183,14 +183,12 @@ except Exception:
 
 TP_MERGE_TICK_BAND = int(os.getenv("TP_MERGE_TICK_BAND", "1") or 1)
 TP_REARM_TICK = int(os.getenv("TP_REARM_TICK", "1") or 1)
-ANTI_STALE_MIN = int(os.getenv("ANTI_STALE_MIN", "15") or 15)  # דקות
+ANTI_STALE_MIN = int(os.getenv("ANTI_STALE_MIN", "15") or 15)  # minutes
 ANTI_STALE_NUDGE_BPS = float(os.getenv("ANTI_STALE_NUDGE_BPS", "2") or 2.0)
 
-# ====== (NEW) Time-Stop knobs (best-effort; used only if the logic exists) ======
+# ====== (NEW) Time-Stop knobs ======
 TIME_STOP_MIN = int(os.getenv("TIME_STOP_MIN", "0") or 0)
 TIME_STOP_KEEP_PROFIT_MIN_PCT = float(os.getenv("TIME_STOP_KEEP_PROFIT_MIN_PCT", "0") or 0.0)
-
-# (optional) external time-stop logic (only used if present)
 try:
     from utils.time_stop import should_time_stop, time_stop_decision  # type: ignore
 except Exception:
@@ -227,8 +225,6 @@ with suppress(Exception):
         app.include_router(_routes_ops_ui.router)
 
 # ============= Public feed fallbacks (no-404) =============
-# נוסיף ראוטים פנימיים רק אם לא קיימים כבר (כלומר אם routes.public/* לא עלו).
-
 def _route_exists(path: str, method: str = "GET") -> bool:
     try:
         for r in app.routes:
@@ -260,39 +256,23 @@ async def _scan_public_now_fallback(symbols: Optional[str] = None):
     return {"ok": True, "data": data}
 
 def _ensure_public_fallbacks() -> None:
-    """
-    מוסיף את המסלולים /scan/public-topk, /scan/public-now, /topk אם חסרים.
-    לא מתנגש אם הם כבר קיימים ברואטרים חיצוניים.
-    """
     try:
         if not _route_exists("/scan/public-topk", "GET"):
-            app.add_api_route(
-                "/scan/public-topk",
-                _scan_public_topk_fallback,
-                methods=["GET"],
-                tags=["public"],
-            )
+            app.add_api_route("/scan/public-topk", _scan_public_topk_fallback, methods=["GET"], tags=["public"])
         if not _route_exists("/scan/public-now", "GET"):
-            app.add_api_route(
-                "/scan/public-now",  # FIXED: was "/scan_public_now"
-                _scan_public_now_fallback,
-                methods=["GET"],
-                tags=["public"],
-            )
+            app.add_api_route("/scan/public-now", _scan_public_now_fallback, methods=["GET"], tags=["public"])
         if not _route_exists("/topk", "GET"):
             app.add_api_route("/topk", _scan_public_topk_fallback, methods=["GET"], tags=["public"])
     except Exception as e:
         logger.warning("public_fallbacks_add_failed: %s", e)
 
-# (NEW) מעקב In-memory: כניסה ראשונית ו-TP1 timing
-# ייווצרו אם לא קיימים (טעינה/רילוד)
+# (NEW) In-memory timing trackers
 app.state.pos_open_ts = getattr(app.state, "pos_open_ts", {})
 app.state.tp1_hit_ts = getattr(app.state, "tp1_hit_ts", {})
 
-# ===== UltraTop integration (mount under /ultra only if enabled) =====
+# ===== UltraTop integration (optional) =====
 ULTRATOP_MODE = os.getenv("ULTRATOP_MODE", "noop").lower()
 ULTRATOP_PREFIX = os.getenv("ULTRATOP_PREFIX", "/ultra")
-
 try:
     from main_ultratop import setup_ultratop  # type: ignore
     if ULTRATOP_MODE in ("mount", "embed", "attach"):
@@ -303,7 +283,7 @@ try:
 except Exception as e:
     logger.warning("UltraTop not mounted: %s", e)
 
-# ---------- Safe HEAD & /readyz (first middleware) ----------
+# ---------- Safe HEAD & /readyz ----------
 @app.middleware("http")
 async def _head_compat_and_soft_readyz(request: Request, call_next):
     if request.url.path == "/readyz":
@@ -362,7 +342,6 @@ TELEGRAM_WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
 API_BEARER_TOKEN = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
 NS = os.getenv("REDIS_NAMESPACE", "ops-supervisor-web").strip() or "ops-supervisor-web"
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
-# אם אין REDIS_URL – אל תכפה Redis גם אם הסביבה דרשה; נגלוש לזיכרון
 _REQUIRE_REDIS_ENV = os.getenv("REQUIRE_REDIS", "1").lower() in ("1", "true", "yes", "on")
 REQUIRE_REDIS = _REQUIRE_REDIS_ENV and bool(REDIS_URL)
 CONFIRMSTORE_ENABLE = os.getenv("CONFIRMSTORE_ENABLE", "0").lower() in ("1", "true", "yes", "on") or (not REDIS_URL)
@@ -389,15 +368,13 @@ ETA_SMART_ENABLE = os.getenv("ETA_SMART_ENABLE", "1").lower() in ("1", "true", "
 ETA_VELOCITY_WINDOW = int(os.getenv("ETA_VELOCITY_WINDOW", "30"))
 TP1_TAGS = [t.strip() for t in (os.getenv("TP1_TAGS", "TP1,tp1,tp_1,TAKE_PROFIT_1")).split(",") if t.strip()]
 
-# HMAC secret for signed links (GET links)
+# HMAC secret (links)
 HMAC_SECRET = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") or "").strip()
 
-# HTTP/2 enable toggle (used also for httpx fallback logic)
-HTTP2_ENABLE = os.getenv("HTTP2_ENABLE", "1").lower() in ("1", "true", "yes", "on")  # kept for backwards-compat; runtime flag added below
+# HTTP/2 toggle
+HTTP2_ENABLE = os.getenv("HTTP2_ENABLE", "1").lower() in ("1", "true", "yes", "on")
 
-# ==================== Binance endpoints auto-fallback (HTTP/WS) ====================
-# ENV: BINANCE_FUTURES_HTTP_BASE, BINANCE_FUTURES_WS_BASE, BINANCE_SPOT_HTTP_BASE
-# Optional lists: BINANCE_HTTP_BASES_FUTURES, BINANCE_WS_BASES_FUTURES, BINANCE_HTTP_BASES_SPOT
+# ==================== Binance endpoints auto-fallback ====================
 def _csv_list(env_key: str, defaults: List[str]) -> List[str]:
     raw = (os.getenv(env_key) or "").strip()
     items = [x.strip() for x in raw.split(",") if x.strip()]
@@ -440,17 +417,12 @@ def _binance_candidate_sets() -> Dict[str, List[str]]:
     fut_http = _csv_list("BINANCE_HTTP_BASES_FUTURES", def_fut_http)
     fut_ws   = _csv_list("BINANCE_WS_BASES_FUTURES", def_fut_ws)
     spot_http= _csv_list("BINANCE_HTTP_BASES_SPOT", def_spot_http)
-    return {
-        "fut_http": fut_http,
-        "fut_ws": fut_ws,
-        "spot_http": spot_http,
-    }
+    return {"fut_http": fut_http, "fut_ws": fut_ws, "spot_http": spot_http}
 
 _shared_client_lock = threading.Lock()
 
 def _http2_enabled_runtime() -> bool:
     return os.getenv("HTTP2_ENABLE", "1").lower() in ("1", "true", "yes", "on")
-
 
 def _get_shared_async_client() -> httpx.AsyncClient:
     cli: Optional[httpx.AsyncClient] = getattr(app.state, "shared_async_client", None)
@@ -475,9 +447,6 @@ def _get_shared_async_client() -> httpx.AsyncClient:
         return cli
 
 async def _http_ready(base: str, *, path: str = "/fapi/v1/ping", timeout: float = 6.0) -> bool:
-    """
-    Probe an endpoint with a lightweight GET; returns True only on 200.
-    """
     try:
         cli = _get_shared_async_client()
         r = await cli.get(base.rstrip("/") + path, timeout=httpx.Timeout(timeout))
@@ -486,10 +455,6 @@ async def _http_ready(base: str, *, path: str = "/fapi/v1/ping", timeout: float 
         return False
 
 async def _resolve_binance_endpoints() -> None:
-    """
-    בוחר בסיסים תקינים ומעדכן app.state + os.environ לשימוש כללי.
-    אם הראשון לא זמין—נפול לבא בתור.
-    """
     cands = _binance_candidate_sets()
     chosen_fut_http = None
     for b in cands["fut_http"]:
@@ -501,7 +466,6 @@ async def _resolve_binance_endpoints() -> None:
         if await _http_ready(b, path="/api/v3/ping"):
             chosen_spot_http = b
             break
-    # WS: pick by order (no ping)
     chosen_fut_ws = cands["fut_ws"][0] if cands["fut_ws"] else None
 
     app.state.BINANCE_FUTURES_HTTP_BASE = (chosen_fut_http or cands["fut_http"][0]).rstrip("/")
@@ -614,7 +578,6 @@ def _verify_http_signature(request: Request, body: bytes, *, route_path: str) ->
         return False, "server_signing_secret_missing"
     mac = hmac.new(key, sigstr.encode(), hashlib.sha256).digest()
     calc = b64encode(mac).decode()
-    # constant-time comparison for safety
     if not hmac.compare_digest(calc, info["signature"]):
         return False, "bad_signature"
 
@@ -622,7 +585,6 @@ def _verify_http_signature(request: Request, body: bytes, *, route_path: str) ->
     if enforce_ts:
         try:
             skew = int(os.getenv("SIG_TS_SKEW_SEC", "900") or 900)
-            # support integer OR float timestamp strings
             ts_raw = hdrs_lower.get("x-request-timestamp", "0")
             try:
                 ts = int(float(ts_raw))
@@ -639,7 +601,6 @@ def _require_not_expired(exp_val: Optional[Union[int, str]]) -> None:
     if exp_val in (None, "", 0, "0", "0.0"):
         return
     try:
-        # allow float-like strings, e.g. "1700000000.0"
         if isinstance(exp_val, (int, float)):
             exp_i = int(exp_val)
         else:
@@ -679,7 +640,6 @@ async def _enforce_nonce_once(request: Request) -> None:
         bucket = {}
         app.state._nonce_mem = bucket
     now = time.time()
-    # cleanup
     for k, ts in list(bucket.items()):
         if now - float(ts) > ttl:
             bucket.pop(k, None)
@@ -879,7 +839,6 @@ async def _public_cache_etag(request: Request, call_next):
                 resp.headers["Vary"] = "If-None-Match"
             elif "if-none-match" not in resp.headers.get("Vary", "").lower():
                 resp.headers["Vary"] = resp.headers["Vary"] + ", If-None-Match"
-            # אין גוף שאפשר לגבות עליו ETag — נחזיר כמו שהוא
             return resp
         try:
             hasher = hashlib.md5()
@@ -912,17 +871,15 @@ def _md_html(s: str) -> str:
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                               reject_url: Optional[str] = None, preview_url: Optional[str] = None,
                               manage_url: Optional[str] = None) -> Dict[str, Any]:
-    # --- silent switch (global mute) ---
     if os.getenv("TG_SILENT", "0").lower() in ("1", "true", "yes", "on"):
         return {"ok": True, "skipped": True, "reason": "silent_mode"}
 
-    # --- idempotency on Redis to avoid duplicate sends within IDEM_TTL_SEC ---
     if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
         try:
             r = await _get_redis_cached()
             if r:
                 key_payload = json.dumps({"t": text, "a": approve_url, "r": reject_url, "p": preview_url, "m": manage_url}, ensure_ascii=False, separators=(",", ":"))
-                idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"  # safe uniqueness
+                idem_key = f"{NS}:idem:tg:{hashlib.md5(key_payload.encode('utf-8')).hexdigest()}"
                 ok = await r.setnx(idem_key, "1")
                 if not ok:
                     return {"ok": True, "skipped": True, "reason": "idem_duplicate"}
@@ -968,7 +925,6 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                 data = r.json()
             if r.status_code < 400 and data.get("ok"):
                 return {"ok": True, "status": r.status_code, "result": data.get("result")}
-            # retry on 429/5xx
             if r.status_code in (429, 500, 502, 503, 504):
                 ra = 0.0
                 with suppress(Exception):
@@ -1047,7 +1003,7 @@ async def get_last_price_async(symbol: str) -> Optional[float]:
                 return v
     return None
 
-# >>> KL HTTP HELPER (לוקלי; מביא klines ב-HTTP לצ'קליסט)
+# >>> KL HTTP HELPER
 async def _fetch_klines_http(symbol: str, interval: str = "15m", limit: int = 120) -> List[List[Any]]:
     sym = symbol.upper()
     if not sym.endswith("USDT"):
@@ -1065,7 +1021,6 @@ async def _fetch_klines_http(symbol: str, interval: str = "15m", limit: int = 12
 
 # ==================== Misc helpers ====================
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
-
 def _parse_mode(note: Optional[str]) -> Optional[str]:
     if not note:
         return None
@@ -1165,7 +1120,6 @@ def _round_to_lot_size(client, symbol: str, qty: float) -> float:
         _tick, step = _get_filters(client, symbol)
         if step and step > 0:
             q = math.floor(float(qty) / float(step)) * float(step)
-            # מנקה רעשים של נקודה צפה (למנוע 0.0179999999)
             dec = max(0, min(8, str(step)[::-1].find('.')))
             return float(f"{q:.{dec}f}")
         return float(qty)
@@ -1307,16 +1261,13 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
         pass
 
     try:
-        # אל תסמוך על iscoroutinefunction (יכול לטעות עם wrappers) – בדוק את התוצאה בפועל
         maybe = execute_trade_live(**clean)  # type: ignore[misc]
         if inspect.isawaitable(maybe):
             res = await maybe  # type: ignore[assignment]
         else:
             res = maybe  # type: ignore[assignment]
-        # normalize qty precision guard (אם המימוש הפנימי לא עיגל)
         try:
             if not res.get("ok") and "precision" in str(res).lower():
-                # ניסיון עיגול ו־retry חד-פעמי לשכבת ה-MARKET
                 symbol2 = (ticket.get("symbol") or "").upper()
                 side2 = (ticket.get("side") or "").upper()
                 qty2 = float(ticket.get("qty") or ticket.get("quantity") or 0.0)
@@ -1420,7 +1371,6 @@ def _require_bearer(request: Request) -> None:
         return
     if not API_BEARER_TOKEN:
         raise HTTPException(status_code=503, detail="Route protection enabled but API_BEARER_TOKEN missing")
-    # case-insensitive "bearer" support; trim extra spaces
     auth = request.headers.get("Authorization", "") or request.headers.get("authorization", "")
     parts = auth.split(" ", 1)
     if not parts or len(parts) < 2:
@@ -1431,6 +1381,115 @@ def _require_bearer(request: Request) -> None:
     if token != API_BEARER_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+# ------- permissions helpers for alerts (from your patch) -------
+def _allow_by_bearer_or_apikey(request: Request) -> None:
+    """
+    מרשה או Bearer (API_BEARER_TOKEN) או x-api-key (API_TOKEN/PRIMARY_API_TOKEN).
+    """
+    want_bearer = (request.headers.get("authorization") or request.headers.get("Authorization") or "").strip()
+    x_api_key = (request.headers.get("x-api-key") or request.headers.get("X-API-Key") or "").strip()
+    if API_BEARER_TOKEN and want_bearer.lower().startswith("bearer "):
+        if want_bearer.split(" ", 1)[1].strip() == API_BEARER_TOKEN:
+            return
+    api_tokens = [(os.getenv("PRIMARY_API_TOKEN") or "").strip(),
+                  (os.getenv("API_TOKEN") or "").strip(),
+                  (os.getenv("API_BEARER_TOKEN") or "").strip()]
+    if x_api_key and x_api_key in [t for t in api_tokens if t]:
+        return
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+# ==================== Manager/Alerts routes (from your patch) ====================
+@router.get("/ops/manager/health", tags=["manager"])
+async def ops_manager_health():
+    return {
+        "ok": True,
+        "enabled": True,
+        "state_machine": "idle",
+        "writes_orders": True,
+        "ws_autoflip": True,
+        "rt_manage": True,
+        "pending_count": len(ConfirmStore.pending()) if CONFIRMSTORE_ENABLE else 0,
+        "redis": bool(aioredis and REDIS_URL),
+        "http2": _http2_enabled_runtime(),
+        "version": APP_VERSION,
+    }
+
+@router.post("/ops/manager/tick", tags=["manager"])
+async def ops_manager_tick(request: Request):
+    _require_bearer(request)
+    return {"ok": True, "tick": int(time.time())}
+
+@router.get("/alerts/trades/active", tags=["ops-approval"])
+async def alerts_trades_active(request: Request):
+    _require_bearer(request)
+    items: List[Dict[str, Any]] = []
+    if aioredis and REDIS_URL:
+        try:
+            r = await _get_redis_cached()
+            if r:
+                patt = f"{NS}:ticket:*"
+                cursor = "0"
+                keys: List[str] = []
+                for _ in range(50):
+                    cursor, batch = await r.scan(cursor=cursor, match=patt, count=200)
+                    keys.extend(batch)
+                    if cursor == "0":
+                        break
+                for k in keys[:300]:
+                    raw = await r.get(k)
+                    if not raw:
+                        continue
+                    obj = json.loads(raw)
+                    req = obj.get("req") or obj
+                    items.append(req)
+        except Exception:
+            pass
+    if CONFIRMSTORE_ENABLE:
+        try:
+            for it in ConfirmStore.pending():
+                req = it.get("req") or it
+                items.append(req)
+        except Exception:
+            pass
+    return {"ok": True, "items": items, "count": len(items)}
+
+@router.post("/alerts/ingest", tags=["ops-approval"])
+async def alerts_ingest(request: Request, payload: Dict[str, Any] = Body(...)):
+    _allow_by_bearer_or_apikey(request)
+    payload = dict(payload or {})
+    payload.setdefault("leverage_min", AUTO_LEV_MIN)
+    payload.setdefault("leverage_max", AUTO_LEV_MAX)
+    payload.setdefault("budget_min", AUTO_BUDGET_MIN)
+    payload.setdefault("budget_max", AUTO_BUDGET_MAX)
+    payload["require_approval"] = True if payload.get("require_approval") is None else bool(payload.get("require_approval"))
+    res = await create_ticket(payload, request=request)
+    return res
+
+@router.post("/alerts/trades/update", tags=["ops-approval"])
+async def alerts_trades_update(request: Request, body: Dict[str, Any] = Body(...)):
+    """
+    צפה ל-body: {"ticket_id":"...", "action":"approve"|"reject", "exp":<unix optional>}
+    אימות: כותרת X-Signature-Hex = HMAC-SHA256(OPS_SIGN_SECRET, raw_body)
+    אופציונלי: X-Request-Nonce למניעת replay (אם ANTI_REPLAY_ENABLE=1)
+    """
+    raw = await request.body()
+    sig_hex = request.headers.get("X-Signature-Hex") or request.headers.get("x-signature-hex") or ""
+    if not HMAC_SECRET:
+        raise HTTPException(status_code=503, detail="OPS_SIGN_SECRET/WEBHOOK_HMAC_SECRET missing")
+    want = _sign_hex(HMAC_SECRET, raw)
+    if not sig_hex or not hmac.compare_digest(sig_hex.strip(), want):
+        raise HTTPException(status_code=401, detail="bad_signature")
+    await _enforce_nonce_once(request)
+    _require_not_expired(body.get("exp"))
+    ticket_id = str(body.get("ticket_id") or "").strip()
+    action = (body.get("action") or "").strip().lower()
+    if not (ticket_id and action in ("approve", "reject")):
+        raise HTTPException(status_code=422, detail="missing_fields")
+    if action == "approve":
+        return await _approve_core(ticket_id)
+    return await _reject_core(ticket_id)
+
+# ==================== Ticket/UI/Approve/Reject ====================
 def _rows_kv_html(t: Dict[str, Any]) -> str:
     def cv(k, default="—"):
         v = t.get(k, default)
@@ -1656,14 +1715,11 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     preview_url = _build_signed_link(base, "/ops/ui/ticket/signed", tid, ttl_sec=900, action="preview")
     approve_url = _build_signed_link(base, "/ops/approve/signed", tid, ttl_sec=900, action="approve")
     reject_url = _build_signed_link(base, "/ops/reject/signed", tid, ttl_sec=900, action="reject")
-    # כפתור "⚡ Manage Now" – חתימה לפי WEBHOOK_HMAC_SECRET על GET
-    # הסימבול מגיע מתוך הכרטיס
+
     manage_url = ""
     try:
         sym_for_btn = str(symbol or "").upper()
         manage_url = _build_signed_link(base, "/manage-once/signed", sym_for_btn, ttl_sec=600, action="manage")
-        # הסכמה: ticket_id בשדה link-key, כאן אנו משתמשים ב-symbol כ-"ticket_id" לייעוד החתימה.
-        # הנתיב עצמו יאמת exp+sig ויטפל ב-symbol=... מה-Query.
         if "?" in manage_url:
             manage_url += f"&symbol={sym_for_btn}"
         else:
@@ -1771,15 +1827,11 @@ async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), s
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     return _render_ticket_html(ticket_id, rec, base)
 
-# === NEW: Public ticket inspect (200 if exists, 404 if not) ===
 @router.get("/public/ticket/inspect", tags=["public"])
 async def public_ticket_inspect(ticket_id: str = Query(...)):
     rec, _ = await _load_ticket(ticket_id)
     if rec:
-        return JSONResponse({
-            "ok": True, "ticket_id": ticket_id, "found": True,
-            "key": f"{NS}:ticket:{ticket_id}", "data": rec
-        })
+        return JSONResponse({"ok": True, "ticket_id": ticket_id, "found": True, "key": f"{NS}:ticket:{ticket_id}", "data": rec})
     return JSONResponse({"ok": True, "ticket_id": ticket_id, "found": False}, status_code=404)
 
 def _maybe_protect_routes(request: Request) -> None:
@@ -1807,7 +1859,6 @@ async def reject_signed(ticket_id: str = Query(...), exp: str = Query(...), sig:
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     return await _reject_core(ticket_id)
 
-# === NEW: Signed POST endpoints (HTTP Signatures) ===
 @router.post("/ops/approve/signed")
 async def approve_signed_post(request: Request, payload: Dict[str, Any] = Body(...)):
     """
@@ -1819,7 +1870,7 @@ async def approve_signed_post(request: Request, payload: Dict[str, Any] = Body(.
         raise HTTPException(status_code=401, detail="Bad signature")
     await _enforce_nonce_once(request)
     _require_not_expired(payload.get("exp"))
-    ticket_id = str(payload.get("ticket_id") or "").strip()  # FIXED: was .trim()
+    ticket_id = str(payload.get("ticket_id") or "").strip()
     approved = bool(payload.get("approve") is True)
     if not ticket_id:
         raise HTTPException(status_code=422, detail="Missing ticket_id")
@@ -1846,7 +1897,7 @@ async def reject_signed_post(request: Request, payload: Dict[str, Any] = Body(..
         raise HTTPException(status_code=422, detail="approve_true_on_reject_endpoint")
     return await _reject_core(ticket_id)
 
-# --- בטוח: עטיפת smart_manage_now (אם קיים במודול חיצוני) ---
+# --- בטוח: עטיפת smart_manage_now (אם קיים) ---
 async def _smart_manage_now(symbol: str,
                             offset_bps: Optional[int] = None,
                             pcts: Optional[List[float]] = None,
@@ -1900,7 +1951,6 @@ async def _try_mark_decided(ticket_id: str, decision: str, ttl: int = 30) -> boo
             await r.expire(key_any, ttl)
     return bool(ok)
 
-# (שאר הלוגיקה של approve/reject נשמרה ללא שינוי משמעותי)
 async def _approve_core(ticket_id: str):
     if not await _try_mark_decided(ticket_id, "approve"):
         return _html("⚠️ בקשה זו כבר טופלה (כפילות נמנעה).")
@@ -1982,7 +2032,6 @@ async def _approve_core(ticket_id: str):
         try:
             sm = {
                 "enable": os.getenv("SMART_MANAGE_ON_APPROVE", "1").lower() in ("1", "true", "yes", "on"),
-                # prefer BE_BPS / TRAIL_OFFSET_BPS if provided
                 "offset_bps": int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS",
                                     os.getenv("BE_BPS",
                                     os.getenv("TRAIL_OFFSET_BPS",
@@ -2040,7 +2089,6 @@ async def _reject_core(ticket_id: str):
 # ==================== Indicator & profile helpers ====================
 PROFILE_AUTO_SELECT = os.getenv("PROFILE_AUTO_SELECT", "1").lower() in ("1", "true", "yes", "on")
 
-# Prefer BE_BPS for base profile if provided (4 TPs by default)
 PROFILE_BASE_BE_BPS = int(os.getenv("PROFILE_BASE_BE_BPS", os.getenv("BE_BPS", "5")))
 PROFILE_BASE_PCTS = [float(x) for x in (os.getenv("PROFILE_BASE_PCTS", "3,6,10,16")).split(",") if x.strip()]
 PROFILE_BASE_SPLITS = [float(x) for x in (os.getenv("PROFILE_BASE_SPLITS", "0.25,0.25,0.25,0.25")).split(",") if x.strip()]
@@ -2097,7 +2145,6 @@ def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -
     except Exception:
         return {"atr": 0.0, "adx": 0.0, "price": 0.0}
 
-# ===== Profile select for /manage-once =====
 async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, float], str]:
     try:
         klines = client.futures_klines(symbol=symbol, interval="1m", limit=60)
@@ -2131,7 +2178,7 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
 
     return prof, {"price": price, "atr": atr, "adx": adx}, profile_name
 
-# --- pause windows parser ---
+# --- pause windows ---
 def _parse_pause_windows(spec: str) -> List[Tuple[int, int]]:
     windows: List[Tuple[int, int]] = []
     for part in [p.strip() for p in (spec or "").split(",") if p.strip()]:
@@ -2173,7 +2220,6 @@ def _in_pause_window_utc(now: Optional[time.struct_time] = None) -> bool:
 
 @router.post("/manage-once")
 async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
-    # אם הגיעו דרך נתיב חתום – דולג Bearer
     try:
         if not getattr(request.state, "_signed_override", False):
             _require_bearer(request)
@@ -2194,7 +2240,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
     client = Client(api_key, api_sec)
     _align_position_mode(client)
 
-    # position info (keep for potential future use; not strictly required now)
     try:
         positions = client.futures_position_information(symbol=symbol)
         has_any = any(abs(float(p.get("positionAmt") or 0.0)) > 0 for p in positions)
@@ -2205,7 +2250,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
 
     tick, step = _get_filters(client, symbol)
 
-    # בחר פרופיל ניהול לפי אינדיקטורים וקח בחשבון חלונות pause
     prof, indicators, prof_name = await _select_profile_for_symbol(client, symbol, payload)
     if _in_pause_window_utc():
         return {
@@ -2216,7 +2260,6 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
             "indicators": indicators,
         }
 
-    # הפעלת smart_manage_now אם קיים; אחרת נחזיר skipped
     try:
         res = await _smart_manage_now(
             symbol,
@@ -2229,18 +2272,10 @@ async def manage_once(request: Request, payload: Dict[str, Any] = Body(...)):
         return {"ok": False, "error": "smart_manage_now_failed", "detail": str(e)}
     return {"ok": True, "delegated": True, "profile": prof_name, "indicators": indicators, "result": res}
 
-# ==================== NEW: Signed GET manage-once (Telegram button) ====================
 @router.get("/manage-once/signed", tags=["manager"])
 async def manage_once_signed(symbol: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
-    """
-    הפעלה ידנית/כפויה של ניהול דינמי על פוזיציה פתוחה בסימבול, דרך לינק חתום.
-    חתימה מאומתת ע"י _verify_signed_params (WEBHOOK_HMAC_SECRET).
-    משתמש בפרופיל דינמי (BASE/EXTREME) ובאותם PCTS/SPLITS/ATR_MULT מה-ENV.
-    """
-    # אנחנו ממחזרים את מנגנון החתימות של הלינקים: path=/manage-once/signed, "ticket_id"=symbol
     if not _verify_signed_params(symbol, exp, sig, "/manage-once/signed"):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
-    # עוקף Bearer לפרו-סייד (כמו UI signed)
     class _Req:
         state = type("S", (), {"_signed_override": True})
     payload = {
@@ -2252,30 +2287,9 @@ async def manage_once_signed(symbol: str = Query(...), exp: str = Query(...), si
     }
     return await manage_once(_Req(), payload)  # type: ignore
 
-@router.get("/manage-once/multi/signed", tags=["manager"])
-async def manage_once_multi_signed(symbols: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
-    """
-    הפעלה גורפת לכלל הסימבולים המבוקשים (מופרדים בפסיק), עם לינק חתום אחד.
-    """
-    # כאן אנו משתמשים באותו "ticket_id" לצורך חתימה: כל ה-query "symbols" עובר באימות כיחידה אחת
-    if not _verify_signed_params(symbols, exp, sig, "/manage-once/multi/signed"):
-        raise HTTPException(status_code=401, detail="Bad or expired signature")
-    class _Req:
-        state = type("S", (), {"_signed_override": True})
-    out = []
-    for sym in [s.strip().upper() for s in symbols.split(",") if s.strip()]:
-        payload = {
-            "symbol": sym,
-            "offset_bps": int(os.getenv("PROFILE_BASE_BE_BPS", os.getenv("BE_BPS", "5"))),
-            "pcts": [float(x) for x in (os.getenv("PROFILE_BASE_PCTS", "3,6,10,16")).split(",") if x.strip()],
-            "splits": [float(x) for x in (os.getenv("PROFILE_BASE_SPLITS", "0.25,0.25,0.25,0.25")).split(",") if x.strip()],
-            "atr_mult": float(os.getenv("PROFILE_BASE_ATR_MULT", os.getenv("TRAIL_ATR_MULT", "1.6"))),
-        }
-        res = await manage_once(_Req(), payload)  # type: ignore
-        out.append({"symbol": sym, "res": res})
-    return {"ok": True, "results": out}
+# ----------------- Mount router & startup -----------------
+app.include_router(router)
 
-# ==================== Startup / health / version ====================
 @app.on_event("startup")
 async def _on_startup():
     _ensure_public_fallbacks()
@@ -2283,68 +2297,21 @@ async def _on_startup():
         await _resolve_binance_endpoints()
     with suppress(Exception):
         await _ensure_telegram_webhook()
+    if STARTUP_NOTIFY_ENABLE:
+        with suppress(Exception):
+            await _send_telegram_html(f"🚀 <b>{_md_html(APP_TITLE)}</b> is up (v{_md_html(APP_VERSION)})")
 
-@router.get("/version", tags=["meta"])
-async def version():
-    return {"ok": True, "version": APP_VERSION}
-
-# Mount router
-app.include_router(router)
-
-# ==================== Graceful shutdown (close clients) ====================
-@app.on_event("shutdown")
-async def _on_shutdown():
-    # Close shared AsyncClient (httpx)
-    try:
-        cli: Optional[httpx.AsyncClient] = getattr(app.state, "shared_async_client", None)
-        if cli and not cli.is_closed:
-            await cli.aclose()
-            try:
-                delattr(app.state, "shared_async_client")
-            except Exception:
-                app.state.shared_async_client = None  # type: ignore[attr-defined]
-    except Exception as e:
-        logger.debug("shutdown: httpx close failed: %s", e)
-
-    # Close Redis (if initialized)
-    try:
-        r = getattr(app.state, "redis", None)
-        if r is not None:
-            with suppress(Exception):
-                await r.close()          # redis.asyncio supports .close()
-            try:
-                delattr(app.state, "redis")
-            except Exception:
-                app.state.redis = None   # type: ignore[attr-defined]
-    except Exception as e:
-        logger.debug("shutdown: redis close failed: %s", e)
-
-    # Cancel background tasks (if any were registered on app.state.bg_tasks)
-    try:
-        tasks: List[asyncio.Task] = list(getattr(app.state, "bg_tasks", []) or [])
-        for t in tasks:
-            with suppress(Exception):
-                t.cancel()
-        if tasks:
-            with suppress(Exception):
-                await asyncio.gather(*tasks, return_exceptions=True)
-        try:
-            delattr(app.state, "bg_tasks")
-        except Exception:
-            app.state.bg_tasks = []  # type: ignore[attr-defined]
-    except Exception as e:
-        logger.debug("shutdown: bg_tasks cancel failed: %s", e)
-
-    logger.info("Application shutdown complete.")
-
-# ==================== Uvicorn entrypoint ====================
+# ==================== __main__ ====================
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=_port(),
-        reload=bool(os.getenv("RELOAD", "0") in ("1","true","yes","on")),
+        log_level=LOG_LEVEL.lower(),
+        reload=False,
+        workers=int(os.getenv("UVICORN_WORKERS", "1") or 1),
+        http="h11" if not _http2_enabled_runtime() else "auto",
     )
 
 
