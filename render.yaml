@@ -119,12 +119,12 @@ services:
 
       # ציבורי (כולל טעינה עצלה ל־/ui/snapshot)
       - key: SECURITY_PUBLIC_PATHS
-        value: "/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/public/ticket/inspect,/public/pos-events/stream,/manage-once/signed,/manage-once/multi/signed,/ops/manager/health,/ui/snapshot,/ui/snapshot/idle"
+        value: "/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/public/ticket/inspect,/public/pos-events/stream,/ops/manager/health,/ui/snapshot,/ui/snapshot/idle"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk"
-      # הגנה על /admin ועוד
+      # הגנה על /admin ועוד + ניהול ידני
       - key: SECURITY_PROTECTED_PATHS
-        value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json,/admin"
+        value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json,/admin,/manage-once,/manage-once/multi"
 
       - key: ENABLE_CSP
         value: "1"
@@ -134,13 +134,13 @@ services:
       - key: ANTI_REPLAY_ENABLE
         value: "1"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
-        value: "1"
+        value: "0"         # ❗ ביטול חתימה
       - key: ANTI_REPLAY_SKEW_SEC
         value: "60"
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
       - key: SIG_TS_ENFORCE
-        value: "1"
+        value: "0"         # ❗ ביטול אימות חותמת זמן
       - key: SIG_TS_SKEW_SEC
         value: "900"
 
@@ -785,21 +785,21 @@ services:
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
-      # === אימוץ אוטומטי של טריידים ידניים, ללא אישור ===
+      # אימוץ אוטומטי של טריידים ידניים (ניהול בלבד, ללא אישור)
       - key: ADOPT_MANUAL_ENABLE
-        value: "1"           # הפעלה
+        value: "1"
       - key: ADOPT_MODE
-        value: execute       # אין אישור; אימוץ וניהול מיידיים
+        value: execute
       - key: ADOPT_MIN_USDT
-        value: "10"          # מינימום אימוץ
+        value: "10"
       - key: ADOPT_SYMBOL_ALLOWLIST
-        value: "*"           # כל הסימבולים, לא רק WATCHLIST
+        value: "*"
       - key: ADOPT_MARKET
-        value: futures       # מאמץ פוזיציות Futures
+        value: futures
       - key: ADOPT_POSITION_MODE
-        value: hedge         # תואם ל-POSITION_MODE_OVERRIDE
+        value: hedge
       - key: ADOPT_NATIVE_TPSL
-        value: "1"           # להצמדת TP/SL מקוריים אם קיימים
+        value: "1"
 
       - key: AUTO_BE_BPS
         value: "8"
@@ -835,7 +835,7 @@ services:
       - key: POLICY_SCHEMA_PATH
         value: config/policy_schema.json
 
-      # === אוטו־דיסקברי מודרני (לטעינת routes/* באופן חכם) ===
+      # === אוטו־דיסקברי מודרני ===
       - key: ROUTES_AUTOLOAD
         value: "1"
       - key: ROUTES_AUTOLOAD_MODE
@@ -847,7 +847,7 @@ services:
       - key: ROUTES_VERBOSE
         value: "0"
 
-      # === תאימות להגדרות אוטו־דיסקברי הישנות ===
+      # === תאימות ישנה ===
       - key: ROUTES_AUTO_DISCOVERY
         value: "1"
       - key: ROUTES_NEED_TG_APPROVAL
@@ -873,7 +873,7 @@ services:
       - key: DISABLE_ROUTES
         value: ""
       - key: ROUTES_DENY_GLOBS
-        value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
+        value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/risk/*/internal*"
 
       - key: API_BEARER_TOKEN_RO
         fromSecret: API_BEARER_TOKEN_RO_PROD
