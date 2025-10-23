@@ -364,8 +364,15 @@ services:
         value: "1"
       - key: REQUIRE_TELEGRAM_APPROVAL
         value: "1"
+      # >>> כפי שביקשת:
       - key: AUTO_OPEN_ON_APPROVE
-        value: "1"
+        value: "0"
+      - key: ALLOW_MARKET_ENTRY
+        value: "0"
+      - key: APPROVAL_REQUIRE_FRESH_PRICE
+        value: "0"
+      - key: CONFIRM_TTL_SEC
+        value: "600"
 
       - key: PROPOSE_BLOCK_ON_FAIL
         value: "1"
@@ -375,13 +382,9 @@ services:
         value: "0"
       - key: APPROVAL_SUCCESS_MIN
         value: "0"
-      - key: APPROVAL_REQUIRE_FRESH_PRICE
-        value: "1"
       - key: APPROVAL_DUP_COOLDOWN_SEC
         value: "0"
 
-      - key: CONFIRM_TTL_SEC
-        value: "120"
       - key: OPS_TICKET_TTL_SEC
         value: "900"
       - key: ONLY_TRADE_NOTIFICATIONS
@@ -410,8 +413,6 @@ services:
         value: "1"
 
       - key: EXECUTE_TRADES
-        value: "1"
-      - key: ALLOW_MARKET_ENTRY
         value: "1"
       - key: MANAGER_WRITES_ORDERS
         value: "1"
@@ -882,8 +883,9 @@ services:
       - key: ETHERSCAN_API_KEY
         fromSecret: ETHERSCAN_API_KEY_PROD
 
+      # צפייה ב־positions בפומבי (כמו שביקשת למנוע 404)
       - key: POS_PUB_ENABLE
-        value: "0"
+        value: "1"
       - key: POS_PUB_INTERVAL_SEC
         value: "30"
 
