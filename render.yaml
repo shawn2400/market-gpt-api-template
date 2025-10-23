@@ -120,9 +120,9 @@ services:
       # הוספנו את /ui/snapshot ו-/ui/snapshot/idle לציבורי (לטעינה עצלה)
       - key: SECURITY_PUBLIC_PATHS
         value: /readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/public/ticket/inspect,/public/pos-events/stream,/manage-once/signed,/manage-once/multi/signed,/ops/manager/health,/ui/snapshot,/ui/snapshot/idle
-      # הוספנו /admin להגנה
       - key: SECURITY_PUBLIC_PREFIXES
         value: /public,/price,/static,/risk
+      # הוספנו /admin להגנה
       - key: SECURITY_PROTECTED_PATHS
         value: /ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json,/admin
 
@@ -1009,7 +1009,5 @@ services:
         value: 2000
       - key: UI_IDLE_STOP_SEC
         value: 30
-
-
 
 
