@@ -609,9 +609,12 @@ def _verify_http_signature(request: Request, body: bytes, *, route_path: str) ->
             try:
                 ts = int(float(ts_raw))
             except Exception:
+                logger.debug("sig_ts:reject reason=bad_format ts_raw=%s", ts_raw)
                 return False, "timestamp_bad_format"
             now = int(time.time())
             if abs(now - ts) > max(0, skew):
+                logger.debug("sig_ts:reject reason=out_of_window ts=%s now=%s skew=%s delta=%s",
+                             ts, now, skew, now - ts)
                 return False, "timestamp_out_of_window"
         except Exception:
             return False, "timestamp_bad_format"
@@ -760,9 +763,68 @@ async def _security_headers(request: Request, call_next):
     if _enable_coep:
         resp.headers.setdefault("Cross-Origin-Embedder-Policy", "require-corp")
     resp.headers.setdefault("X-XSS-Protection", "0")
+    # CSP (נשלט ENV)
+    try:
+        if os.getenv("ENABLE_CSP", "0").lower() in ("1", "true", "yes", "on"):
+            pol = os.getenv("CSP_POLICY", "default-src 'none'")
+            resp.headers.setdefault("Content-Security-Policy", pol)
+    except Exception:
+        pass
     if os.getenv("ENABLE_HSTS", "0").lower() in ("1", "true", "yes", "on"):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
     return resp
+
+# ==================== Helpers for guards & RL logs ====================
+def _client_ip(request: Request) -> str:
+    return request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.client.host if request.client else "0.0.0.0")
+
+def _env_list(s: Optional[str]) -> List[str]:
+    return [x.strip() for x in (s or "").split(",") if x and x.strip()]
+
+def _path_matches(path: str, exact: List[str], prefixes: List[str]) -> bool:
+    if any(path == e for e in exact):
+        return True
+    if any(path.startswith(pr) for pr in prefixes if pr):
+        return True
+    return False
+
+# ==================== Path Protection (ENV-driven) ====================
+@app.middleware("http")
+async def _path_protection_guard(request: Request, call_next):
+    """
+    כיבוד ENV ל-public/protected:
+      - SECURITY_PUBLIC_PATHS: רשימת נתיבים מדויקים (/, /readyz, ...)
+      - SECURITY_PUBLIC_PREFIXES: רשימת פריפיקסים ציבוריים (/public, /static ...)
+      - SECURITY_PROTECTED_PATHS: רשימת נתיבים מוגנים במדויק
+      - ROUTES_PROTECTED_PREFIXES: רשימת פריפיקסים מוגנים (/ops, /admin ...)
+    כללים:
+      1. אם path ב-public (מדויק/פריפיקס) => מעבר חופשי.
+      2. אחרת אם path ב-protected (מדויק/פריפיקס) => דרוש Bearer.
+      3. אחרת => ברירת מחדל: אין שינוי (הראוטים עצמם יגנו אם צריך).
+    """
+    try:
+        path = request.url.path
+        pub_exact = _env_list(os.getenv("SECURITY_PUBLIC_PATHS"))
+        pub_prefx = _env_list(os.getenv("SECURITY_PUBLIC_PREFIXES"))
+        prot_exact = _env_list(os.getenv("SECURITY_PROTECTED_PATHS"))
+        prot_prefx = _env_list(os.getenv("ROUTES_PROTECTED_PREFIXES"))
+
+        # כלל public קודם (override)
+        if _path_matches(path, pub_exact, pub_prefx):
+            return await call_next(request)
+
+        # אם מוגן – דרוש Bearer
+        if _path_matches(path, prot_exact, prot_prefx):
+            try:
+                _require_bearer(request)
+            except HTTPException:
+                logger.debug("path_protection:401 path=%s ip=%s", path, _client_ip(request))
+                raise
+            return await call_next(request)
+    except Exception as e:
+        # לא לחסום תנועה על תקלה בשכבת ההגנה – נמשיך כרגיל ונרשום אזהרה
+        logger.warning("path_protection_guard_failed: %s", e)
+    return await call_next(request)
 
 # ==================== Public Rate Limit middleware ====================
 async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
@@ -801,7 +863,7 @@ async def _public_rate_limit(request: Request, call_next):
     p = request.url.path
     if request.method.upper() != "GET":
         return await call_next(request)
-    ip = request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.client.host if request.client else "0.0.0.0")
+    ip = _client_ip(request)
     rules = {
         "/scan/public-topk": (PUBLIC_TOPK_RPS, PUBLIC_TOPK_WINDOW),
         "/scan/public-now": (PUBLIC_NOW_RPS, PUBLIC_NOW_WINDOW),
@@ -811,6 +873,7 @@ async def _public_rate_limit(request: Request, call_next):
         if p.startswith(k):
             over = await _rl_hit(k, int(win), int(rps) * int(win), ip)
             if over:
+                logger.debug("rate_limit:429 path=%s ip=%s win=%ss limit=%s", k, ip, win, int(rps) * int(win))
                 return JSONResponse(
                     {"ok": False, "error": "rate_limited"},
                     status_code=429,
@@ -879,6 +942,7 @@ async def _public_cache_etag(request: Request, call_next):
             fresh.headers["Cache-Control"] = resp.headers.get("Cache-Control", f"public, max-age={PUBLIC_CACHE_MAX_AGE}")
             fresh.headers["ETag"] = etag
             fresh.headers["Vary"] = resp.headers.get("Vary", "If-None-Match")
+            logger.debug("etag:304 path=%s etag=%s", request.url.path, etag)
             return fresh
     except Exception:
         return resp
@@ -1885,9 +1949,15 @@ async def approve_signed_post(request: Request, payload: Dict[str, Any] = Body(.
     גוף צפוי: {"approve": true|false, "ticket_id": "...", "exp": <optional>}
     """
     raw = await request.body()
-    ok, _reason = _verify_http_signature(request, raw, route_path="/ops/approve/signed")
+    ok, reason = _verify_http_signature(request, raw, route_path="/ops/approve/signed")
     if not ok:
-        raise HTTPException(status_code=401, detail="Bad signature")
+        hdrs = {}
+        try:
+            if os.getenv("SIG_TS_ENFORCE", "0").lower() in ("1","true","yes","on"):
+                hdrs["Replay-Window"] = os.getenv("SIG_TS_SKEW_SEC", "900")
+        except Exception:
+            pass
+        raise HTTPException(status_code=401, detail="Bad signature", headers=hdrs)
     await _enforce_nonce_once(request)
     _require_not_expired(payload.get("exp"))
     ticket_id = str(payload.get("ticket_id") or "").strip()
@@ -1901,9 +1971,15 @@ async def approve_signed_post(request: Request, payload: Dict[str, Any] = Body(.
 @router.post("/ops/reject/signed")
 async def reject_signed_post(request: Request, payload: Dict[str, Any] = Body(...)):
     raw = await request.body()
-    ok, _reason = _verify_http_signature(request, raw, route_path="/ops/reject/signed")
+    ok, reason = _verify_http_signature(request, raw, route_path="/ops/reject/signed")
     if not ok:
-        raise HTTPException(status_code=401, detail="Bad signature")
+        hdrs = {}
+        try:
+            if os.getenv("SIG_TS_ENFORCE", "0").lower() in ("1","true","yes","on"):
+                hdrs["Replay-Window"] = os.getenv("SIG_TS_SKEW_SEC", "900")
+        except Exception:
+            pass
+        raise HTTPException(status_code=401, detail="Bad signature", headers=hdrs)
     await _enforce_nonce_once(request)
     _require_not_expired(payload.get("exp"))
     try:
@@ -2191,7 +2267,7 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
             prof["pcts"] = [float(x) for x in payload["pcts"]]
     if payload.get("splits"):
         with suppress(Exception):
-            prof["splits"] = [float(x) for x in payload["splits"]]
+            prof["splits"] = [float(x) for x in payload.get("splits")]
     if payload.get("atr_mult") is not None:
         with suppress(Exception):
             prof["atr_mult"] = float(payload["atr_mult"])
@@ -2390,8 +2466,6 @@ if __name__ == "__main__":
         workers=int(os.getenv("UVICORN_WORKERS", "1") or 1),
         http="h11" if not _http2_enabled_runtime() else "auto",
     )
-
-
 
 
 
