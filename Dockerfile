@@ -48,9 +48,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ALGOGPT_VERSION=${APP_VERSION} \
     HTTP2_ENABLE=1
 
-# ספריות ריצה הנדרשות ל־numpy/scipy/matplotlib/Pillow ועוד
+# ספריות ריצה + כלי shell להרצה מתוך ה-pod:
+# - curl (HTTP)
+# - openssl + xxd (חתימות HMAC)
+# - uuid-runtime (uuidgen)
+# - sed, gawk, coreutils (date/head/…)
+# - ca-certificates, tzdata, bash, git (נוחות/תמיכה)
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
-    tini ca-certificates tzdata bash curl git \
+    tini ca-certificates tzdata bash curl openssl xxd uuid-runtime sed gawk coreutils git \
     libopenblas0-openmp liblapack3 \
     libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
  && rm -rf /var/lib/apt/lists/*
@@ -58,7 +63,7 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 # תלויות מפאזה 1
 COPY --from=builder /install /usr/local
 
-# משתמש לא־רוט
+# משתמש לא-רוט
 RUN useradd -ms /bin/bash appuser
 
 WORKDIR /app
@@ -83,6 +88,7 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
 
 ENTRYPOINT ["/usr/bin/tini","--"]
 CMD ["gunicorn","-c","/app/gunicorn_conf.py"]
+
 
 
 
