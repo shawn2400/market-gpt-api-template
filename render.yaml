@@ -1010,4 +1010,86 @@ services:
       - key: UI_IDLE_STOP_SEC
         value: 30
 
+      # =========================
+      # Dynamic Selector (Auto)
+      # =========================
+      - key: DYNAMIC_PROFILE_ENABLE
+        value: "1"
+      - key: DYN_PROFILE_ADX_RANGE
+        value: "18,35"
+      - key: DYN_PROFILE_ATR_PCT_RANGE
+        value: "0.3,1.8"
+      - key: DYN_PROFILE_PRIORITIES
+        value: "panic>aggr>base>cons"
+      - key: PROFILE_ASSET_MAP
+        value: "BTC=base;ETH=base;ALTS=aggr;LOWCAP=aggr"
+      - key: DYN_SWITCH_HYST_MS
+        value: "120000"
+      - key: DYN_EVAL_EVERY_MS
+        value: "20000"
+      - key: CACHE_INDIC_TTL_SEC
+        value: "30"
+      - key: CACHE_DELTA_TTL_SEC
+        value: "20"
+
+      # =========================
+      # Conservative Pack
+      # =========================
+      - key: CONS_DELTA_QTY_MIN
+        value: "120000"
+      - key: CONS_PANIC_ATR_PCT
+        value: "2.2"
+      - key: CONS_FLIP_MIN_ROE_NEG
+        value: "-2.2"
+      - key: CONS_FLIP_COOLDOWN_SEC
+        value: "600"
+      - key: CONS_FLIP_ADX_MIN
+        value: "24"
+      - key: CONS_FLIP_ATR_PCT_MIN
+        value: "0.45"
+      - key: CONS_FLIP_MAX_PCT_SLIPPAGE
+        value: "0.8"
+      - key: CONS_TP_PROFILE
+        value: "2,4,7,12"
+      - key: CONS_TP_SPLITS
+        value: "0.35,0.30,0.20,0.15"
+      - key: CONS_TRAIL_ATR_MULT
+        value: "1.8"
+      - key: CONS_BE_BPS
+        value: "6"
+      - key: CONS_TIME_MAX_MIN
+        value: "120"
+      - key: CONS_TIME_MIN_ROE_NEG
+        value: "-0.7"
+
+      # =========================
+      # Aggressive Pack
+      # =========================
+      - key: AGGR_DELTA_QTY_MIN
+        value: "60000"
+      - key: AGGR_PANIC_ATR_PCT
+        value: "1.4"
+      - key: AGGR_FLIP_MIN_ROE_NEG
+        value: "-0.9"
+      - key: AGGR_FLIP_COOLDOWN_SEC
+        value: "180"
+      - key: AGGR_FLIP_ADX_MIN
+        value: "20"
+      - key: AGGR_FLIP_ATR_PCT_MIN
+        value: "0.35"
+      - key: AGGR_FLIP_MAX_PCT_SLIPPAGE
+        value: "1.2"
+      - key: AGGR_TP_PROFILE
+        value: "3,6,10,16"
+      - key: AGGR_TP_SPLITS
+        value: "0.30,0.30,0.25,0.15"
+      - key: AGGR_TRAIL_ATR_MULT
+        value: "1.3"
+      - key: AGGR_BE_BPS
+        value: "4"
+      - key: AGGR_TIME_MAX_MIN
+        value: "60"
+      - key: AGGR_TIME_MIN_ROE_NEG
+        value: "-0.4"
+
 
