@@ -1016,13 +1016,13 @@ services:
       - key: DYNAMIC_PROFILE_ENABLE
         value: "1"
       - key: DYN_PROFILE_ADX_RANGE
-        value: "18,35"
+        value: "16,40"
       - key: DYN_PROFILE_ATR_PCT_RANGE
-        value: "0.3,1.8"
+        value: "0.25,2.20"
       - key: DYN_PROFILE_PRIORITIES
-        value: "panic>aggr>base>cons"
+        value: "panic>vaggr>aggr>base>cons"
       - key: PROFILE_ASSET_MAP
-        value: "BTC=base;ETH=base;ALTS=aggr;LOWCAP=aggr"
+        value: "BTC=cons;ETH=cons;ALTS=aggr;LOWCAP=vaggr"
       - key: DYN_SWITCH_HYST_MS
         value: "120000"
       - key: DYN_EVAL_EVERY_MS
@@ -1033,7 +1033,7 @@ services:
         value: "20"
 
       # =========================
-      # Conservative Pack
+      # Conservative Pack (BTC/ETH)
       # =========================
       - key: CONS_DELTA_QTY_MIN
         value: "120000"
@@ -1063,7 +1063,7 @@ services:
         value: "-0.7"
 
       # =========================
-      # Aggressive Pack
+      # Aggressive Pack (ALTS)
       # =========================
       - key: AGGR_DELTA_QTY_MIN
         value: "60000"
@@ -1091,5 +1091,68 @@ services:
         value: "60"
       - key: AGGR_TIME_MIN_ROE_NEG
         value: "-0.4"
+
+      # =========================
+      # Very-Aggressive Pack (LOWCAP)
+      # =========================
+      - key: VAGGR_DELTA_QTY_MIN
+        value: "45000"
+      - key: VAGGR_PANIC_ATR_PCT
+        value: "1.1"
+      - key: VAGGR_FLIP_MIN_ROE_NEG
+        value: "-0.6"
+      - key: VAGGR_FLIP_COOLDOWN_SEC
+        value: "120"
+      - key: VAGGR_FLIP_ADX_MIN
+        value: "19"
+      - key: VAGGR_FLIP_ATR_PCT_MIN
+        value: "0.28"
+      - key: VAGGR_FLIP_MAX_PCT_SLIPPAGE
+        value: "1.4"
+      - key: VAGGR_TP_PROFILE
+        value: "4,8,14,22"
+      - key: VAGGR_TP_SPLITS
+        value: "0.28,0.30,0.22,0.20"
+      - key: VAGGR_TRAIL_ATR_MULT
+        value: "1.2"
+      - key: VAGGR_BE_BPS
+        value: "3"
+      - key: VAGGR_TIME_MAX_MIN
+        value: "45"
+      - key: VAGGR_TIME_MIN_ROE_NEG
+        value: "-0.35"
+
+      # =========================
+      # Dynamic Trading Windows (Hours/Days)
+      # =========================
+      - key: WINDOWS_ENGINE_ENABLE
+        value: "1"
+      - key: WINDOWS_TZ
+        value: "UTC"
+      # ברירת מחדל לכל הנכסים אם אין התאמה אחרת
+      - key: WINDOWS_RULES_DEFAULT
+        value: "02:00-06:00Z=OFF,11:30-12:00Z=REDUCE_50"
+
+      # לפי מחלקת נכס
+      - key: WINDOWS_RULES__BTC
+        value: "02:00-05:00Z=OFF,11:30-12:00Z=REDUCE_50"
+      - key: WINDOWS_RULES__ETH
+        value: "02:00-05:00Z=OFF,11:30-12:00Z=REDUCE_50"
+      - key: WINDOWS_RULES__ALTS
+        value: "00:00-06:00Z=OFF,11:30-12:00Z=REDUCE_50,22:00-23:00Z=REDUCE_50"
+      - key: WINDOWS_RULES__LOWCAP
+        value: "00:00-08:00Z=OFF,11:30-12:00Z=REDUCE_50,22:00-02:00Z=REDUCE_50"
+
+      # Overrides ברמת טיקר (גובר על מחלקת נכס)
+      - key: WINDOWS_RULES__BTCUSDT
+        value: "02:00-05:00Z=OFF,11:30-12:00Z=REDUCE_50"
+      - key: WINDOWS_RULES__ETHUSDT
+        value: "02:00-05:00Z=OFF,11:30-12:00Z=REDUCE_50"
+      - key: WINDOWS_RULES__SOLUSDT
+        value: "00:00-06:00Z=OFF,11:30-12:00Z=REDUCE_50,22:00-23:00Z=REDUCE_50"
+      - key: WINDOWS_RULES__BNBUSDT
+        value: "00:00-06:00Z=OFF,11:30-12:00Z=REDUCE_50,22:00-23:00Z=REDUCE_50"
+      - key: WINDOWS_RULES__NEARUSDT
+        value: "00:00-07:00Z=OFF,11:30-12:00Z=REDUCE_50,22:00-02:00Z=REDUCE_50"
 
 
