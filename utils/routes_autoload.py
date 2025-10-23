@@ -15,9 +15,9 @@ from fastapi.routing import APIRouter
 log = logging.getLogger("algogpt.routes_autoload")
 
 def _as_set(csv: Optional[str]) -> Optional[Set[str]]:
-    if not csv:
+    if csv is None:
         return None
-    s = {x.strip() for x in csv.split(",") if x.strip()}
+    s = {x.strip() for x in str(csv).split(",") if x.strip()}
     return s or None
 
 def _should_take(name: str, allow: Optional[Set[str]], deny: Optional[Set[str]]) -> bool:
@@ -48,13 +48,10 @@ def _call_setup_if_present(app: FastAPI, module: ModuleType, verbose: bool = Fal
             log.warning("routes_autoload: setup(app) failed on %s: %s", module.__name__, e)
     return False
 
-def _iter_route_modules(package: str = "routes") -> Iterable[str]:
-    """Yield fully-qualified module names under the given package (flat only)."""
+def _iter_route_modules(package: str = "routes"):
     with suppress(Exception):
         pkg = importlib.import_module(package)
-        it = pkgutil.iter_modules(pkg.__path__, prefix=f"{package}.")
-        for m in it:
-            # ignore packages; only load python modules
+        for m in pkgutil.iter_modules(pkg.__path__, prefix=f"{package}."):
             if not m.ispkg:
                 yield m.name
 
@@ -70,9 +67,11 @@ def autoload_routes(
     Auto-detect and mount all modules under `package` that expose either:
       - `router: fastapi.APIRouter`
       - `setup(app: FastAPI)` function
-    Filters:
-      - `allow`: iterable of module basenames to include (or {"*"} for all)
-      - `deny`: iterable of module basenames to exclude
+
+    Environment knobs:
+      ROUTES_ALLOW="*" | "scan,market,status"
+      ROUTES_DENY="debug,backtest"
+      ROUTES_VERBOSE=1
     """
     if verbose is None:
         verbose = (os.getenv("ROUTES_VERBOSE", "0").lower() in ("1", "true", "yes", "on"))
@@ -98,6 +97,6 @@ def autoload_routes(
         mounted = _include_router_if_present(app, mod, verbose=verbose)
         called = _call_setup_if_present(app, mod, verbose=verbose)
 
-        if not (mounted or called):
-            if verbose:
-                log.debug("routes_autoload: %s has neither router nor setup(app) — no-op", fqmn)
+        if not (mounted or called) and verbose:
+            log.debug("routes_autoload: %s has neither router nor setup(app) — no-op", fqmn)
+
