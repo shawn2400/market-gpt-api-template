@@ -212,6 +212,20 @@ app = FastAPI(
     openapi_url=OPENAPI_URL,
 )
 
+# ---- Optional include of external routers if available (prevents 404 on known modules) ----
+with suppress(Exception):
+    from routes import manager as _routes_manager  # type: ignore
+    if getattr(_routes_manager, "router", None):
+        app.include_router(_routes_manager.router)
+with suppress(Exception):
+    from routes import position_ops as _routes_position_ops  # type: ignore
+    if getattr(_routes_position_ops, "router", None):
+        app.include_router(_routes_position_ops.router)
+with suppress(Exception):
+    from routes import ops_ui as _routes_ops_ui  # type: ignore
+    if getattr(_routes_ops_ui, "router", None):
+        app.include_router(_routes_ops_ui.router)
+
 # ============= Public feed fallbacks (no-404) =============
 # נוסיף ראוטים פנימיים רק אם לא קיימים כבר (כלומר אם routes.public/* לא עלו).
 
@@ -2280,21 +2294,48 @@ app.include_router(router)
 # ==================== Graceful shutdown (close clients) ====================
 @app.on_event("shutdown")
 async def _on_shutdown():
-    # Close shared AsyncClient
+    # Close shared AsyncClient (httpx)
     try:
         cli: Optional[httpx.AsyncClient] = getattr(app.state, "shared_async_client", None)
         if cli and not cli.is_closed:
             await cli.aclose()
-    except Exception:
-        pass
-    # Close Redis (if any)
+            try:
+                delattr(app.state, "shared_async_client")
+            except Exception:
+                app.state.shared_async_client = None  # type: ignore[attr-defined]
+    except Exception as e:
+        logger.debug("shutdown: httpx close failed: %s", e)
+
+    # Close Redis (if initialized)
     try:
-        if aioredis and REDIS_URL:
-            r = getattr(app.state, "redis", None)
-            if r:
-                await r.close()
-    except Exception:
-        pass
+        r = getattr(app.state, "redis", None)
+        if r is not None:
+            with suppress(Exception):
+                await r.close()          # redis.asyncio supports .close()
+            try:
+                delattr(app.state, "redis")
+            except Exception:
+                app.state.redis = None   # type: ignore[attr-defined]
+    except Exception as e:
+        logger.debug("shutdown: redis close failed: %s", e)
+
+    # Cancel background tasks (if any were registered on app.state.bg_tasks)
+    try:
+        tasks: List[asyncio.Task] = list(getattr(app.state, "bg_tasks", []) or [])
+        for t in tasks:
+            with suppress(Exception):
+                t.cancel()
+        if tasks:
+            with suppress(Exception):
+                await asyncio.gather(*tasks, return_exceptions=True)
+        try:
+            delattr(app.state, "bg_tasks")
+        except Exception:
+            app.state.bg_tasks = []  # type: ignore[attr-defined]
+    except Exception as e:
+        logger.debug("shutdown: bg_tasks cancel failed: %s", e)
+
+    logger.info("Application shutdown complete.")
 
 # ==================== Uvicorn entrypoint ====================
 if __name__ == "__main__":
@@ -2305,8 +2346,6 @@ if __name__ == "__main__":
         port=_port(),
         reload=bool(os.getenv("RELOAD", "0") in ("1","true","yes","on")),
     )
-
-
 
 
 
