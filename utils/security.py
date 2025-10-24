@@ -27,7 +27,7 @@ def _pick_signature(headers_lower: Dict[str, str]) -> Tuple[Optional[str], str]:
     תומך ב:
       - X-Webhook-Hmac: <hex|b64>
       - X-Signature: <hex|b64>
-      - X-AlgoGPT-Signature: <hex|ב64>
+      - X-AlgoGPT-Signature: <hex|b64>
       - X-Hub-Signature-256: sha256=<hex|b64>
     """
     cand = (
