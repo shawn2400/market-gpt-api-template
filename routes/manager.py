@@ -1222,7 +1222,7 @@ async def _maybe_eval_and_flip(symbol: str) -> None:
     if not _should_eval(symbol, price, now_ts):
         return
     try:
-        reg = await eval_regime(symbol=symbol, long_req=LONG_REQ, short_req=SHORT_REQ, neutral_req=NEUTRAL_REQ, timeframe=DEFAULT_TF)  # type: ignore
+        reg = await eval_regime(symbol=symbol, long_req=LONG_REQ, short_req=_SHORT_REQ, neutral_req=NEUTRAL_REQ, timeframe=DEFAULT_TF)  # type: ignore
     except Exception as e:
         logger.debug("eval_regime (ws) failed for %s: %s", symbol, e)
         return
@@ -1372,6 +1372,7 @@ def main() -> None:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
+
 
 
 
