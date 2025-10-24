@@ -15,35 +15,8 @@ except Exception:
     def require_bearer_token():
         return None
 
-# ===== סכימות (ננסה לייבא, ואם אין – נגדיר לוקאלית) =====
-try:
-    # סכימות "רשמיות" אם קיימות
-    from schemas.manage_state import TradesStateOut, TradeStateItem  # type: ignore
-except Exception:
-    from pydantic import BaseModel, Field
-    from typing import Optional
-
-    class TradeStateItem(BaseModel):
-        trade_id: str = Field(default="")
-        symbol: str = Field(default="")
-        side: str = Field(default="")
-        qty: float = Field(default=0.0)
-        leverage: int = Field(default=0)
-        state: str = Field(default="UNKNOWN")
-        entry: Optional[float] = Field(default=None)
-        opened_ts: Optional[float] = Field(default=None)
-        extra: Optional[Dict[str, Any]] = Field(default=None)
-
-        class Config:
-            extra = "ignore"
-
-    class TradesStateOut(BaseModel):
-        ok: bool = True
-        count: int
-        items: List[TradeStateItem]
-
-        class Config:
-            extra = "ignore"
+# ===== סכימות (ייבוא קנוני) =====
+from schemas import TradesStateOut, TradeStateItem
 
 # ===== מקור הדאטה (fallback אם לא קיים storage) =====
 try:
@@ -66,8 +39,7 @@ def manager_health():
 def state_trades() -> TradesStateOut:
     """
     שליפת מצב עסקאות מתוך ה־store.
-    אם קיימת סכימה רשמית ב-schemas/manage_state.py – נשתמש בה.
-    אחרת נשתמש ב־fallback המקומי שמיישר שדות בסיס.
+    משתמשים בסכימות הקנוניות מ־schemas/manage_state.py
     """
     raw = get_all_state() or []
     items: List[TradeStateItem] = []
@@ -98,4 +70,5 @@ def state_trades() -> TradesStateOut:
                 ))
 
     return TradesStateOut(ok=True, count=len(items), items=items)
+
 
