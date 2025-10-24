@@ -136,7 +136,6 @@ def _fallback_filters() -> Dict[str, Any]:
     return {
         "price_tick": float(os.getenv("DEFAULT_PRICE_TICK", "0.01")),
         "qty_step": float(os.getenv("DEFAULT_QTY_STEP", "0.001")),
-        # also names expected by utils/quantize.py:
         "tick": float(os.getenv("DEFAULT_PRICE_TICK", "0.01")),
         "step": float(os.getenv("DEFAULT_QTY_STEP", "0.001")),
     }
@@ -146,7 +145,6 @@ def _round_step(v: float, step: float) -> float:
         return v
     return math.floor(v / step + 1e-12) * step
 
-# wrappers aligning signatures with utils.quantize (px/qty, filters)
 try:
     from utils.quantize import quantize_price as _qp, quantize_qty as _qq  # type: ignore
 except Exception:
@@ -250,12 +248,8 @@ def _get_filters(client, symbol: str) -> Dict[str, Any]:
                     if ft == "LOT_SIZE":
                         with suppress(Exception):
                             qty_step = float(f.get("stepSize") or 0.0)
-                out = {
-                    "price_tick": price_tick or 0.0,
-                    "qty_step": qty_step or 0.0,
-                }
-                out["tick"] = out["price_tick"]
-                out["step"] = out["qty_step"]
+                out = {"price_tick": price_tick or 0.0, "qty_step": qty_step or 0.0}
+                out["tick"] = out["price_tick"]; out["step"] = out["qty_step"]
                 return out if (out["price_tick"] or out["qty_step"]) else _fallback_filters()
     except Exception:
         pass
@@ -267,7 +261,7 @@ def _get_filters(client, symbol: str) -> Dict[str, Any]:
 def _fetch_position_side_qty_entry(client, symbol: str) -> Tuple[str, float, float]:
     infos = client.futures_position_information(symbol=symbol) or []
     if not infos:
-        raise HTTPException(status_code=404, detail="No position information")  # FastAPI imported at top
+        raise HTTPException(status_code=404, detail="No position information")
     pos = infos[0]
     qty = float(pos.get("positionAmt") or 0.0)
     ep = float(pos.get("entryPrice") or 0.0)
@@ -379,6 +373,7 @@ def auto_mock_approve(
 # =========================
 @router.post("/manage-once")
 def manage_once(
+    request: Request,
     payload: Dict[str, Any] = Body(..., example={"symbol":"BTCUSDT","action":"manage","params":{"tighten":True}}),
     authorization: Optional[str] = Header(None),
 ) -> Dict[str, Any]:
@@ -389,7 +384,6 @@ def manage_once(
     params = payload.get("params") or {}
     if not symbol:
         raise HTTPException(status_code=422, detail="missing symbol")
-    # חיבור עתידי ל-trade_manager.manage_open_trades(*)
     return _ok(symbol=symbol, action=action, queued=True, params=params)
 
 # =========================
@@ -736,7 +730,7 @@ def cancel_tp(
     return _ok(symbol=symbol, cancelled=n)
 
 # =========================
-# SL explicit move & Close fraction
+# SL explicit move & Close fraction/percent
 # =========================
 @router.post("/sl/move")
 def move_sl(
@@ -818,6 +812,26 @@ def close_fraction(
     res = _ok(symbol=symbol, side=side, closed_qty=part)
     _maybe_notify(symbol, "close", res)
     return res
+
+@router.post("/close-percent")
+def close_percent_alias(
+    payload: Dict[str, Any] = Body(..., example={"symbol":"BTCUSDT","percent":25}),
+    authorization: Optional[str] = Header(None),
+) -> Dict[str, Any]:
+    """
+    אליאס נוח: קבלת percent (0–100) והמרה ל-fraction (0–1) ומשתמש ב-/close.
+    """
+    if not _auth_ok(authorization):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+    symbol = (payload.get("symbol") or "").upper().strip()
+    pct = payload.get("percent", payload.get("pct", None))
+    if pct is None:
+        raise HTTPException(status_code=422, detail="missing percent/pct")
+    try:
+        fraction = max(0.0, min(1.0, float(pct) / 100.0))
+    except Exception:
+        raise HTTPException(status_code=422, detail="bad percent")
+    return close_fraction({"symbol": symbol, "fraction": fraction}, authorization)  # type: ignore[arg-type]
 
 
 
