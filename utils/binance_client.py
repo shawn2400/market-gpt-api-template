@@ -372,7 +372,8 @@ def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         if symbol:
             return cast(List[Dict[str, Any]], client.futures_get_open_orders(symbol=symbol.upper()) or [])
-        return cast(List[Dict[str, Any]], client.futures_get_open_orders() or [])
+        return cast(List[Dict[str, Any]], client.futures_get_open_orders() or []
+        )
     except Exception as e:
         logger.error("Failed to get open orders: %s", e)
         return []
@@ -594,7 +595,6 @@ __all__ = [
     "place_limit_order",
     "cancel_order",
 ]
-
 
 
 
