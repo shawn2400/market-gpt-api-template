@@ -209,19 +209,25 @@ app = FastAPI(
     openapi_url=OPENAPI_URL,
 )
 
-# ---- Optional include of external routers if available (prevents 404 on known modules) ----
-with suppress(Exception):
-    from routes import manager as _routes_manager  # type: ignore
-    if getattr(_routes_manager, "router", None):
-        app.include_router(_routes_manager.router)
-with suppress(Exception):
-    from routes import position_ops as _routes_position_ops  # type: ignore
-    if getattr(_routes_position_ops, "router", None):
-        app.include_router(_routes_position_ops.router)
-with suppress(Exception):
-    from routes import ops_ui as _routes_ops_ui  # type: ignore
-    if getattr(_routes_ops_ui, "router", None):
-        app.include_router(_routes_ops_ui.router)
+# ---- safe include of critical routers (even if autoload runs) ----
+def _safe_include(router_module_path: str):
+    import importlib, logging
+    log = logging.getLogger("algogpt.main")
+    try:
+        mod = importlib.import_module(router_module_path)
+        if hasattr(mod, "router"):
+            app.include_router(mod.router)
+            log.info("include_router ok: %s", router_module_path)
+        else:
+            log.warning("module has no 'router': %s", router_module_path)
+    except Exception as e:
+        log.warning("include_router failed for %s: %s", router_module_path, e)
+
+# עדיף להכליל קריטיים ידנית (גם אם autoload רץ):
+_safe_include("routes.manager")
+_safe_include("routes.position_ops")
+_safe_include("routes.scan")
+# השאר ימשיכו להגיע דרך האוטולואד
 
 # ---- Auto-discovery of all other routes.* modules (smart & dynamic) ----
 ROUTES_AUTOLOAD = os.getenv("ROUTES_AUTOLOAD", "1").lower() in ("1","true","yes","on")
@@ -1818,7 +1824,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
-            tp_val = req_body.get(f"tp{i}")
+            tp_val = req_body.get(f"tp{i}") or ""
             row = f"• TP{i}: <code>{_md_html(str(tp_val))}</code>"
             if req_body.get(f"eta_tp{i}_min") is not None:
                 row += f"  ETA:<code>{req_body[f'eta_tp{i}_min']}m</code>"
@@ -2267,7 +2273,7 @@ async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any
             prof["pcts"] = [float(x) for x in payload["pcts"]]
     if payload.get("splits"):
         with suppress(Exception):
-            prof["splits"] = [float(x) for x in payload.get("splits")]
+            prof["splits"] = [float(x) for x in (payload.get("splits") or [])]
     if payload.get("atr_mult") is not None:
         with suppress(Exception):
             prof["atr_mult"] = float(payload["atr_mult"])
@@ -2383,7 +2389,7 @@ async def manage_once_signed(symbol: str = Query(...), exp: str = Query(...), si
     }
     return await manage_once(_Req(), payload)  # type: ignore
 
-# ----------------- Mount router (כבר קיים מעל) & STARTUP/SHUTDOWN -----------------
+# ----------------- Mount router & STARTUP/SHUTDOWN -----------------
 app.include_router(router)
 
 @app.on_event("startup")
@@ -2457,15 +2463,15 @@ async def version():
 # ==================== __main__ ====================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",
-        port=_port(),
-        log_level=LOG_LEVEL.lower(),
-        reload=False,
-        workers=int(os.getenv("UVICORN_WORKERS", "1") or 1),
-        http="h11" if not _http2_enabled_runtime() else "auto",
-    )
+    host = os.getenv("HOST", "0.0.0.0")
+    # ברירת מחדל תשתמש בפונקציית _port אם PORT לא הוגדר
+    try:
+        port = int(os.getenv("PORT", str(_port())))
+    except Exception:
+        port = _port()
+    reload = os.getenv("RELOAD", "0").lower() in ("1", "true", "yes", "on")
+    uvicorn.run("main:app", host=host, port=port, reload=reload, log_level=LOG_LEVEL.lower())
+
 
 
 
