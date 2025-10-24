@@ -1,23 +1,6 @@
-# schemas/manage_state.py
+# schemas/manage.py
 from __future__ import annotations
+from .manage_state import TradeStateItem, TradesStateOut
 
-from typing import List, Dict, Any, Optional
-from pydantic import BaseModel
+__all__ = ["TradeStateItem", "TradesStateOut"]
 
-
-class TradeStateItem(BaseModel):
-    trade_id: str
-    symbol: str
-    side: str
-    qty: float
-    leverage: int
-    state: str
-    entry: Optional[float] = None
-    opened_ts: Optional[float] = None
-    extra: Optional[Dict[str, Any]] = None
-
-
-class TradesStateOut(BaseModel):
-    ok: bool = True
-    count: int
-    items: List[TradeStateItem]
