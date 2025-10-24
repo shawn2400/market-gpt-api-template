@@ -1,5 +1,6 @@
 # utils/risk_rules.py
-from __future__ annotations__
+from __future__ import annotations
+
 from typing import Dict, Any, Optional, Tuple, List
 import os
 from utils.watchlist_utils import get_symbol_prefs
@@ -17,70 +18,100 @@ SUCCESS_WARN_PCT       = float(os.getenv("SUCCESS_WARN_PCT", "60"))
 MIN_ABS_RISK_BPS_DEF   = float(os.getenv("MIN_ABS_RISK_BPS",   "0"))
 MIN_ABS_REWARD_BPS_DEF = float(os.getenv("MIN_ABS_REWARD_BPS", "0"))
 
+
 def rr_from_levels(entry: float, sl: float, tp1: float) -> Optional[float]:
     try:
         entry = float(entry); sl = float(sl); tp1 = float(tp1)
         risk = abs(entry - sl); reward = abs(tp1 - entry)
-        if risk <= 0: return None
+        if risk <= 0:
+            return None
         return reward / risk
     except Exception:
         return None
 
+
 def entry_gap_ok(price: Optional[float], entry: Optional[float], max_gap_pct: Optional[float] = None) -> bool:
-    if price is None or entry is None: return False
+    if price is None or entry is None:
+        return False
     try:
         price = float(price); entry = float(entry)
-        if price <= 0: return False
+        if price <= 0:
+            return False
         thr = float(max_gap_pct if max_gap_pct is not None else ENTRY_GAP_MAX_PCT)
         gap = abs(entry - price) / price * 100.0
         return gap <= thr
     except Exception:
         return False
 
+
 def _rr_threshold(vol_regime: str, symbol: str) -> float:
     prefs = get_symbol_prefs(symbol) or {}
     base_min = prefs.get("min_rr", None)
-    if isinstance(base_min, (int, float)): return float(base_min)
+    if isinstance(base_min, (int, float)):
+        return float(base_min)
     v = (vol_regime or "mid").lower()
-    if v.startswith("low"):  return RR_MIN_LOW_VOL
-    if v.startswith("high"): return RR_MIN_HIGH_VOL
+    if v.startswith("low"):
+        return RR_MIN_LOW_VOL
+    if v.startswith("high"):
+        return RR_MIN_HIGH_VOL
     return RR_MIN_MID_VOL
+
 
 def _lev_cap(symbol: str) -> int:
     prefs = get_symbol_prefs(symbol) or {}
     m = prefs.get("max_leverage", None)
-    try: m = int(m) if m is not None else LEV_HARD_CAP
-    except Exception: m = LEV_HARD_CAP
+    try:
+        m = int(m) if m is not None else LEV_HARD_CAP
+    except Exception:
+        m = LEV_HARD_CAP
     return max(1, int(m))
+
 
 def _side_ok(side: str) -> bool:
     return (side or "").upper() in ("LONG", "SHORT", "BUY", "SELL")
 
+
 def _norm_side(side: str) -> str:
     s = (side or "").upper()
-    if s == "BUY": return "LONG"
-    if s == "SELL": return "SHORT"
+    if s == "BUY":
+        return "LONG"
+    if s == "SELL":
+        return "SHORT"
     return s
+
 
 def _levels_monotonic(side: str, entry: float, sl: float, tp1: float) -> bool:
     side = _norm_side(side)
-    if side == "LONG": return sl < entry < tp1
+    if side == "LONG":
+        return sl < entry < tp1
     return sl > entry > tp1
+
 
 def _bps_from_entry(a: float, b: float) -> float:
     try:
         a = float(a); b = float(b)
-        if a <= 0: return 0.0
+        if a <= 0:
+            return 0.0
         return abs(b - a) / a * 10000.0
     except Exception:
         return 0.0
 
+
 def gate_trade(
-    symbol: str, side: str, price: Optional[float], entry: Optional[float], sl: Optional[float], tp1: Optional[float],
-    *, vol_regime: str = "mid", success_pct: Optional[float] = None, leverage: Optional[int] = None,
+    symbol: str,
+    side: str,
+    price: Optional[float],
+    entry: Optional[float],
+    sl: Optional[float],
+    tp1: Optional[float],
+    *,
+    vol_regime: str = "mid",
+    success_pct: Optional[float] = None,
+    leverage: Optional[int] = None,
     min_rr_override: Optional[float] = None,
 ) -> Dict[str, Any]:
-    errors: List[str] = []; warnings: List[str] = []
+    errors: List[str] = []
+    warnings: List[str] = []
 
     if not _side_ok(side):
         errors.append("invalid side")
