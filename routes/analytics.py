@@ -1,4 +1,5 @@
 # routes/analytics.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, time, json
 from typing import Optional, Dict, Any, List
@@ -8,7 +9,8 @@ from fastapi import APIRouter, Depends, Body, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from utils.auth import require_api_key
-from utils.security import verify_hmac, idem_seen
+from utils.compat_shims import verify_hmac  # fixed import
+from utils.security import idem_seen
 
 router = APIRouter(prefix="/alerts", tags=["Alerts"], dependencies=[Depends(require_api_key)])
 
@@ -90,7 +92,7 @@ def _update_trade(tid: str, **updates):
     if USE_REDIS_TRADES and RED.exists(f"trades:active:{tid}"):  # type: ignore
         RED.hset(f"trades:active:{tid}", mapping=updates)        # type: ignore
     elif tid in _TRADES:
-        _TRADES[tid].update(updates)
+        _TRADES[t] = {**_TRADES.get(tid, {}), **updates}  # type: ignore[name-defined]
 
 def _fmt_num(x: Any) -> str:
     try:
@@ -208,6 +210,7 @@ async def analysis_ingest(
         r = await client.post(f"{TELEGRAM_API}/sendMessage", json=body)
         r.raise_for_status()
         return {"ok": True}
+
 
 
 
