@@ -1,4 +1,5 @@
 # routes/admin.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from typing import Dict, Any
@@ -9,7 +10,7 @@ from utils.auth import require_api_key
 from utils.config import dump_config_sanitized
 from utils.time_sync import ensure_fresh_sync, last_server_time_ms, server_time_ms, recv_window_ms
 from utils.feature_flags import set_flag
-from utils.auto_executor import is_executor_running
+from utils.compat_shims import is_executor_running  # <- fixed import
 
 router = APIRouter(prefix="/admin", tags=["Admin"], dependencies=[Depends(require_api_key)])
 log = logging.getLogger("algogpt.admin")
@@ -102,3 +103,4 @@ def set_feature_flag(name: str, value: str):
     v = value.strip().lower() in ("1","true","yes","on")
     set_flag(name, v)
     return {"ok": True, "name": name, "value": v}
+
