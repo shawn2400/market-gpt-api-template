@@ -1,4 +1,5 @@
 # routes/telegram.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, time, json, logging
 from typing import Any, Dict, Optional
@@ -10,7 +11,7 @@ from utils.telegram_notifier import (
     verify_callback_data,
     TelegramNotifier,
 )
-from utils.anti_replay import build_signature_headers
+from utils.compat_shims import build_signature_headers  # ✔ shim במקום anti_replay
 
 logger = logging.getLogger("algogpt.telegram.webhook")
 router = APIRouter(prefix="/telegram", tags=["telegram"])
@@ -151,4 +152,3 @@ async def webhook(
     except Exception as e:
         logger.exception("webhook handling failed: %s", e)
         raise HTTPException(status_code=500, detail=f"webhook_error: {e}")
-
