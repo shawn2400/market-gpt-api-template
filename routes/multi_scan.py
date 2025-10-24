@@ -6,7 +6,7 @@ import os, asyncio, logging
 
 import pandas as pd
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ConfigDict
 
 from utils.indicators import prepare_indicators_for_backtest
 from utils.ai_analysis import analyze_with_ai
@@ -46,13 +46,7 @@ async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 200) ->
 
 # ========= Models =========
 class IndicatorSet(BaseModel):
-    class Config:
-        extra = "ignore"
-    try:
-        from pydantic import ConfigDict
-        model_config = ConfigDict(extra="ignore")  # type: ignore
-    except Exception:
-        pass
+    model_config = ConfigDict(extra="ignore")
 
     rsi: float | None = None
     ema_21: float | None = None
@@ -102,8 +96,12 @@ async def scan_symbols(
     ip = (request.client.host if request and request.client else "unknown")
 
     # Rate limit (Redis אם יש, אחרת זיכרון)
-    allowed, _remaining = await rl_allow("scan_multi", ip, limit=int(os.getenv("SCAN_RL_LIMIT", "30")),
-                                         window_sec=int(os.getenv("SCAN_RL_WINDOW", "60")))
+    allowed, _remaining = await rl_allow(
+        "scan_multi",
+        ip,
+        limit=int(os.getenv("SCAN_RL_LIMIT", "30")),
+        window_sec=int(os.getenv("SCAN_RL_WINDOW", "60")),
+    )
     if not allowed:
         raise HTTPException(429, "Rate limit exceeded")
 
@@ -129,7 +127,7 @@ async def scan_symbols(
 
             ai_txt: Optional[str] = None
             if include_ai:
-                slim = {"symbol": sym}
+                slim: Dict[str, Any] = {"symbol": sym}
                 for k in want:
                     if k in row:
                         slim[k] = row[k]
@@ -139,8 +137,12 @@ async def scan_symbols(
                 except Exception as e:
                     ai_txt = f"AI error: {e}"
 
-            return ScanSignal(symbol=sym, interval=interval,
-                              indicators=IndicatorSet(**row), analysis=ai_txt)
+            return ScanSignal(
+                symbol=sym,
+                interval=interval,
+                indicators=IndicatorSet(**row),
+                analysis=ai_txt
+            )
         except httpx.HTTPError as he:
             return ScanSignal(symbol=sym, interval=interval, ok=False, error=f"http: {he}")
         except Exception as e:
