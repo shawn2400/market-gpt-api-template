@@ -57,14 +57,8 @@ ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "").strip()
 CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0").lower() in ("1", "true", "yes", "on")
 CANCEL_PREFIX_OVERRIDE = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
-
-def _now() -> float:
-    return time.time()
-
-
-def _ms() -> int:
-    return int(time.time() * 1000)
-
+def _now() -> float: return time.time()
+def _ms() -> int: return int(time.time() * 1000)
 
 try:
     from utils.ws_fallback import get_price as ws_get_price, is_price_fresh as ws_is_fresh, update_price as ws_update_price
@@ -86,7 +80,6 @@ _BINANCE_HTTP_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binanc
 _client_lock = threading.RLock()
 _CLIENT: Optional[Client] = None
 _client_ban_until: float = 0.0
-
 
 def _init_client() -> Optional[Client]:
     global _CLIENT, _client_ban_until
@@ -134,14 +127,12 @@ def _init_client() -> Optional[Client]:
         logger.error("Binance client init failed: %s", e)
         return None
 
-
 def _get_client() -> Optional[Client]:
     global _CLIENT
     with _client_lock:
         if _CLIENT is not None:
             return _CLIENT
         return _init_client()
-
 
 class _ClientProxy:
     def __getattr__(self, name: str):
@@ -150,13 +141,10 @@ class _ClientProxy:
             raise RuntimeError("Binance REST unavailable (library/keys missing or client not ready/banned)")
         return getattr(c, name)
 
-
 client: Client | _ClientProxy = _ClientProxy()
-
 
 def get_futures_client():
     return _get_client() or client
-
 
 @observe_http(name="binance_exinfo")
 def futures_exchange_info_safe(force_refresh: bool = False) -> Optional[Dict[str, Any]]:
@@ -172,7 +160,6 @@ def futures_exchange_info_safe(force_refresh: bool = False) -> Optional[Dict[str
         logger.error("futures_exchange_info failed: %s", e)
         return _exinfo_cache["data"]
 
-
 @observe_http(name="binance_ping")
 def fapi_ping() -> bool:
     try:
@@ -182,7 +169,6 @@ def fapi_ping() -> bool:
         logger.warning("Futures ping failed: %s", e)
         return False
 
-
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     info = futures_exchange_info_safe() or {}
     su = symbol.upper()
@@ -191,45 +177,29 @@ def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
             return s
     return None
 
-
 def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
     try:
         si = get_symbol_info(symbol)
         if not si:
             return None
         filters: Dict[str, Any] = {
-            "tickSize": None,
-            "minPrice": None,
-            "maxPrice": None,
-            "stepSize": None,
-            "minQty": None,
-            "maxQty": None,
-            "mMinQty": None,
-            "mMaxQty": None,
-            "minNotional": None,
+            "tickSize": None, "minPrice": None, "maxPrice": None,
+            "stepSize": None, "minQty": None, "maxQty": None,
+            "mMinQty": None, "mMaxQty": None, "minNotional": None,
             "percentPrice": {"up": None, "down": None, "decimals": None},
         }
         for f in si.get("filters", []):
             t = f.get("filterType")
             if t == "PRICE_FILTER":
-                filters["tickSize"] = f.get("tickSize")
-                filters["minPrice"] = f.get("minPrice")
-                filters["maxPrice"] = f.get("maxPrice")
+                filters["tickSize"] = f.get("tickSize"); filters["minPrice"] = f.get("minPrice"); filters["maxPrice"] = f.get("maxPrice")
             elif t == "LOT_SIZE":
-                filters["minQty"] = f.get("minQty")
-                filters["maxQty"] = f.get("maxQty")
-                filters["stepSize"] = f.get("stepSize")
+                filters["minQty"] = f.get("minQty"); filters["maxQty"] = f.get("maxQty"); filters["stepSize"] = f.get("stepSize")
             elif t in ("MARKET_Lot_SIZE", "MARKET_LOT_SIZE"):
-                filters["mMinQty"] = f.get("minQty")
-                filters["mMaxQty"] = f.get("maxQty")
+                filters["mMinQty"] = f.get("minQty"); filters["mMaxQty"] = f.get("maxQty")
             elif t in ("MIN_NOTIONAL", "NOTIONAL"):
                 filters["minNotional"] = f.get("notional") or f.get("minNotional")
             elif t == "PERCENT_PRICE":
-                filters["percentPrice"] = {
-                    "up": f.get("multiplierUp"),
-                    "down": f.get("multiplierDown"),
-                    "decimals": f.get("multiplierDecimal"),
-                }
+                filters["percentPrice"] = {"up": f.get("multiplierUp"), "down": f.get("multiplierDown"), "decimals": f.get("multiplierDecimal")}
         if not filters["tickSize"]:
             filters["tickSize"] = DEFAULT_PRICE_TICK_STR
         if not filters["stepSize"]:
@@ -241,37 +211,29 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
         logger.error("Failed get_symbol_filters: %s", e)
         return None
 
-
 def _decs(step: str) -> int:
-    if "." not in step:
-        return 0
+    if "." not in step: return 0
     frac = step.split(".", 1)[1].rstrip("0")
     return len(frac)
-
 
 def _quantize_price(symbol: str, price: float) -> str:
     f = get_symbol_filters(symbol) or {}
     tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
-    if tick <= 0:
-        tick = float(DEFAULT_PRICE_TICK_STR)
+    if tick <= 0: tick = float(DEFAULT_PRICE_TICK_STR)
     steps = round(price / tick)
     adj = steps * tick
     decs = _decs(str(f.get("tickSize") or DEFAULT_PRICE_TICK_STR))
     return f"{adj:.{decs}f}"
 
-
 def _quantize_qty(symbol: str, qty: float) -> str:
     f = get_symbol_filters(symbol) or {}
     step = float(f.get("stepSize") or DEFAULT_QTY_STEP_STR)
-    if step <= 0:
-        step = float(DEFAULT_QTY_STEP_STR)
-    if qty <= 0:
-        return "0"
+    if step <= 0: step = float(DEFAULT_QTY_STEP_STR)
+    if qty <= 0: return "0"
     steps = math.floor(max(qty, 0.0) / step)
     adj = max(step, steps * step)
     decs = _decs(str(f.get("stepSize") or DEFAULT_QTY_STEP_STR))
     return f"{adj:.{decs}f}"
-
 
 def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
     try:
@@ -284,17 +246,14 @@ def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
     need = mn / max(price, 1e-12)
     return _quantize_qty(symbol, need)
 
-
 def _cache_get(cache: Dict[str, Tuple[float, float]], symbol: str) -> Optional[float]:
     ts_ms, val = cache.get(symbol.upper(), (0.0, 0.0))
     if _ms() - ts_ms <= PRICE_CACHE_TTL_MS:
         return val
     return None
 
-
 def _cache_put(cache: Dict[str, Tuple[float, float]], symbol: str, value: float) -> None:
     cache[symbol.upper()] = (_ms(), float(value))
-
 
 @observe_http(name="binance_mark_price", include_labels=["symbol"])
 def futures_mark_price(symbol: str) -> Optional[float]:
@@ -311,7 +270,6 @@ def futures_mark_price(symbol: str) -> Optional[float]:
     except Exception as e:
         logger.error("Failed mark price for %s: %s", sym, e)
         return None
-
 
 @observe_http(name="binance_index_price", include_labels=["symbol"])
 def futures_index_price(symbol: str) -> Optional[float]:
@@ -348,7 +306,6 @@ def futures_index_price(symbol: str) -> Optional[float]:
         pass
     try:
         import httpx  # type: ignore
-
         base = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
         url = f"{base}/fapi/v1/premiumIndex"
         with observe_http_ctx(name="binance_http"):
@@ -367,7 +324,6 @@ def futures_index_price(symbol: str) -> Optional[float]:
         logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
     return None
 
-
 def get_price(symbol: str) -> Optional[float]:
     try:
         if ws_get_price and ws_is_fresh and ws_is_fresh(symbol):
@@ -378,7 +334,6 @@ def get_price(symbol: str) -> Optional[float]:
         pass
     return futures_mark_price(symbol)
 
-
 @observe_http(name="binance_balance")
 def futures_balance() -> List[Dict[str, Any]]:
     try:
@@ -387,7 +342,6 @@ def futures_balance() -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error("Failed to fetch futures_balance: %s", e)
         return []
-
 
 @observe_http(name="binance_positions", include_labels=["symbol"])
 def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -405,16 +359,13 @@ def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         logger.error("Failed to get open positions: %s", e)
         return []
 
-
 def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     return get_open_positions(symbol)
-
 
 def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
     for p in get_open_positions(symbol):
         return p
     return None
-
 
 @observe_http(name="binance_open_orders", include_labels=["symbol"])
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -425,7 +376,6 @@ def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     except Exception as e:
         logger.error("Failed to get open orders: %s", e)
         return []
-
 
 @observe_http(name="binance_all_orders", include_labels=["symbol"])
 def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, Any]]:
@@ -440,7 +390,6 @@ def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, An
     except Exception as e:
         logger.error("get_all_orders error: %s", e)
         return []
-
 
 def _percent_guard_ok(symbol: str, price: Optional[float]) -> bool:
     if not PERCENT_GUARD_ENABLE or price is None:
@@ -466,7 +415,6 @@ def _percent_guard_ok(symbol: str, price: Optional[float]) -> bool:
     except Exception:
         return True
 
-
 _bucket_reset_at = 0.0
 _bucket_used = 0
 _dyn_qps = max(1, ORD_QPS_BUCKET)
@@ -474,7 +422,6 @@ _dyn_backoff_base = max(BACKOFF_BASE_MS, BACKOFF_BASE_MS)
 _last_rl_hit = 0.0
 _rl_window = 30.0
 _rl_hits = 0
-
 
 def _rate_allow() -> bool:
     global _bucket_reset_at, _bucket_used, _dyn_qps, _last_rl_hit, _rl_hits
@@ -492,7 +439,6 @@ def _rate_allow() -> bool:
         return True
     return False
 
-
 def _note_rate_limit_hit():
     global _dyn_qps, _dyn_backoff_base, _last_rl_hit, _rl_hits
     _rl_hits += 1
@@ -500,11 +446,9 @@ def _note_rate_limit_hit():
     _dyn_qps = max(1, _dyn_qps - 1)
     _dyn_backoff_base = min(BACKOFF_MAX_MS, max(_dyn_backoff_base, int(_dyn_backoff_base * 1.5)))
 
-
 def _backoff_sleep(attempt: int) -> None:
     delay_ms = min(BACKOFF_MAX_MS, _dyn_backoff_base * (2 ** max(0, attempt - 1)))
     time.sleep(delay_ms / 1000.0)
-
 
 @observe_http(name="binance_set_leverage", include_labels=["symbol"])
 def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
@@ -514,7 +458,6 @@ def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
     except Exception as e:
         logger.warning("set_leverage failed %s lev=%s: %s", symbol, leverage, e)
         return {"ok": False, "error": str(e)}
-
 
 @observe_http(name="binance_create_order", include_labels=["symbol"])
 def futures_create_order(**kwargs) -> Dict[str, Any]:
@@ -588,7 +531,6 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
             continue
     raise RuntimeError(f"create_order_failed:{sym}:{typ}:{str(last) if last else 'unknown_error'}")
 
-
 @observe_http(name="binance_cancel_order", include_labels=["symbol"])
 def futures_cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
     try:
@@ -597,13 +539,36 @@ def futures_cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
         logger.warning("cancel_order failed %s/%s: %s", symbol, order_id, e)
         return {"ok": False, "error": str(e)}
 
+# ──────────────────────────────────────────────────────────────────────────────
+# תאימות לאחור: place_limit_order / cancel_order
+# ──────────────────────────────────────────────────────────────────────────────
+
+def place_limit_order(symbol: str, side: str, quantity: float, price: float, **kwargs) -> Dict[str, Any]:
+    """
+    עטיפה נוחה להזמנה מסוג LIMIT כפי שמודולים מסוימים מייבאים.
+    שימוש:
+      place_limit_order("BTCUSDT","BUY",0.001, 60000, reduceOnly=True, timeInForce="GTC", positionSide="BOTH")
+    """
+    params = {
+        "symbol": symbol.upper(),
+        "side": side.upper(),
+        "type": "LIMIT",
+        "timeInForce": kwargs.pop("timeInForce", "GTC"),
+        "quantity": quantity,
+        "price": price,
+    }
+    params.update(kwargs)
+    return futures_create_order(**params)
+
+def cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
+    """שם ישן בו משתמשים ראוטים שונים."""
+    return futures_cancel_order(symbol, order_id)
 
 def get_price_coalesced(symbol: str) -> Optional[float]:
     v = get_price(symbol)
     if v is not None:
         return float(v)
     return futures_index_price(symbol)
-
 
 __all__ = [
     "client",
@@ -625,6 +590,9 @@ __all__ = [
     "set_leverage",
     "futures_create_order",
     "futures_cancel_order",
+    # תאימות:
+    "place_limit_order",
+    "cancel_order",
 ]
 
 
