@@ -27,7 +27,7 @@ def _pick_signature(headers_lower: Dict[str, str]) -> Tuple[Optional[str], str]:
     תומך ב:
       - X-Webhook-Hmac: <hex|b64>
       - X-Signature: <hex|b64>
-      - X-AlgoGPT-Signature: <hex|b64>
+      - X-AlgoGPT-Signature: <hex|ב64>
       - X-Hub-Signature-256: sha256=<hex|b64>
     """
     cand = (
@@ -76,7 +76,6 @@ def _iter_secrets() -> list[Tuple[bytes, str]]:
                 out.append((binascii.unhexlify(val), f"{name}:hex"))
                 continue
             except Exception:
-                # ייפול לפורמט ASCII אם ה־HEX לא תקין
                 pass
         out.append((val.encode("utf-8"), f"{name}:ascii"))
     return out
@@ -100,7 +99,6 @@ def _build_messages(raw: bytes, ts: Optional[str]) -> list[Tuple[bytes, str]]:
 async def verify_request_hmac(
     request: Request,
     *,
-    # שמות כותרות אפשריים (גמישים)
     sig_header_names: Iterable[str] = (
         "X-Webhook-Hmac",
         "X-Signature",
@@ -115,21 +113,15 @@ async def verify_request_hmac(
     max_skew_sec: int = 300,
 ) -> Tuple[bool, str]:
     """
-    אימות HMAC על בקשת FastAPI:
-    - תומך בכמה שמות כותרות ופורמטים (HEX / Base64, ו־GitHub "sha256=").
-    - תומך במפתח HEX או ASCII (עם *_KEY_IS_HEX או זיהוי אוטומטי).
-    - תומך בשני מסלולי הודעה: raw ו־"ts.body" אם קיים timestamp.
-    - מחזיר (ok, reason).
+    אימות HMAC על בקשת FastAPI.
     """
     raw = await request.body()
     headers_lower = _lower_headers(request.headers)
 
-    # אסוף חתימה
     sig, mode_hint = _pick_signature(headers_lower)
     if not sig:
         return (False, "missing_signature")
 
-    # timestamp (אופציונלי) + בדיקת skew
     ts = None
     for name in ts_header_names:
         v = headers_lower.get(name.lower())
@@ -142,25 +134,20 @@ async def verify_request_hmac(
             if abs(time.time() - tsf) > max_skew_sec:
                 return (False, "timestamp_skew")
         except Exception:
-            # לא עוצרים בגלל timestamp לא פרסבילי – פשוט לא נשתמש בו
             ts = None
 
-    # מפתחות לבדיקה
     secrets = _iter_secrets()
     if not secrets:
         return (False, "missing_secret")
 
-    # בנה וריאנטים של הודעה
     messages = _build_messages(raw, ts)
 
-    # ננסה כל קומבינציה: secret × message × encoder (HEX,B64)
     for key_bytes, key_label in secrets:
         for msg_bytes, msg_tag in messages:
             digest = hmac.new(key_bytes, msg_bytes, hashlib.sha256).digest()
             hex_sig = binascii.hexlify(digest).decode()
             b64_sig = base64.b64encode(digest).decode()
 
-            # אם החתימה נראית HEX – נשווה קודם ל־HEX
             if mode_hint == "hex":
                 try:
                     if hmac.compare_digest(sig.lower(), hex_sig.lower()):
@@ -168,7 +155,6 @@ async def verify_request_hmac(
                 except Exception:
                     pass
             else:
-                # לא בטוח – ננסה גם HEX וגם B64
                 try:
                     if hmac.compare_digest(sig.lower(), hex_sig.lower()):
                         return (True, f"ok:{key_label}:{msg_tag}:hex")
@@ -180,10 +166,9 @@ async def verify_request_hmac(
                 except Exception:
                     pass
 
-    # דיבאג ידידותי (לא מדליף מפתח)
     log.debug(
-        "hmac_verify_failed: sig_mode=%s tried=%d secrets, msg_variants=%d, headers=%s",
-        mode_hint, len(secrets), len(messages),
+        "hmac_verify_failed: tried=%d secrets, msg_variants=%d, headers=%s",
+        len(secrets), len(messages),
         {k: v for k, v in request.headers.items()
          if k.lower() in ("x-webhook-hmac","x-signature","x-hub-signature-256","x-webhook-ts","x-signature-timestamp","x-algogpt-timestamp")}
     )
@@ -215,11 +200,33 @@ def verify_bearer(request: Request, *, token: Optional[str] = None) -> bool:
     except Exception:
         return False
 
+# ──────────────────────────────────────────────────────────────────────────────
+# תאימות לאחור: verify_hmac + idem_seen
+# ──────────────────────────────────────────────────────────────────────────────
 
-__all__ = ["verify_request_hmac", "verify_bearer"]
+# verify_hmac – עטיפה לשם ישן שמודולים אחרים צפויים לייבא
+async def verify_hmac(request: Request, **kwargs) -> Tuple[bool, str]:
+    return await verify_request_hmac(request, **kwargs)
 
+# idem_seen – אנטי-כפילות פשוט עם TTL בזיכרון
+__IDEM_DB: Dict[str, float] = {}
+def idem_seen(key: str, ttl_sec: int = 300) -> bool:
+    """
+    מחזיר True אם המפתח כבר נראה ועדיין בתוקף; אחרת שומר ומחזיר False.
+    """
+    now = time.time()
+    # ניקוי פריטים שפג תוקפם (קליל)
+    expired = [k for k, until in __IDEM_DB.items() if until <= now]
+    for k in expired:
+        __IDEM_DB.pop(k, None)
 
+    until = __IDEM_DB.get(key)
+    if until and until > now:
+        return True
+    __IDEM_DB[key] = now + max(1, int(ttl_sec))
+    return False
 
+__all__ = ["verify_request_hmac", "verify_bearer", "verify_hmac", "idem_seen"]
 
 
 
