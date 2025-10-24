@@ -1277,7 +1277,7 @@ async def _rt_manage(symbol: str) -> None:
                 if profit_atr >= step:
                     lock_off = 0.25 * atr_abs * step
                     lp = entry + sign * lock_off
-                    lock_price = lp if lock_price is None else (max(lock_price, lp) if side_now == "BUY" else min(lock_price, lp))
+                    lock_price = lp if lock_price is not None else (max(lock_price, lp) if side_now == "BUY" else min(lock_price, lp))
             if lock_price is not None:
                 targets.append(lock_price)
 
@@ -1473,6 +1473,7 @@ def main() -> None:
     except KeyboardInterrupt:
         pass
     # EOF
+
 
 
 
