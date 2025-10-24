@@ -1,4 +1,5 @@
 # routes/grid.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import logging, json
 from pathlib import Path
@@ -16,6 +17,7 @@ from utils.grid_executor import execute_grid_trade as basic_grid
 from utils.grid_manager import start_grid_for_position
 from utils.binance_spot_client import spot_price
 from utils.binance_client import futures_mark_price
+from utils.compat_shims import place_limit_order  # fixed import (shim)
 
 logger = logging.getLogger("algogpt.routes.grid")
 router = APIRouter(prefix="/grid", tags=["Grid"], dependencies=[Depends(require_api_key)])
@@ -159,8 +161,6 @@ async def trade_grid(req: GridTradeRequest):
     except Exception as e:
         logger.exception("grid_trade_failed")
         raise HTTPException(status_code=500, detail=f"Grid trade failed: {e}")
-
-
 
 
 
