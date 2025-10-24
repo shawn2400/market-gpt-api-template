@@ -1,4 +1,5 @@
 # routes/order_modify.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Body, HTTPException
@@ -6,8 +7,9 @@ from pydantic import BaseModel, Field
 from typing import Optional, Literal, Dict, Any
 
 from utils.auth import require_api_key
+from utils.compat_shims import get_order  # ✔ fixed: import get_order from compat_shims
 from utils.binance_client import (
-    get_order, cancel_order, get_open_orders,
+    cancel_order, get_open_orders,
     place_stop_market_order, place_take_profit_market,
 )
 
@@ -183,4 +185,5 @@ def update_order(req: UpdateOrderReq = Body(...)) -> Dict[str, Any]:
         "new_trigger": float(req.new_price),
         "response": {k: resp.get(k) for k in ("orderId", "clientOrderId", "type", "side", "status", "stopPrice", "origQty")},
     }
+
 
