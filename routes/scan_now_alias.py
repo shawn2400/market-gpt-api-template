@@ -1,11 +1,14 @@
 # routes/scan_now_alias.py
 from __future__ import annotations
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import List, Optional, Dict, Any
 import os, httpx, asyncio
 
-from routes.scan import scan_symbols, ScanResponse  # משתמש במודלים/לוגיקה הקיימת
-from fastapi import HTTPException
+# נסה לייבא scan_symbols; אם בקוד שלך הפונקציה נקראת run_scan – ניצור אליאס
+try:
+    from routes.scan import scan_symbols, ScanResponse
+except Exception:
+    from routes.scan import run_scan as scan_symbols, ScanResponse  # type: ignore
 
 router = APIRouter(tags=["ScanNow"], prefix="")
 
@@ -120,8 +123,5 @@ async def scan_now(
         "scanned": len(syms),
         "interval": interval,
     }
-
-
-
 
 
