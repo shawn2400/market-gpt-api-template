@@ -6,7 +6,7 @@ services:
     plan: standard
     autoDeploy: true
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /readyz
+    healthCheckPath: /healthz
 
     disks:
       - name: data
@@ -118,7 +118,7 @@ services:
         value: "1"
 
       - key: SECURITY_PUBLIC_PATHS
-        value: "/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/ops/approve/signed,/ops/reject/signed,/public/ticket/inspect,/public/pos-events/stream,/ops/manager/health,/ui/snapshot,/ui/snapshot/idle"
+        value: "/healthz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/ops/approve/signed,/ops/reject/signed,/public/ticket/inspect,/public/pos-events/stream,/ops/manager/health,/ui/snapshot,/ui/snapshot/idle"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk,/ultra"
       - key: SECURITY_PROTECTED_PATHS
@@ -135,8 +135,6 @@ services:
         value: "1"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
         value: "1"
-      - key: ANTI_REPLAY_SKEW_SEC
-        value: "120"
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
       - key: SIG_TS_ENFORCE
@@ -1120,6 +1118,7 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
+
 
 
 
