@@ -115,7 +115,8 @@ services:
         value: "1"
       - key: ENABLE_HSTS
         value: "1"
-      - key: TRUST_XFF
+      # שם חדש—מתאים ל־_client_ip בגרסה המתוקנת
+      - key: TRUST_PROXY
         value: "1"
 
       # ציבורי (כולל טעינה עצלה ל־/ui/snapshot)
@@ -1145,6 +1146,7 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
+
 
 
 
