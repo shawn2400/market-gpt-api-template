@@ -45,6 +45,7 @@ services:
         value: /ultra
       - key: ULTRATOP_STATIC_DIR
         value: /app/static/ultra
+      # ודא שה־/ultra זמין לציבור (להלן נוסיף גם ב-SECURITY_PUBLIC_PREFIXES)
 
       - key: WEB_CONCURRENCY
         value: "1"
@@ -119,9 +120,12 @@ services:
 
       # ציבורי (כולל טעינה עצלה ל־/ui/snapshot)
       - key: SECURITY_PUBLIC_PATHS
-        value: "/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/public/ticket/inspect,/public/pos-events/stream,/ops/manager/health,/ui/snapshot,/ui/snapshot/idle"
+        value: "/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/ops/approve/signed,/ops/reject/signed,/public/ticket/inspect,/public/pos-events/stream,/ops/manager/health,/ui/snapshot,/ui/snapshot/idle"
+      # ↑ חשוב: מסלולי /ops/approve/reject/signed צריכים להיות ציבוריים
+      #   אחרת שכבת השמירה לפי PREFIX תחסום אותם ותחייב Bearer, למרות שיש חתימה.
       - key: SECURITY_PUBLIC_PREFIXES
-        value: "/public,/price,/static,/risk"
+        value: "/public,/price,/static,/risk,/ultra"
+      # ↑ מאפשר גישה ציבורית גם ל-UltraTop (לפי ULTRATOP_PREFIX=/ultra)
       # הגנה על /admin ועוד + ניהול ידני
       - key: SECURITY_PROTECTED_PATHS
         value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json,/admin,/manage-once,/manage-once/multi"
@@ -131,12 +135,12 @@ services:
       - key: CSP_POLICY
         value: "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https:; base-uri 'none'; frame-ancestors 'none'"
 
+      # --- Anti-replay / HTTP Signature ---
       - key: ANTI_REPLAY_ENABLE
         value: "1"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
         value: "1"         # ✅ הפעלת חתימה נגד Replay
-      - key: ANTI_REPLAY_SKEW_SEC
-        value: "60"
+      # הערה: ANTI_REPLAY_SKEW_SEC אינו נצרך בקוד; יש שימוש ב-SIG_TS_SKEW_SEC.
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
       - key: SIG_TS_ENFORCE
@@ -478,7 +482,7 @@ services:
 
       - key: NATIVE_TPSL_ENABLE
         value: "1"
-      - key: SL_MONOTONIC
+      - key: SL_MONOTIC
         value: "1"
 
       - key: STRUCT_SL_ENABLE
@@ -821,8 +825,6 @@ services:
       - key: BTC_SHORT_REQ
         value: "ema21<=ema50"
 
-      - key: PUBLIC_REQUIRE_BEARER
-        value: "1"
       - key: PUBLIC_SSE_HEARTBEAT_SEC
         value: "20"
       - key: PUBLIC_SSE_MAX_IDLE_SEC
@@ -1144,6 +1146,7 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
+
 
 
 
