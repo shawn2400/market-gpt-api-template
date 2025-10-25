@@ -624,10 +624,41 @@ async def manager_status():
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+class ValidateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    symbol: str = Field(..., description="e.g. BTCUSDT")
+    side: str = Field(..., description="BUY/SELL או LONG/SHORT")
+    entry: Optional[float] = Field(None, description="מחיר כניסה (אם Market אפשר להשאיר ריק)")
+    sl: Optional[float] = Field(None, description="Stop Loss (נדרש ל-RR)")
+    tp1: Optional[float] = Field(None, description="Take Profit 1 (נדרש ל-RR)")
+    leverage: Optional[int] = Field(None, description="מינוף לשיקולי תקרה/אזהרה")
+    vol_regime: Optional[str] = Field(None, description="low/mid/high (ברירת מחדל מה-ENV)")
+    success_pct: Optional[float] = Field(None, description="אופציונלי – הסתברות הצלחה לחיווי אזהרה")
+    use_market_as_entry: bool = Field(default=True)
+
 @router.post("/manager/validate-plan", response_model=ValidateResponse)
 async def validate_plan(req: ValidateRequest, request: Request):
     _allow_by_bearer_or_apikey(request)
     return await _risk_validate(req)
+
+class IngestRequest(ValidateRequest):
+    qty: Optional[float] = Field(None)
+    budget: Optional[float] = Field(None)
+    leverage_min: Optional[int] = Field(None, description="ברירת־מחדל AUTO_LEV_MIN")
+    leverage_max: Optional[int] = Field(None, description="ברירת־מחדל AUTO_LEV_MAX")
+    budget_min: Optional[float] = Field(None, description="ברירת־מחדל AUTO_BUDGET_MIN")
+    budget_max: Optional[float] = Field(None, description="ברירת־מחדל AUTO_BUDGET_MAX")
+    tp2: Optional[float] = None
+    tp3: Optional[float] = None
+    tp_splits: Optional[List[float]] = None
+    position_side: Optional[str] = None
+    note: Optional[str] = None
+    require_approval: Optional[bool] = Field(default=True)
+    expiry_ts: Optional[int] = None
+    prob_overall_pct: Optional[float] = None
+    prob_tp1_pct: Optional[float] = None
+    prob_tp2_pct: Optional[float] = None
+    prob_tp3_pct: Optional[float] = None
 
 @router.post("/manager/ingest-alert")
 async def ingest_alert(req: IngestRequest, request: Request):
@@ -1610,6 +1641,7 @@ def main() -> None:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
+
 
 
 
