@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import httpx
-from fastapi import APIRouter, HTTPException, Header, Body, Request, Depends
+from fastapi import APIRouter, HTTPException, Header, Body, Request
 from pydantic import BaseModel, Field, ConfigDict
 
 # ===== Utilities / Optional modules (graceful fallbacks) =====
@@ -627,13 +627,19 @@ async def manager_status():
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+class ValidateRequestBody(ValidateRequest):
+    pass
+
 @router.post("/manager/validate-plan", response_model=ValidateResponse)
-async def validate_plan(req: ValidateRequest, request: Request):
+async def validate_plan(req: ValidateRequestBody, request: Request):
     _allow_by_bearer_or_apikey(request)
     return await _risk_validate(req)
 
+class IngestRequestBody(IngestRequest):
+    pass
+
 @router.post("/manager/ingest-alert")
-async def ingest_alert(req: IngestRequest, request: Request):
+async def ingest_alert(req: IngestRequestBody, request: Request):
     """
     מקבל התראה, מבצע Risk Gate, ואם עבר—פותח כרטיס אישור דרך /ops/ticket.
     """
@@ -980,9 +986,7 @@ async def manage_once_route(
     # 5) Trail by offset_bps (after BE)
     be_done = current_sl_px is not None and ((current_sl_px - be_price) * sign) >= -1e-12
     if be_done:
-        # BUY: mark*(1 - bps/10000); SELL: mark*(1 + bps/10000)
         target_sl = mark * (1.0 - (sign * trail_bps / 10000.0))
-        # Never cross the BE wrong way:
         target_sl = max(target_sl, be_price) if side=="BUY" else min(target_sl, be_price)
         if current_sl_px is None or (target_sl - current_sl_px) * sign > 1e-12:
             try:
@@ -1588,8 +1592,12 @@ async def _manager_loop():
             except Exception: pass
         await asyncio.sleep(max(3, MANAGER_INTERVAL_SEC))
 
-@router.on_event("startup")
-async def _startup():
+# === EXPORTED STARTUP HOOK (לקרוא מתוך קובץ הכניסה הראשי) ===
+async def startup():
+    """
+    יש לזמן פונקציה זו מתוך app הראשי:
+      app.add_event_handler("startup", routes.manager.startup)
+    """
     if MANAGER_ENABLE:
         asyncio.create_task(_manager_loop())
     global _WS_TASK
@@ -1601,19 +1609,6 @@ async def _startup():
             try: POS_LIVE_ERRORS.labels("ALL", "ws_start").inc()
             except Exception: pass
 
-def main() -> None:
-    if not MANAGER_ENABLE:
-        print("MANAGER_ENABLE=0 — exiting.")
-        return
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.create_task(_manager_loop())
-        if USE_WS:
-            loop.create_task(_ws_autoflip_loop())
-        loop.run_forever()
-    except KeyboardInterrupt:
-        pass
 
 
 
