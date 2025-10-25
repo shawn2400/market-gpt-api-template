@@ -1,4 +1,4 @@
-# routes/manager.py
+# routes/manager.py 
 from __future__ import annotations
 import os, json, time, hashlib, asyncio, logging, math, re
 from pathlib import Path
@@ -254,7 +254,8 @@ async def _get_mark_price(symbol: str) -> Optional[float]:
     sym = (symbol or "").upper().strip()
     if not sym:
         return None
-    url = f"{FAPI_HTTP}/fapi/v1/premiumIndex"}
+    # ❗ תיקון סוגר עודף: הסרנו את '}' המיותר
+    url = f"{FAPI_HTTP}/fapi/v1/premiumIndex"
     try:
         async with _http() as cli:
             r = await cli.get(url, params={"symbol": sym})
@@ -1606,11 +1607,10 @@ async def startup():
             _WS_TASK = asyncio.create_task(_ws_autoflip_loop())
         except Exception as e:
             logger.error("ws_autoflip start failed: %s", e)
-            try: POS_LIVE_ERRORS.labels("ALL", "ws_start").inc()
-            except Exception: pass
-
-
-
+            try:
+                POS_LIVE_ERRORS.labels("ALL", "ws_start").inc()
+            except Exception:
+                pass
 
 
 
