@@ -830,7 +830,6 @@ async def _path_protection_guard(request: Request, call_next):
         # לא לחסום תנועה על תקלה בשכבת ההגנה – נמשיך כרגיל ונרשום אזהרה
         logger.warning("path_protection_guard_failed: %s", e)
     return await call_next(request)
-
 # ==================== Public Rate Limit middleware ====================
 async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
     key = f"{NS}:rl:{path_key}:{ip}"
@@ -1107,6 +1106,7 @@ async def _fetch_klines_http(symbol: str, interval: str = "15m", limit: int = 12
     except Exception:
         pass
     return []
+
 # ==================== Misc helpers ====================
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
 def _parse_mode(note: Optional[str]) -> Optional[str]:
@@ -1213,7 +1213,6 @@ def _round_to_lot_size(client, symbol: str, qty: float) -> float:
         return float(qty)
     except Exception:
         return float(qty)
-
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     with suppress(Exception):
         from utils.trade_executor import place_futures_market  # type: ignore
@@ -2387,7 +2386,6 @@ async def manage_once_signed(symbol: str = Query(...), exp: str = Query(...), si
 
 # ----------------- Mount router & STARTUP/SHUTDOWN -----------------
 app.include_router(router)
-
 @app.on_event("startup")
 async def _on_startup():
     try:
@@ -2467,6 +2465,7 @@ if __name__ == "__main__":
         port = _port()
     reload = os.getenv("RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload, log_level=LOG_LEVEL.lower())
+
 
 
 
