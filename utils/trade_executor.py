@@ -113,12 +113,14 @@ except Exception:
     def pre_trade_risk_check(*args, **kwargs):
         return {"ok": True, "score": 100.0, "reasons": ["risk_module_missing"], "metrics": {}}
 
+# --- Approvals (patched to include wait_for_confirmation) ---
 try:
-    from utils.approvals import ConfirmStore, send_confirm_request, require_approval
+    from utils.approvals import ConfirmStore, send_confirm_request, require_approval, wait_for_confirmation
 except Exception:
     class ConfirmStore: ...
     def send_confirm_request(*args, **kwargs): return None
     def require_approval(plan: Dict[str, Any]) -> bool: return False
+    def wait_for_confirmation(*args, **kwargs): return True  # Fallback מאפשר ריצה גם בלי מודול
 
 log = logging.getLogger("algogpt.trade_executor")
 
@@ -667,8 +669,22 @@ def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
     if not ok:
         return {"ok": False, "error": "quality_gate_failed", "detail": reason_bad}
 
+    # === Patched approval flow: blocking wait before execution ===
     idem = _Idem(prefix="trade", ttl=IDEMPOTENCY_TTL_SEC)
-    _approve_if_needed(idem, plan)
+    need_approval = (ENFORCE_APPROVAL_ALWAYS or require_approval(plan))
+    if need_approval:
+        ttl = int(plan.get("confirm_ttl_sec") or CONFIRM_TTL_SEC or 600)
+        try:
+            send_confirm_request(idem, plan, ttl=ttl)
+        except Exception as e:
+            log.warning("send_confirm_request_failed: %s", e)
+        ok_confirm = False
+        try:
+            ok_confirm = bool(wait_for_confirmation(idem, plan, ttl=ttl))
+        except Exception as e:
+            log.warning("wait_for_confirmation_failed: %s", e)
+        if not ok_confirm:
+            return {"ok": False, "error": "not_approved_or_timeout"}
 
     leverage = _choose_leverage(
         symbol,
@@ -839,6 +855,7 @@ async def execute_trade_live_async(plan: Dict[str, Any]) -> Dict[str, Any]:
     return await loop.run_in_executor(None, execute_trade_live, plan)
 
 __all__ = ["execute_trade_live", "execute_trade_live_async", "_safe_close_position"]
+
 
 
 
