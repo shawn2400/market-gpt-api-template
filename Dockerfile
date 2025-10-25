@@ -87,23 +87,17 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
   CMD curl -fsS http://127.0.0.1:${PORT:-10000}/readyz || exit 1
 
 ENTRYPOINT ["/usr/bin/tini","--"]
-CMD ["gunicorn","-c","/app/gunicorn_conf.py"]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+# הרצה ישירה עם UvicornWorker; בלי תלות בקובץ gunicorn_conf.py (שעלול לא להיות ב-repo).
+# מאפשר גם שימוש ב-APP_MODULE (ברירת מחדל main:app).
+ENV APP_MODULE=main:app
+CMD bash -lc '\
+  APP_MODULE=${APP_MODULE:-main:app}; \
+  WEB_CONC=${WEB_CONCURRENCY:-$(python - <<PY
+import os, multiprocessing as mp; print(max(2, min(8, (mp.cpu_count() or 2)*2)))
+PY
+)}; \
+  exec gunicorn -k uvicorn.workers.UvicornWorker -w "${WEB_CONC}" -b 0.0.0.0:${PORT:-10000} "${APP_MODULE}" \
+    --timeout ${GUNICORN_TIMEOUT:-180} --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-45} --keep-alive ${GUNICORN_KEEPALIVE:-30}'
 
 
 
