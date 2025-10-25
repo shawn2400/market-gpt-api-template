@@ -8,7 +8,6 @@ import hmac
 import hashlib
 import json
 import threading
-import asyncio
 import base64
 import logging
 from typing import Optional, Tuple, Any, Dict, List, Iterable
@@ -41,7 +40,8 @@ _NONCE_TTL_SEC = int(os.getenv("ANTI_REPLAY_NONCE_TTL_SEC", "600") or 600)
 # HTTP Signatures: which header names we accept for ts/nonce/body hash (case-insensitive)
 _TS_HEADER_CANDIDATES = ("x-request-timestamp", "x-ops-timestamp")
 _NONCE_HEADER_CANDIDATES = ("x-request-nonce", "x-ops-nonce")
-_BODYHASH_HEADER_CANDIDATES = ("digest", "x-content-sha256")  # We validate value if present
+# Body hash candidates we can validate (case-insensitive keys)
+_BODYHASH_HEADER_CANDIDATES = ("digest", "x-content-sha256", "content-digest")
 
 logger = logging.getLogger("anti_replay")
 
@@ -256,7 +256,7 @@ def _parse_signature_header(h: str) -> Dict[str, str]:
     return out
 
 def _lowerkey_headers(h: Dict[str, str]) -> Dict[str, str]:
-    return { (k or "").lower(): v for k, v in (h or {}).items() }
+    return {(k or "").lower(): v for k, v in (h or {}).items()}
 
 def _http_sig_build_string_to_sign(
     method: str,
@@ -277,7 +277,7 @@ def _http_sig_build_string_to_sign(
         if hn_l == "(request-target)":
             lines.append(f"(request-target): {m} {route_path}")
         else:
-            # host/content-type/x-request-timestamp/x-ops-nonce/digest/x-content-sha256/...
+            # host/content-type/x-request-timestamp/x-ops-nonce/digest/x-content-sha256/content-digest/...
             val = h.get(hn_l, "")
             lines.append(f"{hn_l}: {val}")
     return "\n".join(lines)
@@ -297,6 +297,52 @@ def _extract_first(headers: Dict[str, str], names: Iterable[str]) -> Optional[st
         if n.lower() in h and h[n.lower()]:
             return h[n.lower()]
     return None
+
+def _validate_body_hash_if_present(headers: Dict[str, str], body_bytes: bytes) -> Tuple[bool, str, bool]:
+    """
+    Validates optional body hash headers, if present.
+    Supports:
+      - Digest: "SHA-256=<base64>"
+      - X-Content-SHA256: "<base64>"
+      - Content-Digest (RFC 9530): "sha-256=:<base64>:" possibly among multiple algs
+    Returns (ok, reason, validated)
+    """
+    h = _lowerkey_headers(headers or {})
+    validated = False
+
+    # Digest
+    if "digest" in h and h["digest"]:
+        dv = h["digest"].strip()
+        if not dv.upper().startswith("SHA-256="):
+            return False, "bad_digest_format", validated
+        b64 = dv.split("=", 1)[1]
+        if b64 != _sha256_b64(body_bytes):
+            return False, "bad_digest_mismatch", validated
+        validated = True
+
+    # X-Content-SHA256
+    if "x-content-sha256" in h and h["x-content-sha256"]:
+        if h["x-content-sha256"].strip() != _sha256_b64(body_bytes):
+            return False, "bad_xcontentsha_mismatch", validated
+        validated = True
+
+    # Content-Digest (RFC 9530)
+    if "content-digest" in h and h["content-digest"]:
+        # Example: sha-256=:<base64>:
+        try:
+            v = h["content-digest"]
+            import re
+            m = re.search(r"sha-256\s*=\s*:(?P<b64>[A-Za-z0-9+/=]+):", v)
+            if not m:
+                return False, "bad_content_digest_format", validated
+            want_b64 = m.group("b64")
+            if want_b64 != _sha256_b64(body_bytes):
+                return False, "bad_content_digest_mismatch", validated
+            validated = True
+        except Exception:
+            return False, "bad_content_digest_format", validated
+
+    return True, "ok", validated
 
 def _verify_http_signature_common(
     method: str,
@@ -357,27 +403,11 @@ def _verify_http_signature_common(
     if not nonce_val and must_sign:
         return False, "missing_nonce"
 
-    # Optional body-hash validation if present
+    # Optional body-hash validation if present (accept any of the supported headers)
     body_bytes = _canonicalize_body(body)
-    did_validate_hash = False
-    hash_hdr_name = _extract_first(h, _BODYHASH_HEADER_CANDIDATES)
-    if hash_hdr_name:
-        hash_hdr_name_l = [n for n in _BODYHASH_HEADER_CANDIDATES if n in h]
-        # if both exist, prefer 'digest' first
-    digest_val = h.get("digest")
-    xcs_val = h.get("x-content-sha256")
-    if digest_val:
-        # expect form "SHA-256=<base64>"
-        if not digest_val.upper().startswith("SHA-256="):
-            return False, "bad_digest_format"
-        b64 = digest_val.split("=", 1)[1]
-        if b64 != _sha256_b64(body_bytes):
-            return False, "bad_digest_mismatch"
-        did_validate_hash = True
-    elif xcs_val:
-        if xcs_val != _sha256_b64(body_bytes):
-            return False, "bad_xcontentsha_mismatch"
-        did_validate_hash = True
+    ok_hash, reason_hash, _validated = _validate_body_hash_if_present(h, body_bytes)
+    if not ok_hash:
+        return False, reason_hash
 
     # Build expected signature (Base64) exactly per headers=
     try:
@@ -397,8 +427,8 @@ def _verify_http_signature_common(
     # Log helpful context for ops:
     try:
         logger.info(
-            "anti-replay: HTTP-SIG ok keyId=%s secret_src=%s headers=%s ts=%s nonce=%s validated_hash=%s",
-            key_id, _SECRET_SRC, headers_list, ts_val, nonce_val, did_validate_hash
+            "anti-replay: HTTP-SIG ok keyId=%s secret_src=%s headers=%s ts=%s nonce=%s",
+            key_id, _SECRET_SRC, headers_list, ts_val, nonce_val
         )
     except Exception:
         pass
