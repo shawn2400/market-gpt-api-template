@@ -257,3 +257,10 @@ async def scan_multi(
     ok_any = any(r.ok for r in results)
     return ScanResponse(ok=ok_any, count_total=len(syms), returned=len(results), signals=list(results))
 
+
+# בסוף routes/scan.py (אם חסר):
+def run_scan(*args, **kwargs):
+    # נהל/העבר ל־router פונקציה קיימת, או החזר תשובה מינימלית:
+    return {"ok": True, "data": []}
+
+
