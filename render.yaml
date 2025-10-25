@@ -45,7 +45,6 @@ services:
         value: /ultra
       - key: ULTRATOP_STATIC_DIR
         value: /app/static/ultra
-      # ודא שה־/ultra זמין לציבור (נוסף גם ב-SECURITY_PUBLIC_PREFIXES למטה)
 
       - key: WEB_CONCURRENCY
         value: "1"
@@ -115,24 +114,21 @@ services:
         value: "1"
       - key: ENABLE_HSTS
         value: "1"
-      # שם חדש—מתאים ל־_client_ip בגרסה המתוקנת
       - key: TRUST_PROXY
         value: "1"
 
-      # ציבורי (כולל טעינה עצלה ל־/ui/snapshot)
       - key: SECURITY_PUBLIC_PATHS
         value: "/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/ops/approve/signed,/ops/reject/signed,/public/ticket/inspect,/public/pos-events/stream,/ops/manager/health,/ui/snapshot,/ui/snapshot/idle"
-      # ↑ מסלולי /ops/approve/reject/signed ציבוריים (מאומתים בחתימה)
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk,/ultra"
-      # הגנה על /admin ועוד + ניהול ידני
       - key: SECURITY_PROTECTED_PATHS
         value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json,/admin,/manage-once,/manage-once/multi"
 
       - key: ENABLE_CSP
         value: "1"
+      # === CSP מתוקן: מוסיפים unpkg + unsafe-eval בשביל Babel בדפדפן ===
       - key: CSP_POLICY
-        value: "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https:; base-uri 'none'; frame-ancestors 'none'"
+        value: "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; connect-src 'self' https:; base-uri 'none'; frame-ancestors 'none'"
 
       # --- Anti-replay / HTTP Signature ---
       - key: ANTI_REPLAY_ENABLE
@@ -140,7 +136,7 @@ services:
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
         value: "1"
       - key: ANTI_REPLAY_SKEW_SEC
-        value: "120"       # משמש ב-anti_replay.py
+        value: "120"
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
       - key: SIG_TS_ENFORCE
@@ -483,7 +479,7 @@ services:
       - key: NATIVE_TPSL_ENABLE
         value: "1"
       - key: SL_MONOTONIC
-        value: "1"   # ← תוקן המפתח (היה SL_MONOTIC)
+        value: "1"
 
       - key: STRUCT_SL_ENABLE
         value: "1"
@@ -789,7 +785,6 @@ services:
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: "1"
 
-      # אימוץ אוטומטי של טריידים ידניים (ניהול בלבד, ללא אישור)
       - key: ADOPT_MANUAL_ENABLE
         value: "1"
       - key: ADOPT_MODE
@@ -837,7 +832,6 @@ services:
       - key: POLICY_SCHEMA_PATH
         value: config/policy_schema.json
 
-      # === אוטו־דיסקברי מודרני ===
       - key: ROUTES_AUTOLOAD
         value: "1"
       - key: ROUTES_AUTOLOAD_MODE
@@ -849,7 +843,6 @@ services:
       - key: ROUTES_VERBOSE
         value: "0"
 
-      # === תאימות ישנה ===
       - key: ROUTES_AUTO_DISCOVERY
         value: "1"
       - key: ROUTES_NEED_TG_APPROVAL
@@ -893,12 +886,6 @@ services:
         fromSecret: OPS_SIGN_SECRET_PROD
       - key: WEBHOOK_HMAC_SECRET
         fromSecret: WEBHOOK_HMAC_SECRET_PROD
-      - key: OPENAI_API_KEY
-        fromSecret: OPENAI_API_KEY_PROD
-      - key: TELEGRAM_BOT_TOKEN
-        fromSecret: TELEGRAM_BOT_TOKEN_PROD
-      - key: TELEGRAM_WEBHOOK_SECRET
-        fromSecret: TELEGRAM_WEBHOOK_SECRET_PROD
       - key: ALERTS_INGEST_HMAC_SECRET
         fromSecret: ALERTS_INGEST_HMAC_SECRET_PROD
       - key: INTERNAL_JWT_PUBLIC_KEY
@@ -1029,15 +1016,11 @@ services:
       - key: BINANCE_FAPI
         value: https://fapi.binance.com
 
-      # === Lazy UI Sampler (חדש) ===
       - key: UI_POLL_MS
         value: "2000"
       - key: UI_IDLE_STOP_SEC
         value: "30"
 
-      # =========================
-      # Dynamic Selector (Auto)
-      # =========================
       - key: DYNAMIC_PROFILE_ENABLE
         value: "1"
       - key: DYN_PROFILE_ADX_RANGE
@@ -1057,9 +1040,6 @@ services:
       - key: CACHE_DELTA_TTL_SEC
         value: "20"
 
-      # =========================
-      # Conservative Pack (BTC/ETH)
-      # =========================
       - key: CONS_DELTA_QTY_MIN
         value: "120000"
       - key: CONS_PANIC_ATR_PCT
@@ -1087,9 +1067,6 @@ services:
       - key: CONS_TIME_MIN_ROE_NEG
         value: "-0.7"
 
-      # =========================
-      # Aggressive Pack (ALTS)
-      # =========================
       - key: AGGR_DELTA_QTY_MIN
         value: "60000"
       - key: AGGR_PANIC_ATR_PCT
@@ -1117,9 +1094,6 @@ services:
       - key: AGGR_TIME_MIN_ROE_NEG
         value: "-0.4"
 
-      # =========================
-      # Very-Aggressive Pack (LOWCAP)
-      # =========================
       - key: VAGGR_DELTA_QTY_MIN
         value: "45000"
       - key: VAGGR_PANIC_ATR_PCT
@@ -1146,7 +1120,6 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
-
 
 
 
