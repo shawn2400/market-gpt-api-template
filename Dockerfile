@@ -48,12 +48,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     ALGOGPT_VERSION=${APP_VERSION} \
     HTTP2_ENABLE=1
 
-# ספריות ריצה + כלי shell להרצה מתוך ה-pod:
-# - curl (HTTP)
-# - openssl + xxd (חתימות HMAC)
-# - uuid-runtime (uuidgen)
-# - sed, gawk, coreutils (date/head/…)
-# - ca-certificates, tzdata, bash, git (נוחות/תמיכה)
+# ספריות ריצה + כלי shell להרצה מתוך ה-pod
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     tini ca-certificates tzdata bash curl openssl xxd uuid-runtime sed gawk coreutils git \
     libopenblas0-openmp liblapack3 \
@@ -68,7 +63,7 @@ RUN useradd -ms /bin/bash appuser
 
 WORKDIR /app
 
-# העתקת קוד האפליקציה (כולל gunicorn_conf.py אם קיים ברפוזיטורי)
+# העתקת קוד האפליקציה
 COPY . .
 
 # גרסת אפליקציה לשקיפות
@@ -87,20 +82,20 @@ HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
   CMD curl -fsS http://127.0.0.1:${PORT:-10000}/readyz || exit 1
 
 ENTRYPOINT ["/usr/bin/tini","--"]
-# הרצה ישירה עם UvicornWorker; בלי תלות בקובץ gunicorn_conf.py (שעלול לא להיות ב-repo).
-# מאפשר גם שימוש ב-APP_MODULE (ברירת מחדל main:app).
+
+# הרצה ישירה עם UvicornWorker; בלי heredoc, בלי >>>.
+# חישוב WEB_CONCURRENCY עם python -c (מקסימום 8, מינימום 2, כפול ליבות).
 ENV APP_MODULE=main:app
 CMD bash -lc '\
   APP_MODULE=${APP_MODULE:-main:app}; \
-  WEB_CONC=${WEB_CONCURRENCY:-$(python - <<PY
-import os, multiprocessing as mp; print(max(2, min(8, (mp.cpu_count() or 2)*2)))
-PY
-)}; \
+  WEB_CONC=${WEB_CONCURRENCY:-$(python -c "import multiprocessing as mp; print(max(2, min(8, (mp.cpu_count() or 2)*2)))")}; \
   exec gunicorn -k uvicorn.workers.UvicornWorker -w "${WEB_CONC}" -b 0.0.0.0:${PORT:-10000} "${APP_MODULE}" \
-    --timeout ${GUNICORN_TIMEOUT:-180} --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-45} --keep-alive ${GUNICORN_KEEPALIVE:-30}'
-
-
-
+    --timeout ${GUNICORN_TIMEOUT:-180} \
+    --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-45} \
+    --keep-alive ${GUNICORN_KEEPALIVE:-30} \
+    --max-requests ${GUNICORN_MAX_REQUESTS:-500} \
+    --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-50} \
+'
 
 
 
