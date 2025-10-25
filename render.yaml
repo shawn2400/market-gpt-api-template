@@ -45,7 +45,7 @@ services:
         value: /ultra
       - key: ULTRATOP_STATIC_DIR
         value: /app/static/ultra
-      # ודא שה־/ultra זמין לציבור (להלן נוסיף גם ב-SECURITY_PUBLIC_PREFIXES)
+      # ודא שה־/ultra זמין לציבור (נוסף גם ב-SECURITY_PUBLIC_PREFIXES למטה)
 
       - key: WEB_CONCURRENCY
         value: "1"
@@ -121,11 +121,9 @@ services:
       # ציבורי (כולל טעינה עצלה ל־/ui/snapshot)
       - key: SECURITY_PUBLIC_PATHS
         value: "/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/ops/approve/signed,/ops/reject/signed,/public/ticket/inspect,/public/pos-events/stream,/ops/manager/health,/ui/snapshot,/ui/snapshot/idle"
-      # ↑ חשוב: מסלולי /ops/approve/reject/signed צריכים להיות ציבוריים
-      #   אחרת שכבת השמירה לפי PREFIX תחסום אותם ותחייב Bearer, למרות שיש חתימה.
+      # ↑ מסלולי /ops/approve/reject/signed ציבוריים (מאומתים בחתימה)
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk,/ultra"
-      # ↑ מאפשר גישה ציבורית גם ל-UltraTop (לפי ULTRATOP_PREFIX=/ultra)
       # הגנה על /admin ועוד + ניהול ידני
       - key: SECURITY_PROTECTED_PATHS
         value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json,/admin,/manage-once,/manage-once/multi"
@@ -139,12 +137,13 @@ services:
       - key: ANTI_REPLAY_ENABLE
         value: "1"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
-        value: "1"         # ✅ הפעלת חתימה נגד Replay
-      # הערה: ANTI_REPLAY_SKEW_SEC אינו נצרך בקוד; יש שימוש ב-SIG_TS_SKEW_SEC.
+        value: "1"
+      - key: ANTI_REPLAY_SKEW_SEC
+        value: "120"       # משמש ב-anti_replay.py
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
       - key: SIG_TS_ENFORCE
-        value: "1"         # ✅ אכיפת אימות חותמת זמן
+        value: "1"
       - key: SIG_TS_SKEW_SEC
         value: "900"
 
@@ -178,7 +177,7 @@ services:
       - key: PUBLIC_SSE_MAX_CONNS
         value: "40"
       - key: PUBLIC_SSE_MAX_CONNS_PER_IP
-        value: "3"          # ✅ מתאים לתקרת ה־Adaptive (עד 3 פר IP)
+        value: "3"
       - key: PUBLIC_RL_NS
         value: "ops-supervisor-web:rl:prod"
 
@@ -221,7 +220,7 @@ services:
       - key: BINANCE_HTTP_TIMEOUT
         value: "10.0"
       - key: BINANCE_MAX_RETRIES
-        value: "2"          # ✅ ריטריים מתונים לשיפור עמידות רשת
+        value: "2"
       - key: BINANCE_RECV_WINDOW
         value: "45000"
       - key: LISTENKEY_KEEPALIVE_SEC
@@ -373,7 +372,7 @@ services:
       - key: AUTO_OPEN_ON_APPROVE
         value: "0"
       - key: ALLOW_MARKET_ENTRY
-        value: "1"          # ✅ “גם וגם”: לאפשר MARKET כשצריך (דיפולט HYBRID)
+        value: "1"
       - key: APPROVAL_REQUIRE_FRESH_PRICE
         value: "0"
       - key: CONFIRM_TTL_SEC
@@ -482,8 +481,8 @@ services:
 
       - key: NATIVE_TPSL_ENABLE
         value: "1"
-      - key: SL_MONOTIC
-        value: "1"
+      - key: SL_MONOTONIC
+        value: "1"   # ← תוקן המפתח (היה SL_MONOTIC)
 
       - key: STRUCT_SL_ENABLE
         value: "1"
@@ -1146,6 +1145,7 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
+
 
 
 
