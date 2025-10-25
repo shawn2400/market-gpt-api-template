@@ -45,7 +45,7 @@ from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter, Dep
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response as StarletteResponse
-from starlette.responses import StreamingResponse, FileResponse  # NEW: used to skip ETag for streaming/file
+from starlette.responses import StreamingResponse, FileResponse  # used to skip ETag for streaming/file
 
 # ==================== Logging ====================
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -320,6 +320,7 @@ async def _head_compat_and_soft_readyz(request: Request, call_next):
         resp = await call_next(new_req)
         return StarletteResponse(status_code=resp.status_code, headers=dict(resp.headers), media_type=resp.media_type)
     return await call_next(request)
+
 # ---------- CORS ----------
 CORS_ALLOW_ORIGINS = os.getenv("CORS_ALLOW_ORIGINS", "*")
 CORS_ALLOW_HEADERS = os.getenv("CORS_ALLOW_HEADERS", "*")
@@ -347,12 +348,6 @@ app.add_middleware(
 )
 
 # ==================== Env & helpers ====================
-def _port() -> int:
-    try:
-        return int(os.getenv("PORT", "10000") or "10000")
-    except Exception:
-        return 10000
-
 def get_internal_base() -> str:
     internal = (os.getenv("INTERNAL_BASE") or "").strip()
     if internal:
@@ -394,7 +389,6 @@ PUBLIC_TOPK_DIGEST_K = int(os.getenv("PUBLIC_TOPK_DIGEST_K", "5") or "5")
 PUBLIC_TOPK_DIGEST_MIN_SCORE = float(os.getenv("PUBLIC_TOPK_DIGEST_MIN_SCORE", "7.0") or 7.0)
 PUBLIC_TOPK_DIGEST_REQUIRE_SIDE = os.getenv("PUBLIC_TOPK_DIGEST_REQUIRE_SIDE", "1").lower() in ("1", "true", "yes", "on")
 PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS = os.getenv("PUBLIC_TOPK_DIGEST_INCLUDE_DETAILS", "0").lower() in ("1", "true", "yes", "on")
-
 OPS_TICKET_TTL_SEC = int(os.getenv("OPS_TICKET_TTL_SEC", "1800"))
 ETA_SMART_ENABLE = os.getenv("ETA_SMART_ENABLE", "1").lower() in ("1", "true", "yes", "on")
 ETA_VELOCITY_WINDOW = int(os.getenv("ETA_VELOCITY_WINDOW", "30"))
@@ -804,12 +798,17 @@ async def _security_headers(request: Request, call_next):
 
 # ==================== Helpers for guards & RL logs ====================
 def _client_ip(request: Request) -> str:
-    # Trust proxy headers only if explicitly enabled
+    # Trust proxy/XFF headers only if explicitly enabled.
+    # Prefer TRUST_XFF (per your ENV), but keep backward-compat with TRUST_PROXY.
+    try:
+        trust_xff = os.getenv("TRUST_XFF", "0").lower() in ("1", "true", "yes", "on")
+    except Exception:
+        trust_xff = False
     try:
         trust_proxy = os.getenv("TRUST_PROXY", "0").lower() in ("1", "true", "yes", "on")
     except Exception:
         trust_proxy = False
-    if trust_proxy:
+    if trust_xff or trust_proxy:
         xff = request.headers.get("X-Forwarded-For", "")
         if xff:
             return xff.split(",")[0].strip()
@@ -997,7 +996,7 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
     if os.getenv("TG_SILENT", "0").lower() in ("1", "true", "yes", "on"):
         return {"ok": True, "skipped": True, "reason": "silent_mode"}
 
-    if USE_REDIS_IDEM && IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
+    if USE_REDIS_IDEM and IDEM_TTL_SEC > 0 and (aioredis and REDIS_URL):
         try:
             r = await _get_redis_cached()
             if r:
@@ -1638,7 +1637,6 @@ def _html(msg: str) -> HTMLResponse:
         "<p style='color:#666'>אפשר לחזור חזרה לטלגרם.</p>"
         "</body>"
     )
-
 async def _load_ticket(ticket_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
     if aioredis and REDIS_URL:
         try:
@@ -2240,6 +2238,7 @@ async def _reject_core(ticket_id: str):
         )
     await _delete_ticket(ticket_id, source, final_status=False)
     return _html("⛔️ נדחה — הכרטיס הוסר.")
+
 # ==================== Indicator & profile helpers ====================
 PROFILE_AUTO_SELECT = os.getenv("PROFILE_AUTO_SELECT", "1").lower() in ("1", "true", "yes", "on")
 
@@ -2297,7 +2296,7 @@ def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -
         adx = adx_series[-1] if adx_series else 0.0
         return {"atr": float(atr), "adx": float(adx), "price": float(closes[-1])}
     except Exception:
-        return {"atr": 0.0, "adx": 0.0, "price": 0.0"}
+        return {"atr": 0.0, "adx": 0.0, "price": 0.0}
 
 async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, float], str]:
     try:
@@ -2339,6 +2338,17 @@ async def _on_startup():
         await _resolve_binance_endpoints()
     except Exception as e:
         logger.warning("resolve_binance_endpoints_failed: %s", e)
+    # Auto-load routes (eager/background) according to env
+    try:
+        if ROUTES_AUTOLOAD:
+            mode = (os.getenv("ROUTES_AUTOLOAD_MODE") or "eager").strip().lower()
+            if mode in ("eager", "now"):
+                _routes_autoload_now()
+            else:
+                # run in background so startup stays fast
+                asyncio.create_task(asyncio.to_thread(_routes_autoload_now))
+    except Exception as e:
+        logger.warning("routes_autoload_startup_failed: %s", e)
     with suppress(Exception):
         await _ensure_telegram_webhook()
 
@@ -2385,6 +2395,7 @@ def _port() -> int:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False, http="h11", ws="auto")
+
 
 
 
