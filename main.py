@@ -41,7 +41,7 @@ except Exception:
 # ----------------------------------------------------------------------------------------
 
 import httpx
-from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter, Depends
+from fastapi import FastAPI, Request, HTTPException, Body, Query, APIRouter, Depends, Response as FastAPIResponse
 from fastapi.responses import JSONResponse, PlainTextResponse, HTMLResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.responses import Response as StarletteResponse
@@ -211,6 +211,16 @@ app = FastAPI(
     redoc_url=REDOC_URL,
     openapi_url=OPENAPI_URL,
 )
+# ============================================================
+#  Universal OPTIONS handlers (solve CORS preflight for '/')
+# ============================================================
+@app.options("/")
+async def _options_root():
+    return Response(status_code=204)
+
+@app.options("/{rest_of_path:path}")
+async def _options_any(rest_of_path: str):
+    return Response(status_code=204)
 
 # ---- safe include of critical routers (even if autoload runs) ----
 def _safe_include(router_module_path: str):
@@ -392,6 +402,7 @@ app.add_middleware(
     allow_methods=[m.strip() for m in CORS_ALLOW_METHODS.split(",")] if CORS_ALLOW_METHODS else ["*"],
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
 )
+
 # ==================== Env & helpers ====================
 def get_internal_base() -> str:
     internal = (os.getenv("INTERNAL_BASE") or "").strip()
@@ -516,7 +527,6 @@ def _get_shared_async_client() -> httpx.AsyncClient:
         )
         app.state.shared_async_client = cli
         return cli
-
 async def _http_ready(base: str, *, path: str = "/fapi/v1/ping", timeout: float = 6.0) -> bool:
     try:
         cli = _get_shared_async_client()
@@ -840,7 +850,6 @@ async def _security_headers(request: Request, call_next):
     if os.getenv("ENABLE_HSTS", "0").lower() in ("1", "true", "yes", "on"):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
     return resp
-
 # ==================== Helpers for guards & RL logs ====================
 def _client_ip(request: Request) -> str:
     # Trust proxy/XFF headers only if explicitly enabled.
@@ -869,20 +878,50 @@ def _path_matches(path: str, exact: List[str], prefixes: List[str]) -> bool:
         return True
     return False
 
+# ============================================================
+#  Early auth guard (returns 401 BEFORE parameter validation)
+# ============================================================
+def _split_env_list(name: str, default: str = "") -> List[str]:
+    raw = os.getenv(name, default)
+    return [p.strip() for p in raw.split(",") if p.strip()]
+
+_PUBLIC_PATHS    = set(_split_env_list("SECURITY_PUBLIC_PATHS", ""))
+_PUBLIC_PREFIXES = _split_env_list("SECURITY_PUBLIC_PREFIXES", "/public,/price,/static,/risk,/ultra")
+_PROTECTED_PATHS = set(_split_env_list(
+    "SECURITY_PROTECTED_PATHS",
+    "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json,/admin,/manage-once,/manage-once/multi"
+))
+
+def _is_public(path: str) -> bool:
+    if path in _PUBLIC_PATHS:
+        return True
+    return any(path.startswith(pref) for pref in _PUBLIC_PREFIXES)
+
+def _is_protected(path: str) -> bool:
+    return (path in _PROTECTED_PATHS) or path.startswith("/ops") or path.startswith("/admin")
+
+@app.middleware("http")
+async def _early_protect(request: Request, call_next):
+    if request.method == "OPTIONS":
+        return Response(status_code=204)
+    path = request.url.path
+    if _is_public(path):
+        return await call_next(request)
+    if _is_protected(path):
+        try:
+            if "_require_bearer" in globals():
+                _require_bearer(request)
+            else:
+                auth = request.headers.get("authorization") or request.headers.get("Authorization")
+                if not (auth and auth.lower().startswith("bearer ")):
+                    return Response(status_code=401)
+        except Exception:
+            return Response(status_code=401)
+    return await call_next(request)
+
 # ==================== Path Protection (ENV-driven) ====================
 @app.middleware("http")
 async def _path_protection_guard(request: Request, call_next):
-    """
-    כיבוד ENV ל-public/protected:
-      - SECURITY_PUBLIC_PATHS: רשימת נתיבים מדויקים (/, /readyz, ...)
-      - SECURITY_PUBLIC_PREFIXES: רשימת פריפיקסים ציבוריים (/public, /static ...)
-      - SECURITY_PROTECTED_PATHS: רשימת נתיבים מוגנים במדויק
-      - ROUTES_PROTECTED_PREFIXES: רשימת פריפיקסים מוגנים (/ops, /admin ...)
-    כללים:
-      1. אם path ב-public (מדויק/פריפיקס) => מעבר חופשי.
-      2. אחרת אם path ב-protected (מדויק/פריפיקס) => דרוש Bearer.
-      3. אחרת => ברירת מחדל: אין שינוי (הראוטים עצמם יגנו אם צריך).
-    """
     try:
         path = request.url.path
         pub_exact = _env_list(os.getenv("SECURITY_PUBLIC_PATHS"))
@@ -890,11 +929,9 @@ async def _path_protection_guard(request: Request, call_next):
         prot_exact = _env_list(os.getenv("SECURITY_PROTECTED_PATHS"))
         prot_prefx = _env_list(os.getenv("ROUTES_PROTECTED_PREFIXES"))
 
-        # כלל public קודם (override)
         if _path_matches(path, pub_exact, pub_prefx):
             return await call_next(request)
 
-        # אם מוגן – דרוש Bearer
         if _path_matches(path, prot_exact, prot_prefx):
             try:
                 _require_bearer(request)
@@ -903,7 +940,6 @@ async def _path_protection_guard(request: Request, call_next):
                 raise
             return await call_next(request)
     except Exception as e:
-        # לא לחסום תנועה על תקלה בשכבת ההגנה – נמשיך כרגיל ונרשום אזהרה
         logger.warning("path_protection_guard_failed: %s", e)
     return await call_next(request)
 
@@ -923,7 +959,6 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
     except Exception as e:
         logger.debug("rate_limit_redis_fallback: %s", e)
 
-    # in-memory fallback
     bucket = getattr(app.state, "rl_mem", None)
     if bucket is None:
         bucket = {}
@@ -990,7 +1025,6 @@ async def _public_cache_etag(request: Request, call_next):
             return PlainTextResponse("", status_code=204)
         raise
     try:
-        # Skip ETag for streaming/file responses to avoid buffering/side-effects
         if isinstance(resp, (StreamingResponse, FileResponse)):
             return resp
         if int(getattr(resp, "status_code", 200)) >= 400:
@@ -1031,6 +1065,7 @@ async def _public_cache_etag(request: Request, call_next):
     except Exception:
         return resp
     return resp
+
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1214,6 +1249,7 @@ def _align_position_mode(client) -> None:
             client.futures_change_position_mode(dualSidePosition="true")
         elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
+
 # ==================== Order ID helper ====================
 try:
     from utils.order_ids import build_client_order_id  # type: ignore
@@ -1231,7 +1267,6 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
-
 # ==================== Execute trade helpers ====================
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
@@ -1457,9 +1492,9 @@ def _round_qty(q: float, dec: int) -> float:
         fmt = "{:0." + str(int(dec)) + "f}"
         return float(fmt.format(q))
     except Exception:
-        return float(f"{q:.3f}")
+        return float(f"{q:.3f}")  # fallback
 
-async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:  # noqa: C901
     symbol = (ticket.get("symbol") or "").upper()
     price = await get_last_price_async(symbol)
     if not price or float(price) <= 0:
@@ -1514,7 +1549,6 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket.pop("positionSide", None)
         new_ticket["position_side"] = ""
     return new_ticket
-
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
 
@@ -1681,6 +1715,7 @@ def _html(msg: str) -> HTMLResponse:
         "<p style='color:#666'>אפשר לחזור חזרה לטלגרם.</p>"
         "</body>"
     )
+
 async def _load_ticket(ticket_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
     if aioredis and REDIS_URL:
         try:
@@ -1747,7 +1782,6 @@ async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[boo
                 await r.delete(f"{NS}:ticket:{ticket_id}")
     with suppress(Exception):
         ConfirmStore.remove(ticket_id)
-
 @router.post("/ops/ticket")
 async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = None):
     symbol = (payload.get("symbol") or "").upper().strip()
@@ -2058,7 +2092,6 @@ async def approve_signed_post(request: Request, payload: Dict[str, Any] = Body(.
                 hdrs["Replay-Window"] = os.getenv("SIG_TS_SKEW_SEC", "900")
         except Exception:
             pass
-    # ... (rest identical)
         raise HTTPException(status_code=401, detail="Bad signature", headers=hdrs)
     await _enforce_nonce_once(request)
     _require_not_expired(payload.get("exp"))
@@ -2094,7 +2127,6 @@ async def reject_signed_post(request: Request, payload: Dict[str, Any] = Body(..
     if approved:
         raise HTTPException(status_code=422, detail="approve_true_on_reject_endpoint")
     return await _reject_core(ticket_id)
-
 # --- בטוח: עטיפת smart_manage_now (אם קיים) ---
 async def _smart_manage_now(symbol: str,
                             offset_bps: Optional[int] = None,
@@ -2448,6 +2480,7 @@ def _port() -> int:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False, http="h11", ws="auto")
+
 
 
 
