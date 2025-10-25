@@ -10,7 +10,7 @@ from utils.auth import require_api_key
 from utils.compat_shims import get_order  # ✔ fixed: import get_order from compat_shims
 from utils.binance_client import (
     cancel_order, get_open_orders,
-    place_stop_market_order, place_take_profit_market,
+    place_stop_market_order, place_take_profit_market,  # ✔ קיימים עכשיו ב-utils כעטיפות תאימות
 )
 
 # 🔔 אירועים (Redis + Telegram) – Fallback רך
@@ -42,7 +42,7 @@ def _detect_order_kind(order: Dict[str, Any]) -> str:
     ot = (order.get("type") or "").upper()
     if ot in ("STOP_MARKET", "TAKE_PROFIT_MARKET"):
         return ot
-    # חלק מהנהלים מחזירים גם type=STOP/TAKE_PROFIT (גרסאות ישנות) – נתמוך בזה
+    # תאימות לגרסאות ישנות
     if ot == "STOP":
         return "STOP_MARKET"
     if ot == "TAKE_PROFIT":
@@ -56,11 +56,7 @@ def _reverse_side(side: str) -> str:
 @router.post("/update-order")
 def update_order(req: UpdateOrderReq = Body(...)) -> Dict[str, Any]:
     """
-    עדכון TP/SL לפתיחה קיימת:
-    - נשלוף את ההזמנה.
-    - אם זה טריגר מסוג מתאים → נבטל וניצור מחדש עם ה-stopPrice החדש.
-    - אם זה לא טריגר מוכר, או PUT לא נתמך – מחזירים שגיאה מנומקת.
-    - אם מדובר ב-SL: לאחר הצלחה נשגר emit("sl_move", frm=..., to=...)
+    עדכון TP/SL לפתיחה קיימת: ביטול והזמנה מחדש עם stopPrice חדש.
     """
     if not (req.orderId or req.clientId):
         raise HTTPException(status_code=400, detail="must provide orderId or clientId")
@@ -75,21 +71,19 @@ def update_order(req: UpdateOrderReq = Body(...)) -> Dict[str, Any]:
 
     kind = _detect_order_kind(ord_)
     if kind not in ("STOP_MARKET", "TAKE_PROFIT_MARKET"):
-        # ננסה עדיין: יש מי שעושה TP/SL כ-LIMIT. במקרה כזה לא "משנים" – צריך לבטל ולפתוח חדש ידנית.
         raise HTTPException(status_code=400, detail=f"order type not modifiable as TP/SL (type={ord_.get('type')})")
 
     side = (ord_.get("side") or "").upper()
     qty  = ord_.get("origQty") or ord_.get("quantity") or ord_.get("cumQty") or None
     pos_side = ord_.get("positionSide")  # יכול להיות None במצב one-way
 
-    # נשמור מחיר ישן (לדיוח sl_move)
+    # מחיר ישן (לדיווח sl_move / tp_move)
     try:
         old_trigger = float(ord_.get("stopPrice") or ord_.get("price") or 0.0)
     except Exception:
         old_trigger = 0.0
 
     if qty is None:
-        # fallback: נשלוף openOrders ונמצא את הכמות שוב (במקרה של שדות שונים)
         try:
             oo = get_open_orders(sym)
             for o in oo:
@@ -115,62 +109,40 @@ def update_order(req: UpdateOrderReq = Body(...)) -> Dict[str, Any]:
 
     # 2) ביטול
     try:
-        cancel_order(sym, order_id=req.orderId, client_id=req.clientId)
+        cancel_order(sym, order_id=req.orderId or 0)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"cancel failed: {e}")
 
     # 3) יצירה מחדש עם מחיר חדש
     try:
         if req.type == "SL":
-            if kind != "STOP_MARKET":
-                # אם הלקוח סימן SL אבל ההזמנה הייתה TP – נכבד את הקלט וניצור STOP_MARKET
-                resp = place_stop_market_order(
-                    symbol=sym,
-                    side=side,                # צד הסגירה קיים כבר
-                    stop_price=float(req.new_price),
-                    quantity=qty_f,
-                    reduce_only=True,
-                    position_side=pos_side,
-                )
-            else:
-                resp = place_stop_market_order(
-                    symbol=sym,
-                    side=side,
-                    stop_price=float(req.new_price),
-                    quantity=qty_f,
-                    reduce_only=True,
-                    position_side=pos_side,
-                )
+            resp = place_stop_market_order(
+                symbol=sym,
+                side=side,
+                stop_price=float(req.new_price),
+                quantity=qty_f,
+                reduce_only=True,
+                position_side=pos_side,
+            )
         else:  # "TP"
-            if kind != "TAKE_PROFIT_MARKET":
-                resp = place_take_profit_market(
-                    symbol=sym,
-                    side=side,
-                    stop_price=float(req.new_price),
-                    quantity=qty_f,
-                    reduce_only=True,
-                    position_side=pos_side,
-                )
-            else:
-                resp = place_take_profit_market(
-                    symbol=sym,
-                    side=side,
-                    stop_price=float(req.new_price),
-                    quantity=qty_f,
-                    reduce_only=True,
-                    position_side=pos_side,
-                )
+            resp = place_take_profit_market(
+                symbol=sym,
+                side=side,
+                stop_price=float(req.new_price),
+                quantity=qty_f,
+                reduce_only=True,
+                position_side=pos_side,
+            )
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"re-place {req.type} failed: {e}")
 
-    # 🔔 emit sl_move/ tp_move (לבקשתך – חובה לפחות sl_move)
+    # 🔔 emit sl_move / tp_move
     try:
         loop = asyncio.get_event_loop()
         if req.type == "SL":
             if loop.is_running():
                 loop.create_task(emit(sym, "sl_move", frm=old_trigger or None, to=float(req.new_price)))
         else:
-            # אופציונלי: tp_move (לא נדרש אם לא תרצה)
             if loop.is_running():
                 loop.create_task(emit(sym, "tp_move", frm=old_trigger or None, to=float(req.new_price)))
     except Exception:
@@ -183,7 +155,8 @@ def update_order(req: UpdateOrderReq = Body(...)) -> Dict[str, Any]:
         "clientId_prev": req.clientId,
         "replaced": kind,
         "new_trigger": float(req.new_price),
-        "response": {k: resp.get(k) for k in ("orderId", "clientOrderId", "type", "side", "status", "stopPrice", "origQty")},
+        "response": {k: resp.get(k) for k in ("orderId", "clientOrderId", "type", "side", "status", "stopPrice", "origQty") if isinstance(resp, dict)},
     }
+
 
 
