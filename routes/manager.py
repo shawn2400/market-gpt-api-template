@@ -1,12 +1,12 @@
 # routes/manager.py
 from __future__ import annotations
-import os, json, time, hashlib, asyncio, logging, math
+import os, json, time, hashlib, asyncio, logging, math, re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 import httpx
-from fastapi import APIRouter, HTTPException, Header, Body
-from pydantic import BaseModel
+from fastapi import APIRouter, HTTPException, Header, Body, Request, Depends
+from pydantic import BaseModel, Field, ConfigDict
 
 # ===== Utilities / Optional modules (graceful fallbacks) =====
 try:
@@ -211,6 +211,163 @@ except Exception as e:
         @classmethod
         def flush_all(cls) -> None: return None
     ConfirmStore = _NoConfirm  # type: ignore
+
+# ===== Added: Risk integration & helpers =====
+LOG = logging.getLogger("algogpt.routes.manager")
+FAPI_HTTP = os.getenv("BINANCE_FAPI", "https://fapi.binance.com").rstrip("/")
+MANAGER_REQUIRE_RISK = os.getenv("MANAGER_REQUIRE_RISK", "1").lower() in ("1","true","yes","on")
+DEFAULT_VOL_REGIME = (os.getenv("RISK_VOL_REGIME") or "mid").strip().lower()  # low/mid/high
+AUTO_LEV_MIN = int(os.getenv("AUTO_LEV_MIN", "20") or 20)
+AUTO_LEV_MAX = int(os.getenv("AUTO_LEV_MAX", "35") or 35)
+AUTO_BUDGET_MIN = float(os.getenv("AUTO_BUDGET_MIN", "100") or 100.0)
+AUTO_BUDGET_MAX = float(os.getenv("AUTO_BUDGET_MAX", "200") or 200.0)
+
+# Risk Rules (soft import; used extensively)
+try:
+    from utils.risk_rules import gate_trade  # type: ignore
+except Exception:
+    gate_trade = None  # type: ignore
+
+def _allow_by_bearer_or_apikey(request: Request) -> None:
+    api_bearer = (os.getenv("API_BEARER_TOKEN") or os.getenv("API_TOKEN") or "").strip()
+    if not api_bearer:
+        return
+    auth = (request.headers.get("authorization") or request.headers.get("Authorization") or "").strip()
+    if auth.startswith("Bearer ") and auth.split(" ", 1)[1].strip() == api_bearer:
+        return
+    x_api_key = (request.headers.get("x-api-key") or request.headers.get("X-API-Key") or "").strip()
+    if x_api_key and x_api_key in [(os.getenv("PRIMARY_API_TOKEN") or "").strip(),
+                                   (os.getenv("API_TOKEN") or "").strip(),
+                                   (os.getenv("API_BEARER_TOKEN") or "").strip()]:
+        return
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+_HTTP_TIMEOUT = httpx.Timeout(10.0)
+_HTTP_LIMITS = httpx.Limits(max_connections=int(os.getenv("HTTP_MAX_CONNECTIONS","200")),
+                            max_keepalive_connections=int(os.getenv("HTTP_MAX_KEEPALIVE","50")))
+
+def _http() -> httpx.AsyncClient:
+    return httpx.AsyncClient(timeout=_HTTP_TIMEOUT, limits=_HTTP_LIMITS,
+                             headers={"User-Agent": f"algogpt/manager"})
+
+async def _get_mark_price(symbol: str) -> Optional[float]:
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        return None
+    url = f"{FAPI_HTTP}/fapi/v1/premiumIndex"
+    try:
+        async with _http() as cli:
+            r = await cli.get(url, params={"symbol": sym})
+            r.raise_for_status()
+            j = r.json()
+            mp = float(j.get("markPrice"))
+            return mp if mp > 0 else None
+    except Exception as e:
+        LOG.debug("[manager] mark price fetch failed: %s", e)
+        return None
+
+def _pick_vol_regime(spec: Optional[str]) -> str:
+    s = (spec or DEFAULT_VOL_REGIME or "mid").lower()
+    if s.startswith("low"):
+        return "low"
+    if s.startswith("high"):
+        return "high"
+    return "mid"
+
+class ValidateRequest(BaseModel):
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
+    symbol: str = Field(..., description="e.g. BTCUSDT")
+    side: str = Field(..., description="BUY/SELL או LONG/SHORT")
+    entry: Optional[float] = Field(None, description="מחיר כניסה (אם Market אפשר להשאיר ריק)")
+    sl: Optional[float] = Field(None, description="Stop Loss (נדרש ל-RR)")
+    tp1: Optional[float] = Field(None, description="Take Profit 1 (נדרש ל-RR)")
+    leverage: Optional[int] = Field(None, description="מינוף לשיקולי תקרה/אזהרה")
+    vol_regime: Optional[str] = Field(None, description="low/mid/high (ברירת מחדל מה-ENV)")
+    success_pct: Optional[float] = Field(None, description="אופציונלי – הסתברות הצלחה לחיווי אזהרה")
+    use_market_as_entry: bool = Field(default=True)
+
+class IngestRequest(ValidateRequest):
+    qty: Optional[float] = Field(None)
+    budget: Optional[float] = Field(None)
+    leverage_min: Optional[int] = Field(None, description="ברירת־מחדל AUTO_LEV_MIN")
+    leverage_max: Optional[int] = Field(None, description="ברירת־מחדל AUTO_LEV_MAX")
+    budget_min: Optional[float] = Field(None, description="ברירת־מחדל AUTO_BUDGET_MIN")
+    budget_max: Optional[float] = Field(None, description="ברירת־מחדל AUTO_BUDGET_MAX")
+    tp2: Optional[float] = None
+    tp3: Optional[float] = None
+    tp_splits: Optional[List[float]] = None
+    position_side: Optional[str] = Field(None, description="LONG/SHORT/BOTH")
+    note: Optional[str] = None
+    require_approval: Optional[bool] = Field(default=True)
+    expiry_ts: Optional[int] = Field(None, description="תפוגה יוניקס לכרטיס (אופציונלי)")
+    prob_overall_pct: Optional[float] = None
+    prob_tp1_pct: Optional[float] = None
+    prob_tp2_pct: Optional[float] = None
+    prob_tp3_pct: Optional[float] = None
+
+class ValidateResponse(BaseModel):
+    ok: bool
+    price_used: Optional[float] = None
+    vol_regime: str
+    risk: Dict[str, Any]
+    normalized: Dict[str, Any]
+
+async def _risk_validate(payload: ValidateRequest) -> ValidateResponse:
+    if not callable(gate_trade) and MANAGER_REQUIRE_RISK:
+        raise HTTPException(status_code=503, detail="risk_rules_unavailable")
+
+    symbol = payload.symbol.upper().strip()
+    side = payload.side.upper().strip()
+    if side not in ("BUY","SELL","LONG","SHORT"):
+        raise HTTPException(status_code=422, detail="side must be BUY/SELL/LONG/SHORT")
+
+    price_now: Optional[float] = None
+    if payload.use_market_as_entry or payload.entry in (None, 0, "0", "0.0"):
+        price_now = await _get_mark_price(symbol)
+        if price_now is None and MANAGER_REQUIRE_RISK:
+            raise HTTPException(status_code=502, detail="mark_price_unavailable")
+
+    entry_for_rr = payload.entry
+    if (entry_for_rr in (None, 0, "0", "0.0")) and price_now:
+        entry_for_rr = price_now
+
+    vol_regime = _pick_vol_regime(payload.vol_regime)
+
+    risk_res: Dict[str, Any] = {"ok": True, "errors": [], "warnings": [], "metrics": {}}
+    if callable(gate_trade):
+        try:
+            risk_res = gate_trade(
+                symbol=symbol,
+                side=side,
+                price=price_now,
+                entry=entry_for_rr,
+                sl=payload.sl,
+                tp1=payload.tp1,
+                vol_regime=vol_regime,
+                success_pct=payload.success_pct,
+                leverage=payload.leverage,
+                min_rr_override=None,
+            )
+        except Exception as e:
+            LOG.warning("[manager] gate_trade failed (permissive): %s", e)
+            if MANAGER_REQUIRE_RISK:
+                raise HTTPException(status_code=500, detail="risk_rules_error")
+
+    norm = {
+        "symbol": symbol,
+        "side": side,
+        "entry": entry_for_rr,
+        "sl": payload.sl,
+        "tp1": payload.tp1,
+        "leverage": payload.leverage,
+    }
+    return ValidateResponse(
+        ok=bool(risk_res.get("ok", True)),
+        price_used=price_now,
+        vol_regime=vol_regime,
+        risk=risk_res,
+        normalized=norm,
+    )
 
 # ===== Runtime state =====
 TICK_COUNT: int = 0
@@ -449,8 +606,89 @@ async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
         await _notify_telegram_approval_from_obj(obj, ticket_id=tid_fb)
     return tid_fb
 
-# ---------- Public endpoints ----------
+# ---------- Public endpoints (new risk-aware endpoints) ----------
+@router.get("/manager/status")
+async def manager_status():
+    try:
+        return {
+            "ok": True,
+            "http": True,
+            "risk_rules": bool(callable(gate_trade)),
+            "fapi": FAPI_HTTP,
+            "defaults": {
+                "vol_regime": DEFAULT_VOL_REGIME,
+                "auto_lev": [AUTO_LEV_MIN, AUTO_LEV_MAX],
+                "auto_budget": [AUTO_BUDGET_MIN, AUTO_BUDGET_MAX],
+            },
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
+@router.post("/manager/validate-plan", response_model=ValidateResponse)
+async def validate_plan(req: ValidateRequest, request: Request):
+    _allow_by_bearer_or_apikey(request)
+    return await _risk_validate(req)
+
+@router.post("/manager/ingest-alert")
+async def ingest_alert(req: IngestRequest, request: Request):
+    """
+    מקבל התראה, מבצע Risk Gate, ואם עבר—פותח כרטיס אישור דרך /ops/ticket.
+    """
+    _allow_by_bearer_or_apikey(request)
+    vr = await _risk_validate(req)
+    if not vr.ok and MANAGER_REQUIRE_RISK:
+        return {"ok": False, "blocked": True, "reason": "risk_rules", "risk": vr.risk}
+
+    base = (os.getenv("PUBLIC_HOST") or "").rstrip("/")
+    if not base:
+        port = int(os.getenv("PORT", "10000") or 10000)
+        base = f"http://127.0.0.1:{port}"
+    url = f"{base}/ops/ticket"
+
+    body = {
+        "symbol": vr.normalized["symbol"],
+        "side": vr.normalized["side"],
+        "qty": req.qty,
+        "leverage": req.leverage,
+        "position_side": (req.position_side or ("LONG" if vr.normalized["side"] in ("BUY","LONG") else "SHORT")),
+        "budget": req.budget,
+        "note": req.note or "",
+        "tp1": req.tp1, "tp2": req.tp2, "tp3": req.tp3,
+        "sl": req.sl,
+        "tp_splits": req.tp_splits,
+        "leverage_min": req.leverage_min or AUTO_LEV_MIN,
+        "leverage_max": req.leverage_max or AUTO_LEV_MAX,
+        "budget_min": req.budget_min or AUTO_BUDGET_MIN,
+        "budget_max": req.budget_max or AUTO_BUDGET_MAX,
+        "prob_overall_pct": req.prob_overall_pct,
+        "prob_tp1_pct": req.prob_tp1_pct,
+        "prob_tp2_pct": req.prob_tp2_pct,
+        "prob_tp3_pct": req.prob_tp3_pct,
+        "expiry_ts": req.expiry_ts,
+        "require_approval": True if req.require_approval is None else bool(req.require_approval),
+    }
+
+    headers: Dict[str,str] = {}
+    for key in ("API_BEARER_TOKEN","API_TOKEN","PRIMARY_API_TOKEN","ALGOGPT_API_TOKEN"):
+        tok = (os.getenv(key) or "").strip()
+        if tok:
+            if key == "API_BEARER_TOKEN":
+                headers["Authorization"] = f"Bearer {tok}"
+            else:
+                headers["X-API-Key"] = tok
+
+    async with _http() as cli:
+        try:
+            r = await cli.post(url, json=body, headers=headers)
+            j = r.json() if "application/json" in r.headers.get("content-type","") else {"ok": False, "raw": r.text}
+            if r.status_code >= 400:
+                return {"ok": False, "status": r.status_code, "error": j}
+            return {"ok": True, "risk": vr.risk, "ticket": j}
+        except Exception as e:
+            LOG.exception("[manager] ingest-alert failed: %s", e)
+            raise HTTPException(status_code=502, detail="ops_ticket_unavailable")
+
+# ---------- Existing Public endpoints ----------
 class TradeOpenRequest(BaseModel):
     symbol: str
     side: str  # BUY | SELL
@@ -513,7 +751,7 @@ async def ops_manager_health():
         "native_tpsl_enable": NATIVE_TPSL_ENABLE,
         "order_trigger": ORDER_TRIGGER,
         "auto_flip_enable": AUTO_FLIP_ENABLE,
-        "ws_autoflip": bool(USE_WS and AUTO_FLIP_ENABLE),
+        "ws_autoflip": bool(USE_WS and _WS_TASK and not _WS_TASK.done()),
         "rt_manage": bool(TRAIL_RT_ENABLE),
     }
 
@@ -1222,7 +1460,7 @@ async def _maybe_eval_and_flip(symbol: str) -> None:
     if not _should_eval(symbol, price, now_ts):
         return
     try:
-        reg = await eval_regime(symbol=symbol, long_req=LONG_REQ, short_req=_SHORT_REQ, neutral_req=NEUTRAL_REQ, timeframe=DEFAULT_TF)  # type: ignore
+        reg = await eval_regime(symbol=symbol, long_req=LONG_REQ, short_req=SHORT_REQ, neutral_req=NEUTRAL_REQ, timeframe=DEFAULT_TF)  # type: ignore
     except Exception as e:
         logger.debug("eval_regime (ws) failed for %s: %s", symbol, e)
         return
@@ -1372,7 +1610,6 @@ def main() -> None:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
-
 
 
 
