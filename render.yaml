@@ -134,13 +134,13 @@ services:
       - key: ANTI_REPLAY_ENABLE
         value: "1"
       - key: ANTI_REPLAY_REQUIRE_SIGNATURE
-        value: "0"         # ❗ ביטול חתימה
+        value: "1"         # ✅ הפעלת חתימה נגד Replay
       - key: ANTI_REPLAY_SKEW_SEC
         value: "60"
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
       - key: SIG_TS_ENFORCE
-        value: "0"         # ❗ ביטול אימות חותמת זמן
+        value: "1"         # ✅ אכיפת אימות חותמת זמן
       - key: SIG_TS_SKEW_SEC
         value: "900"
 
@@ -174,7 +174,7 @@ services:
       - key: PUBLIC_SSE_MAX_CONNS
         value: "40"
       - key: PUBLIC_SSE_MAX_CONNS_PER_IP
-        value: "2"
+        value: "3"          # ✅ מתאים לתקרת ה־Adaptive (עד 3 פר IP)
       - key: PUBLIC_RL_NS
         value: "ops-supervisor-web:rl:prod"
 
@@ -217,7 +217,7 @@ services:
       - key: BINANCE_HTTP_TIMEOUT
         value: "10.0"
       - key: BINANCE_MAX_RETRIES
-        value: "0"
+        value: "2"          # ✅ ריטריים מתונים לשיפור עמידות רשת
       - key: BINANCE_RECV_WINDOW
         value: "45000"
       - key: LISTENKEY_KEEPALIVE_SEC
@@ -369,7 +369,7 @@ services:
       - key: AUTO_OPEN_ON_APPROVE
         value: "0"
       - key: ALLOW_MARKET_ENTRY
-        value: "0"
+        value: "1"          # ✅ “גם וגם”: לאפשר MARKET כשצריך (דיפולט HYBRID)
       - key: APPROVAL_REQUIRE_FRESH_PRICE
         value: "0"
       - key: CONFIRM_TTL_SEC
@@ -1144,7 +1144,6 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
-
 
 
 
