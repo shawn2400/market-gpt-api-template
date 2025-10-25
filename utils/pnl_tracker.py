@@ -8,7 +8,10 @@ from fpdf import FPDF
 PNL_FILE = "pnl_tracker.json"
 PDF_OUTPUT_PATH = "static/reports/pnl_report.pdf"
 
-DAILY_HARD_LOSS_USD = float(os.getenv("DAILY_HARD_LOSS_USD", "-150"))
+# תמיכה בשני שמות ENV לצורך תאימות:
+# DAILY_LOSS_CAP_USDT (כמו ב-render.yaml) או DAILY_HARD_LOSS_USD (ישן)
+_DAILY_CAP_ENV = os.getenv("DAILY_LOSS_CAP_USDT") or os.getenv("DAILY_HARD_LOSS_USD") or "-150"
+DAILY_HARD_LOSS_USD = float(_DAILY_CAP_ENV)
 
 def _atomic_write_json(path: str, data: Any) -> None:
     d = os.path.dirname(path) or "."
@@ -116,6 +119,7 @@ def generate_pnl_pdf(limit_days: Optional[int] = None) -> Optional[str]:
     except Exception as e:
         print(f"[pnl_tracker] ❌ Error PDF: {e}")
         return None
+
 
 
 
