@@ -61,7 +61,7 @@ class Settings:
     AUTH_QUERY_KEYS: List[str] = field(default_factory=lambda: ["api_key", "apikey", "token", "key", "auth"])
     AUTH_BEARER_PREFIXES: List[str] = field(default_factory=lambda: ["Bearer", "Token", "JWT"])
     AUTH_PUBLIC_PATHS: Set[str] = field(default_factory=lambda: {
-        "/", "/ping", "/status", "/healthz", "/docs", "/redoc", "/openapi.json",
+        "/", "/ping", "/status", "/healthz", "/readyz", "/docs", "/redoc", "/openapi.json",
     })
 
     ALLOW_MARKET_ENTRY: bool = _env_bool("ALLOW_MARKET_ENTRY", True)
@@ -256,6 +256,9 @@ def dump_config_sanitized() -> Dict[str, object]:
         "ENV": os.getenv("ENV", ""),
     }
     data.update(extras)
+    # שדרוג קטן: אם BINANCE_FAPI קיים – להראותו (לא סודי)
+    if os.getenv("BINANCE_FAPI"):
+        data["BINANCE_FAPI"] = os.getenv("BINANCE_FAPI")
 
     def _mask(val: str) -> str:
         if not val:
