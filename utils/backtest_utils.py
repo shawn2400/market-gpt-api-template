@@ -3,9 +3,7 @@ from __future__ import annotations
 import pandas as pd
 from typing import Dict, Any, Optional
 
-
 from utils.indicators import prepare_indicators_for_backtest
-
 
 def _calc_stress(trades: list[Dict[str, Any]], initial_balance: float, final_balance: float) -> Dict[str, Any]:
     if not trades:
@@ -34,7 +32,6 @@ def _calc_stress(trades: list[Dict[str, Any]], initial_balance: float, final_bal
         "max_win_pct": round(max_win, 2),
         "risk_reward_ratio": round(rr, 2) if rr else None,
     }
-
 
 def run_backtest(
     df: pd.DataFrame,
@@ -119,7 +116,6 @@ def run_backtest(
         "n_trades": len(trades),
         "stress": stress,
     }
-
 
 
 
