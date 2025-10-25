@@ -625,7 +625,6 @@ def _verify_http_signature(request: Request, body: bytes, *, route_path: str) ->
         except Exception:
             return False, "timestamp_bad_format"
     return True, "ok"
-
 def _require_not_expired(exp_val: Optional[Union[int, str]]) -> None:
     if exp_val in (None, "", 0, "0", "0.0"):
         return
@@ -1108,7 +1107,6 @@ async def _fetch_klines_http(symbol: str, interval: str = "15m", limit: int = 12
     except Exception:
         pass
     return []
-
 # ==================== Misc helpers ====================
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
 def _parse_mode(note: Optional[str]) -> Optional[str]:
@@ -1438,7 +1436,6 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket.pop("positionSide", None)
         new_ticket["position_side"] = ""
     return new_ticket
-
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
 
@@ -2187,7 +2184,6 @@ async def _reject_core(ticket_id: str):
         )
     await _delete_ticket(ticket_id, source, final_status=False)
     return _html("⛔️ נדחה — הכרטיס הוסר.")
-
 # ==================== Indicator & profile helpers ====================
 PROFILE_AUTO_SELECT = os.getenv("PROFILE_AUTO_SELECT", "1").lower() in ("1", "true", "yes", "on")
 
@@ -2471,6 +2467,7 @@ if __name__ == "__main__":
         port = _port()
     reload = os.getenv("RELOAD", "0").lower() in ("1", "true", "yes", "on")
     uvicorn.run("main:app", host=host, port=port, reload=reload, log_level=LOG_LEVEL.lower())
+
 
 
 
