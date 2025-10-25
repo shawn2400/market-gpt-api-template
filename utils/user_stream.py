@@ -7,8 +7,7 @@ import httpx, websockets
 
 from utils import config as cfg
 from utils.http_client import safe_get
-from utils.binance_client import place_stop_market
-from utils.precision_utils import apply_price_tick_side
+from utils.binance_client import place_stop_market, apply_price_tick_side
 
 logger = logging.getLogger("algogpt.userstream")
 
@@ -306,4 +305,5 @@ async def stop_user_stream_consumer():
         pass
     _keepalive_task = None
     logger.info({"event": "user_stream_stopped"})
+
 
