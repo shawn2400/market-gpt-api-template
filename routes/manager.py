@@ -97,7 +97,7 @@ except Exception:
 
 # ===== Prometheus (soft dep) =====
 try:
-    from prometheus_client import Counter, Summary
+    from prometheus_client import Counter, Summary  # type: ignore
 except Exception:
     class _Noop:
         def labels(self, *_, **__): return self
@@ -274,6 +274,7 @@ def _pick_vol_regime(spec: Optional[str]) -> str:
         return "high"
     return "mid"
 
+# ===== Schemas =====
 class ValidateRequest(BaseModel):
     model_config = ConfigDict(extra="ignore", populate_by_name=True)
     symbol: str = Field(..., description="e.g. BTCUSDT")
@@ -312,6 +313,7 @@ class ValidateResponse(BaseModel):
     risk: Dict[str, Any]
     normalized: Dict[str, Any]
 
+# ===== Risk validate =====
 async def _risk_validate(payload: ValidateRequest) -> ValidateResponse:
     if not callable(gate_trade) and MANAGER_REQUIRE_RISK:
         raise HTTPException(status_code=503, detail="risk_rules_unavailable")
@@ -503,6 +505,7 @@ def _build_ingest_payload(obj: Dict[str, Any]) -> Dict[str, Any]:
         "entry_score": float(es["score"]),
         "entry_score_min": float(es["min_req"]),
     }
+    # copy optional fields if present:
     for k in ["prob_overall_pct","prob_tp1_pct","prob_tp2_pct","prob_tp3_pct",
               "eta_open_min","eta_tp1_min","eta_tp2_min","eta_tp3_min","expiry_ts","tp_splits","position_side","note",
               "entry_price","price","approve_url","reject_url","ticket_url","budget_usd","ttl_sec"]:
@@ -606,7 +609,7 @@ async def _dispatch_signal(obj: Dict[str, Any]) -> Optional[str]:
         await _notify_telegram_approval_from_obj(obj, ticket_id=tid_fb)
     return tid_fb
 
-# ---------- Public endpoints (new risk-aware endpoints) ----------
+# ---------- Public endpoints (risk-aware) ----------
 @router.get("/manager/status")
 async def manager_status():
     try:
@@ -624,41 +627,10 @@ async def manager_status():
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-class ValidateRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
-    symbol: str = Field(..., description="e.g. BTCUSDT")
-    side: str = Field(..., description="BUY/SELL או LONG/SHORT")
-    entry: Optional[float] = Field(None, description="מחיר כניסה (אם Market אפשר להשאיר ריק)")
-    sl: Optional[float] = Field(None, description="Stop Loss (נדרש ל-RR)")
-    tp1: Optional[float] = Field(None, description="Take Profit 1 (נדרש ל-RR)")
-    leverage: Optional[int] = Field(None, description="מינוף לשיקולי תקרה/אזהרה")
-    vol_regime: Optional[str] = Field(None, description="low/mid/high (ברירת מחדל מה-ENV)")
-    success_pct: Optional[float] = Field(None, description="אופציונלי – הסתברות הצלחה לחיווי אזהרה")
-    use_market_as_entry: bool = Field(default=True)
-
 @router.post("/manager/validate-plan", response_model=ValidateResponse)
 async def validate_plan(req: ValidateRequest, request: Request):
     _allow_by_bearer_or_apikey(request)
     return await _risk_validate(req)
-
-class IngestRequest(ValidateRequest):
-    qty: Optional[float] = Field(None)
-    budget: Optional[float] = Field(None)
-    leverage_min: Optional[int] = Field(None, description="ברירת־מחדל AUTO_LEV_MIN")
-    leverage_max: Optional[int] = Field(None, description="ברירת־מחדל AUTO_LEV_MAX")
-    budget_min: Optional[float] = Field(None, description="ברירת־מחדל AUTO_BUDGET_MIN")
-    budget_max: Optional[float] = Field(None, description="ברירת־מחדל AUTO_BUDGET_MAX")
-    tp2: Optional[float] = None
-    tp3: Optional[float] = None
-    tp_splits: Optional[List[float]] = None
-    position_side: Optional[str] = None
-    note: Optional[str] = None
-    require_approval: Optional[bool] = Field(default=True)
-    expiry_ts: Optional[int] = None
-    prob_overall_pct: Optional[float] = None
-    prob_tp1_pct: Optional[float] = None
-    prob_tp2_pct: Optional[float] = None
-    prob_tp3_pct: Optional[float] = None
 
 @router.post("/manager/ingest-alert")
 async def ingest_alert(req: IngestRequest, request: Request):
@@ -1005,7 +977,7 @@ async def manage_once_route(
         except Exception as e:
             return {"ok": False, "error": f"place_be_failed: {e}"}
 
-    # 5) Trail by offset_bps (after BE) — corrected formula
+    # 5) Trail by offset_bps (after BE)
     be_done = current_sl_px is not None and ((current_sl_px - be_price) * sign) >= -1e-12
     if be_done:
         # BUY: mark*(1 - bps/10000); SELL: mark*(1 + bps/10000)
@@ -1049,6 +1021,7 @@ async def manage_once_route(
         **({"tp": tp_info} if tp_info else {}),
     }
 
+# ===== Native TP/SL rewrite =====
 class SymbolReq(BaseModel):
     symbol: str
 
@@ -1641,6 +1614,7 @@ def main() -> None:
         loop.run_forever()
     except KeyboardInterrupt:
         pass
+
 
 
 
