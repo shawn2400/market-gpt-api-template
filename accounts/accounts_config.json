@@ -1,14 +1,14 @@
 [
   {
     "id": "main",
-    "api_key": "PUT_YOUR_BINANCE_API_KEY",
-    "api_secret": "PUT_YOUR_BINANCE_API_SECRET",
+    "api_key": "",
+    "api_secret": "",
     "market": "futures"
   },
   {
     "id": "spot1",
-    "api_key": "PUT_YOUR_BINANCE_SPOT_KEY",
-    "api_secret": "PUT_YOUR_BINANCE_SPOT_SECRET",
+    "api_key": "",
+    "api_secret": "",
     "market": "spot"
   }
 ]
