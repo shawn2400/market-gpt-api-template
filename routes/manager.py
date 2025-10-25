@@ -254,7 +254,7 @@ async def _get_mark_price(symbol: str) -> Optional[float]:
     sym = (symbol or "").upper().strip()
     if not sym:
         return None
-    url = f"{FAPI_HTTP}/fapi/v1/premiumIndex"
+    url = f"{FAPI_HTTP}/fapi/v1/premiumIndex"}
     try:
         async with _http() as cli:
             r = await cli.get(url, params={"symbol": sym})
@@ -1608,6 +1608,7 @@ async def startup():
             logger.error("ws_autoflip start failed: %s", e)
             try: POS_LIVE_ERRORS.labels("ALL", "ws_start").inc()
             except Exception: pass
+
 
 
 
