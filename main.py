@@ -145,6 +145,13 @@ _inline_env_defaults: Dict[str, str] = {
 for _k, _v in _inline_env_defaults.items():
     os.environ.setdefault(_k, _v)
 
+# Align nonce TTL with timestamp skew if not explicitly set
+if "ANTI_REPLAY_NONCE_TTL_SEC" not in os.environ:
+    try:
+        os.environ["ANTI_REPLAY_NONCE_TTL_SEC"] = os.getenv("SIG_TS_SKEW_SEC", "900")
+    except Exception:
+        os.environ["ANTI_REPLAY_NONCE_TTL_SEC"] = "900"
+
 # ========= Notification policy =========
 ONLY_TRADE_NOTIFICATIONS = os.getenv("ONLY_TRADE_NOTIFICATIONS", "1").lower() in ("1", "true", "yes", "on")
 STARTUP_NOTIFY_ENABLE = os.getenv("STARTUP_NOTIFY_ENABLE", "0").lower() in ("1", "true", "yes", "on")
@@ -221,7 +228,6 @@ async def _options_root():
 @app.options("/{rest_of_path:path}")
 async def _options_any(rest_of_path: str):
     return Response(status_code=204)
-
 # ---- safe include of critical routers (even if autoload runs) ----
 def _safe_include(router_module_path: str):
     import importlib, logging
@@ -402,7 +408,6 @@ app.add_middleware(
     allow_methods=[m.strip() for m in CORS_ALLOW_METHODS.split(",")] if CORS_ALLOW_METHODS else ["*"],
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
 )
-
 # ==================== Env & helpers ====================
 def get_internal_base() -> str:
     internal = (os.getenv("INTERNAL_BASE") or "").strip()
@@ -527,6 +532,7 @@ def _get_shared_async_client() -> httpx.AsyncClient:
         )
         app.state.shared_async_client = cli
         return cli
+
 async def _http_ready(base: str, *, path: str = "/fapi/v1/ping", timeout: float = 6.0) -> bool:
     try:
         cli = _get_shared_async_client()
@@ -564,7 +570,6 @@ def _spot_http() -> str:
 
 def _fut_ws() -> str:
     return getattr(app.state, "BINANCE_FUTURES_WS_BASE", os.getenv("BINANCE_FUTURES_WS_BASE", "wss://fstream.binance.com/ws")).rstrip("/")
-
 # ==================== Security helpers ====================
 def _get_hmac_key_bytes() -> Optional[bytes]:
     cand = (
@@ -630,7 +635,7 @@ def _verify_http_signature(request: Request, body: bytes, *, route_path: str) ->
     hdrs_lower = {k.lower(): v for k, v in request.headers.items()}
 
     # Hardened: require essential headers in the signature list
-    required_base = {"(request-target)"}
+    required_base = {"(request-target)", "host", "content-type", "x-request-nonce"}
     require_ts = os.getenv("SIG_TS_ENFORCE", "0").lower() in ("1", "true", "yes", "on")
     if require_ts:
         required_base.add("x-request-timestamp")
@@ -645,6 +650,16 @@ def _verify_http_signature(request: Request, body: bytes, *, route_path: str) ->
         if hname != "(request-target)" and hname not in hdrs_lower:
             return False, f"header_missing:{hname}"
 
+    # Basic nonce strength & presence checks
+    nonce_val = (hdrs_lower.get("x-request-nonce") or "").strip()
+    if not nonce_val:
+        return False, "nonce_missing"
+    if len(nonce_val) < 16:
+        return False, "nonce_too_short"
+    # Content-Type presence enforced above; ensure non-empty value
+    if not (hdrs_lower.get("content-type") or "").strip():
+        return False, "content_type_missing"
+
     # Digest / x-content-sha256
     if "digest" in hdrs_lower:
         try:
@@ -652,15 +667,15 @@ def _verify_http_signature(request: Request, body: bytes, *, route_path: str) ->
             if scheme.strip().lower() != "sha-256":
                 return False, "unsupported_digest_scheme"
             want = b64v.strip()
-            got = _sha256_b64(body)
-            if want != got:
+            got_d = _sha256_b64(body)
+            if want != got_d:
                 return False, "bad_digest"
         except Exception:
             return False, "bad_digest_format"
     elif "x-content-sha256" in hdrs_lower:
         want = hdrs_lower["x-content-sha256"].strip()
-        got = _sha256_b64(body)
-        if want != got:
+        got_d = _sha256_b64(body)
+        if want != got_d:
             return False, "bad_x_content_sha256"
 
     method = request.method
@@ -739,6 +754,14 @@ async def _enforce_nonce_once(request: Request) -> None:
     if bucket is None:
         bucket = {}
         app.state._nonce_mem = bucket
+    # bound memory to avoid unbounded growth
+    try:
+        if len(bucket) > 5000:
+            # drop ~10% oldest keys (best-effort)
+            for k, _ts in list(bucket.items())[:500]:
+                bucket.pop(k, None)
+    except Exception:
+        pass
     now = time.time()
     for k, ts in list(bucket.items()):
         if now - float(ts) > ttl:
@@ -767,7 +790,9 @@ def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600,
         sep = "&" if "?" in route else "?"
         return f"{base}{route}{sep}ticket_id={ticket_id}"
     exp = int(time.time()) + int(ttl_sec)
-    to_sign = f"{path}|{ticket_id}|{exp}|{NS}".encode("utf-8")
+    # Bind signature to audience (PUBLIC_HOST) to prevent cross-host replay
+    aud = (PUBLIC_HOST or "").rstrip("/")
+    to_sign = f"{aud}|{path}|{ticket_id}|{exp}|{NS}".encode("utf-8")
     sig = _sign_hex(HMAC_SECRET, to_sign)
     sep = "&" if "?" in path else "?"
     return f"{base}{path}{sep}ticket_id={ticket_id}&exp={exp}&sig={sig}"
@@ -781,7 +806,8 @@ def _verify_signed_params(ticket_id: str, exp: str, sig: str, path: str) -> bool
             return False
     except Exception:
         return False
-    expected = _sign_hex(HMAC_SECRET, f"{path}|{ticket_id}|{exp}|{NS}".encode("utf-8"))
+    aud = (PUBLIC_HOST or "").rstrip("/")
+    expected = _sign_hex(HMAC_SECRET, f"{aud}|{path}|{ticket_id}|{exp}|{NS}".encode("utf-8"))
     return hmac.compare_digest(expected, sig)
 
 # ==================== Simple ConfirmStore (in-memory fallback) ====================
@@ -886,7 +912,8 @@ def _split_env_list(name: str, default: str = "") -> List[str]:
     return [p.strip() for p in raw.split(",") if p.strip()]
 
 _PUBLIC_PATHS    = set(_split_env_list("SECURITY_PUBLIC_PATHS", ""))
-_PUBLIC_PREFIXES = _split_env_list("SECURITY_PUBLIC_PREFIXES", "/public,/price,/static,/risk,/ultra")
+# Safer default: no public prefixes unless explicitly configured
+_PUBLIC_PREFIXES = _split_env_list("SECURITY_PUBLIC_PREFIXES", "")
 _PROTECTED_PATHS = set(_split_env_list(
     "SECURITY_PROTECTED_PATHS",
     "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json,/admin,/manage-once,/manage-once/multi"
@@ -1065,7 +1092,6 @@ async def _public_cache_etag(request: Request, call_next):
     except Exception:
         return resp
     return resp
-
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1321,7 +1347,8 @@ def _round_to_lot_size(client, symbol: str, qty: float) -> float:
         _tick, step = _get_filters(client, symbol)
         if step and step > 0:
             q = math.floor(float(qty) / float(step)) * float(step)
-            dec = max(0, min(8, str(step)[::-1].find('.')))
+            s = str(step)
+            dec = max(0, min(8, len(s.split(".")[1]) if "." in s else 0))
             return float(f"{q:.{dec}f}")
         return float(qty)
     except Exception:
@@ -1590,11 +1617,12 @@ def _allow_by_bearer_or_apikey(request: Request) -> None:
     want_bearer = (request.headers.get("authorization") or request.headers.get("Authorization") or "").strip()
     x_api_key = (request.headers.get("x-api-key") or request.headers.get("X-API-Key") or "").strip()
     if API_BEARER_TOKEN and want_bearer.lower().startswith("bearer "):
-        if want_bearer.split(" ", 1)[1].strip() == API_BEARER_TOKEN:
+        token = want_bearer.split(" ", 1)[1].strip()
+        if hmac.compare_digest(token, API_BEARER_TOKEN):
             return
     api_tokens = [(os.getenv("PRIMARY_API_TOKEN") or "").strip(),
                   (os.getenv("API_TOKEN") or "").strip()]
-    if x_api_key and x_api_key in [t for t in api_tokens if t]:
+    if x_api_key and any(hmac.compare_digest(x_api_key, t) for t in api_tokens if t):
         return
     raise HTTPException(status_code=401, detail="Unauthorized")
 
@@ -1669,16 +1697,32 @@ async def alerts_ingest(request: Request, payload: Dict[str, Any] = Body(...)):
 async def alerts_trades_update(request: Request, body: Dict[str, Any] = Body(...)):
     """
     צפה ל-body: {"ticket_id":"...", "action":"approve"|"reject", "exp":<unix optional>}
-    אימות: כותרת X-Signature-Hex = HMAC-SHA256(OPS_SIGN_SECRET, raw_body)
-    אופציונלי: X-Request-Nonce למניעת replay (אם ANTI_REPLAY_ENABLE=1)
+    אימות: כותרת X-Signature-Hex = HMAC-SHA256(OPS_SIGN_SECRET, (X-Request-Timestamp|X-Request-Nonce + "\n" + raw_body))
+    חובה: X-Request-Nonce (ייחודי) + X-Request-Timestamp (חלון זמן)
     """
     raw = await request.body()
     sig_hex = request.headers.get("X-Signature-Hex") or request.headers.get("x-signature-hex") or ""
     if not HMAC_SECRET:
         raise HTTPException(status_code=503, detail="OPS_SIGN_SECRET/WEBHOOK_HMAC_SECRET missing")
-    want = _sign_hex(HMAC_SECRET, raw)
+    # Enforce timestamp & nonce
+    ts_raw = (request.headers.get("X-Request-Timestamp") or request.headers.get("x-request-timestamp") or "").strip()
+    nonce_raw = (request.headers.get("X-Request-Nonce") or request.headers.get("x-request-nonce") or "").strip()
+    if len(nonce_raw) < 16:
+        raise HTTPException(status_code=401, detail="nonce_missing_or_weak")
+    try:
+        ts_i = int(float(ts_raw))
+    except Exception:
+        raise HTTPException(status_code=401, detail="timestamp_bad_format")
+    skew = int(os.getenv("SIG_TS_SKEW_SEC", "900") or 900)
+    now_i = int(time.time())
+    if abs(now_i - ts_i) > max(0, skew):
+        raise HTTPException(status_code=401, detail="timestamp_out_of_window", headers={"Replay-Window": str(skew)})
+    # Bind signature to headers + body to prevent detached replay
+    base = (f"{ts_raw}|{nonce_raw}").encode("utf-8") + b"\n" + raw
+    want = _sign_hex(HMAC_SECRET, base)
     if not sig_hex or not hmac.compare_digest(sig_hex.strip(), want):
         raise HTTPException(status_code=401, detail="bad_signature")
+    # Anti-replay (nonce cache)
     await _enforce_nonce_once(request)
     _require_not_expired(body.get("exp"))
     ticket_id = str(body.get("ticket_id") or "").strip()
@@ -1782,6 +1826,7 @@ async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[boo
                 await r.delete(f"{NS}:ticket:{ticket_id}")
     with suppress(Exception):
         ConfirmStore.remove(ticket_id)
+
 @router.post("/ops/ticket")
 async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = None):
     symbol = (payload.get("symbol") or "").upper().strip()
@@ -2127,6 +2172,7 @@ async def reject_signed_post(request: Request, payload: Dict[str, Any] = Body(..
     if approved:
         raise HTTPException(status_code=422, detail="approve_true_on_reject_endpoint")
     return await _reject_core(ticket_id)
+
 # --- בטוח: עטיפת smart_manage_now (אם קיים) ---
 async def _smart_manage_now(symbol: str,
                             offset_bps: Optional[int] = None,
@@ -2457,8 +2503,15 @@ async def healthz():
 # ================ Telegram webhook (optional minimal) ================
 @app.post("/telegram/webhook", tags=["telegram"])
 async def telegram_webhook(request: Request):
-    # Minimal stub to acknowledge; your bot logic can live elsewhere.
-    _ = await request.json()
+    data = await request.json()
+    # Optional: validate Telegram secret token if configured
+    try:
+        expected = (TELEGRAM_WEBHOOK_SECRET or "").strip()
+        got = (request.headers.get("X-Telegram-Bot-Api-Secret-Token") or "").strip()
+        if expected and not hmac.compare_digest(expected, got):
+            return JSONResponse({"ok": False, "error": "bad_secret_token"}, status_code=401)
+    except Exception:
+        pass
     return JSONResponse({"ok": True})
 
 # ================ Manage-once (signed) stub ================
@@ -2480,8 +2533,6 @@ def _port() -> int:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False, http="h11", ws="auto")
-
-
 
 
 
