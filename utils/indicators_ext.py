@@ -173,6 +173,11 @@ def ema_gap_guard(closes: List[float], period: int = 21, max_gap_pct: float = 6.
     return (gap_pct <= max_gap_pct, float(gap_pct))
 
 
+def advanced_indicators(klines, **kwargs):
+    # החזרה ריקה/מינימלית כדי שלא ייפול import
+    return {"ok": True, "features": {}}
+
+
 __all__ = [
     "compute_vwap",
     "compute_obv",
@@ -182,6 +187,7 @@ __all__ = [
     "trend_confidence",
     "rsi_composite",
     "ema_gap_guard",
+    "advanced_indicators",
 ]
 
 
