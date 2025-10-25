@@ -231,7 +231,6 @@ _safe_include("routes.manager")
 _safe_include("routes.position_ops")
 _safe_include("routes.scan")
 # השאר ימשיכו להגיע דרך האוטולואד
-
 # ---- Auto-discovery of all other routes.* modules (smart & dynamic) ----
 ROUTES_AUTOLOAD = os.getenv("ROUTES_AUTOLOAD", "1").lower() in ("1","true","yes","on")
 ROUTES_AUTOLOAD_MODE = (os.getenv("ROUTES_AUTOLOAD_MODE") or "eager").strip().lower()  # eager | background
@@ -248,6 +247,53 @@ def _routes_autoload_now():
         logger.info("routes_autoload: completed")
     except Exception as e:
         logger.warning("routes_autoload: failed: %s", e)
+
+# ==================== UI grid dynamic include (NO route collisions) ====================
+UI_GRID_MODE = (os.getenv("UI_GRID_MODE") or "local").strip().lower()  # local|proxy|off
+
+def _append_env_csv(key: str, more: List[str]) -> None:
+    cur = os.getenv(key, "")
+    items = [x.strip() for x in cur.split(",") if x.strip()]
+    for m in more:
+        if m and m not in items:
+            items.append(m)
+    os.environ[key] = ",".join(items)
+
+def _adjust_routes_autoload_filters() -> None:
+    """
+    לפני autoload — נוודא שלא יטען ראוטר מתנגש.
+    local  -> נחסום server.routes.ui_grid / ui_grid_proxy
+    proxy  -> נחסום routes.ui_grid
+    off    -> נחסום הכל (שני הצדדים)
+    """
+    if UI_GRID_MODE == "local":
+        _append_env_csv("ROUTES_DENY", ["server.routes.ui_grid", "server.routes.ui_grid_proxy"])
+    elif UI_GRID_MODE == "proxy":
+        _append_env_csv("ROUTES_DENY", ["routes.ui_grid"])
+    else:  # off
+        _append_env_csv("ROUTES_DENY", ["routes.ui_grid", "server.routes.ui_grid", "server.routes.ui_grid_proxy"])
+
+def _include_ui_grid_router():
+    """
+    כולל *רק* ראוטר אחד לפי UI_GRID_MODE, ותואם לשם הקובץ בצד ה-proxy
+    (תומך גם בשם הישן server.routes.ui_grid וגם בשם המומלץ server.routes.ui_grid_proxy).
+    """
+    try:
+        if UI_GRID_MODE == "local":
+            _safe_include("routes.ui_grid")
+            logger.info("ui_grid: mode=local (routes.ui_grid)")
+        elif UI_GRID_MODE == "proxy":
+            # ננסה את השם החדש קודם
+            try:
+                _safe_include("server.routes.ui_grid_proxy")
+                logger.info("ui_grid: mode=proxy (server.routes.ui_grid_proxy)")
+            except Exception:
+                _safe_include("server.routes.ui_grid")
+                logger.info("ui_grid: mode=proxy (server.routes.ui_grid)")
+        else:
+            logger.info("ui_grid: mode=off (not included)")
+    except Exception as e:
+        logger.warning("ui_grid include failed (mode=%s): %s", UI_GRID_MODE, e)
 
 # ============= Public feed fallbacks (no-404) =============
 def _route_exists(path: str, method: str = "GET") -> bool:
@@ -346,7 +392,6 @@ app.add_middleware(
     allow_methods=[m.strip() for m in CORS_ALLOW_METHODS.split(",")] if CORS_ALLOW_METHODS else ["*"],
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
 )
-
 # ==================== Env & helpers ====================
 def get_internal_base() -> str:
     internal = (os.getenv("INTERNAL_BASE") or "").strip()
@@ -1169,7 +1214,6 @@ def _align_position_mode(client) -> None:
             client.futures_change_position_mode(dualSidePosition="true")
         elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
-
 # ==================== Order ID helper ====================
 try:
     from utils.order_ids import build_client_order_id  # type: ignore
@@ -2014,6 +2058,7 @@ async def approve_signed_post(request: Request, payload: Dict[str, Any] = Body(.
                 hdrs["Replay-Window"] = os.getenv("SIG_TS_SKEW_SEC", "900")
         except Exception:
             pass
+    # ... (rest identical)
         raise HTTPException(status_code=401, detail="Bad signature", headers=hdrs)
     await _enforce_nonce_once(request)
     _require_not_expired(payload.get("exp"))
@@ -2338,6 +2383,14 @@ async def _on_startup():
         await _resolve_binance_endpoints()
     except Exception as e:
         logger.warning("resolve_binance_endpoints_failed: %s", e)
+
+    # === NEW: respect UI_GRID_MODE before autoload ===
+    try:
+        _adjust_routes_autoload_filters()
+        _include_ui_grid_router()
+    except Exception as e:
+        logger.warning("ui_grid_wiring_failed: %s", e)
+
     # Auto-load routes (eager/background) according to env
     try:
         if ROUTES_AUTOLOAD:
@@ -2395,6 +2448,8 @@ def _port() -> int:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False, http="h11", ws="auto")
+
+
 
 
 
