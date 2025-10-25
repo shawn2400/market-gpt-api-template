@@ -372,7 +372,9 @@ def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         if symbol:
             return cast(List[Dict[str, Any]], client.futures_get_open_orders(symbol=symbol.upper()) or [])
-        return cast(List[Dict[str, Any]], client.futures_get_open_orders() or []
+        return cast(
+            List[Dict[str, Any]],
+            client.futures_get_open_orders() or []
         )
     except Exception as e:
         logger.error("Failed to get open orders: %s", e)
@@ -571,6 +573,129 @@ def get_price_coalesced(symbol: str) -> Optional[float]:
         return float(v)
     return futures_index_price(symbol)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# הרחבות חדשות מהפאץ׳
+# ──────────────────────────────────────────────────────────────────────────────
+
+def place_stop_market(
+    symbol: str,
+    side: str,
+    stop_price: float,
+    quantity: float,
+    *,
+    reduce_only: bool = True,
+    positionSide: Optional[str] = None,
+    workingType: Optional[str] = None
+) -> Dict[str, Any]:
+    """עטיפה נוחה להזמנה מסוג STOP_MARKET (ל־SL/BE/Lock)."""
+    args: Dict[str, Any] = {
+        "symbol": symbol.upper(),
+        "side": side.upper(),
+        "type": "STOP_MARKET",
+        "stopPrice": _quantize_price(symbol, float(stop_price)),
+        "quantity": _quantize_qty(symbol, float(quantity)),
+        "reduceOnly": bool(reduce_only),
+        "timeInForce": "GTC",
+        "workingType": (workingType or WORKING_TYPE),
+    }
+    if positionSide and HEDGE_MODE_OVERRIDE not in ("0", "false", "no", "off", "oneway"):
+        args["positionSide"] = positionSide.upper()
+    return futures_create_order(**args)
+
+def set_breakeven_stop(
+    symbol: str,
+    entry_price: float,
+    side_opened: str,
+    *,
+    offset_bps: float = 8.0,
+    qty_hint: Optional[float] = None,
+    positionSide: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    קובע SL ב־Breakeven±offset_bps. אם qty_hint לא ניתן — נאתר מהפוזיציה הפתוחה.
+    """
+    try:
+        # מציאת כמות מהפוזיציה
+        q = qty_hint
+        if not q or q <= 0:
+            for p in get_open_positions(symbol):
+                amt = float(p.get("positionAmt") or 0.0)
+                if abs(amt) > 0:
+                    q = abs(amt)
+                    break
+        if not q or q <= 0:
+            raise RuntimeError("qty_missing")
+        side_u = side_opened.upper()
+        close_side = "SELL" if side_u in ("BUY", "LONG") else "BUY"
+        be = float(entry_price) * (1.0 + (offset_bps / 10000.0 if close_side == "SELL" else -offset_bps / 10000.0))
+        # מבטל סטופים קודמים (רק אם יש)
+        try:
+            for o in get_open_orders(symbol):
+                typ = (o.get("type") or "").upper()
+                st = (o.get("status") or "").upper()
+                if "STOP" in typ and st in ("NEW", "PARTIALLY_FILLED"):
+                    oid = o.get("orderId")
+                    if oid is not None:
+                        futures_cancel_order(symbol, oid)
+        except Exception:
+            pass
+        return place_stop_market(symbol, close_side, be, float(q), positionSide=positionSide)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def get_klines_df(symbol: str, interval: str = "5m", limit: int = 120):
+    """DataFrame נוח לשימוש ע"י trade_manager (ללא תלות ב־ws_fallback)."""
+    try:
+        import pandas as pd  # type: ignore
+        arr = client.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(max(limit, 50), 1000)) or []
+        if not arr:
+            return None
+        cols = ["open_time","open","high","low","close","volume","close_time","qv","nTrades","taker_base","taker_quote","x"]
+        df = pd.DataFrame(arr, columns=cols[:len(arr[0])])
+        for c in ("open", "high", "low", "close", "volume"):
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+        return df
+    except Exception:
+        return None
+
+def close_all_positions() -> Dict[str, Any]:
+    """סוגר כל פוזיציה פתוחה במרקט reduceOnly."""
+    closed = []
+    try:
+        for p in get_open_positions():
+            sym = (p.get("symbol") or "").upper()
+            amt = float(p.get("positionAmt") or 0.0)
+            if not sym or abs(amt) <= 0:
+                continue
+            side_opened = "BUY" if amt > 0 else "SELL"
+            close_side = "SELL" if side_opened == "BUY" else "BUY"
+            qty_str = _quantize_qty(sym, abs(amt))
+            args = {"symbol": sym, "side": close_side, "type": "MARKET", "reduceOnly": True, "quantity": qty_str}
+            try:
+                closed.append(futures_create_order(**args))
+            except Exception as e:
+                closed.append({"ok": False, "error": str(e), "symbol": sym})
+        return {"ok": True, "closed": closed}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+def apply_price_tick_side(price: float, symbol: str, side: str) -> tuple[str, float]:
+    """
+    מקוונט מחיר לפי tick, ובמקרה של SELL מוריד צעד אחד כדי להבטיח מעבר התאמה בשווקים צמודים.
+    מחזיר (price_str, price_float).
+    """
+    p_str = _quantize_price(symbol, float(price))
+    p = float(p_str)
+    try:
+        f = get_symbol_filters(symbol) or {}
+        tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
+        if side.upper() == "SELL":
+            p = max(tick, p - tick)
+            p_str = _quantize_price(symbol, p)
+    except Exception:
+        pass
+    return p_str, float(p_str)
+
 __all__ = [
     "client",
     "get_futures_client",
@@ -594,7 +719,14 @@ __all__ = [
     # תאימות:
     "place_limit_order",
     "cancel_order",
+    # הרחבות חדשות:
+    "place_stop_market",
+    "set_breakeven_stop",
+    "get_klines_df",
+    "close_all_positions",
+    "apply_price_tick_side",
 ]
+
 
 
 
