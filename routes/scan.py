@@ -1,7 +1,7 @@
 # routes/scan.py
 from __future__ import annotations
 from fastapi import APIRouter, Query
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Union
 import os
 import pandas as pd  # type: ignore
 import httpx
@@ -194,6 +194,38 @@ async def _score_from_df(df: pd.DataFrame) -> Dict[str, Any]:
         # לא מפילים את ה־API בגלל תקלת סקורינג
         return {"score": None, "features": None}
 
+# ===================== Programmatic API (alias-friendly) =====================
+async def scan_symbols(
+    symbols: Union[str, List[str]],
+    interval: str = ENTRY_SCORE_INTERVAL,
+    limit: int = 200,
+) -> ScanResponse:
+    """
+    פונקציה לשימוש פנימי/אליאס: מקבלת CSV או List[str] ומחזירה ScanResponse.
+    """
+    if isinstance(symbols, str):
+        syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
+    else:
+        syms = [s.strip().upper() for s in symbols if s and isinstance(s, str)]
+    if not syms:
+        wl = (os.getenv("WATCHLIST") or "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT").split(",")
+        syms = [s.strip().upper() for s in wl if s.strip()]
+
+    async def _one(sym: str) -> ScanSignal:
+        try:
+            df = await _fetch_klines_async(sym, interval, limit)
+            if df.empty:
+                return ScanSignal(symbol=sym, interval=interval, ok=False, error="no data")
+            scored = await _score_from_df(df)
+            # כאן לא חובה לחשב אינדיקטורים כבדים; מחזירים רק score/features (indicators=None)
+            return ScanSignal(symbol=sym, interval=interval, score=scored["score"], features=scored["features"], ok=True)
+        except Exception as e:
+            return ScanSignal(symbol=sym, interval=interval, ok=False, error=str(e))
+
+    results = await asyncio.gather(*[_one(s) for s in syms], return_exceptions=False)
+    ok_any = any(r.ok for r in results)
+    return ScanResponse(ok=ok_any, count_total=len(syms), returned=len(results), signals=list(results))
+
 # ===================== Endpoints =====================
 @router.get("/info", response_model=ScanResponse, summary="Basic Scan Info")
 async def scan_info(
@@ -235,32 +267,17 @@ async def scan_multi(
     interval: str = Query(default=ENTRY_SCORE_INTERVAL, description="Kline interval"),
     limit: int = Query(200, ge=50, le=200),
 ) -> ScanResponse:
+    # משתמש בפונקציית השירות כדי לשמור תאימות ל-alias
+    if symbols:
+        return await scan_symbols(symbols=symbols, interval=interval, limit=limit)
     # אם לא הועברו סמלים — ננסה מה־WATCHLIST או ברירת מחדל
-    if not symbols:
-        wl = (os.getenv("WATCHLIST") or "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT").split(",")
-        syms = [s.strip().upper() for s in wl if s.strip()]
-    else:
-        syms = [s.strip().upper() for s in symbols.split(",") if s.strip()]
-    syms = [s for s in syms if s]
-
-    async def _one(sym: str) -> ScanSignal:
-        try:
-            df = await _fetch_klines_async(sym, interval, limit)
-            if df.empty:
-                return ScanSignal(symbol=sym, interval=interval, ok=False, error="no data")
-            scored = await _score_from_df(df)
-            return ScanSignal(symbol=sym, interval=interval, score=scored["score"], features=scored["features"], ok=True)
-        except Exception as e:
-            return ScanSignal(symbol=sym, interval=interval, ok=False, error=str(e))
-
-    results = await asyncio.gather(*[_one(s) for s in syms], return_exceptions=False)
-    ok_any = any(r.ok for r in results)
-    return ScanResponse(ok=ok_any, count_total=len(syms), returned=len(results), signals=list(results))
-
+    wl = (os.getenv("WATCHLIST") or "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT").split(",")
+    return await scan_symbols(symbols=[s.strip().upper() for s in wl if s.strip()], interval=interval, limit=limit)
 
 # בסוף routes/scan.py (אם חסר):
 def run_scan(*args, **kwargs):
-    # נהל/העבר ל־router פונקציה קיימת, או החזר תשובה מינימלית:
+    # אליאס מינימלי לתאימות אם מישהו עדיין מייבא
     return {"ok": True, "data": []}
+
 
 
