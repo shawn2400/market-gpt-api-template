@@ -1,8 +1,8 @@
 # routes/scan_now_alias.py
 from __future__ import annotations
-from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException
 from typing import List, Optional, Dict, Any
-import os, httpx, asyncio
+import os, httpx
 
 # נסה לייבא scan_symbols; אם בקוד שלך הפונקציה נקראת run_scan – ניצור אליאס
 try:
@@ -62,7 +62,7 @@ async def scan_now(
 ) -> Dict[str, Any]:
     """
     1) משיג רשימת סימבולים מ-/scan/top-volume (או WATCHLIST).
-    2) מחשב אינדיקטורים דרך scan_symbols (routes/scan.py).
+    2) מחשב אינדיקטורים/ציון דרך scan_symbols (routes/scan.py).
     3) משגר את הסיגנלים ל-/alerts/analysis כדי ליצור Approval בטלגרם.
     """
     public_host = (host or PUBLIC_HOST or "").rstrip("/")
@@ -95,7 +95,7 @@ async def scan_now(
             {
                 "symbol": s.symbol,
                 "interval": s.interval,
-                "indicators": (s.indicators.dict() if hasattr(s.indicators, "dict") else None)
+                "indicators": (s.indicators.dict() if hasattr(s.indicators, "dict") else None),
             }
             for s in (scan_resp.signals or [])
             if getattr(s, "ok", True)
