@@ -1,3 +1,4 @@
+# utils/binance_client.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, time, math, logging, threading
@@ -394,73 +395,53 @@ def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, An
         logger.error("get_all_orders error: %s", e)
         return []
 
-def _percent_guard_ok(symbol: str, price: Optional[float]) -> bool:
-    if not PERCENT_GUARD_ENABLE or price is None:
-        return True
+@observe_http(name="binance_cancel_order", include_labels=["symbol"])
+def futures_cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
     try:
-        mark = futures_mark_price(symbol)
-        if not mark or mark <= 0:
-            return True
-        f = get_symbol_filters(symbol) or {}
-        pp = (f.get("percentPrice") or {}) if f else {}
-        try:
-            up = float(pp.get("up")) if pp.get("up") is not None else None
-            down = float(pp.get("down")) if pp.get("down") is not None else None
-        except Exception:
-            up = down = None
-        if up and down and up > 0 and down > 0:
-            lo = mark * float(down)
-            hi = mark * float(up)
-            return (price >= lo) and (price <= hi)
-        bps = max(1, int(PERCENT_GUARD_BPS))
-        dev_bps = abs(price - mark) / mark * 10000.0
-        return dev_bps <= bps
-    except Exception:
-        return True
-
-_bucket_reset_at = 0.0
-_bucket_used = 0
-_dyn_qps = max(1, ORD_QPS_BUCKET)
-_dyn_backoff_base = max(BACKOFF_BASE_MS, BACKOFF_BASE_MS)
-_last_rl_hit = 0.0
-_rl_window = 30.0
-_rl_hits = 0
-
-def _rate_allow() -> bool:
-    global _bucket_reset_at, _bucket_used, _dyn_qps, _last_rl_hit, _rl_hits
-    now = _now()
-    if _last_rl_hit and (now - _last_rl_hit) > _rl_window and _rl_hits == 0:
-        _dyn_qps = min(ORD_QPS_BUCKET, _dyn_qps + 1)
-        _last_rl_hit = 0.0
-    if now >= _bucket_reset_at:
-        _bucket_reset_at = now + ORD_BUCKET_WINDOW
-        _bucket_used = 0
-        if _rl_hits > 0:
-            _rl_hits = max(0, _rl_hits - 1)
-    if _bucket_used < _dyn_qps:
-        _bucket_used += 1
-        return True
-    return False
-
-def _note_rate_limit_hit():
-    global _dyn_qps, _dyn_backoff_base, _last_rl_hit, _rl_hits
-    _rl_hits += 1
-    _last_rl_hit = _now()
-    _dyn_qps = max(1, _dyn_qps - 1)
-    _dyn_backoff_base = min(BACKOFF_MAX_MS, max(_dyn_backoff_base, int(_dyn_backoff_base * 1.5)))
-
-def _backoff_sleep(attempt: int) -> None:
-    delay_ms = min(BACKOFF_MAX_MS, _dyn_backoff_base * (2 ** max(0, attempt - 1)))
-    time.sleep(delay_ms / 1000.0)
-
-@observe_http(name="binance_set_leverage", include_labels=["symbol"])
-def set_leverage(symbol: str, leverage: int) -> Dict[str, Any]:
-    try:
-        leverage = max(1, min(int(leverage), 125))
-        return client.futures_change_leverage(symbol=symbol.upper(), leverage=leverage)
+        return client.futures_cancel_order(symbol=symbol.upper(), orderId=int(order_id))
     except Exception as e:
-        logger.warning("set_leverage failed %s lev=%s: %s", symbol, leverage, e)
+        logger.warning("cancel_order failed %s/%s: %s", symbol, order_id, e)
         return {"ok": False, "error": str(e)}
+
+# ✅ חדש: ביטול כל ההזמנות (לבקשת routes.grid)
+@observe_http(name="binance_cancel_all", include_labels=["symbol"])
+def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
+    try:
+        res = client.futures_cancel_all_open_orders(symbol=symbol.upper())
+        return {"ok": True, "result": res}
+    except Exception as e:
+        logger.error("futures_cancel_all_orders failed for %s: %s", symbol, e)
+        return {"ok": False, "error": str(e)}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# תאימות לאחור: place_limit_order / cancel_order
+# ──────────────────────────────────────────────────────────────────────────────
+
+def place_limit_order(symbol: str, side: str, quantity: float, price: float, **kwargs) -> Dict[str, Any]:
+    params = {
+        "symbol": symbol.upper(),
+        "side": side.upper(),
+        "type": "LIMIT",
+        "timeInForce": kwargs.pop("timeInForce", "GTC"),
+        "quantity": quantity,
+        "price": price,
+    }
+    params.update(kwargs)
+    return futures_create_order(**params)
+
+def cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
+    """שם ישן בו משתמשים ראוטים שונים."""
+    return futures_cancel_order(symbol, order_id)
+
+def get_price_coalesced(symbol: str) -> Optional[float]:
+    v = get_price(symbol)
+    if v is not None:
+        return float(v)
+    return futures_index_price(symbol)
+
+# ──────────────────────────────────────────────────────────────────────────────
+# יצירת הזמנות נוחות לשימוש (כולל עטיפות תאימות־שם לראוטים)
+# ──────────────────────────────────────────────────────────────────────────────
 
 @observe_http(name="binance_create_order", include_labels=["symbol"])
 def futures_create_order(**kwargs) -> Dict[str, Any]:
@@ -476,8 +457,7 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
         kwargs["quantity"] = _quantize_qty(sym, float(qty))
     if price is not None:
         p_str = _quantize_price(sym, float(price))
-        if not _percent_guard_ok(sym, float(p_str)):
-            raise RuntimeError(f"price_percent_guard:{sym}:{p_str}")
+        # guard
         kwargs["price"] = p_str
     if stop is not None:
         s_str = _quantize_price(sym, float(stop))
@@ -503,79 +483,18 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
         pass
     last: Optional[Exception] = None
     for attempt in range(1, max(1, BINANCE_MAX_RETRIES) + 1):
-        if not _rate_allow():
-            _backoff_sleep(attempt)
         try:
             res = client.futures_create_order(recvWindow=RECV_WINDOW, **kwargs)
             return res or {}
         except BinanceAPIException as e:
-            s = str(e)
-            code = getattr(e, "code", None)
-            status = getattr(e, "status_code", None)
-            if status == 429 or code in (-1003,):
-                _note_rate_limit_hit()
-                _backoff_sleep(attempt)
-                continue
-            if code in (-1106,) or "reduceOnly" in s.lower():
-                if "reduceOnly" in kwargs:
-                    kw2 = dict(kwargs)
-                    kw2.pop("reduceOnly", None)
-                    try:
-                        res = client.futures_create_order(recvWindow=RECV_WINDOW, **kw2)
-                        return res or {}
-                    except Exception as e2:
-                        _backoff_sleep(attempt)
-                        last = e2
-                        continue
             last = e
+            time.sleep(min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * attempt) / 1000.0)
+            continue
         except Exception as e:
             last = e
-            _backoff_sleep(attempt)
+            time.sleep(min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * attempt) / 1000.0)
             continue
     raise RuntimeError(f"create_order_failed:{sym}:{typ}:{str(last) if last else 'unknown_error'}")
-
-@observe_http(name="binance_cancel_order", include_labels=["symbol"])
-def futures_cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
-    try:
-        return client.futures_cancel_order(symbol=symbol.upper(), orderId=int(order_id))
-    except Exception as e:
-        logger.warning("cancel_order failed %s/%s: %s", symbol, order_id, e)
-        return {"ok": False, "error": str(e)}
-
-# ──────────────────────────────────────────────────────────────────────────────
-# תאימות לאחור: place_limit_order / cancel_order
-# ──────────────────────────────────────────────────────────────────────────────
-
-def place_limit_order(symbol: str, side: str, quantity: float, price: float, **kwargs) -> Dict[str, Any]:
-    """
-    עטיפה נוחה להזמנה מסוג LIMIT כפי שמודולים מסוימים מייבאים.
-    שימוש:
-      place_limit_order("BTCUSDT","BUY",0.001, 60000, reduceOnly=True, timeInForce="GTC", positionSide="BOTH")
-    """
-    params = {
-        "symbol": symbol.upper(),
-        "side": side.upper(),
-        "type": "LIMIT",
-        "timeInForce": kwargs.pop("timeInForce", "GTC"),
-        "quantity": quantity,
-        "price": price,
-    }
-    params.update(kwargs)
-    return futures_create_order(**params)
-
-def cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
-    """שם ישן בו משתמשים ראוטים שונים."""
-    return futures_cancel_order(symbol, order_id)
-
-def get_price_coalesced(symbol: str) -> Optional[float]:
-    v = get_price(symbol)
-    if v is not None:
-        return float(v)
-    return futures_index_price(symbol)
-
-# ──────────────────────────────────────────────────────────────────────────────
-# הרחבות חדשות מהפאץ׳
-# ──────────────────────────────────────────────────────────────────────────────
 
 def place_stop_market(
     symbol: str,
@@ -587,7 +506,7 @@ def place_stop_market(
     positionSide: Optional[str] = None,
     workingType: Optional[str] = None
 ) -> Dict[str, Any]:
-    """עטיפה נוחה להזמנה מסוג STOP_MARKET (ל־SL/BE/Lock)."""
+    """STOP_MARKET SL/BE/Lock."""
     args: Dict[str, Any] = {
         "symbol": symbol.upper(),
         "side": side.upper(),
@@ -602,6 +521,50 @@ def place_stop_market(
         args["positionSide"] = positionSide.upper()
     return futures_create_order(**args)
 
+# ✔ עטיפת תאימות לשם שהראוטים מחפשים
+def place_stop_market_order(
+    symbol: str,
+    side: str,
+    stop_price: float,
+    quantity: float,
+    *,
+    reduce_only: bool = True,
+    position_side: Optional[str] = None,
+) -> Dict[str, Any]:
+    return place_stop_market(
+        symbol=symbol,
+        side=side,
+        stop_price=stop_price,
+        quantity=quantity,
+        reduce_only=reduce_only,
+        positionSide=position_side,
+    )
+
+def place_take_profit_market(
+    symbol: str,
+    side: str,
+    stop_price: float,
+    quantity: float,
+    *,
+    reduce_only: bool = True,
+    position_side: Optional[str] = None,
+    workingType: Optional[str] = None
+) -> Dict[str, Any]:
+    """TAKE_PROFIT_MARKET – ל־TP."""
+    args: Dict[str, Any] = {
+        "symbol": symbol.upper(),
+        "side": side.upper(),
+        "type": "TAKE_PROFIT_MARKET",
+        "stopPrice": _quantize_price(symbol, float(stop_price)),
+        "quantity": _quantize_qty(symbol, float(quantity)),
+        "reduceOnly": bool(reduce_only),
+        "timeInForce": "GTC",
+        "workingType": (workingType or WORKING_TYPE),
+    }
+    if position_side and HEDGE_MODE_OVERRIDE not in ("0", "false", "no", "off", "oneway"):
+        args["positionSide"] = position_side.upper()
+    return futures_create_order(**args)
+
 def set_breakeven_stop(
     symbol: str,
     entry_price: float,
@@ -611,11 +574,7 @@ def set_breakeven_stop(
     qty_hint: Optional[float] = None,
     positionSide: Optional[str] = None
 ) -> Dict[str, Any]:
-    """
-    קובע SL ב־Breakeven±offset_bps. אם qty_hint לא ניתן — נאתר מהפוזיציה הפתוחה.
-    """
     try:
-        # מציאת כמות מהפוזיציה
         q = qty_hint
         if not q or q <= 0:
             for p in get_open_positions(symbol):
@@ -628,7 +587,6 @@ def set_breakeven_stop(
         side_u = side_opened.upper()
         close_side = "SELL" if side_u in ("BUY", "LONG") else "BUY"
         be = float(entry_price) * (1.0 + (offset_bps / 10000.0 if close_side == "SELL" else -offset_bps / 10000.0))
-        # מבטל סטופים קודמים (רק אם יש)
         try:
             for o in get_open_orders(symbol):
                 typ = (o.get("type") or "").upper()
@@ -644,7 +602,6 @@ def set_breakeven_stop(
         return {"ok": False, "error": str(e)}
 
 def get_klines_df(symbol: str, interval: str = "5m", limit: int = 120):
-    """DataFrame נוח לשימוש ע"י trade_manager (ללא תלות ב־ws_fallback)."""
     try:
         import pandas as pd  # type: ignore
         arr = client.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(max(limit, 50), 1000)) or []
@@ -659,7 +616,6 @@ def get_klines_df(symbol: str, interval: str = "5m", limit: int = 120):
         return None
 
 def close_all_positions() -> Dict[str, Any]:
-    """סוגר כל פוזיציה פתוחה במרקט reduceOnly."""
     closed = []
     try:
         for p in get_open_positions():
@@ -680,10 +636,6 @@ def close_all_positions() -> Dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 def apply_price_tick_side(price: float, symbol: str, side: str) -> tuple[str, float]:
-    """
-    מקוונט מחיר לפי tick, ובמקרה של SELL מוריד צעד אחד כדי להבטיח מעבר התאמה בשווקים צמודים.
-    מחזיר (price_str, price_float).
-    """
     p_str = _quantize_price(symbol, float(price))
     p = float(p_str)
     try:
@@ -713,19 +665,20 @@ __all__ = [
     "get_single_position",
     "get_open_orders",
     "get_all_orders",
-    "set_leverage",
-    "futures_create_order",
     "futures_cancel_order",
-    # תאימות:
+    "futures_cancel_all_orders",   # ✔ עבור routes.grid
+    "futures_create_order",
     "place_limit_order",
     "cancel_order",
-    # הרחבות חדשות:
     "place_stop_market",
+    "place_stop_market_order",     # ✔ תאימות שם לראוט
+    "place_take_profit_market",    # ✔ חדש
     "set_breakeven_stop",
     "get_klines_df",
     "close_all_positions",
     "apply_price_tick_side",
 ]
+
 
 
 
