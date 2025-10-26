@@ -1511,7 +1511,7 @@ async def _maybe_eval_and_flip(symbol: str) -> None:
         await emit(symbol, "auto_flip", from_side=side_now or "FLAT", to=desired)
         logger.info("WS auto-flip %s -> %s (was %s) px=%.4f", symbol, desired, side_now, price)
     except Exception as e:
-        logger.debug("WS auto_flip %s failed: %s", symbol, e)
+        logger.debug("WS auto_flip %s failed: %s", e)
 
 async def _symbols_to_track() -> List[str]:
     wanted: Set[str] = set()
@@ -1611,6 +1611,7 @@ async def startup():
                 POS_LIVE_ERRORS.labels("ALL", "ws_start").inc()
             except Exception:
                 pass
+
 
 
 
