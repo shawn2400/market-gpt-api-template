@@ -159,7 +159,7 @@ AF_PRICE_TTL_SEC       = int(os.getenv("PRICE_WS_FRESH_TTL", "60"))
 AF_WATCHLIST           = [s.strip().upper() for s in (os.getenv("WATCHLIST", "") or "").split(",") if s.strip()]
 
 # RT trailing / BE / locks
-TRAIL_RT_ENABLE           = os.getenv("TRAIL_RT_ENABLE", "1") in ("1","true","yes","on")
+TRAIL_RT_ENABLE           = os.getenv("TRAIL_RT_ENABLE", "1").lower() in ("1","true","yes","on")
 TRAIL_RT_INTERVAL_SEC     = int(os.getenv("TRAIL_RT_INTERVAL_SEC", "20"))
 TRAIL_RT_ATR_MULT         = float(os.getenv("TRAIL_RT_ATR_MULT", os.getenv("TRAIL_ATR_MULT","1.6")))
 TRAIL_RT_MIN_CALLBACK     = float(os.getenv("TRAIL_RT_MIN_CALLBACK", "0.1"))
@@ -170,12 +170,12 @@ TRAIL_RT_MAX_SYMBOLS      = int(os.getenv("TRAIL_RT_MAX_SYMBOLS", "20"))
 TP_BE_OFFSET_BPS          = float(os.getenv("TP_BE_OFFSET_BPS", "12"))
 SMART_MANAGE_BE_OFFSET_BPS= float(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", str(PROFILE_BASE_BE_BPS)))
 
-BE_GUARD_ENABLE           = os.getenv("BE_GUARD_ENABLE", "1") in ("1","true","yes","on")
+BE_GUARD_ENABLE           = os.getenv("BE_GUARD_ENABLE", "1").lower() in ("1","true","yes","on")
 BE_BASE_BPS               = float(os.getenv("BE_BASE_BPS", "5"))
 BE_ADX_FACTOR             = float(os.getenv("BE_ADX_FACTOR", "0.2"))
 BE_MIN_BPS                = float(os.getenv("BE_MIN_BPS", "2"))
 BE_MAX_BPS                = float(os.getenv("BE_MAX_BPS", "25"))
-SL_MONOTONIC              = os.getenv("SL_MONOTONIC", "1") in ("1","true","yes","on")
+SL_MONOTONIC              = os.getenv("SL_MONOTONIC", "1").lower() in ("1","true","yes","on")
 PROFIT_LOCK_STEPS         = [float(x) for x in (os.getenv("PROFIT_LOCK_STEPS", "1.0,1.5,2.0").split(","))]
 ATR_UPDATE_COOLDOWN_SEC   = int(os.getenv("ATR_UPDATE_COOLDOWN_SEC", "20"))
 AUTO_TRAIL_ATRPCT_MAX     = float(os.getenv("AUTO_TRAIL_ATRPCT_MAX", "0.015"))
@@ -1617,6 +1617,7 @@ async def startup():
                 pass
 
 __all__ = ["router", "startup"]
+
 
 
 
