@@ -1,1 +1,1131 @@
+services:
+  - type: web
+    name: algogpt-staging
+    env: docker
+    region: frankfurt
+    plan: standard
+    autoDeploy: true
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /healthz
+
+    disks:
+      - name: data
+        mountPath: /app/data
+        sizeGB: 1
+
+    envVars:
+      - key: APP_NAME
+        value: algogpt
+      - key: APP_TITLE
+        value: "AlgoGPT Service (staging)"
+      - key: ALGOGPT_VERSION
+        value: "2.18.0"
+      - key: INSTANCE_ID
+        value: algogpt-staging
+      - key: INSTANCE
+        value: algogpt-staging
+      - key: APP_INSTANCE
+        value: algogpt-staging
+      - key: SERVICE_INSTANCE
+        value: algogpt-staging
+
+      - key: MODE
+        value: hybrid
+
+      - key: PORT
+        value: "10000"
+      - key: APP_MODULE
+        value: main:app
+      - key: PYTHONPATH
+        value: /app
+
+      - key: ULTRATOP_MODE
+        value: mount
+      - key: ULTRATOP_PREFIX
+        value: /ultra
+      - key: ULTRATOP_STATIC_DIR
+        value: /app/static/ultra
+
+      - key: WEB_CONCURRENCY
+        value: "1"
+      - key: GUNICORN_TIMEOUT
+        value: "180"
+      - key: GUNICORN_GRACEFUL_TIMEOUT
+        value: "45"
+      - key: GUNICORN_KEEPALIVE
+        value: "30"
+      - key: GUNICORN_MAX_REQUESTS
+        value: "500"
+      - key: GUNICORN_MAX_REQUESTS_JITTER
+        value: "50"
+
+      - key: LOG_LEVEL
+        value: INFO
+      - key: UVICORN_ACCESS_LOG
+        value: "false"
+      - key: UVICORN_LOG_LEVEL
+        value: info
+
+      - key: HTTP_MAX_CONNECTIONS
+        value: "200"
+      - key: HTTP_MAX_KEEPALIVE
+        value: "50"
+      - key: AUTO_RUN
+        value: "1"
+
+      - key: PUBLIC_HOST
+        value: https://algogpt-staging-docker.onrender.com
+      - key: CONTEXT_URL
+        value: https://algogpt-staging-docker.onrender.com
+      - key: WEBHOOK_HOST
+        value: https://algogpt-staging-docker.onrender.com
+
+      - key: DOCS_URL
+        value: /docs
+      - key: REDOC_URL
+        value: /redoc
+      - key: OPENAPI_URL
+        value: /openapi.json
+      - key: ENABLE_READONLY_HTTP
+        value: "1"
+      - key: READONLY_ENDPOINTS
+        value: ""
+      - key: OPENAPI_HIDE_PATTERNS
+        value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/trade/*,/risk/*/internal*"
+      - key: OPENAPI_PUBLIC_MAX_OPS
+        value: "30"
+
+      - key: CORS_ALLOW_ORIGINS
+        value: https://algogpt-staging-docker.onrender.com
+      - key: CORS_ALLOW_ORIGINS_STRICT
+        value: https://algogpt-staging-docker.onrender.com
+      - key: CORS_ALLOW_HEADERS
+        value: "*"
+      - key: CORS_ALLOW_METHODS
+        value: "*"
+      - key: CORS_ALLOW_CREDENTIALS
+        value: "0"
+
+      - key: PROTECT_APPROVE_ROUTES
+        value: "1"
+      - key: PROTECT_DIGEST_ROUTES
+        value: "1"
+      - key: PROTECT_DEBUG_ROUTES
+        value: "1"
+      - key: ENABLE_HSTS
+        value: "1"
+      - key: TRUST_PROXY
+        value: "1"
+
+      - key: SECURITY_PUBLIC_PATHS
+        value: "/healthz,/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/ops/approve/signed,/ops/reject/signed,/public/ticket/inspect,/public/pos-events/stream,/ops/manager/health,/ui/snapshot,/ui/snapshot/idle"
+      - key: SECURITY_PUBLIC_PREFIXES
+        value: "/public,/price,/static,/risk,/ultra"
+      - key: SECURITY_PROTECTED_PATHS
+        value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json,/admin,/manage-once,/manage-once/multi"
+
+      - key: ENABLE_CSP
+        value: "1"
+      - key: CSP_POLICY
+        value: "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; connect-src 'self' https: wss:; base-uri 'none'; frame-ancestors 'none'"
+
+      # --- Anti-replay / HTTP Signature ---
+      - key: ANTI_REPLAY_ENABLE
+        value: "1"
+      - key: ANTI_REPLAY_REQUIRE_SIGNATURE
+        value: "1"
+      - key: ANTI_REPLAY_NONCE_TTL_SEC
+        value: "180"
+      - key: SIG_TS_ENFORCE
+        value: "1"
+      - key: SIG_TS_SKEW_SEC
+        value: "900"
+
+      - key: RATE_LIMIT_ENABLE
+        value: "1"
+      - key: RL_FAIL_OPEN
+        value: "0"
+      - key: RATE_LIMIT_BACKEND
+        value: memory
+      - key: PUBLIC_TOPK_RPS
+        value: "2"
+      - key: PUBLIC_TOPK_WINDOW
+        value: "3"
+      - key: PUBLIC_NOW_RPS
+        value: "2"
+      - key: PUBLIC_NOW_WINDOW
+        value: "3"
+      - key: PUBLIC_CACHE_MAX_AGE
+        value: "20"
+      - key: PUBLIC_CACHE_PATHS
+        value: "/scan/public-topk,/scan/public-now,/topk"
+
+      - key: PUBLIC_WEB_RPS
+        value: "2"
+      - key: PUBLIC_WEB_BURST
+        value: "6"
+      - key: PUBLIC_REST_RPS
+        value: "5"
+      - key: PUBLIC_REST_BURST
+        value: "15"
+      - key: PUBLIC_SSE_MAX_CONNS
+        value: "40"
+      - key: PUBLIC_SSE_MAX_CONNS_PER_IP
+        value: "3"
+      - key: PUBLIC_RL_NS
+        value: "ops-supervisor-web:rl:staging"
+
+      - key: EXECUTOR_RL_RPS
+        value: "2"
+      - key: EXECUTOR_RL_BURST
+        value: "6"
+      - key: EXECUTOR_RL_WINDOW
+        value: "3"
+      - key: EXECUTOR_RL_NS
+        value: "ops-executor:rl:staging"
+
+      # ===== Redis (חובה) =====
+      - key: REDIS_URL
+        fromSecret: REDIS_URL_STAGING
+      - key: REQUIRE_REDIS
+        value: "1"
+      - key: READINESS_CHECK_REDIS
+        value: "1"
+      - key: READINESS_REDIS_RETRY
+        value: "1"
+
+      - key: CONFIRMSTORE_ENABLE
+        value: "1"
+      - key: USE_REDIS_IDEM
+        value: "0"
+      - key: IDEM_TTL_SEC
+        value: "120"
+      - key: SETEX_STRICT
+        value: "0"
+
+      - key: DEFAULT_MARKET
+        value: futures
+      - key: POSITION_MODE_OVERRIDE
+        value: hedge
+      - key: BINANCE_MARGIN_TYPE_DEFAULT
+        value: ISOLATED
+      - key: BINANCE_FUTURES_HTTP_BASE
+        value: https://fapi.binance.com
+      - key: BINANCE_FUTURES_WS_BASE
+        value: wss://fstream.binance.com/ws
+      - key: BINANCE_SPOT_HTTP_BASE
+        value: https://api.binance.com
+      - key: BINANCE_TESTNET
+        value: "false"
+      - key: BINANCE_WORKING_TYPE
+        value: MARK_PRICE
+      - key: BINANCE_HTTP_TIMEOUT
+        value: "10.0"
+      - key: BINANCE_MAX_RETRIES
+        value: "2"
+      - key: BINANCE_RECV_WINDOW
+        value: "45000"
+      - key: LISTENKEY_KEEPALIVE_SEC
+        value: "1800"
+      - key: WS_KEEPALIVE_SEC
+        value: "25"
+      - key: USE_WS
+        value: "1"
+      - key: USER_STREAM_ENABLE
+        value: "1"
+
+      - key: EXCHANGE_INFO_TTL_SEC
+        value: "900"
+
+      - key: ENABLE_AI_ROUTES
+        value: "1"
+      - key: PRICE_MONITOR_DISABLE
+        value: "0"
+
+      - key: SCAN_SOURCE
+        value: binance-futures
+      - key: UNIVERSE_MODE
+        value: exchange
+      - key: SCAN_INTERVALS
+        value: "5m,15m,1h,4h"
+      - key: SCAN_MAX_SYMBOLS
+        value: "80"
+      - key: SCAN_MAX_LIMIT
+        value: "0"
+      - key: SCAN_CONCURRENCY
+        value: "1"
+      - key: TOP_SYMBOLS
+        value: "40"
+      - key: SUGGEST_FUTURES
+        value: "1"
+      - key: SUGGEST_INTERVAL_SEC
+        value: "60"
+      - key: SUGGEST_CAP_PER_CYCLE
+        value: "15"
+      - key: SCAN_AUTOTICKET_ENABLE
+        value: "1"
+      - key: SCAN_NOTIFY_TELEGRAM
+        value: "0"
+
+      - key: INDICATOR_INTERVALS
+        value: "15m,1h,4h,1d"
+      - key: ENABLE_INDICATOR_EXIT
+        value: "1"
+      - key: ADX_MIN
+        value: "20"
+      - key: FEAT_DAILY_CAPS
+        value: "0"
+      - key: FEAT_DEBOUNCE_LIMIT
+        value: "1"
+      - key: FEAT_QUALITY_ENFORCE
+        value: "1"
+      - key: FEAT_SPREAD_DEPTH
+        value: "1"
+      - key: FEAT_TF_ALIGN
+        value: "1"
+      - key: FEAT_VOLUME_GATE
+        value: "1"
+      - key: FEAT_COOLDOWN
+        value: "0"
+      - key: MAX_ATR_PCT
+        value: "3"
+      - key: ALLOW_HTTP_IN_INDICATORS
+        value: "0"
+      - key: INDICATORS_SUBSET
+        value: ""
+
+      - key: ENTRY_SCORE_MODE
+        value: log
+      - key: ENTRY_SCORE_MIN
+        value: "0"
+      - key: ENTRY_SCORE_INTERVAL
+        value: "15m"
+      - key: ENTRY_SCORE_ENFORCE_ON_APPROVE
+        value: "0"
+      - key: CHECKLIST_LOG_FEATURES
+        value: "1"
+      - key: REGIME_ADX_TREND
+        value: "22"
+      - key: REGIME_CHOP_ATR
+        value: "0.6"
+      - key: REGIME_COMPRESSION_BW
+        value: "1.2"
+      - key: EMA_GAP_MAX_PCT
+        value: "6"
+      - key: IMPACT_SLIP_BPS_MAX
+        value: "25"
+
+      - key: SPREAD_ASSUME_PCT
+        value: "0.02"
+      - key: SPREAD_SOFT_PCT
+        value: "0.05"
+      - key: VOLATILITY_GATE_ATRPCT
+        value: "1.2"
+      - key: PREFER_HYBRID_DEFAULT
+        value: "1"
+
+      - key: W_REGIME
+        value: "2.0"
+      - key: W_COMPRESSION
+        value: "2.0"
+      - key: W_TRENDCONF
+        value: "3.0"
+      - key: W_RSI_COMP
+        value: "1.5"
+      - key: W_EMA_GAP
+        value: "1.5"
+
+      - key: ALLOWLIST_MODE
+        value: off
+      - key: SYMBOLS_ALLOWLIST_PATH
+        value: config/symbols_allowlist.json
+      - key: WATCHLIST
+        value: "BTCUSDT,ETHUSDT,SOLUSDT,BNBUSDT,NEARUSDT"
+
+      - key: SCAN_CRON_ENABLE
+        value: "1"
+      - key: SCAN_CRON_EVERY_SEC
+        value: "60"
+      - key: SCAN_CRON_TIMEFRAME
+        value: "15m"
+      - key: SCAN_CRON_KLINES
+        value: "150"
+      - key: SCAN_CRON_LIMIT
+        value: "8"
+      - key: SCAN_CRON_MIN_SCORE
+        value: "8.5"
+      - key: SCAN_REARM_SCORE
+        value: "6"
+      - key: SCAN_DEDUPE_WINDOW_SEC
+        value: "300"
+      - key: SCAN_TTL_SEC
+        value: "900"
+      - key: SCAN_RICH
+        value: "1"
+      - key: DEFAULT_LEVERAGE
+        value: "5"
+      - key: DEFAULT_STAKE_USDT
+        value: "25"
+
+      - key: APPROVAL_ENABLED
+        value: "1"
+      - key: REQUIRE_TELEGRAM_APPROVAL
+        value: "1"
+      - key: AUTO_OPEN_ON_APPROVE
+        value: "0"
+      - key: ALLOW_MARKET_ENTRY
+        value: "1"
+      - key: APPROVAL_REQUIRE_FRESH_PRICE
+        value: "0"
+      - key: CONFIRM_TTL_SEC
+        value: "600"
+
+      - key: PROPOSE_BLOCK_ON_FAIL
+        value: "1"
+      - key: APPROVAL_REQUIRE_WATCHLIST
+        value: "0"
+      - key: APPROVAL_RR_MIN
+        value: "0"
+      - key: APPROVAL_SUCCESS_MIN
+        value: "0"
+      - key: APPROVAL_DUP_COOLDOWN_SEC
+        value: "0"
+
+      - key: OPS_TICKET_TTL_SEC
+        value: "900"
+      - key: ONLY_TRADE_NOTIFICATIONS
+        value: "1"
+      - key: NOTIFY_LEVEL
+        value: critical
+      - key: STARTUP_NOTIFY_ENABLE
+        value: "0"
+      - key: ADMIN_CHAT_ID
+        value: "449087907"
+      - key: TELEGRAM_CHAT_ID
+        value: "449087907"
+      - key: TELEGRAM_ADMIN_IDS
+        value: "449087907"
+      - key: TELEGRAM_AUTO_WEBHOOK
+        value: "1"
+      - key: TELEGRAM_PARSE_MODE
+        value: HTML
+      - key: TELEGRAM_RICH_MSG
+        value: "0"
+      - key: ALLOW_PUBLIC_META_TELEGRAM_SEND
+        value: "0"
+      - key: TELEGRAM_SEND_ENABLE
+        value: "1"
+      - key: HTTP2_ENABLE
+        value: "1"
+
+      - key: EXECUTE_TRADES
+        value: "1"
+      - key: MANAGER_WRITES_ORDERS
+        value: "1"
+
+      # ===== חובה ל-Native TPSL =====
+      - key: ORDERS_USE_OCO
+        value: "1"
+
+      - key: ORDER_ID_PREFIX
+        value: ALG
+      - key: ORDER_ID_INCLUDE_TS
+        value: "1"
+      - key: ORDER_BACKOFF_BASE_MS
+        value: "120"
+      - key: ORDER_BACKOFF_MAX_MS
+        value: "1600"
+      - key: ORDER_ROUND_TO_TICK
+        value: "1"
+      - key: USE_EXCHANGE_FILTERS
+        value: "1"
+      - key: ORD_VERIFY_TIMEOUT_MS
+        value: "800"
+      - key: ORD_CANCEL_STRATEGY
+        value: MINIMAL
+      - key: MAX_TRADES_PER_TICK
+        value: "1"
+      - key: MIN_NOTIONAL_USDT
+        value: "5"
+
+      - key: MAX_TRADE_BUDGET
+        value: "200"
+      - key: ORDER_TRIGGER
+        value: mark
+      - key: POST_ONLY
+        value: "0"
+
+      - key: REST_COOLDOWN_SEC
+        value: "10"
+      - key: RETRY_MAX
+        value: "3"
+      - key: RETRY_BASE_MS
+        value: "700"
+      - key: RETRY_JITTER
+        value: "1"
+
+      - key: PRICE_DP_OVERRIDE__BTCUSDT
+        value: "1"
+      - key: QTY_STEP_OVERRIDE__BTCUSDT
+        value: "0.001"
+
+      - key: AUTO_QTY_ENABLE
+        value: "1"
+      - key: AUTO_QTY_MODE
+        value: notional
+      - key: AUTO_QTY_MARGIN_BUFFER_PCT
+        value: "0.15"
+      - key: AUTO_LEV_MIN
+        value: "20"
+      - key: AUTO_LEV_MAX
+        value: "35"
+      - key: AUTO_BUDGET_MIN
+        value: "100"
+      - key: AUTO_BUDGET_MAX
+        value: "200"
+
+      - key: NATIVE_TPSL_ENABLE
+        value: "1"
+      - key: SL_MONOTONIC
+        value: "1"
+
+      - key: STRUCT_SL_ENABLE
+        value: "1"
+      - key: GRACE_ENABLE
+        value: "0"
+
+      - key: GRACE_TIME_SEC
+        value: "420"
+      - key: GRACE_MAX_MAE_ATR
+        value: "1.2"
+      - key: PERCENT_GUARD_ENABLE
+        value: "1"
+      - key: PERCENT_PRICE_GUARD_BPS
+        value: "180"
+      - key: ENTRY_BAND_BPS
+        value: "25"
+      - key: ENTRY_GAP_MAX_PCT
+        value: "0.80"
+      - key: ENTRY_GAP_WARN_PCT
+        value: "0.50"
+      - key: STOP_BAND_BPS
+        value: "20"
+      - key: TP_BE_OFFSET_BPS
+        value: "12"
+      - key: STREAM_TP_BE
+        value: "1"
+
+      - key: TP_LADDER_ON_APPROVE
+        value: "0"
+      - key: SMART_MANAGE_ON_APPROVE
+        value: "1"
+
+      - key: SMART_MANAGE_BE_OFFSET_BPS
+        value: "5"
+      - key: SMART_MANAGE_PCTS
+        value: "3,6,10,16"
+      - key: SMART_MANAGE_SPLITS
+        value: "0.25,0.25,0.25,0.25"
+      - key: SMART_MANAGE_TRAIL_ATR_MULT
+        value: "1.6"
+
+      - key: LADDER_TP_ENABLE
+        value: "0"
+      - key: LADDER_SL_ENABLE
+        value: "1"
+      - key: TP_MAX_LADDERS
+        value: "3"
+      - key: TP_MERGE_TICK_BAND
+        value: "1"
+      - key: TP_REARM_TICK
+        value: "1"
+
+      - key: PROFIT_LOCK_STEPS
+        value: "0.8,1.2,1.8"
+
+      - key: STRUCT_SL_LOOKBACK
+        value: "50"
+      - key: STRUCT_SL_LEFT
+        value: "3"
+      - key: STRUCT_SL_RIGHT
+        value: "3"
+      - key: STRUCT_SL_BUFFER_BPS
+        value: "3"
+      - key: STRUCT_SL_MERGE_MODE
+        value: tight
+      - key: TIME_STOP_MIN
+        value: "20"
+      - key: TIME_STOP_KEEP_PROFIT_MIN_PCT
+        value: "0.5"
+
+      - key: PROFILE_BASE_BE_BPS
+        value: "5"
+      - key: TRAIL_ENABLE
+        value: "1"
+      - key: TRAIL_ATR_MULT
+        value: "1.6"
+      - key: ATR_UPDATE_COOLDOWN_SEC
+        value: "20"
+      - key: ATR_MIN_DELTA
+        value: "0.02"
+      - key: HYSTERESIS_ATR_FRAC
+        value: "0.2"
+      - key: SL_MIN_STEP_BPS
+        value: "3"
+
+      - key: BE_ARM_PCT
+        value: "0.45"
+      - key: BE_GUARD_ENABLE
+        value: "1"
+      - key: BE_GUARD_EVERY_SEC
+        value: "20"
+      - key: BE_TRIGGER_REQUIRE_ADX
+        value: "20"
+      - key: BE_TRIGGER_PROG_TO_TP1_PCT
+        value: "0.35"
+      - key: PROG_TO_TP1_FALLBACK_PCT
+        value: "0.60"
+      - key: TRAIL_IN_CHOP
+        value: "1"
+      - key: TP_SL_REFRESH_SEC
+        value: "60"
+      - key: MANAGER_REISSUE_ENABLE
+        value: "1"
+      - key: MANAGER_REISSUE_POLICY
+        value: cancel_replace
+
+      - key: AUTO_TRAIL_ADX_MIN
+        value: "20"
+      - key: AUTO_TRAIL_ATRPCT_MAX
+        value: "0.02"
+      - key: BE_BASE_BPS
+        value: "4"
+      - key: BE_ADX_FACTOR
+        value: "0.2"
+      - key: BE_MIN_BPS
+        value: "2"
+      - key: BE_MAX_BPS
+        value: "18"
+      - key: BE_STAIR_STEPS
+        value: "1"
+      - key: BE_STAIR_FACTOR
+        value: "0.5"
+      - key: TRAIL_DEFAULT_ATR_MULT
+        value: "1.4"
+
+      - key: TRAIL_RT_ENABLE
+        value: "1"
+      - key: TRAIL_RT_INTERVAL_SEC
+        value: "20"
+      - key: TRAIL_RT_ATR_MULT
+        value: "1.4"
+      - key: TRAIL_RT_MIN_CALLBACK
+        value: "0.08"
+      - key: TRAIL_RT_MAX_CALLBACK
+        value: "1.0"
+      - key: TRAIL_RT_PRICE_SRC
+        value: MARK_PRICE
+      - key: TRAIL_RT_MAX_SYMBOLS
+        value: "20"
+      - key: TRAIL_RT_ADJUST_THRESHOLD
+        value: "0.2"
+      - key: TRAIL_RT_WATCHLIST
+        value: ""
+
+      - key: AUTO_FLIP_ENABLE
+        value: "1"
+      - key: AUTO_FLIP_NEUTRAL
+        value: "1"
+      - key: AUTOFLIP_EVAL_COOLDOWN_SEC
+        value: "20"
+      - key: AUTOFLIP_FLIP_COOLDOWN_SEC
+        value: "120"
+      - key: AUTOFLIP_MOVE_BPS
+        value: "3"
+      - key: AUTOFLIP_MAX_SYMBOLS
+        value: "20"
+
+      - key: LONG_REQ
+        value: "ema21>=ema50 and adx>=22 and atrpct<=0.02"
+      - key: SHORT_REQ
+        value: "ema21<=ema50 and adx>=22 and atrpct<=0.02"
+      - key: NEUTRAL_REQ
+        value: "between(rsi,45,55) or abs(macd_hist)<0.05"
+      - key: REGIME_ADX_MIN_15m
+        value: "22"
+
+      - key: HEALTH_ALERTS_ENABLE
+        value: "1"
+      - key: HEALTH_ALERTS_COOLDOWN_SEC
+        value: "120"
+
+      - key: HEALTH_PRICE_MAX_AGE
+        value: "30"
+      - key: HEALTH_TP_GRACE_SEC
+        value: "8"
+      - key: HEALTH_TP1_ENABLE
+        value: "0"
+      - key: HEALTH_TP1_INTERVAL_SEC
+        value: "1200"
+      - key: HEALTH_TP1_ONLY_WITH_POSITION
+        value: "1"
+      - key: TP1_TAGS
+        value: "TP1,tp1,tp_1,TAKE_PROFIT_1"
+      - key: OPS_DIGEST_INTERVAL_HOURS
+        value: "6"
+      - key: OPS_HEARTBEAT_ENABLE
+        value: "0"
+      - key: OPS_HEARTBEAT_EVERY_MIN
+        value: "5"
+      - key: HEARTBEAT_HOURS
+        value: "2"
+      - key: HEARTBEAT_MIN_SCORE
+        value: "6"
+      - key: ANTI_STALE_MIN
+        value: "15"
+      - key: ANTI_STALE_NUDGE_BPS
+        value: "2"
+      - key: DIGEST_MAX_LINES_DEFAULT
+        value: "30"
+      - key: DIGEST_SEND_TELEGRAM
+        value: "0"
+
+      - key: ETA_SMART_ENABLE
+        value: "1"
+      - key: ETA_VELOCITY_WINDOW
+        value: "30"
+      - key: DEFAULT_INTERVAL
+        value: "15m"
+
+      - key: GUARDER_ENABLE
+        value: "1"
+      - key: GUARDER_INTERVAL_SEC
+        value: "45"
+
+      - key: READINESS_CHECK_BINANCE
+        value: "1"
+      - key: READINESS_CHECK_REDIS
+        value: "1"
+      - key: READINESS_CHECK_SQLITE
+        value: "0"
+      - key: READINESS_FAIL_GRACE_SEC
+        value: "5"
+      - key: READINESS_BINANCE_RETRY
+        value: "1"
+      - key: READINESS_REDIS_RETRY
+        value: "1"
+      - key: SQLITE_PATH
+        value: /app/data/state-staging.db
+
+      - key: PROM_METRICS_ENABLE
+        value: "1"
+      - key: PROM_METRICS_PATH
+        value: /metrics
+      - key: METRICS_PROTECT
+        value: "1"
+      - key: PUBLIC_METRICS_REQUIRE_BEARER
+        value: "1"
+      - key: HTTP_LATENCY_BUCKETS
+        value: "0.05,0.1,0.25,0.5,1,2,5"
+      - key: TP1_TIME_BUCKETS
+        value: "30,60,120,300,600,1200,3600"
+      - key: SLIP_BPS_BUCKETS
+        value: "1,2,5,10,20,50,100"
+      - key: METRICS_BEARER
+        fromSecret: METRICS_BEARER_STAGING
+
+      - key: DAILY_LOSS_CAP_USDT
+        value: "150"
+      - key: KILL_ON_CAP
+        value: "1"
+      - key: PRICE_PROTECT
+        value: "1"
+      - key: MAX_LOSS_PER_SYMBOL_USDT
+        value: "50"
+      - key: DAILY_MAX_TRADES_PER_SYMBOL
+        value: "4"
+      - key: CAPS_PER_SYMBOL_WINDOW_SEC
+        value: "3600"
+      - key: THREE_STRIKE_N
+        value: "3"
+      - key: THREE_STRIKE_WINDOW_SEC
+        value: "86400"
+      - key: SAFE_MODE
+        value: "1"
+      - key: EQUITY_USDT
+        value: "2000"
+      - key: EQUITY_ATH_USDT
+        value: "4000"
+      - key: EQUITY_DRAWDOWN_GUARD_PCT
+        value: "25"
+      - key: CORR_CAP_BETA
+        value: "1.6"
+      - key: VOL_TARGET_PCT
+        value: "0.015"
+      - key: KELLY_LITE_CAP
+        value: "0.5"
+      - key: GAP_SHOCK_BPS
+        value: "80"
+
+      - key: METRICS_ENABLE
+        value: "true"
+      - key: PNL_TRACKING
+        value: "true"
+      - key: PARAMS_DIR
+        value: params/optimized
+      - key: DATABASE_URL
+        value: sqlite:////app/data/algogpt-staging.db
+      - key: PRICE_CACHE_TTL_MS
+        value: "250"
+      - key: PRICE_MAX_AGE_SEC
+        value: "15"
+      - key: PRICE_WS_FRESH_TTL
+        value: "60"
+      - key: PRICE_SCAN_INTERVAL
+        value: "60"
+
+      - key: MANAGER_ENABLE
+        value: "1"
+      - key: TRADE_MANAGER_ENABLE
+        value: "1"
+      - key: MANAGER_INTERVAL_SEC
+        value: "20"
+      - key: ALLOW_MANAGE_OPEN_TRADES
+        value: "1"
+
+      - key: ADOPT_MANUAL_ENABLE
+        value: "1"
+      - key: ADOPT_MODE
+        value: execute
+      - key: ADOPT_MIN_USDT
+        value: "10"
+      - key: ADOPT_SYMBOL_ALLOWLIST
+        value: "*"
+      - key: ADOPT_MARKET
+        value: futures
+      - key: ADOPT_POSITION_MODE
+        value: hedge
+      - key: ADOPT_NATIVE_TPSL
+        value: "1"
+
+      - key: AUTO_BE_BPS
+        value: "8"
+      - key: AUTO_ATR_MULT
+        value: "1.6"
+      - key: AUTO_TP_PCTS
+        value: ""
+      - key: AUTO_TP_SPLITS
+        value: ""
+      - key: AUTO_POLL_SEC
+        value: "30"
+
+      - key: BTC_GATE_ENABLE
+        value: "1"
+      - key: BTC_GATE_TF
+        value: "15m"
+      - key: BTC_LONG_REQ
+        value: "ema21>=ema50"
+      - key: BTC_SHORT_REQ
+        value: "ema21<=ema50"
+
+      - key: PUBLIC_SSE_HEARTBEAT_SEC
+        value: "20"
+      - key: PUBLIC_SSE_MAX_IDLE_SEC
+        value: "300"
+      - key: PUBLIC_SSE_GZIP
+        value: "0"
+
+      - key: POLICY_DSL_PATH
+        value: policies/dynamic_policy.yaml
+      - key: POLICY_SCHEMA_PATH
+        value: config/policy_schema.json
+
+      - key: ROUTES_AUTOLOAD
+        value: "1"
+      - key: ROUTES_AUTOLOAD_MODE
+        value: background
+      - key: ROUTES_ALLOW
+        value: "*"
+      - key: ROUTES_DENY
+        value: ""
+      - key: ROUTES_VERBOSE
+        value: "0"
+
+      - key: ROUTES_AUTO_DISCOVERY
+        value: "1"
+      - key: ROUTES_NEED_TG_APPROVAL
+        value: "0"
+      - key: ROUTES_PUBLIC_PREFIX
+        value: /public
+      - key: ROUTES_PROTECTED_PREFIXES
+        value: "/ops,/manager,/routes,/webhook,/guard,/admin"
+      - key: ROUTES_TAGS_REQUIRE
+        value: ""
+      - key: ROUTES_TAGS_DENY
+        value: "internal,debug"
+      - key: ROUTES_APPROVE_ENDPOINT
+        value: /ops/approve
+      - key: ROUTES_DEFAULT_TIMEOUT_SEC
+        value: "30"
+      - key: ROUTES_DEFAULT_RL_RPS
+        value: "5"
+      - key: ROUTES_DEFAULT_RL_BURST
+        value: "15"
+      - key: ENABLE_ROUTES
+        value: ""
+      - key: DISABLE_ROUTES
+        value: ""
+      - key: ROUTES_DENY_GLOBS
+        value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/risk/*/internal*"
+
+      - key: API_BEARER_TOKEN_RO
+        fromSecret: API_BEARER_TOKEN_RO_STAGING
+      - key: API_BEARER_TOKEN_ACTION
+        fromSecret: API_BEARER_TOKEN_ACTION_STAGING
+      - key: API_BEARER_TOKEN
+        fromSecret: API_BEARER_TOKEN_STAGING
+      - key: API_TOKEN
+        fromSecret: API_TOKEN_STAGING
+      - key: PRIMARY_API_TOKEN
+        fromSecret: PRIMARY_API_TOKEN_STAGING
+      - key: API_SIGNING_SECRET
+        fromSecret: OPS_SIGN_SECRET_STAGING
+      - key: OPS_SIGN_SECRET
+        fromSecret: OPS_SIGN_SECRET_STAGING
+      - key: WEBHOOK_HMAC_SECRET
+        fromSecret: WEBHOOK_HMAC_SECRET_STAGING
+      - key: ALERTS_INGEST_HMAC_SECRET
+        fromSecret: ALERTS_INGEST_HMAC_SECRET_STAGING
+      - key: INTERNAL_JWT_PUBLIC_KEY
+        fromSecret: INTERNAL_JWT_PUBLIC_KEY_STAGING
+      - key: BINANCE_API_KEY
+        fromSecret: BINANCE_API_KEY_STAGING
+      - key: BINANCE_API_SECRET
+        fromSecret: BINANCE_API_SECRET_STAGING
+      - key: ETHERSCAN_API_KEY
+        fromSecret: ETHERSCAN_API_KEY_STAGING
+
+      - key: POS_PUB_ENABLE
+        value: "1"
+      - key: POS_PUB_INTERVAL_SEC
+        value: "30"
+
+      - key: POS_EVENTS_ENABLE
+        value: "1"
+      - key: POS_EVENTS_KEY
+        value: pos:events:staging
+      - key: POS_EVENTS_CHAN
+        value: pos:events:chan:staging
+      - key: POS_EVENTS_MAX
+        value: "300"
+      - key: POS_EVENTS_EXPIRE_SEC
+        value: "43200"
+      - key: POS_EVENTS_TELEGRAM_ENABLE
+        value: "1"
+      - key: POS_EVENTS_TELEGRAM_LEVEL
+        value: info
+
+      - key: DYNAMIC_CONTROL_ENABLE
+        value: "1"
+      - key: DYNAMIC_SAFETY_MODE
+        value: on
+      - key: DYNAMIC_TARGET_P95_MS
+        value: "900"
+      - key: DYNAMIC_ERROR_RATE_MAX_PCT
+        value: "2.0"
+      - key: DYNAMIC_CPU_HIGH_WATERMARK_PCT
+        value: "80"
+      - key: DYNAMIC_CPU_LOW_WATERMARK_PCT
+        value: "45"
+      - key: DYNAMIC_MEM_HIGH_WATERMARK_PCT
+        value: "85"
+      - key: DYNAMIC_MEM_LOW_WATERMARK_PCT
+        value: "45"
+      - key: DYNAMIC_SCALE_INTERVAL_SEC
+        value: "30"
+      - key: DYNAMIC_MIN_STABILIZE_SEC
+        value: "90"
+
+      - key: ADAPTIVE_RL_ENABLE
+        value: "1"
+      - key: ADAPTIVE_RL_MIN_RPS
+        value: "3"
+      - key: ADAPTIVE_RL_MAX_RPS
+        value: "10"
+      - key: ADAPTIVE_RL_BURST_MIN
+        value: "6"
+      - key: ADAPTIVE_RL_BURST_MAX
+        value: "30"
+      - key: ADAPTIVE_SSE_ENABLE
+        value: "1"
+      - key: ADAPTIVE_SSE_MAX_CONNS_MIN
+        value: "20"
+      - key: ADAPTIVE_SSE_MAX_CONNS_MAX
+        value: "60"
+      - key: ADAPTIVE_SSE_PER_IP_MIN
+        value: "1"
+      - key: ADAPTIVE_SSE_PER_IP_MAX
+        value: "3"
+
+      - key: ADAPTIVE_SCAN_ENABLE
+        value: "1"
+      - key: SCAN_CONCURRENCY_MIN
+        value: "1"
+      - key: SCAN_CONCURRENCY_MAX
+        value: "2"
+      - key: SCAN_INTERVAL_SEC_MIN
+        value: "30"
+      - key: SCAN_INTERVAL_SEC_MAX
+        value: "90"
+      - key: ADAPTIVE_MANAGER_ENABLE
+        value: "1"
+      - key: MANAGER_INTERVAL_SEC_MIN
+        value: "20"
+      - key: MANAGER_INTERVAL_SEC_MAX
+        value: "60"
+
+      - key: LOAD_SHED_ENABLE
+        value: "1"
+      - key: LOAD_SCHED_P95_HARD_MS
+        value: "1500"
+      - key: LOAD_SHED_QUEUE_MAX
+        value: "200"
+      - key: LOAD_SHED_REJECT_PCT_STEP
+        value: "10"
+
+      - key: DYNAMIC_REDIS_GUARDS_ENABLE
+        value: "0"
+      - key: DYNAMIC_BINANCE_GUARDS_ENABLE
+        value: "1"
+      - key: HALT_TRADING_ON_DEGRADED_HEALTH
+        value: "1"
+      - key: HEALTH_RECOVERY_GRACE_SEC
+        value: "120"
+
+      - key: PROFILE_BASE_PCTS
+        value: "3,6,10,16"
+      - key: PROFILE_BASE_SPLITS
+        value: "0.25,0.25,0.25,0.25"
+      - key: PROFILE_BASE_ATR_MULT
+        value: "1.6"
+      - key: ADX_EXTREME_MIN
+        value: "28"
+      - key: ATRPCT_EXTREME_MIN
+        value: "0.007"
+      - key: PROFILE_EXTREME_BE_BPS
+        value: "2"
+      - key: PROFILE_EXTREME_PCTS
+        value: "2,4,7,12"
+      - key: PROFILE_EXTREME_SPLITS
+        value: "0.20,0.25,0.25,0.30"
+      - key: PROFILE_EXTREME_ATR_MULT
+        value: "1.6"
+
+      - key: BINANCE_FAPI
+        value: https://fapi.binance.com
+
+      - key: UI_POLL_MS
+        value: "2000"
+      - key: UI_IDLE_STOP_SEC
+        value: "30"
+
+      - key: DYNAMIC_PROFILE_ENABLE
+        value: "1"
+      - key: DYN_PROFILE_ADX_RANGE
+        value: "16,40"
+      - key: DYN_PROFILE_ATR_PCT_RANGE
+        value: "0.25,2.20"
+      - key: DYN_PROFILE_PRIORITIES
+        value: "panic>vaggr>aggr>base>cons"
+      - key: PROFILE_ASSET_MAP
+        value: "BTC=cons;ETH=cons;ALTS=aggr;LOWCAP=vaggr"
+      - key: DYN_SWITCH_HYST_MS
+        value: "120000"
+      - key: DYN_EVAL_EVERY_MS
+        value: "20000"
+      - key: CACHE_INDIC_TTL_SEC
+        value: "30"
+      - key: CACHE_DELTA_TTL_SEC
+        value: "20"
+
+      - key: CONS_DELTA_QTY_MIN
+        value: "120000"
+      - key: CONS_PANIC_ATR_PCT
+        value: "2.2"
+      - key: CONS_FLIP_MIN_ROE_NEG
+        value: "-2.2"
+      - key: CONS_FLIP_COOLDOWN_SEC
+        value: "600"
+      - key: CONS_FLIP_ADX_MIN
+        value: "24"
+      - key: CONS_FLIP_ATR_PCT_MIN
+        value: "0.45"
+      - key: CONS_FLIP_MAX_PCT_SLIPPAGE
+        value: "0.8"
+      - key: CONS_TP_PROFILE
+        value: "2,4,7,12"
+      - key: CONS_TP_SPLITS
+        value: "0.35,0.30,0.20,0.15"
+      - key: CONS_TRAIL_ATR_MULT
+        value: "1.8"
+      - key: CONS_BE_BPS
+        value: "6"
+      - key: CONS_TIME_MAX_MIN
+        value: "120"
+      - key: CONS_TIME_MIN_ROE_NEG
+        value: "-0.7"
+
+      - key: AGGR_DELTA_QTY_MIN
+        value: "60000"
+      - key: AGGR_PANIC_ATR_PCT
+        value: "1.4"
+      - key: AGGR_FLIP_MIN_ROE_NEG
+        value: "-0.9"
+      - key: AGGR_FLIP_COOLDOWN_SEC
+        value: "180"
+      - key: AGGR_FLIP_ADX_MIN
+        value: "20"
+      - key: AGGR_FLIP_ATR_PCT_MIN
+        value: "0.35"
+      - key: AGGR_FLIP_MAX_PCT_SLIPPAGE
+        value: "1.2"
+      - key: AGGR_TP_PROFILE
+        value: "3,6,10,16"
+      - key: AGGR_TP_SPLITS
+        value: "0.30,0.30,0.25,0.15"
+      - key: AGGR_TRAIL_ATR_MULT
+        value: "1.3"
+      - key: AGGR_BE_BPS
+        value: "4"
+      - key: AGGR_TIME_MAX_MIN
+        value: "60"
+      - key: AGGR_TIME_MIN_ROE_NEG
+        value: "-0.4"
+
+      - key: VAGGR_DELTA_QTY_MIN
+        value: "45000"
+      - key: VAGGR_PANIC_ATR_PCT
+        value: "1.1"
+      - key: VAGGR_FLIP_MIN_ROE_NEG
+        value: "-0.6"
+      - key: VAGGR_FLIP_COOLDOWN_SEC
+        value: "120"
+      - key: VAGGR_FLIP_ADX_MIN
+        value: "19"
+      - key: VAGGR_FLIP_ATR_PCT_MIN
+        value: "0.28"
+      - key: VAGGR_FLIP_MAX_PCT_SLIPPAGE
+        value: "1.4"
+      - key: VAGGR_TP_PROFILE
+        value: "4,8,14,22"
+      - key: VAGGR_TP_SPLITS
+        value: "0.28,0.30,0.22,0.20"
+      - key: VAGGR_TRAIL_ATR_MULT
+        value: "1.2"
+      - key: VAGGR_BE_BPS
+        value: "3"
+      - key: VAGGR_TIME_MAX_MIN
+        value: "45"
+      - key: VAGGR_TIME_MIN_ROE_NEG
+        value: "-0.35"
 
