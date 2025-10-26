@@ -312,6 +312,7 @@ def _include_ui_grid_router():
             logger.info("ui_grid: mode=off (not included)")
     except Exception as e:
         logger.warning("ui_grid include failed (mode=%s): %s", UI_GRID_MODE, e)
+
 # ============= Public feed fallbacks (no-404) =============
 def _route_exists(path: str, method: str = "GET") -> bool:
     try:
@@ -409,7 +410,6 @@ app.add_middleware(
     allow_methods=[m.strip() for m in CORS_ALLOW_METHODS.split(",")] if CORS_ALLOW_METHODS else ["*"],
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
 )
-
 # ==================== Env & helpers ====================
 def get_internal_base() -> str:
     internal = (os.getenv("INTERNAL_BASE") or "").strip()
@@ -596,19 +596,25 @@ def _sha256_b64(data: bytes) -> str:
     return b64encode(hashlib.sha256(data).digest()).decode()
 
 def _parse_signature_auth(h: str) -> Optional[Dict[str, Any]]:
+    """
+    Parse 'Authorization: Signature keyId="...",algorithm="...",headers="...",signature="..."'
+    (Fixed per your patch: robust parsing and normalized keys)
+    """
     if not h or not h.lower().startswith("signature "):
         return None
     s = h[len("Signature "):].strip()
     parts: Dict[str, str] = {}
     for kv in re.split(r'\s*,\s*', s):
-        if "="" not in kv:
+        # expect key="value" pairs
+        if '="' not in kv:
             continue
         k, v = kv.split("=", 1)
         v = v.strip()
         if v.startswith('"') and v.endswith('"'):
             v = v[1:-1]
-        parts[k].strip()
-        parts[k.strip()] = v
+        # normalize the key and store value
+        k = k.strip()
+        parts[k] = v
     if not {"keyId", "algorithm", "headers", "signature"}.issubset(parts.keys()):
         return None
     return {
@@ -773,6 +779,7 @@ async def _enforce_nonce_once(request: Request) -> None:
     if key in bucket:
         raise HTTPException(status_code=401, detail="nonce_replay")
     bucket[key] = now
+
 def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
     try:
         if len(secret_hex_or_text) == 64:
@@ -1120,7 +1127,6 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                     await r.expire(idem_key, int(IDEM_TTL_SEC))
         except Exception as e:
             logger.debug("telegram_idem_warning: %s", e)
-
     if not TELEGRAM_BOT_TOKEN or not ADMIN_CHAT_ID:
         return {"ok": False, "skipped": True}
     try:
@@ -1359,7 +1365,6 @@ def _round_to_lot_size(client, symbol: str, qty: float) -> float:
         return float(qty)
     except Exception:
         return float(qty)
-
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     with suppress(Exception):
         from utils.trade_executor import place_futures_market  # type: ignore
@@ -1582,6 +1587,7 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket.pop("positionSide", None)
         new_ticket["position_side"] = ""
     return new_ticket
+
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
 
@@ -2499,12 +2505,7 @@ async def root():
         "http2": _http2_enabled_runtime(),
         "ui": {"poll_ms": UI_POLL_MS, "idle_stop_sec": UI_IDLE_STOP_SEC},
         "public_paths": PUBLIC_CACHE_PATHS,
-        "ts": int(time.time())
     }
-
-@app.get("/healthz", tags=["public"])
-async def healthz():
-    return {"ok": True, "ts": int(time.time())}
 
 # ================ Telegram webhook (optional minimal) ================
 @app.post("/telegram/webhook", tags=["telegram"])
@@ -2518,27 +2519,26 @@ async def telegram_webhook(request: Request):
             return JSONResponse({"ok": False, "error": "bad_secret_token"}, status_code=401)
     except Exception:
         pass
+    # TODO: handle updates if needed (commands, callbacks, etc.)
+    # For now, acknowledge receipt to avoid Telegram retries.
     return JSONResponse({"ok": True})
 
-# ================ Manage-once (signed) stub ================
-@app.get("/manage-once/signed", tags=["manager"])
-async def manage_once_signed(symbol: str = Query(...), ticket_id: Optional[str] = Query(None), exp: str = Query(...), sig: str = Query(...), request: Request = None):
-    if not _verify_signed_params(ticket_id or symbol, exp, sig, "/manage-once/signed"):
-        raise HTTPException(status_code=401, detail="Bad or expired signature")
-    with suppress(Exception):
-        await _smart_manage_now(symbol.upper())
-    return JSONResponse({"ok": True, "symbol": symbol.upper(), "managed": True})
+# ================ Smoke/guard routes (examples) ================
+@app.get("/guard/smoke/run", tags=["public"])
+async def smoke():
+    return {"ok": True, "ts": int(time.time())}
 
-# ================ Mount app ================
+# ================ Run (optional) ================
 def _port() -> int:
     try:
-        return int(os.getenv("PORT", "10000") or "10000")
+        return int(os.getenv("PORT", "8000") or 8000)
     except Exception:
-        return 10000
+        return 8000
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False, http="h11", ws="auto")
+    import uvicorn  # type: ignore
+    uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=bool(os.getenv("RELOAD", "0") in ("1","true","yes","on")))
+
 
 
 
