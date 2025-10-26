@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, time, math, logging, threading
+from contextlib import suppress
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 from utils.metrics_tracker import observe_http, observe_http_ctx  # מדידת לטנסי/HTTP
@@ -648,6 +649,47 @@ def apply_price_tick_side(price: float, symbol: str, side: str) -> tuple[str, fl
         pass
     return p_str, float(p_str)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# מינוף FUTURES — עטיפה בטוחה שלא מפילה את המערכת
+# ──────────────────────────────────────────────────────────────────────────────
+def set_leverage(symbol: str, leverage: int, *, client: Optional[Client] = None) -> bool:
+    """
+    מעטפת בטוחה להגדרת מינוף על Binance Futures.
+    מחזירה True בהצלחה, False בכישלון — לא מפילה את המערכת.
+    """
+    try:
+        sym = (symbol or "").upper().strip()
+        lev = int(leverage or 0)
+        if not sym or lev <= 0:
+            return False
+
+        # קבלת client קיים או lazy-init מהקובץ
+        cli = client or _get_client()
+        if cli is None:
+            logger.warning("set_leverage: client unavailable (keys/library/init).")
+            return False
+
+        # אופציונלי: שליטה במצב פוזיציה לפי ENV (אם קיים)
+        mode = (HEDGE_MODE_OVERRIDE or "").strip().lower()
+        try:
+            if mode in ("hedge", "dual", "dual_side", "dualposition", "dual_side_position"):
+                with suppress(Exception):
+                    cli.futures_change_position_mode(dualSidePosition="true")  # type: ignore[attr-defined]
+            elif mode in ("oneway", "one_way", "single", "single_side", "oneside", "0", "off", "false", "no"):
+                with suppress(Exception):
+                    cli.futures_change_position_mode(dualSidePosition="false")  # type: ignore[attr-defined]
+        except Exception:
+            # לא קריטי
+            pass
+
+        # שינוי מינוף
+        cli.futures_change_leverage(symbol=sym, leverage=lev)  # type: ignore[attr-defined]
+        logger.info("set_leverage: %s -> x%d", sym, lev)
+        return True
+    except Exception as e:
+        logger.warning("set_leverage failed (%s): %s", symbol, e)
+        return False
+
 __all__ = [
     "client",
     "get_futures_client",
@@ -677,6 +719,7 @@ __all__ = [
     "get_klines_df",
     "close_all_positions",
     "apply_price_tick_side",
+    "set_leverage",                # ← נוספה ל־__all__
 ]
 
 
