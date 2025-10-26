@@ -16,7 +16,7 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY requirements.txt .
 
-# התקנה בשכבת build (ל-prefix /install כדי להעביר לשכבת הריצה)
+# install deps into /install to copy later
 RUN python -m pip install --upgrade pip setuptools wheel \
  && pip install --prefix=/install --no-cache-dir --upgrade-strategy eager -r requirements.txt \
  && pip check
@@ -34,42 +34,41 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONOPTIMIZE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PYTHONPATH=/app \
-    WEB_CONCURRENCY=1 \
-    GUNICORN_TIMEOUT=180 \
-    GUNICORN_GRACEFUL_TIMEOUT=45 \
-    GUNICORN_KEEPALIVE=30 \
-    GUNICORN_MAX_REQUESTS=500 \
-    GUNICORN_MAX_REQUESTS_JITTER=50 \
-    MPLCONFIGDIR=/app/.cache/matplotlib \
     TZ=Asia/Jerusalem \
     DEBIAN_FRONTEND=noninteractive \
     PORT=10000 \
     APP_VERSION=${APP_VERSION} \
     ALGOGPT_VERSION=${APP_VERSION} \
-    HTTP2_ENABLE=1
+    # Gunicorn defaults (ניתן לשנות ב-ENV של Render)
+    WEB_CONCURRENCY=1 \
+    GUNICORN_TIMEOUT=180 \
+    GUNICORN_GRACEFUL_TIMEOUT=45 \
+    GUNICORN_KEEPALIVE=30 \
+    GUNICORN_MAX_REQUESTS=500 \
+    GUNICORN_MAX_REQUESTS_JITTER=50
 
-# ספריות ריצה + כלי shell להרצה מתוך ה-pod
+# packages needed at runtime
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     tini ca-certificates tzdata bash curl openssl xxd uuid-runtime sed gawk coreutils git \
     libopenblas0-openmp liblapack3 \
     libfreetype6 libpng16-16 libjpeg62-turbo zlib1g \
  && rm -rf /var/lib/apt/lists/*
 
-# תלויות מפאזה 1
+# copy python deps from builder
 COPY --from=builder /install /usr/local
 
-# משתמש לא-רוט
+# non-root user
 RUN useradd -ms /bin/bash appuser
 
 WORKDIR /app
 
-# העתקת קוד האפליקציה
+# app code
 COPY . .
 
-# גרסת אפליקציה לשקיפות
+# version stamp (optional)
 RUN printf "%s\n" "${APP_VERSION}" > /app/VERSION || true
 
-# תיקיות והרשאות
+# dirs + permissions
 RUN mkdir -p /app/.cache/matplotlib /app/static/ultra /app/logs /app/data \
  && chown -R appuser:appuser /app
 
@@ -77,25 +76,19 @@ USER appuser
 
 EXPOSE 10000
 
-# בריאות בתוך הקונטיינר – תואם לנתיב /readyz
+# in-container healthcheck → /readyz (כמו בהגדרות Render)
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
   CMD curl -fsS http://127.0.0.1:${PORT:-10000}/readyz || exit 1
 
+# keep init
 ENTRYPOINT ["/usr/bin/tini","--"]
 
-# הרצה ישירה עם UvicornWorker; בלי heredoc, בלי >>>.
-# חישוב WEB_CONCURRENCY עם python -c (מקסימום 8, מינימום 2, כפול ליבות).
+# מודול ה-ASGI
 ENV APP_MODULE=main:app
-CMD bash -lc '\
-  APP_MODULE=${APP_MODULE:-main:app}; \
-  WEB_CONC=${WEB_CONCURRENCY:-$(python -c "import multiprocessing as mp; print(max(2, min(8, (mp.cpu_count() or 2)*2)))")}; \
-  exec gunicorn -k uvicorn.workers.UvicornWorker -w "${WEB_CONC}" -b 0.0.0.0:${PORT:-10000} "${APP_MODULE}" \
-    --timeout ${GUNICORN_TIMEOUT:-180} \
-    --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-45} \
-    --keep-alive ${GUNICORN_KEEPALIVE:-30} \
-    --max-requests ${GUNICORN_MAX_REQUESTS:-500} \
-    --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-50} \
-'
+
+# הרצה נקייה עם Gunicorn+UvicornWorker; שימוש ב-bash כדי לאפשר הרחבת ENV (PORT וכו')
+CMD ["bash","-lc", "exec gunicorn -k uvicorn.workers.UvicornWorker \"${APP_MODULE:-main:app}\" --bind 0.0.0.0:${PORT:-10000} --timeout ${GUNICORN_TIMEOUT:-180} --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-45} --keep-alive ${GUNICORN_KEEPALIVE:-30} --max-requests ${GUNICORN_MAX_REQUESTS:-500} --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-50}"]
+
 
 
 
