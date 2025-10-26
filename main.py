@@ -228,6 +228,7 @@ async def _options_root():
 @app.options("/{rest_of_path:path}")
 async def _options_any(rest_of_path: str):
     return Response(status_code=204)
+
 # ---- safe include of critical routers (even if autoload runs) ----
 def _safe_include(router_module_path: str):
     import importlib, logging
@@ -247,6 +248,7 @@ _safe_include("routes.manager")
 _safe_include("routes.position_ops")
 _safe_include("routes.scan")
 # השאר ימשיכו להגיע דרך האוטולואד
+
 # ---- Auto-discovery of all other routes.* modules (smart & dynamic) ----
 ROUTES_AUTOLOAD = os.getenv("ROUTES_AUTOLOAD", "1").lower() in ("1","true","yes","on")
 ROUTES_AUTOLOAD_MODE = (os.getenv("ROUTES_AUTOLOAD_MODE") or "eager").strip().lower()  # eager | background
@@ -310,7 +312,6 @@ def _include_ui_grid_router():
             logger.info("ui_grid: mode=off (not included)")
     except Exception as e:
         logger.warning("ui_grid include failed (mode=%s): %s", UI_GRID_MODE, e)
-
 # ============= Public feed fallbacks (no-404) =============
 def _route_exists(path: str, method: str = "GET") -> bool:
     try:
@@ -408,6 +409,7 @@ app.add_middleware(
     allow_methods=[m.strip() for m in CORS_ALLOW_METHODS.split(",")] if CORS_ALLOW_METHODS else ["*"],
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
 )
+
 # ==================== Env & helpers ====================
 def get_internal_base() -> str:
     internal = (os.getenv("INTERNAL_BASE") or "").strip()
@@ -570,6 +572,7 @@ def _spot_http() -> str:
 
 def _fut_ws() -> str:
     return getattr(app.state, "BINANCE_FUTURES_WS_BASE", os.getenv("BINANCE_FUTURES_WS_BASE", "wss://fstream.binance.com/ws")).rstrip("/")
+
 # ==================== Security helpers ====================
 def _get_hmac_key_bytes() -> Optional[bytes]:
     cand = (
@@ -598,12 +601,13 @@ def _parse_signature_auth(h: str) -> Optional[Dict[str, Any]]:
     s = h[len("Signature "):].strip()
     parts: Dict[str, str] = {}
     for kv in re.split(r'\s*,\s*', s):
-        if "=" not in kv:
+        if "="" not in kv:
             continue
         k, v = kv.split("=", 1)
         v = v.strip()
         if v.startswith('"') and v.endswith('"'):
             v = v[1:-1]
+        parts[k].strip()
         parts[k.strip()] = v
     if not {"keyId", "algorithm", "headers", "signature"}.issubset(parts.keys()):
         return None
@@ -769,7 +773,6 @@ async def _enforce_nonce_once(request: Request) -> None:
     if key in bucket:
         raise HTTPException(status_code=401, detail="nonce_replay")
     bucket[key] = now
-
 def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
     try:
         if len(secret_hex_or_text) == 64:
@@ -876,6 +879,7 @@ async def _security_headers(request: Request, call_next):
     if os.getenv("ENABLE_HSTS", "0").lower() in ("1", "true", "yes", "on"):
         resp.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
     return resp
+
 # ==================== Helpers for guards & RL logs ====================
 def _client_ip(request: Request) -> str:
     # Trust proxy/XFF headers only if explicitly enabled.
@@ -1092,6 +1096,7 @@ async def _public_cache_etag(request: Request, call_next):
     except Exception:
         return resp
     return resp
+
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1293,6 +1298,7 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
+
 # ==================== Execute trade helpers ====================
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
@@ -2533,6 +2539,7 @@ def _port() -> int:
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False, http="h11", ws="auto")
+
 
 
 
