@@ -788,12 +788,16 @@ async def alerts_trades_update(
     x_nonce: Optional[str]   = Header(None, alias="X-Nonce"),
     x_signature: Optional[str]= Header(None, alias="X-Signature"),
 ):
+    try:
+        body_payload = req.model_dump()  # pydantic v2
+    except Exception:
+        body_payload = req.dict()
     ok, why = verify_request(
         ts_header=x_timestamp,
         nonce_header=x_nonce,
         signature_header=x_signature,
         route="/alerts/trades/update",
-        body=req.dict(),
+        body=body_payload,
         require_signature=ANTI_REPLAY_REQUIRE_SIGNATURE,
     )
     if not ok:
@@ -1611,6 +1615,7 @@ async def startup():
                 POS_LIVE_ERRORS.labels("ALL", "ws_start").inc()
             except Exception:
                 pass
+
 
 
 
