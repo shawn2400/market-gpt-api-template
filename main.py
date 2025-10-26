@@ -212,6 +212,13 @@ DOCS_URL = os.getenv("DOCS_URL", "/docs")
 REDOC_URL = os.getenv("REDOC_URL", "/redoc")
 OPENAPI_URL = os.getenv("OPENAPI_URL", "/openapi.json")
 
+def _port() -> int:
+    """Safe PORT helper used by get_internal_base()."""
+    try:
+        return int(os.getenv("PORT", "8080") or 8080)
+    except Exception:
+        return 8080
+
 app = FastAPI(
     title=APP_TITLE,
     version=APP_VERSION,
@@ -2549,6 +2556,7 @@ async def telegram_webhook(request: Request):
         pass
 
     # Parse body safely
+    data: Dict[str, Any] = {}
     try:
         data = await request.json()
     except Exception:
@@ -2557,61 +2565,31 @@ async def telegram_webhook(request: Request):
 
     # Minimal handling; אל תכביד – רק הדגמה/אישור חיות
     try:
-        msg = (data.get("message") or data.get("edited_message") or {})
-        txt = (msg.get("text") or "").strip()
-        chat = msg.get("chat", {})
+        msg = (data.get("message") or data.get("edited_message") or {})  # type: ignore[assignment]
+        chat = msg.get("chat") or {}
         chat_id = chat.get("id")
-        if txt and chat_id and TELEGRAM_BOT_TOKEN:
-            cli = _get_shared_async_client()
-            # basic commands
-            reply = None
-            if txt.lower().startswith("/ping"):
-                reply = "pong"
-            elif txt.lower().startswith("/start"):
-                reply = "👋 Ready. Use /ping for health."
-            if reply:
-                await (await cli).post(
+        text = msg.get("text", "") or ""
+
+        # אופציונלי: מענה קצר ל-/start כדי לדעת שהבוט חי
+        if text.strip().lower().startswith("/start") and TELEGRAM_BOT_TOKEN and chat_id:
+            try:
+                cli = _get_shared_async_client()
+                await cli.post(
                     f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                    json={"chat_id": chat_id, "text": reply},
+                    json={
+                        "chat_id": chat_id,
+                        "text": "🤖 היי! הבוט מחובר. קבלת התראות תבוצע אוטומטית.",
+                        "disable_web_page_preview": True,
+                    },
                     timeout=httpx.Timeout(10.0),
                 )
+            except Exception as e:
+                logger.debug("telegram_webhook_reply_failed: %s", e)
     except Exception as e:
-        logger.debug("telegram_webhook_handle_failed: %s", e)
+        logger.debug("telegram_webhook_parse_minimal_failed: %s", e)
 
-    return JSONResponse({"ok": True})
+    return JSONResponse({"ok": True}, status_code=200)
 
-# =============== Manage-once signed endpoint (used by inline button) ===============
-@app.get("/manage-once/signed", tags=["ops-approval"])
-async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), symbol: Optional[str] = Query(None)):
-    """
-    ticket_id כאן משמש כ-ident לצורך חתימה — עבור כפתור 'Manage Now' הזנו שם את הסימבול.
-    """
-    if not _verify_signed_params(ticket_id, exp, sig, "/manage-once/signed"):
-        raise HTTPException(status_code=401, detail="Bad or expired signature")
-    sym = (symbol or ticket_id or "").upper()
-    if not sym:
-        return _html("⚠️ חסר סימבול לניהול.")
-    # Use default profile knobs
-    try:
-        res = await _smart_manage_now(
-            sym,
-            offset_bps=PROFILE_BASE_BE_BPS,
-            pcts=PROFILE_BASE_PCTS,
-            splits=PROFILE_BASE_SPLITS,
-            atr_mult=PROFILE_BASE_ATR_MULT,
-        )
-        if not res.get("ok", True):
-            return _html(f"⚠️ ניהול נכשל: {_md_html(str(res))}")
-    except Exception as e:
-        return _html(f"⚠️ שגיאה בהפעלה: {_md_html(str(e))}")
-    return _html(f"⚡️ הטריגר ניהול הופעל עבור <code>{_md_html(sym)}</code>.")
-
-# =============== Utility: port helper for internal URL ===============
-def _port() -> int:
-    try:
-        return int(os.getenv("PORT", "8000"))
-    except Exception:
-        return 8000
 
 
 
