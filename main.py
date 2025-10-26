@@ -534,7 +534,6 @@ def _get_shared_async_client() -> httpx.AsyncClient:
         )
         app.state.shared_async_client = cli
         return cli
-
 async def _http_ready(base: str, *, path: str = "/fapi/v1/ping", timeout: float = 6.0) -> bool:
     try:
         cli = _get_shared_async_client()
@@ -1103,7 +1102,6 @@ async def _public_cache_etag(request: Request, call_next):
     except Exception:
         return resp
     return resp
-
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1365,6 +1363,7 @@ def _round_to_lot_size(client, symbol: str, qty: float) -> float:
         return float(qty)
     except Exception:
         return float(qty)
+
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     with suppress(Exception):
         from utils.trade_executor import place_futures_market  # type: ignore
@@ -1587,7 +1586,6 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket.pop("positionSide", None)
         new_ticket["position_side"] = ""
     return new_ticket
-
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
 
@@ -2538,6 +2536,7 @@ def _port() -> int:
 if __name__ == "__main__":
     import uvicorn  # type: ignore
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=bool(os.getenv("RELOAD", "0") in ("1","true","yes","on")))
+
 
 
 
