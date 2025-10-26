@@ -2,6 +2,7 @@
 from __future__ import annotations
 import os
 import logging
+import hmac
 from typing import List, Optional, Dict, Any
 from fastapi import Header, HTTPException, Request, status
 
@@ -15,9 +16,10 @@ def _split_multi(s: str) -> List[str]:
     return [x for x in re.split(r"[,\s]+", (s or "").strip()) if x]
 
 def _mask(tok: str) -> str:
-    if not tok: return ""
-    if len(tok) <= 4: return tok[0] + "…" + tok[-1]
-    return tok[:2] + "…" + tok[-2:]
+    # Reveal only a tiny prefix; safer for logs.
+    if not tok:
+        return ""
+    return (tok[:2] + "…") if len(tok) > 2 else tok[0] + "…"
 
 _TOKENS: List[str] = []
 _ALLOW_ALL: bool = False
@@ -42,6 +44,7 @@ def _extend_with_api_tokens(toks: List[str]) -> List[str]:
         except Exception as e:
             logger.warning({"event":"auth.tokens_file_read_failed","file":path,"error":str(e)})
     toks = [t for t in toks if t]
+    # de-dup while preserving order
     return list(dict.fromkeys(toks))
 
 def load_tokens_from_env() -> List[str]:
@@ -59,6 +62,7 @@ def refresh_tokens_from_env() -> Dict[str, Any]:
 def refresh_tokens() -> Dict[str, Any]:
     return refresh_tokens_from_env()
 
+# Load on import
 refresh_tokens_from_env()
 
 def get_loaded_tokens(mask: bool = True) -> List[str]:
@@ -68,12 +72,12 @@ def allow_all() -> bool:
     return _ALLOW_ALL
 
 def _extract_bearer_from_auth_header(h: Optional[str]) -> Optional[str]:
-    if not h: return None
+    if not h:
+        return None
     parts = h.strip().split(None, 1)
-    if len(parts) == 2 and parts[0].lower() in ("bearer", "token", "jwt"):
+    # Accept only the standard "Bearer <token>" scheme
+    if len(parts) == 2 and parts[0].lower() == "bearer":
         return parts[1].strip()
-    if len(parts) == 1 and parts[0]:
-        return parts[0].strip()
     return None
 
 def extract_token(request: Request, auth_header: Optional[str], x_api_key: Optional[str]) -> Optional[str]:
@@ -82,18 +86,26 @@ def extract_token(request: Request, auth_header: Optional[str], x_api_key: Optio
     tok = _extract_bearer_from_auth_header(auth_header or "")
     if tok:
         return tok
-    try:
-        qtok = request.query_params.get("token")
-        if qtok:
-            return qtok.strip()
-    except Exception:
-        pass
+    # Allow ?token= only if explicitly enabled
+    if os.getenv("ALLOW_TOKEN_IN_QUERY", "0").lower() in ("1", "true", "yes", "on"):
+        try:
+            qtok = request.query_params.get("token")
+            if qtok:
+                return qtok.strip()
+        except Exception:
+            pass
     return None
 
 def token_matches(token: Optional[str]) -> bool:
-    if allow_all(): return True
-    if not token: return False
-    return token in _TOKENS
+    if allow_all():
+        return True
+    if not token:
+        return False
+    # Constant-time comparison to mitigate timing side-channels
+    for t in _TOKENS:
+        if hmac.compare_digest(token, t):
+            return True
+    return False
 
 def require_bearer_token(
     Authorization: Optional[str] = Header(default=None),
@@ -104,6 +116,7 @@ def require_bearer_token(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
     return tok
 
+# Back-compat alias
 require_api_key = require_bearer_token
 
 def _split_env(s: str) -> List[str]:
@@ -130,8 +143,9 @@ async def validate_token(request: Request, call_next):
         if _is_public(path):
             return await call_next(request)
 
-        if not _TOKENS and not _ALLOW_ALL:
-            return await call_next(request)
+        # Fail closed if tokens are required but none are loaded
+        if not _ALLOW_ALL and not _TOKENS:
+            raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="auth_unavailable")
 
         tok = request.headers.get("X-API-Key") or _extract_bearer_from_auth_header(request.headers.get("Authorization"))
         if not token_matches(tok):
@@ -141,11 +155,8 @@ async def validate_token(request: Request, call_next):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("validate_token: middleware call_next failed for %s: %s", request.url.path, e)
-        try:
-            return await call_next(request)
-        except Exception:
-            raise HTTPException(status_code=500, detail="middleware_error")
+        logger.exception("validate_token middleware error for %s: %s", request.url.path, e)
+        raise HTTPException(status_code=500, detail="middleware_error")
 
 
 
