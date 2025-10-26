@@ -1230,6 +1230,9 @@ async def _tick_once() -> Dict[str, Any]:
                                 await emit(sym, "auto_flip", from_side=side_now, to=desired)
                         except Exception as e:
                             logger.debug("auto_flip (tick) %s failed: %s", sym, e)
+            except Exception as e:
+                # >>> התיקון: סוגר את ה-try החיצוני של ה-Auto-Flip <<<
+                logger.debug("auto_flip (tick path) outer failed: %s", e)
 
         pend = _get_pending_safe()
         TICK_COUNT += 1
@@ -1617,6 +1620,7 @@ async def startup():
                 pass
 
 __all__ = ["router", "startup"]
+
 
 
 
