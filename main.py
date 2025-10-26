@@ -17,6 +17,7 @@ import inspect
 import asyncio
 import threading
 import math
+import uuid
 from contextlib import suppress
 from typing import Any, Dict, List, Optional, Callable, Tuple, Union
 
@@ -410,6 +411,22 @@ app.add_middleware(
     allow_methods=[m.strip() for m in CORS_ALLOW_METHODS.split(",")] if CORS_ALLOW_METHODS else ["*"],
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
 )
+
+# ============== Request ID middleware (observability) ==============
+@app.middleware("http")
+async def _request_id_mw(request: Request, call_next):
+    rid = request.headers.get("X-Request-Id") or str(uuid.uuid4())
+    try:
+        request.state.request_id = rid
+    except Exception:
+        pass
+    resp = await call_next(request)
+    try:
+        resp.headers.setdefault("X-Request-Id", rid)
+    except Exception:
+        pass
+    return resp
+
 # ==================== Env & helpers ====================
 def get_internal_base() -> str:
     internal = (os.getenv("INTERNAL_BASE") or "").strip()
@@ -571,6 +588,7 @@ def _spot_http() -> str:
 
 def _fut_ws() -> str:
     return getattr(app.state, "BINANCE_FUTURES_WS_BASE", os.getenv("BINANCE_FUTURES_WS_BASE", "wss://fstream.binance.com/ws")).rstrip("/")
+
 # ==================== Security helpers ====================
 def _get_hmac_key_bytes() -> Optional[bytes]:
     cand = (
@@ -1110,9 +1128,11 @@ async def _public_cache_etag(request: Request, call_next):
     except Exception:
         return resp
     return resp
+
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                               reject_url: Optional[str] = None, preview_url: Optional[str] = None,
                               manage_url: Optional[str] = None) -> Dict[str, Any]:
@@ -1593,8 +1613,10 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket.pop("positionSide", None)
         new_ticket["position_side"] = ""
     return new_ticket
+
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
+
 # --------- Idempotent webhook example (/webhook/whatever) ----------
 @router.post("/webhook/whatever")
 async def webhook_whatever(request: Request):
@@ -2511,40 +2533,85 @@ async def root():
         "public_paths": PUBLIC_CACHE_PATHS,
     }
 
-# ================ Telegram webhook (optional minimal) ================
+# ================ Telegram webhook (REPLACED with robust version) ================
 @app.post("/telegram/webhook", tags=["telegram"])
 async def telegram_webhook(request: Request):
-    data = await request.json()
-    # Optional: validate Telegram secret token if configured
+    """
+    Telegram webhook (אופציונלי). מממש ולידציה ע"י X-Telegram-Bot-Api-Secret-Token אם הוגדר.
+    """
+    # Validate Telegram secret header if provided
     try:
         expected = (TELEGRAM_WEBHOOK_SECRET or "").strip()
         got = (request.headers.get("X-Telegram-Bot-Api-Secret-Token") or "").strip()
-        if expected and not hmac.compare_digest(expected, got):
-            return JSONResponse({"ok": False, "error": "bad_secret_token"}, status_code=401)
+        if expected and (not got or not hmac.compare_digest(got, expected)):
+            return JSONResponse({"ok": False, "error": "bad_webhook_secret"}, status_code=401)
     except Exception:
         pass
-    # TODO: handle updates if needed (commands, callbacks, etc.)
-    # For now, acknowledge receipt to avoid Telegram retries.
+
+    # Parse body safely
+    try:
+        data = await request.json()
+    except Exception:
+        # Telegram יכול לשלוח גם form/multipart; במקרה כזה פשוט נחזיר 200
+        return JSONResponse({"ok": True, "skipped": True, "reason": "non-json"}, status_code=200)
+
+    # Minimal handling; אל תכביד – רק הדגמה/אישור חיות
+    try:
+        msg = (data.get("message") or data.get("edited_message") or {})
+        txt = (msg.get("text") or "").strip()
+        chat = msg.get("chat", {})
+        chat_id = chat.get("id")
+        if txt and chat_id and TELEGRAM_BOT_TOKEN:
+            cli = _get_shared_async_client()
+            # basic commands
+            reply = None
+            if txt.lower().startswith("/ping"):
+                reply = "pong"
+            elif txt.lower().startswith("/start"):
+                reply = "👋 Ready. Use /ping for health."
+            if reply:
+                await (await cli).post(
+                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+                    json={"chat_id": chat_id, "text": reply},
+                    timeout=httpx.Timeout(10.0),
+                )
+    except Exception as e:
+        logger.debug("telegram_webhook_handle_failed: %s", e)
+
     return JSONResponse({"ok": True})
 
-# ================ Smoke/guard routes (examples) ================
-@app.get("/guard/smoke/run", tags=["public"])
-async def smoke():
-    return {"ok": True, "ts": int(time.time())}
+# =============== Manage-once signed endpoint (used by inline button) ===============
+@app.get("/manage-once/signed", tags=["ops-approval"])
+async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), symbol: Optional[str] = Query(None)):
+    """
+    ticket_id כאן משמש כ-ident לצורך חתימה — עבור כפתור 'Manage Now' הזנו שם את הסימבול.
+    """
+    if not _verify_signed_params(ticket_id, exp, sig, "/manage-once/signed"):
+        raise HTTPException(status_code=401, detail="Bad or expired signature")
+    sym = (symbol or ticket_id or "").upper()
+    if not sym:
+        return _html("⚠️ חסר סימבול לניהול.")
+    # Use default profile knobs
+    try:
+        res = await _smart_manage_now(
+            sym,
+            offset_bps=PROFILE_BASE_BE_BPS,
+            pcts=PROFILE_BASE_PCTS,
+            splits=PROFILE_BASE_SPLITS,
+            atr_mult=PROFILE_BASE_ATR_MULT,
+        )
+        if not res.get("ok", True):
+            return _html(f"⚠️ ניהול נכשל: {_md_html(str(res))}")
+    except Exception as e:
+        return _html(f"⚠️ שגיאה בהפעלה: {_md_html(str(e))}")
+    return _html(f"⚡️ הטריגר ניהול הופעל עבור <code>{_md_html(sym)}</code>.")
 
-# ================ Run (optional) ================
+# =============== Utility: port helper for internal URL ===============
 def _port() -> int:
     try:
-        return int(os.getenv("PORT", "8000") or 8000)
+        return int(os.getenv("PORT", "8000"))
     except Exception:
         return 8000
-
-if __name__ == "__main__":
-    import uvicorn  # type: ignore
-    uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=bool(os.getenv("RELOAD", "0") in ("1","true","yes","on")))
-
-
-
 
 
 
