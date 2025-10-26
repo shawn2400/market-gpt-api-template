@@ -2561,34 +2561,25 @@ async def telegram_webhook(request: Request):
         data = await request.json()
     except Exception:
         # Telegram יכול לשלוח גם form/multipart; במקרה כזה פשוט נחזיר 200
-        return JSONResponse({"ok": True, "skipped": True, "reason": "non-json"}, status_code=200)
+        return JSONResponse({"ok": True, "skipped": True, "reason": "non_json_body"}, status_code=200)
 
-    # Minimal handling; אל תכביד – רק הדגמה/אישור חיות
+    # If we're configured to only push trade notifications, don't attempt to "reply"; just ack
+    if ONLY_TRADE_NOTIFICATIONS:
+        return JSONResponse({"ok": True, "received": True}, status_code=200)
+
+    # Minimal optional logic (no side effects): reply to /ping or /start via logs only
     try:
-        msg = (data.get("message") or data.get("edited_message") or {})  # type: ignore[assignment]
-        chat = msg.get("chat") or {}
-        chat_id = chat.get("id")
-        text = msg.get("text", "") or ""
-
-        # אופציונלי: מענה קצר ל-/start כדי לדעת שהבוט חי
-        if text.strip().lower().startswith("/start") and TELEGRAM_BOT_TOKEN and chat_id:
-            try:
-                cli = _get_shared_async_client()
-                await cli.post(
-                    f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
-                    json={
-                        "chat_id": chat_id,
-                        "text": "🤖 היי! הבוט מחובר. קבלת התראות תבוצע אוטומטית.",
-                        "disable_web_page_preview": True,
-                    },
-                    timeout=httpx.Timeout(10.0),
-                )
-            except Exception as e:
-                logger.debug("telegram_webhook_reply_failed: %s", e)
-    except Exception as e:
-        logger.debug("telegram_webhook_parse_minimal_failed: %s", e)
+        msg = data.get("message") or {}
+        txt = (msg.get("text") or "").strip()
+        if txt in ("/ping", "ping"):
+            logger.info("telegram_webhook: ping received")
+        elif txt.startswith("/start"):
+            logger.info("telegram_webhook: start received")
+    except Exception:
+        pass
 
     return JSONResponse({"ok": True}, status_code=200)
+
 
 
 
