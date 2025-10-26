@@ -184,7 +184,7 @@ services:
       - key: EXECUTOR_RL_NS
         value: "ops-executor:rl:prod"
 
-      # ===== Redis (תוקן: חובה + בדיקות מוכנות) =====
+      # ===== Redis (חובה) =====
       - key: REDIS_URL
         value: "rediss://red-d2j4vf2li9vc73evhv4g:lW8H0fqByUjWpiIlITKuGi6sncAI6848@frankfurt-keyvalue.render.com:6379?ssl_cert_reqs=required&socket_connect_timeout=5&socket_timeout=5"
       - key: REQUIRE_REDIS
@@ -423,7 +423,7 @@ services:
       - key: MANAGER_WRITES_ORDERS
         value: "1"
 
-      # ===== Native TPSL דורש OCO =====
+      # ===== חובה ל-Native TPSL =====
       - key: ORDERS_USE_OCO
         value: "1"
 
@@ -1128,6 +1128,7 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
+
 
 
 
