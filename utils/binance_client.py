@@ -58,6 +58,8 @@ ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "").strip()
 CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0").lower() in ("1", "true", "yes", "on")
 CANCEL_PREFIX_OVERRIDE = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 
+DRY_RUN = os.getenv("DRY_RUN", "0").lower() in ("1","true","yes","on")
+
 def _now() -> float: return time.time()
 def _ms() -> int: return int(time.time() * 1000)
 
@@ -352,7 +354,7 @@ def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         out = []
         su = symbol.upper() if symbol else None
         for pos in positions:
-            amt = float(pos.get("positionAmt", "0") or 0.0)
+            amt = float(pos.get("positionAmt") or 0.0)
             if abs(amt) > 1e-12 and (su is None or (str(pos.get("symbol") or "").upper() == su)):
                 out.append(pos)
         return out
@@ -374,7 +376,7 @@ def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         if symbol:
             return cast(List[Dict[str, Any]], client.futures_get_open_orders(symbol=symbol.upper()) or [])
         return cast(
-            List[Dict[str, Any]],
+            List[Dict[str, Any]], 
             client.futures_get_open_orders() or []
         )
     except Exception as e:
@@ -403,7 +405,7 @@ def futures_cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
         logger.warning("cancel_order failed %s/%s: %s", symbol, order_id, e)
         return {"ok": False, "error": str(e)}
 
-# ✅ חדש: ביטול כל ההזמנות (לבקשת routes.grid)
+# ✅ ביטול כל ההזמנות (לשימוש routes.grid)
 @observe_http(name="binance_cancel_all", include_labels=["symbol"])
 def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
     try:
@@ -457,7 +459,6 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
         kwargs["quantity"] = _quantize_qty(sym, float(qty))
     if price is not None:
         p_str = _quantize_price(sym, float(price))
-        # guard
         kwargs["price"] = p_str
     if stop is not None:
         s_str = _quantize_price(sym, float(stop))
@@ -648,6 +649,41 @@ def apply_price_tick_side(price: float, symbol: str, side: str) -> tuple[str, fl
         pass
     return p_str, float(p_str)
 
+# ===== NEW: leverage/margin helpers (required by routes.*) =====
+def set_leverage(symbol: str, leverage: int, margin_type: str = "ISOLATED") -> Dict[str, Any]:
+    """
+    קובע מינוף ומצב מרג'ין ל-SYMBOL. תומך ב-DRY_RUN.
+    מחזיר dict עם התוצאה; בסביבת DRY_RUN לא שולח לרשת.
+    """
+    sym = (symbol or "").upper().strip()
+    lev = int(leverage)
+    if not sym:
+        raise ValueError("symbol required")
+    if lev < 1 or lev > 125:
+        raise ValueError(f"invalid leverage: {lev}")
+    mt = (margin_type or "ISOLATED").upper().strip()
+    if DRY_RUN or not _BINANCE_AVAILABLE or _get_client() is None:
+        logger.info("[DRY_RUN] set_leverage(%s, %s, margin_type=%s)", sym, lev, mt)
+        return {"dry_run": True, "symbol": sym, "leverage": lev, "margin_type": mt}
+
+    try:
+        c = _get_client()
+        assert c is not None
+        # 1) Margin type (ignore 'already same' errors)
+        try:
+            c.futures_change_margin_type(symbol=sym, marginType=mt)  # type: ignore
+        except Exception as e:
+            s = str(e).lower()
+            if "no need to change margin type" not in s and "margin type same" not in s:
+                logger.warning("futures_change_margin_type(%s,%s) failed: %s", sym, mt, e)
+        # 2) Leverage
+        resp = c.futures_change_leverage(symbol=sym, leverage=lev)  # type: ignore
+        logger.info("futures_change_leverage(%s,%s) -> %s", sym, lev, resp)
+        return {"ok": True, "symbol": sym, "leverage": lev, "margin_type": mt, "binance": resp}
+    except Exception as e:
+        logger.error("set_leverage failed %s/%s: %s", sym, lev, e)
+        return {"ok": False, "error": str(e), "symbol": sym, "leverage": lev, "margin_type": mt}
+
 __all__ = [
     "client",
     "get_futures_client",
@@ -666,17 +702,18 @@ __all__ = [
     "get_open_orders",
     "get_all_orders",
     "futures_cancel_order",
-    "futures_cancel_all_orders",   # ✔ עבור routes.grid
+    "futures_cancel_all_orders",
     "futures_create_order",
     "place_limit_order",
     "cancel_order",
     "place_stop_market",
-    "place_stop_market_order",     # ✔ תאימות שם לראוט
-    "place_take_profit_market",    # ✔ חדש
+    "place_stop_market_order",
+    "place_take_profit_market",
     "set_breakeven_stop",
     "get_klines_df",
     "close_all_positions",
     "apply_price_tick_side",
+    "set_leverage",              # ✔ export for routes.*
 ]
 
 
