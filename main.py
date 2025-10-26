@@ -2431,154 +2431,141 @@ def _wilder_smooth(values: List[float], period: int) -> List[float]:
         smoothed.append((smoothed[-1] * (period - 1) + v) / period)
     return smoothed
 
-def _compute_indicators_from_klines(klines: List[List[Any]], period: int = 14) -> Dict[str, float]:
+# --------- NEW: indicators computation used above ----------
+def _compute_indicators_from_klines(kl: List[List[Any]], period: int = 14) -> Dict[str, float]:
+    """
+    kl: list of Binance klines: [openTime, open, high, low, close, volume, ...]
+    Returns: {"price": last_close, "atr": atr, "adx": adx}
+    """
     try:
-        highs = [float(k[2]) for k in klines]
-        lows = [float(k[3]) for k in klines]
-        closes = [float(k[4]) for k in klines]
-        if len(closes) < period + 2:
-            return {"atr": 0.0, "adx": 0.0, "price": closes[-1] if closes else 0.0}
-        trs, plus_dm, minus_dm = [], [], []
-        for i in range(1, len(closes)):
-            h, l, ph, pl, pc = highs[i], lows[i], highs[i - 1], lows[i - 1], closes[i - 1]
-            tr = max(h - l, abs(h - pc), abs(l - pc))
-            trs.append(tr)
-            up_move = h - ph
-            down_move = pl - l
-            plus_dm.append(up_move if (up_move > down_move and up_move > 0) else 0.0)
-            minus_dm.append(down_move if (down_move > up_move and down_move > 0) else 0.0)
-        atr_series = _wilder_smooth(trs, period)
-        plus_dm_s = _wilder_smooth(plus_dm, period)
-        minus_dm_s = _wilder_smooth(minus_dm, period)
-        if not (atr_series and plus_dm_s and minus_dm_s):
-            return {"atr": 0.0, "adx": 0.0, "price": closes[-1]}
-        atr = atr_series[-1]
-        plus_di = [(p / atr_series[i]) * 100 if atr_series[i] > 0 else 0.0 for i, p in enumerate(plus_dm_s)]
-        minus_di = [(m / atr_series[i]) * 100 if atr_series[i] > 0 else 0.0 for i, m in enumerate(minus_dm_s)]
-        dx = []
-        for i in range(min(len(plus_di), len(minus_di))):
-            s = plus_di[i] + minus_di[i]
-            d = abs(plus_di[i] - minus_di[i])
-            dx.append((d / s) * 100 if s > 0 else 0.0)
-        adx_series = _wilder_smooth(dx, period)
-        adx = adx_series[-1] if adx_series else 0.0
-        return {"atr": float(atr), "adx": float(adx), "price": float(closes[-1])}
+        highs  = [float(x[2]) for x in kl]
+        lows   = [float(x[3]) for x in kl]
+        closes = [float(x[4]) for x in kl]
+        last_close = float(closes[-1])
     except Exception:
-        return {"atr": 0.0, "adx": 0.0, "price": 0.0}
+        return {"price": 0.0, "atr": 0.0, "adx": 0.0}
 
-async def _select_profile_for_symbol(client, symbol: str, payload: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, float], str]:
-    try:
-        klines = client.futures_klines(symbol=symbol, interval="1m", limit=60)
-    except Exception:
-        klines = []
-    indicators = _compute_indicators_from_klines(klines or [], period=14)
-    price = float(indicators.get("price") or 0.0)
-    atr = float(indicators.get("atr") or 0.0)
-    adx = float(indicators.get("adx") or 0.0)
-    atr_pct = (atr / price) if price > 0 else 0.0
+    # True Range
+    trs: List[float] = []
+    for i in range(len(closes)):
+        if i == 0:
+            trs.append(highs[i] - lows[i])
+        else:
+            trs.append(max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1])))
 
-    use_extreme = PROFILE_AUTO_SELECT and ((adx >= ADX_EXTREME_MIN) or (atr_pct >= ATRPCT_EXTREME_MIN))
-    profile_name = "EXTREME" if use_extreme else "BASE"
-
-    if use_extreme:
-        prof = dict(offset_bps=PROFILE_EXTREME_BE_BPS,
-                    pcts=PROFILE_EXTREME_PCTS[:],
-                    splits=PROFILE_EXTREME_SPLITS[:],
-                    atr_mult=PROFILE_EXTREME_ATR_MULT)
+    # ATR (Wilder)
+    if len(trs) < period + 1:
+        atr = 0.0
     else:
-        prof = dict(offset_bps=PROFILE_BASE_BE_BPS,
-                    pcts=PROFILE_BASE_PCTS[:],
-                    splits=PROFILE_BASE_SPLITS[:],
-                    atr_mult=PROFILE_BASE_ATR_MULT)
+        atr_list = _wilder_smooth(trs, period)
+        atr = float(atr_list[-1]) if atr_list else 0.0
 
-    return prof, {"price": price, "atr": atr, "adx": adx, "atr_pct": atr_pct}, profile_name
+    # ADX
+    plus_dm: List[float] = [0.0]
+    minus_dm: List[float] = [0.0]
+    for i in range(1, len(highs)):
+        up_move = highs[i] - highs[i-1]
+        down_move = lows[i-1] - lows[i]
+        plus_dm.append((up_move > down_move and up_move > 0) * up_move)
+        minus_dm.append((down_move > up_move and down_move > 0) * down_move)
 
-# ==================== App wiring & startup ====================
-app.include_router(router)
+    # Wilder smooth DM and TR
+    if len(trs) < period + 1:
+        adx = 0.0
+    else:
+        tr_s = _wilder_smooth(trs, period)
+        pdm_s = _wilder_smooth(plus_dm, period)
+        mdm_s = _wilder_smooth(minus_dm, period)
+        # Align lengths
+        n = min(len(tr_s := tr_s if (tr_s:=tr_s) else tr_s, len(tr_s)), len(pdm_s), len(mdm_s))  # type: ignore
+        tr_s = tr_s[-n:]
+        pdm_s = pdm_s[-n:]
+        mdm_s = mdm_s[-n:]
+        plus_di: List[float] = []
+        minus_di: List[float] = []
+        for i in range(n):
+            denom = tr_s[i] if tr_s[i] > 0 else 1e-9
+            plus_di.append(100.0 * (pdm_s[i] / denom))
+            minus_di.append(100.0 * (mdm_s[i] / denom))
+        dx: List[float] = []
+        for i in range(n):
+            num = abs(plus_di[i] - minus_di[i])
+            den = (plus_di[i] + minus_di[i]) if (plus_di[i] + minus_di[i]) > 0 else 1e-9
+            dx.append(100.0 * (num / den))
+        adx_series = _wilder_smooth(dx, period) if len(dx) >= period else []
+        adx = float(adx_series[-1]) if adx_series else 0.0
 
-@app.on_event("startup")
-async def _on_startup():
-    try:
-        _ensure_public_fallbacks()
-    except Exception as e:
-        logger.warning("ensure_public_fallbacks_failed: %s", e)
-    try:
-        await _resolve_binance_endpoints()
-    except Exception as e:
-        logger.warning("resolve_binance_endpoints_failed: %s", e)
+    return {"price": last_close, "atr": float(atr), "adx": float(adx)}
 
-    # === NEW: respect UI_GRID_MODE before autoload ===
-    try:
-        _adjust_routes_autoload_filters()
-        _include_ui_grid_router()
-    except Exception as e:
-        logger.warning("ui_grid_wiring_failed: %s", e)
+# --------- Signed manage-once endpoint (button target) ----------
+@router.get("/manage-once/signed")
+async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), symbol: Optional[str] = Query(None)):
+    if not _verify_signed_params(ticket_id, exp, sig, "/manage-once/signed"):
+        raise HTTPException(status_code=401, detail="Bad or expired signature")
+    sym = (symbol or "").upper().strip()
+    if not sym:
+        # Try to infer from ticket (best-effort)
+        t, _ = await _load_ticket(ticket_id)
+        if t:
+            sym = (t.get("symbol") or "").upper()
+    if not sym:
+        return _html("⚠️ חסר symbol לביצוע ניהול מהיר.")
+    res = await _smart_manage_now(sym)
+    ok = bool(res.get("ok", True))
+    return _html("✅ שוגר ניהול חכם (Smart Manage).") if ok else _html(f"⚠️ כישלון: {res}")
 
-    # Auto-load routes (eager/background) according to env
-    try:
-        if ROUTES_AUTOLOAD:
-            mode = (os.getenv("ROUTES_AUTOLOAD_MODE") or "eager").strip().lower()
-            if mode in ("eager", "now"):
-                _routes_autoload_now()
-            else:
-                # run in background so startup stays fast
-                asyncio.create_task(asyncio.to_thread(_routes_autoload_now))
-    except Exception as e:
-        logger.warning("routes_autoload_startup_failed: %s", e)
-    with suppress(Exception):
-        await _ensure_telegram_webhook()
-
-# ================ Simple root & health ================
-@app.get("/", tags=["public"])
+# --------- Root & health ----------
+@router.get("/", tags=["public"])
 async def root():
     return {
         "ok": True,
         "name": APP_TITLE,
         "version": APP_VERSION,
-        "http2": _http2_enabled_runtime(),
-        "ui": {"poll_ms": UI_POLL_MS, "idle_stop_sec": UI_IDLE_STOP_SEC},
-        "public_paths": PUBLIC_CACHE_PATHS,
+        "docs": DOCS_URL,
+        "public_host": PUBLIC_HOST or None,
+        "poll_ms": UI_POLL_MS,
+        "idle_stop_sec": UI_IDLE_STOP_SEC,
     }
 
-# ================ Telegram webhook (REPLACED with robust version) ================
-@app.post("/telegram/webhook", tags=["telegram"])
-async def telegram_webhook(request: Request):
-    """
-    Telegram webhook (אופציונלי). מממש ולידציה ע"י X-Telegram-Bot-Api-Secret-Token אם הוגדר.
-    """
-    # Validate Telegram secret header if provided
-    try:
-        expected = (TELEGRAM_WEBHOOK_SECRET or "").strip()
-        got = (request.headers.get("X-Telegram-Bot-Api-Secret-Token") or "").strip()
-        if expected and (not got or not hmac.compare_digest(got, expected)):
-            return JSONResponse({"ok": False, "error": "bad_webhook_secret"}, status_code=401)
-    except Exception:
-        pass
+# Mount router
+app.include_router(router)
 
-    # Parse body safely
-    data: Dict[str, Any] = {}
+# --------- Startup: resolve endpoints, include UI, public fallbacks ----------
+@app.on_event("startup")
+async def _startup():
+    try:
+        _adjust_routes_autoload_filters()
+        _include_ui_grid_router()
+        if ROUTES_AUTOLOAD and ROUTES_AUTOLOAD_MODE == "eager":
+            _routes_autoload_now()
+        _ensure_public_fallbacks()
+        await _resolve_binance_endpoints()
+        await _ensure_telegram_webhook()
+        logger.info("startup complete")
+    except Exception as e:
+        logger.warning("startup partial: %s", e)
+
+# --------- Optional: Telegram webhook receiver (noop if secret/token missing) ----------
+@router.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET):
+        return JSONResponse({"ok": True, "skipped": True})
+    # Simple auth: telegram sends header 'X-Telegram-Bot-Api-Secret-Token'
+    sec = request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
+    if sec != TELEGRAM_WEBHOOK_SECRET:
+        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
     try:
         data = await request.json()
     except Exception:
-        # Telegram יכול לשלוח גם form/multipart; במקרה כזה פשוט נחזיר 200
-        return JSONResponse({"ok": True, "skipped": True, "reason": "non_json_body"}, status_code=200)
+        data = {}
+    # minimal ack (your bot handlers live elsewhere)
+    return JSONResponse({"ok": True})
 
-    # If we're configured to only push trade notifications, don't attempt to "reply"; just ack
-    if ONLY_TRADE_NOTIFICATIONS:
-        return JSONResponse({"ok": True, "received": True}, status_code=200)
+# --------------- Uvicorn helper (optional) ----------------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host=os.getenv("HOST", "0.0.0.0"), port=_port(), reload=bool(os.getenv("RELOAD", "0") in ("1","true","yes","on")))
 
-    # Minimal optional logic (no side effects): reply to /ping or /start via logs only
-    try:
-        msg = data.get("message") or {}
-        txt = (msg.get("text") or "").strip()
-        if txt in ("/ping", "ping"):
-            logger.info("telegram_webhook: ping received")
-        elif txt.startswith("/start"):
-            logger.info("telegram_webhook: start received")
-    except Exception:
-        pass
-
-    return JSONResponse({"ok": True}, status_code=200)
 
 
 
