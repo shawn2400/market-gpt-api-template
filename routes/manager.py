@@ -1,4 +1,4 @@
-# routes/manager.py 
+# routes/manager.py
 from __future__ import annotations
 import os, json, time, hashlib, asyncio, logging, math, re
 from pathlib import Path
@@ -254,7 +254,7 @@ async def _get_mark_price(symbol: str) -> Optional[float]:
     sym = (symbol or "").upper().strip()
     if not sym:
         return None
-    # ❗ תיקון סוגר עודף: הסרנו את '}' המיותר
+    # תיקון סוגר עודף בכתובת — נשמרת נקייה
     url = f"{FAPI_HTTP}/fapi/v1/premiumIndex"
     try:
         async with _http() as cli:
@@ -1511,7 +1511,7 @@ async def _maybe_eval_and_flip(symbol: str) -> None:
         await emit(symbol, "auto_flip", from_side=side_now or "FLAT", to=desired)
         logger.info("WS auto-flip %s -> %s (was %s) px=%.4f", symbol, desired, side_now, price)
     except Exception as e:
-        logger.debug("WS auto_flip %s failed: %s", e)
+        logger.debug("WS auto_flip %s failed: %s", symbol, e)
 
 async def _symbols_to_track() -> List[str]:
     wanted: Set[str] = set()
@@ -1611,10 +1611,6 @@ async def startup():
                 POS_LIVE_ERRORS.labels("ALL", "ws_start").inc()
             except Exception:
                 pass
-
-
-
-
 
 
 
