@@ -117,12 +117,13 @@ services:
       - key: TRUST_PROXY
         value: "1"
 
+      # ציבורי/מוגן — מסודר כך שהחתומים נשארים ציבוריים והפריפיקסים לא חוסמים אותם
       - key: SECURITY_PUBLIC_PATHS
         value: "/healthz,/readyz,/version,/scan/public-now,/scan/public-topk,/scan/public-stream,/topk,/ops/ui/ticket/signed,/ops/approve/signed,/ops/reject/signed,/public/ticket/inspect,/public/pos-events/stream,/ops/manager/health,/ui/snapshot,/ui/snapshot/idle"
       - key: SECURITY_PUBLIC_PREFIXES
         value: "/public,/price,/static,/risk,/ultra"
       - key: SECURITY_PROTECTED_PATHS
-        value: "/ops/approve,/ops/reject,/webhook/whatever,/guard/smoke/run,/ops/pending.json,/admin,/manage-once,/manage-once/multi"
+        value: "/webhook/whatever,/guard/smoke/run,/ops/pending.json,/admin,/manage-once,/manage-once/multi"
 
       - key: ENABLE_CSP
         value: "1"
@@ -137,7 +138,7 @@ services:
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
       - key: SIG_TS_ENFORCE
-        value: "1"
+        value: "0"        # ← מבוטל כי החתימה אצלך מבוססת exp ולא ts
       - key: SIG_TS_SKEW_SEC
         value: "900"
 
@@ -372,7 +373,7 @@ services:
       - key: REQUIRE_TELEGRAM_APPROVAL
         value: "1"
       - key: AUTO_OPEN_ON_APPROVE
-        value: "0"
+        value: "1"   # ← מאושר? פותח פוזיציה אוטומטית
       - key: ALLOW_MARKET_ENTRY
         value: "1"
       - key: APPROVAL_REQUIRE_FRESH_PRICE
@@ -1129,5 +1130,6 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
+
 
 
