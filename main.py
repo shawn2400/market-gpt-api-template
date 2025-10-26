@@ -282,7 +282,7 @@ def _adjust_routes_autoload_filters() -> None:
     לפני autoload — נוודא שלא יטען ראוטר מתנגש.
     local  -> נחסום server.routes.ui_grid / ui_grid_proxy
     proxy  -> נחסום routes.ui_grid
-    off    -> נחסום הכל (שני הצדדים)
+    off    -> נחסם הכל (שני הצדדים)
     """
     if UI_GRID_MODE == "local":
         _append_env_csv("ROUTES_DENY", ["server.routes.ui_grid", "server.routes.ui_grid_proxy"])
@@ -571,7 +571,6 @@ def _spot_http() -> str:
 
 def _fut_ws() -> str:
     return getattr(app.state, "BINANCE_FUTURES_WS_BASE", os.getenv("BINANCE_FUTURES_WS_BASE", "wss://fstream.binance.com/ws")).rstrip("/")
-
 # ==================== Security helpers ====================
 def _get_hmac_key_bytes() -> Optional[bytes]:
     cand = (
@@ -1001,6 +1000,15 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
         bucket = {}
         app.state.rlm_epoch = time.time()
         app.state.rl_mem = bucket
+    # Soft cap to avoid unbounded growth under heavy traffic
+    try:
+        if len(bucket) > 5000:
+            # drop ~10% oldest keys (best-effort)
+            for k in list(bucket.keys())[:500]:
+                bucket.pop(k, None)
+    except Exception:
+        pass
+
     now = time.time()
     rec = bucket.get(key)
     if not rec or (now - rec["start"]) >= window_sec:
@@ -1105,7 +1113,6 @@ async def _public_cache_etag(request: Request, call_next):
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
 async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                               reject_url: Optional[str] = None, preview_url: Optional[str] = None,
                               manage_url: Optional[str] = None) -> Dict[str, Any]:
@@ -1588,7 +1595,6 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
     return new_ticket
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
-
 # --------- Idempotent webhook example (/webhook/whatever) ----------
 @router.post("/webhook/whatever")
 async def webhook_whatever(request: Request):
@@ -2536,6 +2542,7 @@ def _port() -> int:
 if __name__ == "__main__":
     import uvicorn  # type: ignore
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=bool(os.getenv("RELOAD", "0") in ("1","true","yes","on")))
+
 
 
 
