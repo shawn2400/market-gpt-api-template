@@ -126,7 +126,6 @@ services:
 
       - key: ENABLE_CSP
         value: "1"
-      # === CSP מתוקן: מוסיפים unpkg + unsafe-eval בשביל Babel בדפדפן, ו־wss ל־WebSocket ===
       - key: CSP_POLICY
         value: "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; connect-src 'self' https: wss:; base-uri 'none'; frame-ancestors 'none'"
 
@@ -185,8 +184,16 @@ services:
       - key: EXECUTOR_RL_NS
         value: "ops-executor:rl:prod"
 
+      # ===== Redis (תוקן: חובה + בדיקות מוכנות) =====
+      - key: REDIS_URL
+        value: "rediss://red-d2j4vf2li9vc73evhv4g:lW8H0fqByUjWpiIlITKuGi6sncAI6848@frankfurt-keyvalue.render.com:6379?ssl_cert_reqs=required&socket_connect_timeout=5&socket_timeout=5"
       - key: REQUIRE_REDIS
-        value: "0"
+        value: "1"
+      - key: READINESS_CHECK_REDIS
+        value: "1"
+      - key: READINESS_REDIS_RETRY
+        value: "1"
+
       - key: CONFIRMSTORE_ENABLE
         value: "1"
       - key: USE_REDIS_IDEM
@@ -415,8 +422,11 @@ services:
         value: "1"
       - key: MANAGER_WRITES_ORDERS
         value: "1"
+
+      # ===== Native TPSL דורש OCO =====
       - key: ORDERS_USE_OCO
-        value: "0"
+        value: "1"
+
       - key: ORDER_ID_PREFIX
         value: ALG
       - key: ORDER_ID_INCLUDE_TS
@@ -695,7 +705,7 @@ services:
       - key: READINESS_CHECK_BINANCE
         value: "1"
       - key: READINESS_CHECK_REDIS
-        value: "0"
+        value: "1"
       - key: READINESS_CHECK_SQLITE
         value: "0"
       - key: READINESS_FAIL_GRACE_SEC
@@ -703,7 +713,7 @@ services:
       - key: READINESS_BINANCE_RETRY
         value: "1"
       - key: READINESS_REDIS_RETRY
-        value: "0"
+        value: "1"
       - key: SQLITE_PATH
         value: /app/data/state.db
 
@@ -1118,6 +1128,7 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
+
 
 
 
