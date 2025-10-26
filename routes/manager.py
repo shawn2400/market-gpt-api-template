@@ -114,7 +114,7 @@ INGEST_DIR = Path(os.getenv("INGEST_DIR", str(BASE_DIR / "static" / "cache")))
 
 MANAGER_ENABLE       = os.getenv("MANAGER_ENABLE", "1").lower() in ("1","true","yes","on")
 MANAGER_INTERVAL_SEC = int(os.getenv("MANAGER_INTERVAL_SEC", "30"))
-CONFIRMSTORE_ENABLE  = os.getenv("CONFIRMSTORE_ENABLE", "1").lower() in ("1","true","yes","on"))
+CONFIRMSTORE_ENABLE  = os.getenv("CONFIRMSTORE_ENABLE", "1").lower() in ("1","true","yes","on")
 
 PUBLIC_HOST = (os.getenv("PUBLIC_HOST", "") or os.getenv("WEBHOOK_HOST", "")).rstrip("/")
 ALERTS_INGEST_URL = os.getenv("ALERTS_INGEST_URL", f"{PUBLIC_HOST}/alerts/ingest").strip()
@@ -254,7 +254,6 @@ async def _get_mark_price(symbol: str) -> Optional[float]:
     sym = (symbol or "").upper().strip()
     if not sym:
         return None
-    # תיקון סוגר עודף בכתובת — נשמרת נקייה
     url = f"{FAPI_HTTP}/fapi/v1/premiumIndex"
     try:
         async with _http() as cli:
@@ -973,7 +972,7 @@ async def manage_once_route(
         try:
             res = await cli.place_stop_loss_or_be(symbol, side, float(be_price), trigger=trigger)  # type: ignore
             placed = {"action": "BE_SET", "price": float(be_price), "order": res}
-            rounded = f"{float(be_price):.1f}"
+            rounded = f"{float(be_price):.1f}"""
             try:
                 _notify_once(
                     send_trade_approval if callable(send_trade_approval) else (lambda *_a, **_k: None),
@@ -1233,7 +1232,7 @@ async def _tick_once() -> Dict[str, Any]:
                         except Exception as e:
                             logger.debug("auto_flip (tick) %s failed: %s", sym, e)
             except Exception as e:
-                # >>> התיקון: סוגר את ה-try החיצוני של ה-Auto-Flip <<<
+                # סוגר את ה-try החיצוני של ה-Auto-Flip
                 logger.debug("auto_flip (tick path) outer failed: %s", e)
 
         pend = _get_pending_safe()
@@ -1343,7 +1342,7 @@ async def _rt_manage(symbol: str) -> None:
 
     pos_amt = 0.0
     entry = None
-    side_now = None
+    side_now: Optional[str] = None
     try:
         snap = await get_positions_snapshot()
         for row in (snap or []):
@@ -1486,7 +1485,7 @@ async def _maybe_eval_and_flip(symbol: str) -> None:
     AF_LAST_EVAL[symbol] = now_ts
     AF_LAST_EVAL_PX[symbol] = price
 
-    side_now = None
+    side_now: Optional[str] = None
     amt = 0.0
     try:
         if get_positions_snapshot:
