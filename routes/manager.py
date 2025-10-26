@@ -973,7 +973,7 @@ async def manage_once_route(
         try:
             res = await cli.place_stop_loss_or_be(symbol, side, float(be_price), trigger=trigger)  # type: ignore
             placed = {"action": "BE_SET", "price": float(be_price), "order": res}
-            rounded = f"{float(be_price):.1f}"]
+            rounded = f"{float(be_price):.1f}"
             try:
                 _notify_once(
                     send_trade_approval if callable(send_trade_approval) else (lambda *_a, **_k: None),
