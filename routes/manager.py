@@ -1616,6 +1616,9 @@ async def startup():
             except Exception:
                 pass
 
+__all__ = ["router", "startup"]
+
+
 
 
 
