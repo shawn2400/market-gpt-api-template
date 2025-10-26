@@ -126,9 +126,9 @@ services:
 
       - key: ENABLE_CSP
         value: "1"
-      # === CSP מתוקן: מוסיפים unpkg + unsafe-eval בשביל Babel בדפדפן ===
+      # === CSP מתוקן: מוסיפים unpkg + unsafe-eval בשביל Babel בדפדפן, ו־wss ל־WebSocket ===
       - key: CSP_POLICY
-        value: "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; connect-src 'self' https:; base-uri 'none'; frame-ancestors 'none'"
+        value: "default-src 'none'; img-src 'self' data: https:; style-src 'unsafe-inline' 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://unpkg.com; connect-src 'self' https: wss:; base-uri 'none'; frame-ancestors 'none'"
 
       # --- Anti-replay / HTTP Signature ---
       - key: ANTI_REPLAY_ENABLE
@@ -1118,6 +1118,7 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
+
 
 
 
