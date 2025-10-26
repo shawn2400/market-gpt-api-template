@@ -108,7 +108,26 @@ except Exception:
 logger = logging.getLogger("algogpt.manager")
 router = APIRouter(tags=["manager"])
 
-# ===== Config =====
+# ===== helpers for live ENV (dynamic flags) =====
+def _env_str(name: str, default: str = "") -> str:
+    return str(os.getenv(name, default) or "")
+
+def _env_bool(name: str, default: str = "0") -> bool:
+    return _env_str(name, default).strip().lower() in ("1", "true", "yes", "on")
+
+def _env_int(name: str, default: str = "0") -> int:
+    try:
+        return int(_env_str(name, default))
+    except Exception:
+        return int(default or "0")
+
+def _env_float(name: str, default: str = "0.0") -> float:
+    try:
+        return float(_env_str(name, default))
+    except Exception:
+        return float(default or "0.0")
+
+# ===== Config (static defaults; may be overridden by dynamic readers above) =====
 BASE_DIR   = Path(os.getenv("BASE_DIR", "/app"))
 INGEST_DIR = Path(os.getenv("INGEST_DIR", str(BASE_DIR / "static" / "cache")))
 
@@ -743,6 +762,7 @@ async def ops_manager_tick():
 
 @router.get("/ops/manager/health")
 async def ops_manager_health():
+    # Use dynamic ENV reads for runtime-accurate flags
     return {
         "ok": True,
         "enabled": MANAGER_ENABLE,
@@ -756,12 +776,12 @@ async def ops_manager_health():
         "alerts_ingest_url": ALERTS_INGEST_URL or None,
         "public_host": PUBLIC_HOST or None,
         "state_machine": _STATE_MACHINE_AVAILABLE,
-        "writes_orders": MANAGER_WRITES_ORDERS,
-        "native_tpsl_enable": NATIVE_TPSL_ENABLE,
-        "order_trigger": ORDER_TRIGGER,
-        "auto_flip_enable": AUTO_FLIP_ENABLE,
+        "writes_orders": _env_bool("MANAGER_WRITES_ORDERS", "1"),
+        "native_tpsl_enable": _env_bool("NATIVE_TPSL_ENABLE", "0"),
+        "order_trigger": _env_str("ORDER_TRIGGER", ORDER_TRIGGER),
+        "auto_flip_enable": _env_bool("AUTO_FLIP_ENABLE", "1"),
         "ws_autoflip": bool(USE_WS and _WS_TASK and not _WS_TASK.done()),
-        "rt_manage": bool(TRAIL_RT_ENABLE),
+        "rt_manage": _env_bool("TRAIL_RT_ENABLE", "1"),
     }
 
 @router.get("/alerts/trades/active")
@@ -972,7 +992,7 @@ async def manage_once_route(
         try:
             res = await cli.place_stop_loss_or_be(symbol, side, float(be_price), trigger=trigger)  # type: ignore
             placed = {"action": "BE_SET", "price": float(be_price), "order": res}
-            rounded = f"{float(be_price):.1f}"""
+            rounded = f"{float(be_price):.1f}"
             try:
                 _notify_once(
                     send_trade_approval if callable(send_trade_approval) else (lambda *_a, **_k: None),
@@ -1082,7 +1102,7 @@ async def manager_rewrite_native_tpsl(
 ):
     if not _bearer_ok(authorization):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    if not NATIVE_TPSL_ENABLE:
+    if not _env_bool("NATIVE_TPSL_ENABLE", "0"):
         raise HTTPException(status_code=400, detail="NATIVE_TPSL_ENABLE=0")
     return await _do_rewrite_native_tpsl(req.symbol)
 
@@ -1093,7 +1113,7 @@ async def trade_sync_native_tpsl(
 ):
     if not _bearer_ok(authorization):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    if not NATIVE_TPSL_ENABLE:
+    if not _env_bool("NATIVE_TPSL_ENABLE", "0"):
         raise HTTPException(status_code=400, detail="NATIVE_TPSL_ENABLE=0")
     return await _do_rewrite_native_tpsl(req.symbol)
 
@@ -1174,7 +1194,7 @@ async def _tick_once() -> Dict[str, Any]:
                 created.append(tid)
 
         # Periodic manage (if writers available)
-        if MANAGER_WRITES_ORDERS and (pm_manage_once or position_ops_manage_once):
+        if _env_bool("MANAGER_WRITES_ORDERS", "1") and (pm_manage_once or position_ops_manage_once):
             symbols: List[str] = []
             if get_positions_snapshot:
                 try:
@@ -1198,7 +1218,7 @@ async def _tick_once() -> Dict[str, Any]:
                     logger.debug("periodic manage_once for %s failed: %s", sym, e)
 
         # Auto-Flip (tick path) — only if WS not running
-        if AUTO_FLIP_ENABLE and get_positions_snapshot and not (USE_WS and _WS_TASK and not _WS_TASK.done()):
+        if _env_bool("AUTO_FLIP_ENABLE", "1") and get_positions_snapshot and not (USE_WS and _WS_TASK and not _WS_TASK.done()):
             try:
                 snap = await get_positions_snapshot()
                 for row in (snap or []):
@@ -1216,7 +1236,7 @@ async def _tick_once() -> Dict[str, Any]:
                                 desired = "BUY"
                             elif want == "SHORT":
                                 desired = "SELL"
-                            elif AUTO_FLIP_NEUTRAL:
+                            elif _env_bool("AUTO_FLIP_NEUTRAL", "1"):
                                 desired = "NEUTRAL"
                         except Exception as e:
                             logger.debug("eval_regime failed (tick) for %s: %s", sym, e)
@@ -1332,7 +1352,7 @@ def _tp1_price(entry: float, side: str) -> Optional[float]:
 
 # =================== Live manage (WS) ===================
 async def _rt_manage(symbol: str) -> None:
-    if not (TRAIL_RT_ENABLE and TradeClient and get_positions_snapshot):
+    if not (_env_bool("TRAIL_RT_ENABLE", "1") and TradeClient and get_positions_snapshot):
         return
     price = PRICE_MAP.get(symbol)
     ts = LAST_PRICE_TS.get(symbol, 0.0)
@@ -1375,7 +1395,7 @@ async def _rt_manage(symbol: str) -> None:
     sign = 1.0 if side_now == "BUY" else -1.0
 
     # GRACE
-    if GRACE_ENABLE and not st.get("armed_be", False):
+    if _env_bool("GRACE_ENABLE", "1") and not st.get("armed_be", False):
         in_time = (now_ts - float(st["start_ts"])) <= GRACE_TIME_SEC
         mae_abs = max(0.0, (entry - price) if side_now == "BUY" else (price - entry))
         ok_mae = (atr_abs <= 0.0) or (mae_abs <= GRACE_MAX_MAE_ATR * atr_abs)
@@ -1467,7 +1487,7 @@ async def _rt_manage(symbol: str) -> None:
                 except Exception: pass
 
 async def _maybe_eval_and_flip(symbol: str) -> None:
-    if not (AUTO_FLIP_ENABLE and eval_regime and TradeClient):
+    if not (_env_bool("AUTO_FLIP_ENABLE", "1") and eval_regime and TradeClient):
         return
     price = PRICE_MAP.get(symbol)
     ts = LAST_PRICE_TS.get(symbol, 0.0)
@@ -1501,7 +1521,7 @@ async def _maybe_eval_and_flip(symbol: str) -> None:
     desired = None
     if want == "LONG":  desired = "BUY"
     elif want == "SHORT": desired = "SELL"
-    elif AUTO_FLIP_NEUTRAL:
+    elif _env_bool("AUTO_FLIP_NEUTRAL", "1"):
         desired = "NEUTRAL"
 
     if not desired or desired == side_now:
@@ -1590,7 +1610,7 @@ async def _ws_autoflip_loop():
 async def _manager_loop():
     logger.info("manager_loop start: enable=%s interval=%ss ingest_dir=%s alerts_ingest=%s writes_orders=%s native_tpsl=%s auto_flip=%s ws=%s rt_manage=%s",
                 MANAGER_ENABLE, MANAGER_INTERVAL_SEC, INGEST_DIR,
-                ALERTS_INGEST_URL or "DISABLED", MANAGER_WRITES_ORDERS, NATIVE_TPSL_ENABLE,
+                ALERTS_INGEST_URL or "DISABLED", NATIVE_TPSL_ENABLE, NATIVE_TPSL_ENABLE,
                 AUTO_FLIP_ENABLE, USE_WS, TRAIL_RT_ENABLE)
     while True:
         try:
