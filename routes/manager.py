@@ -114,7 +114,7 @@ INGEST_DIR = Path(os.getenv("INGEST_DIR", str(BASE_DIR / "static" / "cache")))
 
 MANAGER_ENABLE       = os.getenv("MANAGER_ENABLE", "1").lower() in ("1","true","yes","on")
 MANAGER_INTERVAL_SEC = int(os.getenv("MANAGER_INTERVAL_SEC", "30"))
-CONFIRMSTORE_ENABLE  = os.getenv("CONFIRMSTORE_ENABLE", "1").lower() in ("1","true","yes","on")
+CONFIRMSTORE_ENABLE  = os.getenv("CONFIRMSTORE_ENABLE", "1").lower() in ("1","true","yes","on"))
 
 PUBLIC_HOST = (os.getenv("PUBLIC_HOST", "") or os.getenv("WEBHOOK_HOST", "")).rstrip("/")
 ALERTS_INGEST_URL = os.getenv("ALERTS_INGEST_URL", f"{PUBLIC_HOST}/alerts/ingest").strip()
@@ -1213,8 +1213,10 @@ async def _tick_once() -> Dict[str, Any]:
                         try:
                             reg = await eval_regime(symbol=sym, long_req=LONG_REQ, short_req=SHORT_REQ, neutral_req=NEUTRAL_REQ, timeframe=DEFAULT_TF)  # type: ignore
                             want = str(reg.get("want","")).upper()
-                            if want == "LONG":  desired = "BUY"
-                            elif want == "SHORT": desired = "SELL"
+                            if want == "LONG":
+                                desired = "BUY"
+                            elif want == "SHORT":
+                                desired = "SELL"
                             elif AUTO_FLIP_NEUTRAL:
                                 desired = "NEUTRAL"
                         except Exception as e:
@@ -1620,6 +1622,7 @@ async def startup():
                 pass
 
 __all__ = ["router", "startup"]
+
 
 
 
