@@ -185,7 +185,7 @@ services:
 
       # ===== Redis (required) =====
       - key: REDIS_URL
-        fromSecret: REDIS_URL_PROD
+        fromSecret: REDIS_URL
       - key: REQUIRE_REDIS
         value: "1"
       - key: READINESS_CHECK_REDIS
@@ -1135,7 +1135,6 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
-
 
 
 
