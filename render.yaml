@@ -371,7 +371,7 @@ services:
       - key: REQUIRE_TELEGRAM_APPROVAL
         value: "1"
       - key: AUTO_OPEN_ON_APPROVE
-        value: "1"   # מאושר? פותח פוזיציה אוטומטית
+        value: "1"
       - key: ALLOW_MARKET_ENTRY
         value: "1"
       - key: APPROVAL_REQUIRE_FRESH_PRICE
@@ -1135,7 +1135,6 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
-
 
 
 
