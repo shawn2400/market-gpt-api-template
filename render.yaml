@@ -910,6 +910,7 @@ services:
       - key: TELEGRAM_WEBHOOK_SECRET
         fromSecret: TELEGRAM_WEBHOOK_SECRET_PROD
 
+      # ===== Positions & Events (SSE/Redis) =====
       - key: POS_PUB_ENABLE
         value: "1"
       - key: POS_PUB_INTERVAL_SEC
@@ -930,6 +931,7 @@ services:
       - key: POS_EVENTS_TELEGRAM_LEVEL
         value: "info"
 
+      # ===== Dynamic & Scaling =====
       - key: DYNAMIC_CONTROL_ENABLE
         value: "1"
       - key: DYNAMIC_SAFETY_MODE
