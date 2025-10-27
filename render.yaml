@@ -6,7 +6,7 @@ services:
     plan: standard
     autoDeploy: true
     dockerfilePath: ./Dockerfile
-    healthCheckPath: /healthz
+    healthCheckPath: /readyz
 
     disks:
       - name: data
@@ -650,7 +650,6 @@ services:
       - key: NEUTRAL_REQ
         value: "between(rsi,45,55) or abs(macd_hist)<0.05"
       - key: REGIME_ADX_MIN_15m
-      - key: REGIME_ADX_MIN_15m
         value: "22"
 
       - key: HEALTH_ALERTS_ENABLE
@@ -1134,7 +1133,6 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
-
 
 
 
