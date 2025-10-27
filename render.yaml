@@ -185,7 +185,7 @@ services:
 
       # ===== Redis (required) =====
       - key: REDIS_URL
-        fromSecret: REDIS_URL
+        fromSecret: redis://red-d2j4vf2li9vc73evhv4g:<PASSWORD>@red-d2j4vf2li9vc73evhv4g:6379
       - key: REQUIRE_REDIS
         value: "1"
       - key: READINESS_CHECK_REDIS
