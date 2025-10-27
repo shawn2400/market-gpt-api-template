@@ -891,7 +891,7 @@ services:
       - key: PRIMARY_API_TOKEN
         fromSecret: PRIMARY_API_TOKEN_PROD
       - key: API_SIGNING_SECRET
-        fromSecret: OPS_SIGN_SECRET_PROD
+        fromSecret: API_SIGNING_SECRET_PROD
       - key: OPS_SIGN_SECRET
         fromSecret: OPS_SIGN_SECRET_PROD
       - key: WEBHOOK_HMAC_SECRET
@@ -906,6 +906,12 @@ services:
         fromSecret: BINANCE_API_SECRET_PROD
       - key: ETHERSCAN_API_KEY
         fromSecret: ETHERSCAN_API_KEY_PROD
+      - key: OPENAI_API_KEY
+        fromSecret: OPENAI_API_KEY_PROD
+      - key: TELEGRAM_BOT_TOKEN
+        fromSecret: TELEGRAM_BOT_TOKEN_PROD
+      - key: TELEGRAM_WEBHOOK_SECRET
+        fromSecret: TELEGRAM_WEBHOOK_SECRET_PROD
 
       - key: POS_PUB_ENABLE
         value: "1"
@@ -1130,6 +1136,7 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
+
 
 
 
