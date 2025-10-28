@@ -73,13 +73,13 @@ services:
       - key: AUTO_RUN
         value: "1"
 
-      # === ✅ PUBLIC / CORS — מצביעים לפרוד ===
+      # === ✅ PUBLIC / CORS — מצביעים לפרוד (תוקן לדוקר) ===
       - key: PUBLIC_HOST
-        value: "https://algogpt-prod.onrender.com"
+        value: "https://algogpt-docker.onrender.com"
       - key: CONTEXT_URL
-        value: "https://algogpt-prod.onrender.com"
+        value: "https://algogpt-docker.onrender.com"
       - key: WEBHOOK_HOST
-        value: "https://algogpt-prod.onrender.com"
+        value: "https://algogpt-docker.onrender.com"
 
       - key: DOCS_URL
         value: "/docs"
@@ -96,11 +96,11 @@ services:
       - key: OPENAPI_PUBLIC_MAX_OPS
         value: "30"
 
-      # === ✅ CORS — הדומיין של הפרוד
+      # === ✅ CORS — הדומיין העדכני ===
       - key: CORS_ALLOW_ORIGINS
-        value: "https://algogpt-prod.onrender.com"
+        value: "https://algogpt-docker.onrender.com"
       - key: CORS_ALLOW_ORIGINS_STRICT
-        value: "https://algogpt-prod.onrender.com"
+        value: "https://algogpt-docker.onrender.com"
       - key: CORS_ALLOW_HEADERS
         value: "*"
       - key: CORS_ALLOW_METHODS
@@ -137,8 +137,9 @@ services:
         value: "1"
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
+      # קשיחה לאבטחת חותמות זמן
       - key: SIG_TS_ENFORCE
-        value: "0"
+        value: "1"
       - key: SIG_TS_SKEW_SEC
         value: "900"
 
@@ -1131,6 +1132,7 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
+
 
 
 
