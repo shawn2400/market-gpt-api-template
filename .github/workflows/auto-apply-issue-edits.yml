@@ -10,17 +10,15 @@ permissions:
 
 jobs:
   apply:
-    # רץ רק אם קיים הלייבל 'autofix'
     if: contains(github.event.issue.labels.*.name, 'autofix')
     runs-on: ubuntu-latest
     steps:
-      # נדרש כדי לפעול עם Node ולמשוך חבילות
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
 
-      - name: Install js-yaml
+      - name: Install deps
         run: npm install js-yaml
 
       - name: Apply edits via GitHub API
@@ -32,33 +30,27 @@ jobs:
             const repo  = context.repo.repo;
             const issue = context.payload.issue;
 
-            // ---- parse autofix YAML block from issue body ----
+            // 1) pull fenced ```autofix block
             const body = issue.body || "";
-            const fence = body.match(/```autofix\s+([\s\S]*?)```/i);
-            if (!fence) {
-              core.setFailed("No ```autofix ...``` fenced block found in issue body.");
-              return;
-            }
+            const m = body.match(/```autofix\s+([\s\S]*?)```/i);
+            if (!m) { core.setFailed("No ```autofix ...``` block in issue body."); return; }
+
+            // 2) parse YAML
             const yaml = require('js-yaml');
             let spec;
-            try {
-              spec = yaml.load(fence[1]);
-            } catch (e) {
-              core.setFailed("Invalid YAML in autofix block: " + e.message);
-              return;
-            }
+            try { spec = yaml.load(m[1]); }
+            catch (e) { core.setFailed("Invalid YAML: " + e.message); return; }
             if (!spec || !Array.isArray(spec.edits) || spec.edits.length === 0) {
-              core.setFailed("No edits found under 'edits:' in the autofix block.");
-              return;
+              core.setFailed("Missing 'edits:' array in autofix block."); return;
             }
 
-            // ---- branch setup ----
+            // 3) create head branch
             const baseBranch = spec.base || 'main';
             const { data: baseRef } = await github.rest.git.getRef({ owner, repo, ref: `heads/${baseBranch}` });
             const headBranch = `ops/autofix-${issue.number}-${Date.now()}`;
             await github.rest.git.createRef({ owner, repo, ref: `refs/heads/${headBranch}`, sha: baseRef.object.sha });
 
-            // ---- helpers ----
+            // helpers
             async function readFile(path) {
               try {
                 const { data } = await github.rest.repos.getContent({ owner, repo, path, ref: headBranch });
@@ -76,14 +68,13 @@ jobs:
               });
             }
 
-            // ---- apply edits ----
+            // 4) apply edits
             for (const e of spec.edits) {
               const { sha, text, missing } = await readFile(e.path);
               if (missing && !e.create && e.mode !== 'literal' && e.mode !== 'append') {
                 core.setFailed(`File not found and 'create' not set: ${e.path}`);
                 return;
               }
-
               let s = text;
 
               if (e.mode === 'regex') {
@@ -98,21 +89,17 @@ jobs:
               } else if (e.mode === 'append') {
                 s = (s || '') + (e.content || '');
               } else {
-                core.setFailed(`Unknown mode for ${e.path}: ${e.mode}`);
-                return;
+                core.setFailed(`Unknown mode for ${e.path}: ${e.mode}`); return;
               }
 
               await writeFile(e.path, sha, s, e.message || `autofix: ${e.path}`);
             }
 
-            // ---- open PR ----
+            // 5) open PR
             const prTitle = (spec.title || `AutoFix from issue #${issue.number}`).slice(0, 100);
-            const prBody  = spec.body  || `Automated edits from issue #${issue.number}.`;
-            try {
-              await github.rest.pulls.create({
-                owner, repo, title: prTitle, head: headBranch, base: baseBranch, body: prBody
-              });
-            } catch (e) {
-              core.setFailed("PR create failed: " + e.message);
-            }
+            const prBody  = spec.body  || `Automations edits from issue #${issue.number}.`;
+            await github.rest.pulls.create({
+              owner, repo, title: prTitle, head: headBranch, base: baseBranch, body: prBody
+            });
+
 
