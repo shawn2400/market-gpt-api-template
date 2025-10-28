@@ -47,13 +47,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     GUNICORN_MAX_REQUESTS=500 \
     GUNICORN_MAX_REQUESTS_JITTER=50
 
-# ===== Runtime OS deps (CLI כל מה שחסר לך בבדיקה בתוך הפוד) =====
-# - curl: בדיקות HTTP ו-HEALTHCHECK
-# - openssl + xxd: חתימות HMAC/hex
-# - coreutils: date / base64 / tr / printf וכו'
-# - sed / gawk: עיבוד שורות
-# - uuid-runtime: יצירת nonce/uuid ב-Shell
-# - bash + ca-certificates + tzdata: סביבה תקינה
+# ===== Runtime OS deps =====
+# curl: בדיקות HTTP/HEALTHCHECK
+# openssl+xxd: חתימות HMAC/hex
+# coreutils/sed/gawk/uuid-runtime: עיבוד/nonce
+# tini+tzdata+certs: סביבה תקינה
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     tini ca-certificates tzdata bash curl openssl xxd uuid-runtime sed gawk coreutils git \
     libopenblas0-openmp liblapack3 \
@@ -64,9 +62,14 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 # העתקת תלויות פייתון שנבנו בשלב ה-builder
 COPY --from=builder /install /usr/local
 
-# הבטחת python3 (יש דימויים שבהם הבינארי הוא "python" בלבד)
-RUN ln -sf /usr/local/bin/python /usr/local/bin/python3 || true \
- && python --version
+# הבטחת 'python' מפנה ל-python3 בלבד (ללא לולאת סימלינקים)
+RUN set -eux; \
+    PY3="$(command -v python3 || true)"; \
+    if [ -z "$PY3" ]; then echo "ERROR: python3 not found in PATH" >&2; exit 1; fi; \
+    rm -f /usr/local/bin/python; \
+    ln -s "$PY3" /usr/local/bin/python; \
+    /usr/bin/env python --version; \
+    /usr/bin/env python3 --version
 
 # יצירת משתמש לא-רוט
 RUN useradd -ms /bin/bash appuser
@@ -86,7 +89,7 @@ USER appuser
 
 EXPOSE 10000
 
-# Healthcheck פנימי → /readyz (משתמש ב-curl שקיים עכשיו ברUNTIME)
+# Healthcheck פנימי → /readyz
 HEALTHCHECK --interval=30s --timeout=10s --retries=5 \
   CMD curl -fsS "http://127.0.0.1:${PORT:-10000}/readyz" || exit 1
 
@@ -98,8 +101,6 @@ ENV APP_MODULE=main:app
 
 # הרצה עם Gunicorn+UvicornWorker
 CMD ["bash","-lc", "exec gunicorn -k uvicorn.workers.UvicornWorker \"${APP_MODULE:-main:app}\" --bind 0.0.0.0:${PORT:-10000} --timeout ${GUNICORN_TIMEOUT:-180} --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-45} --keep-alive ${GUNICORN_KEEPALIVE:-30} --max-requests ${GUNICORN_MAX_REQUESTS:-500} --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-50}"]
-
-
 
 
 
