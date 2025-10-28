@@ -692,13 +692,30 @@ async def reject(ticket_id: str = Query(..., description="ticket_id")):
 
 @router.post("/ops/approve/signed", summary="Internal signed approve endpoint (executes trade) – signature required")
 async def approve_signed(request: Request):
-    if not HMAC_SECRET:
-        raise HTTPException(status_code=500, detail="HMAC secret not set")
+    """
+    אימות חתימה עדכני:
+      1) primary: utils.anti_replay.verify_request  (ts/nonce/signature + API_SIGNING_SECRET, אנטי־ריפליי)
+      2) fallback: HMAC על גוף עם HMAC_SECRET (ל־backcompat) אם ה־headers חסרים או secret לא קיים
+    """
     raw = await request.body()
-    got = request.headers.get("X-Signature", "") or ""
-    want = _sign_hex(HMAC_SECRET, raw)
-    if not hmac.compare_digest(got, want):
-        raise HTTPException(status_code=401, detail="Bad signature")
+
+    # Primary: anti_replay (headers + signing string)
+    from utils.anti_replay import verify_request
+    ts    = request.headers.get("X-Timestamp")
+    nonce = request.headers.get("X-Nonce")
+    sig   = request.headers.get("X-Signature")
+    ok, why = verify_request(ts, nonce, sig, f"{request.method} {request.url.path}", raw, True)
+
+    if not ok:
+        # Fallback only when מתאים ל-backcompat: חסר headers או חסר secret, ויש לנו HMAC_SECRET ישן
+        if why in ("missing-signature-headers", "signing-secret-missing") and HMAC_SECRET:
+            got = request.headers.get("X-Signature", "") or ""
+            want = _sign_hex(HMAC_SECRET, raw)
+            if not hmac.compare_digest(got, want):
+                raise HTTPException(status_code=401, detail=f"Bad signature ({why})")
+        else:
+            raise HTTPException(status_code=401, detail=why)
+
     try:
         payload = json.loads(raw.decode("utf-8"))
     except Exception:
@@ -799,7 +816,6 @@ async def digest_expired(hours: int = Query(6, ge=1, le=48)):
     except Exception as e:
         logger.warning("digest_expired_failed: %s", e)
         return {"ok": False, "error": str(e)}
-
 
 
 
