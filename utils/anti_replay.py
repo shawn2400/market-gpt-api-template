@@ -2,15 +2,15 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import os
-import time
-import hmac
-import hashlib
-import json
-import threading
 import base64
+import hashlib
+import hmac
+import json
 import logging
-from typing import Optional, Tuple, Any, Dict, List, Iterable
+import os
+import threading
+import time
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 # -------- Optional Redis (preferred) --------
 try:
@@ -79,8 +79,7 @@ def _sha256_hex(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 def _sha256_b64(data: bytes) -> str:
-    h = hashlib.sha256(data).digest()
-    return base64.b64encode(h).decode("ascii")
+    return base64.b64encode(hashlib.sha256(data).digest()).decode("ascii")
 
 def _canonicalize_body(body: Any) -> bytes:
     """Return UTF-8 bytes for body in a canonical way (no trailing newline)."""
@@ -95,6 +94,9 @@ def _canonicalize_body(body: Any) -> bytes:
         return json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     except Exception:
         return b""
+
+def _lowerkey_headers(h: Dict[str, str]) -> Dict[str, str]:
+    return {(k or "").lower(): v for k, v in (h or {}).items()}
 
 def _select_key_bytes(secret_hex_or_text: str) -> bytes:
     """
@@ -229,8 +231,8 @@ def _parse_signature_header(h: str) -> Dict[str, str]:
         txt = txt[len("signature "):].strip()
 
     # Split by comma at top-level (simple parser; values are quoted)
-    parts = []
-    cur = []
+    parts: List[str] = []
+    cur: List[str] = []
     in_q = False
     for ch in txt:
         if ch == '"' and (not cur or cur[-1] != '\\'):
@@ -255,9 +257,6 @@ def _parse_signature_header(h: str) -> Dict[str, str]:
         out[k] = v
     return out
 
-def _lowerkey_headers(h: Dict[str, str]) -> Dict[str, str]:
-    return {(k or "").lower(): v for k, v in (h or {}).items()}
-
 def _http_sig_build_string_to_sign(
     method: str,
     route_path: str,
@@ -277,7 +276,6 @@ def _http_sig_build_string_to_sign(
         if hn_l == "(request-target)":
             lines.append(f"(request-target): {m} {route_path}")
         else:
-            # host/content-type/x-request-timestamp/x-ops-nonce/digest/x-content-sha256/content-digest/...
             val = h.get(hn_l, "")
             lines.append(f"{hn_l}: {val}")
     return "\n".join(lines)
@@ -289,7 +287,8 @@ def _http_sig_expected_b64(
     headers_list: Iterable[str],
 ) -> str:
     sts = _http_sig_build_string_to_sign(method, route_path, headers, headers_list).encode("utf-8")
-    return _hmac_b64(_SECRET, sts)
+    key = _select_key_bytes(_SECRET)
+    return base64.b64encode(hmac.new(key, sts, hashlib.sha256).digest()).decode("ascii")
 
 def _extract_first(headers: Dict[str, str], names: Iterable[str]) -> Optional[str]:
     h = _lowerkey_headers(headers)
@@ -330,8 +329,8 @@ def _validate_body_hash_if_present(headers: Dict[str, str], body_bytes: bytes) -
     if "content-digest" in h and h["content-digest"]:
         # Example: sha-256=:<base64>:
         try:
-            v = h["content-digest"]
             import re
+            v = h["content-digest"]
             m = re.search(r"sha-256\s*=\s*:(?P<b64>[A-Za-z0-9+/=]+):", v)
             if not m:
                 return False, "bad_content_digest_format", validated
@@ -358,6 +357,9 @@ def _verify_http_signature_common(
     """
     if not _ENABLE:
         return True, "disabled"
+
+    if not _SECRET:
+        return False, "missing_secret"
 
     must_sign = require_signature or _REQUIRE_SIGNATURE_DEFAULT
     h = _lowerkey_headers(headers or {})
@@ -424,7 +426,6 @@ def _verify_http_signature_common(
             return False, "replay"
 
     # Everything ok
-    # Log helpful context for ops:
     try:
         logger.info(
             "anti-replay: HTTP-SIG ok keyId=%s secret_src=%s headers=%s ts=%s nonce=%s",
@@ -505,8 +506,6 @@ def verify_http_signature(
       headers: request headers (case-insensitive keys are handled)
       body: raw string/bytes or JSON-serializable object (canonicalized internally)
     """
-    if not _SECRET:
-        return False, "missing_secret"
     return _verify_http_signature_common(method, route_path, headers, body, require_signature)
 
 async def verify_http_signature_async(
@@ -516,12 +515,8 @@ async def verify_http_signature_async(
     body: Any,
     require_signature: bool = True,
 ) -> Tuple[bool, str]:
-    if not _SECRET:
-        return False, "missing_secret"
     ok, reason = _verify_http_signature_common(method, route_path, headers, body, require_signature)
     # Anti-replay already handled inside common path (sync claim). If you prefer async Redis, swap here.
     return ok, reason
-
-
 
 
