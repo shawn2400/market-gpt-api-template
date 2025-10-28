@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import hmac
 from typing import Dict, Any, List
 
 import httpx
@@ -14,6 +15,9 @@ try:
     from utils.auth import require_api_key  # type: ignore
 except Exception:
     async def require_api_key(request: Request):
+        """
+        הגנה בסיסית עם Bearer Token (קבוע בזמן) אם PROTECT_EXECUTOR_ROUTES=1.
+        """
         protect = os.getenv("PROTECT_EXECUTOR_ROUTES", "1").lower() in ("1", "true", "yes", "on")
         if not protect:
             return
@@ -21,7 +25,14 @@ except Exception:
         if not token:
             raise HTTPException(status_code=503, detail="API_BEARER_TOKEN missing")
         auth = request.headers.get("Authorization", "")
-        if not (auth.startswith("Bearer ") and auth.split(" ", 1)[1].strip() == token):
+        if not auth.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Unauthorized")
+        provided = auth.split(" ", 1)[1].strip()
+        try:
+            ok = hmac.compare_digest(provided, token)
+        except Exception:
+            ok = (provided == token)
+        if not ok:
             raise HTTPException(status_code=401, detail="Unauthorized")
 
 logger = logging.getLogger("algogpt.routes.executor")
@@ -158,6 +169,7 @@ def get_symbols(quote: str = Query("USDT", description="סימול מטבע צי
         if isinstance(s, dict) and _filter_usdt_perp(s, quote=quote)
     })
     return {"ok": True, "symbols": out, "count": len(out)}
+
 
 
 
