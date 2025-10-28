@@ -1,0 +1,222 @@
+name: AutoFix via GitHub API (no shell)
+on:
+  workflow_dispatch:
+    inputs:
+      preset:
+        description: "Which fix set to apply"
+        required: true
+        default: "core"
+        type: choice
+        options: [core]   # אפשר להוסיף בעתיד presets נוספים
+      branch:
+        description: "Target branch to base changes on"
+        required: true
+        default: "main"
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (read only for context)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.branch }}
+
+      - name: Apply fix via GitHub API (no shell)
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const preset = core.fixsets[ '${{ github.event.inputs.preset }}' ] || core.fixsets.core;
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+            const baseBranch = '${{ github.event.inputs.branch }}';
+            const headBranch = `ops/fixes-${Date.now()}`;
+
+            // Create branch from base
+            const { data: baseRef } = await github.rest.git.getRef({ owner, repo, ref: `heads/${baseBranch}` });
+            await github.rest.git.createRef({
+              owner, repo,
+              ref: `refs/heads/${headBranch}`,
+              sha: baseRef.object.sha
+            });
+
+            // Helper: read file (base64) from HEAD
+            async function readFile(path) {
+              const { data } = await github.rest.repos.getContent({ owner, repo, path, ref: headBranch });
+              if (!('content' in data)) throw new Error(`No content in ${path}`);
+              const buff = Buffer.from(data.content, 'base64');
+              return { sha: data.sha, text: buff.toString('utf8') };
+            }
+
+            // Helper: write file (commit) to branch
+            async function writeFile(path, oldSha, newText, message) {
+              await github.rest.repos.createOrUpdateFileContents({
+                owner, repo, path, branch: headBranch,
+                message,
+                content: Buffer.from(newText, 'utf8').toString('base64'),
+                sha: oldSha,
+              });
+            }
+
+            // --- Fixset logic (pure JS regex edits, no shell) ---
+            const edits = [];
+
+            if (preset.core) {
+              // main.py edits
+              edits.push(async () => {
+                const path = 'main.py';
+                const { sha, text } = await readFile(path);
+                let s = text;
+
+                // ensure "import hmac"
+                if (!/\\bimport\\s+hmac\\b/.test(s)) {
+                  s = s.replace(/import\\s+os(\\r?\\n)/, 'import os$1import hmac$1');
+                }
+
+                // constant-time bearer compare inside _require_bearer
+                s = s.replace(
+                  /(?ms)(def\\s+_require_bearer\\(request:\\s*Request\\).*?if\\s+scheme\\.lower\\(\\)\\s*!=\\s*"bearer":\\s*raise.*?)(\\n\\s*)if\\s+token\\s*!=\\s*API_BEARER_TOKEN\\s*:/,
+                  '$1$2try:$2    ok = hmac.compare_digest(token, API_BEARER_TOKEN)$2except Exception:$2    ok = (token == API_BEARER_TOKEN)$2if not ok:'
+                );
+
+                // HEAD middleware + /readyz (inject after app = FastAPI(...)) if missing
+                if (!s.includes('/readyz') || !/@app\\.middleware\\("http"\\)/.test(s)) {
+                const inject = `
+# ---------- Safe HEAD & /readyz ----------
+@app.middleware("http")
+async def _head_compat_and_soft_readyz(request: Request, call_next):
+    if request.url.path == "/readyz":
+        return PlainTextResponse("ok", status_code=200)
+    if request.method == "HEAD":
+        scope_copy = dict(request.scope)
+        scope_copy["method"] = "GET"
+        new_req = Request(scope_copy, receive=request.receive)
+        resp = await call_next(new_req)
+        return StarletteResponse(status_code=resp.status_code, headers=dict(resp.headers), media_type=resp.media_type)
+    return await call_next(request)
+`;
+                  s = s.replace(
+                    /(app\\s*=\\s*FastAPI\\([^)]*\\)\\s*)/,
+                    `$1\\n${inject}\\n`
+                  );
+                  if (!/from\\s+fastapi\\s+import\\s+FastAPI,\\s*Request/.test(s)) {
+                    s = s.replace(
+                      /from\\s+fastapi\\s+import\\s+FastAPI,/,
+                      'from fastapi import FastAPI, Request,'
+                    );
+                  }
+                  if (!/PlainTextResponse/.test(s)) {
+                    s = s.replace(
+                      /from\\s+starlette\\.responses\\s+import\\s+Response\\s+as\\s+StarletteResponse/,
+                      'from starlette.responses import Response as StarletteResponse, PlainTextResponse'
+                    );
+                  }
+                }
+
+                // RL soft-cap (avoid unbounded growth)
+                if (s.includes('rl_mem') && !s.includes('Soft cap to avoid unbounded growth')) {
+                  s = s.replace(
+                    /(app\\.state\\.rl_mem\\s*=\\s*bucket\\s*\\n)/,
+                    `$1    # Soft cap to avoid unbounded growth under heavy traffic
+    try:
+        if len(bucket) > 5000:
+            for k in list(bucket.keys())[:500]:
+                bucket.pop(k, None)
+    except Exception:
+        pass
+`
+                  );
+                }
+
+                await writeFile(path, sha, s, 'autofix: main.py (bearer const-time, /readyz+HEAD, RL soft-cap)');
+              });
+
+              // utils/multi_tf_scanner.py edits
+              edits.push(async () => {
+                const path = 'utils/multi_tf_scanner.py';
+                let sha, text, exists = true;
+                try {
+                  const got = await readFile(path);
+                  sha = got.sha; text = got.text;
+                } catch (e) {
+                  exists = false;
+                  sha = undefined; text = '# autogenerated by autofix\\n';
+                }
+                let s = text;
+                if (!/^import\\s+httpx/m.test(s)) s = 'import httpx\\n' + s;
+                if (!/^import\\s+os/m.test(s))    s = 'import os\\n' + s;
+
+                if (!/def\\s+get_all_futures_usdt_symbols\\(/.test(s)) {
+                  s += `
+# --- autofix: futures symbols helper (USDT-PERP from /fapi/v1/exchangeInfo) ---
+def get_all_futures_usdt_symbols(timeout: float = 8.0):
+    base = os.getenv("BIN_FAPI_BASE", "https://fapi.binance.com")
+    url = base.rstrip("/") + "/fapi/v1/exchangeInfo"
+    try:
+        with httpx.Client(timeout=timeout) as cli:
+            r = cli.get(url)
+            r.raise_for_status()
+            data = r.json()
+    except Exception:
+        return []
+    symbols = []
+    for sym in data.get("symbols", []):
+        if sym.get("status") != "TRADING":
+            continue
+        if sym.get("contractType") != "PERPETUAL":
+            continue
+        if sym.get("quoteAsset") != "USDT":
+            continue
+        s = sym.get("symbol", "")
+        if s.endswith("USDT"):
+            symbols.append(s)
+    return sorted(set(symbols))
+`;
+                }
+
+                // allow dynamic list when WATCHLIST_ONLY=0
+                if (/def\\s+scan_symbols\\([\\s\\S]*?\\):\\s*\\n/.test(s) && !s.includes('WATCHLIST_ONLY = os.getenv("WATCHLIST_ONLY"')) {
+                  s = s.replace(
+                    /(def\\s+scan_symbols\\([^)]*\\):\\s*\\n)/,
+                    `$1    WATCHLIST_ONLY = os.getenv("WATCHLIST_ONLY", "0").lower() in ("1","true","yes","on")\\n` +
+                    `    if not WATCHLIST_ONLY:\\n` +
+                    `        try:\\n` +
+                    `            _dyn = get_all_futures_usdt_symbols()\\n` +
+                    `            if _dyn:\\n` +
+                    `                symbols = _dyn if "symbols" in locals() else _dyn\\n` +
+                    `        except Exception:\\n` +
+                    `            pass\\n`
+                  );
+                }
+
+                await writeFile(path, sha, s, 'autofix: multi_tf_scanner.py (dynamic USDT-PERP futures list)');
+              });
+            }
+
+            // run all edits
+            for (const job of edits) { await job(); }
+
+            // Create PR from headBranch to baseBranch
+            try {
+              await github.rest.pulls.create({
+                owner, repo, title: `AutoFix (${preset.name||'core'})`,
+                head: headBranch, base: baseBranch,
+                body: "Automated API-based edits (no shell)."
+              });
+            } catch (e) {
+              core.warning(`PR create failed: ${e.message}`);
+            }
+
+          # This object provides our "presets"
+          const core = {
+            fixsets: {
+              core: { name: 'core', core: true }
+            }
+          };
