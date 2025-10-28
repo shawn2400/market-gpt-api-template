@@ -301,15 +301,13 @@ def _adjust_routes_autoload_filters() -> None:
 
 def _include_ui_grid_router():
     """
-    כולל *רק* ראוטר אחד לפי UI_GRID_MODE, ותואם לשם הקובץ בצד ה-proxy
-    (תומך גם בשם הישן server.routes.ui_grid וגם בשם המומלץ server.routes.ui_grid_proxy).
+    כולל *רק* ראותר אחד לפי UI_GRID_MODE...
     """
     try:
         if UI_GRID_MODE == "local":
             _safe_include("routes.ui_grid")
             logger.info("ui_grid: mode=local (routes.ui_grid)")
         elif UI_GRID_MODE == "proxy":
-            # ננסה את השם החדש קודם
             try:
                 _safe_include("server.routes.ui_grid_proxy")
                 logger.info("ui_grid: mode=proxy (server.routes.ui_grid_proxy)")
@@ -645,7 +643,6 @@ def _parse_signature_auth(h: str) -> Optional[Dict[str, Any]]:
         "headers": [x.strip().lower() for x in parts["headers"].split() if x.strip()],
         "signature": parts["signature"],
     }
-
 def _build_sig_string(method: str, path: str, headers_lower: Dict[str, str], headers_order: List[str]) -> str:
     lines: List[str] = []
     for hname in headers_order:
@@ -912,7 +909,6 @@ async def _security_headers(request: Request, call_next):
 # ==================== Helpers for guards & RL logs ====================
 def _client_ip(request: Request) -> str:
     # Trust proxy/XFF headers only if explicitly enabled.
-    # Prefer TRUST_XFF (per your ENV), but keep backward-compat with TRUST_PROXY.
     try:
         trust_xff = os.getenv("TRUST_XFF", "0").lower() in ("1", "true", "yes", "on")
     except Exception:
@@ -1206,7 +1202,6 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                 return {"ok": False, "error": str(e)}
             await asyncio.sleep(0.6 * (attempt + 1))
     return {"ok": False, "error": "telegram_send_exhausted"}
-
 async def _ensure_telegram_webhook() -> None:
     if not TELEGRAM_AUTO_WEBHOOK:
         return
@@ -1654,7 +1649,6 @@ def _require_bearer(request: Request) -> None:
         ok = (token == API_BEARER_TOKEN)
     if not ok:
         raise HTTPException(status_code=401, detail="Unauthorized")
-
 # ------- permissions helpers for alerts (HARDENED) -------
 def _allow_by_bearer_or_apikey(request: Request) -> None:
     """
@@ -2563,7 +2557,6 @@ async def telegram_webhook(request: Request):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("HOST", "0.0.0.0"), port=_port(), reload=bool(os.getenv("RELOAD", "0") in ("1","true","yes","on")))
-
 
 
 
