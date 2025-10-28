@@ -1,0 +1,68 @@
+name: Apply Patch from Comment
+
+on:
+  issue_comment:
+    types: [created]   # רץ כשמגיבים על Issue/PR
+
+permissions:
+  contents: write      # נדרש כדי לדחוף ענף
+  pull-requests: write # נדרש כדי לפתוח PR
+  issues: read
+
+jobs:
+  apply:
+    if: startsWith(github.event.comment.body, '/apply-patch')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect default base branch
+        id: base
+        run: |
+          set -euo pipefail
+          BASE="$(git symbolic-ref --short refs/remotes/origin/HEAD | cut -d'/' -f2- || echo main)"
+          echo "base=$BASE" >> $GITHUB_OUTPUT
+
+      - name: Extract patch from comment
+        id: extract
+        env:
+          BODY: ${{ github.event.comment.body }}
+        run: |
+          python - <<'PY'
+import os, re, sys, pathlib
+body = os.environ['BODY']
+m = re.search(r"```(?:diff|patch)\n(.+?)\n```", body, re.S)
+if not m:
+    print("::error::No ```diff``` or ```patch``` block found in the comment"); sys.exit(1)
+patch = m.group(1)
+pathlib.Path("patch.diff").write_text(patch, encoding="utf-8")
+print("Patch extracted to patch.diff")
+PY
+
+      - name: Apply patch and push branch
+        env:
+          GIT_AUTHOR_NAME: github-actions[bot]
+          GIT_AUTHOR_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+          GIT_COMMITTER_NAME: github-actions[bot]
+          GIT_COMMITTER_EMAIL: 41898282+github-actions[bot]@users.noreply.github.com
+        run: |
+          set -euo pipefail
+          BR="fix/patch-${GITHUB_RUN_ID}"
+          git checkout -b "$BR" "origin/${{ steps.base.outputs.base }}"
+          git apply -3 patch.diff
+          git add -A
+          git commit -m "Apply patch from comment $GITHUB_RUN_ID"
+          git push origin "$BR"
+          echo "BR=$BR" >> $GITHUB_ENV
+
+      - name: Open pull request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ env.BR }}
+          title: "Apply patch from comment"
+          body: "Automated PR created by workflow from /apply-patch comment."
+          base: ${{ steps.base.outputs.base }}
