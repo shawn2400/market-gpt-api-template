@@ -73,12 +73,13 @@ services:
       - key: AUTO_RUN
         value: "1"
 
+      # === ✅ PUBLIC / CORS — מצביעים לפרוד ===
       - key: PUBLIC_HOST
-        value: "https://algogpt-docker.onrender.com"
+        value: "https://algogpt-prod.onrender.com"
       - key: CONTEXT_URL
-        value: "https://algogpt-docker.onrender.com"
+        value: "https://algogpt-prod.onrender.com"
       - key: WEBHOOK_HOST
-        value: "https://algogpt-docker.onrender.com"
+        value: "https://algogpt-prod.onrender.com"
 
       - key: DOCS_URL
         value: "/docs"
@@ -95,10 +96,11 @@ services:
       - key: OPENAPI_PUBLIC_MAX_OPS
         value: "30"
 
+      # === ✅ CORS — הדומיין של הפרוד
       - key: CORS_ALLOW_ORIGINS
-        value: "https://algogpt-docker.onrender.com"
+        value: "https://algogpt-prod.onrender.com"
       - key: CORS_ALLOW_ORIGINS_STRICT
-        value: "https://algogpt-docker.onrender.com"
+        value: "https://algogpt-prod.onrender.com"
       - key: CORS_ALLOW_HEADERS
         value: "*"
       - key: CORS_ALLOW_METHODS
@@ -1040,8 +1042,6 @@ services:
         value: "0.25,2.20"
       - key: DYN_PROFILE_PRIORITIES
         value: "panic>vaggr>aggr>base>cons"
-      - key: PROFILE_ASSET_MAP
-        value: "BTC=cons;ETH=cons;ALTS=aggr;LOWCAP=vaggr"
       - key: DYN_SWITCH_HYST_MS
         value: "120000"
       - key: DYN_EVAL_EVERY_MS
@@ -1131,6 +1131,7 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
+
 
 
 
