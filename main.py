@@ -415,7 +415,6 @@ app.add_middleware(
     allow_methods=[m.strip() for m in CORS_ALLOW_METHODS.split(",")] if CORS_ALLOW_METHODS else ["*"],
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
 )
-
 # ============== Request ID middleware (observability) ==============
 @app.middleware("http")
 async def _request_id_mw(request: Request, call_next):
@@ -1332,7 +1331,6 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
-
 # ==================== Execute trade helpers ====================
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
@@ -2449,7 +2447,6 @@ def _compute_indicators_from_klines(kl: List[List[Any]], period: int = 14) -> Di
 
 # ============= mount router ============
 app.include_router(router)
-
 # ==================== Root & health ====================
 @app.get("/")
 async def root():
@@ -2497,69 +2494,53 @@ async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...),
                                   splits=[float(x) for x in (os.getenv("SMART_MANAGE_SPLITS") or "0.25,0.25,0.25,0.25").split(",") if x.strip()],
                                   atr_mult=float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None)
     return JSONResponse({"ok": True, "result": res})
-# ==================== Public scan fallbacks wiring ====================
-_adjust_routes_autoload_filters()
-_include_ui_grid_router()
-_ensure_public_fallbacks()
 
-# ==================== Startup & Shutdown ====================
+# ==================== Autoload + UI + Fallback wiring ====================
+def _bootstrap_routes_and_ui() -> None:
+    _adjust_routes_autoload_filters()
+    _include_ui_grid_router()
+    if ROUTES_AUTOLOAD:
+        if ROUTES_AUTOLOAD_MODE == "eager":
+            _routes_autoload_now()
+        else:
+            # background to avoid blocking startup
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(asyncio.to_thread(_routes_autoload_now))
+            except Exception:
+                pass
+    _ensure_public_fallbacks()
+
+# ==================== Startup / Shutdown ====================
 @app.on_event("startup")
 async def _on_startup():
     try:
+        _bootstrap_routes_and_ui()
+    except Exception as e:
+        logger.warning("bootstrap_routes_ui_failed: %s", e)
+    # Resolve Binance endpoints
+    with suppress(Exception):
         await _resolve_binance_endpoints()
-    except Exception as e:
-        logger.warning("binance_endpoints_resolve_failed: %s", e)
-    try:
-        if ROUTES_AUTOLOAD and ROUTES_AUTOLOAD_MODE == "eager":
-            _routes_autoload_now()
-    except Exception as e:
-        logger.warning("routes_autoload_eager_failed: %s", e)
-    try:
+    # Ensure Telegram webhook
+    with suppress(Exception):
         await _ensure_telegram_webhook()
-    except Exception as e:
-        logger.info("ensure_telegram_webhook_failed: %s", e)
+    # Startup ping (optional)
     if STARTUP_NOTIFY_ENABLE:
         with suppress(Exception):
-            await _send_telegram_html(f"🟢 <b>{_md_html(APP_TITLE)}</b> v{_md_html(APP_VERSION)} started\nHost: <code>{_md_html(PUBLIC_HOST or 'local')}</code>")
-    logger.info("startup complete")
+            await _send_telegram_html("🟢 <b>AlgoGPT API started</b>")
 
 @app.on_event("shutdown")
 async def _on_shutdown():
-    try:
-        cli: Optional[httpx.AsyncClient] = getattr(app.state, "shared_async_client", None)
+    # close shared httpx client
+    with suppress(Exception):
+        cli = getattr(app.state, "shared_async_client", None)
         if cli and not cli.is_closed:
             await cli.aclose()
-    except Exception:
-        pass
-    logger.info("shutdown complete")
 
-# ==================== Eager background autoload (optional) ====================
-if ROUTES_AUTOLOAD and ROUTES_AUTOLOAD_MODE == "background":
-    async def _bg_autoload():
-        await asyncio.sleep(0.2)
-        try:
-            _routes_autoload_now()
-        except Exception as e:
-            logger.warning("routes_autoload_background_failed: %s", e)
-    try:
-        loop = asyncio.get_event_loop()
-        loop.create_task(_bg_autoload())
-    except Exception:
-        pass
-
-# ==================== Guards: example protected smoke ====================
-@app.get("/guard/smoke/run")
-async def guard_smoke_run(request: Request):
-    _require_bearer(request)
-    return {"ok": True, "ts": int(time.time()), "msg": "protected-ok"}
-
-# ==================== Misc helpers exposed ====================
-@app.get("/ping")
-async def ping():
-    return {"ok": True, "pong": True, "ts": int(time.time())}
-
-# Keep module import side-effects minimal. App object already defined above.
-# End of main.py
+# ==================== If run directly (dev) ====================
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False)
 
 
 
