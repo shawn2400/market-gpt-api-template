@@ -1,0 +1,48 @@
+name: Ops Apply (Run repo-side patch)
+on:
+  workflow_dispatch:
+    inputs:
+      ops_b64:
+        description: "Base64-encoded Bash ops script to run against the repo"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Decode ops script
+        run: |
+          set -euo pipefail
+          printf "%s" "${{ github.event.inputs.ops_b64 }}" | base64 -d > /tmp/ops.sh
+          chmod +x /tmp/ops.sh
+
+      - name: Run ops script
+        env:
+          GIT_COMMITTER_NAME: "ops-bot"
+          GIT_COMMITTER_EMAIL: "ops-bot@users.noreply.github.com"
+          GIT_AUTHOR_NAME: "ops-bot"
+          GIT_AUTHOR_EMAIL: "ops-bot@users.noreply.github.com"
+        run: |
+          set -euo pipefail
+          bash -lc '/tmp/ops.sh'
+
+      - name: Commit & push (if changed)
+        run: |
+          set -euo pipefail
+          git add -A
+          if ! git diff --cached --quiet; then
+            git commit -m "ops: automated repo-side patch via workflow"
+            git push
+          else
+            echo "No changes detected; nothing to commit."
+          fi
