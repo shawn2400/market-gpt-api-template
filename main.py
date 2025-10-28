@@ -595,7 +595,6 @@ def _spot_http() -> str:
 
 def _fut_ws() -> str:
     return getattr(app.state, "BINANCE_FUTURES_WS_BASE", os.getenv("BINANCE_FUTURES_WS_BASE", "wss://fstream.binance.com/ws")).rstrip("/")
-
 # ==================== Security helpers ====================
 def _get_hmac_key_bytes() -> Optional[bytes]:
     cand = (
@@ -1135,7 +1134,6 @@ async def _public_cache_etag(request: Request, call_next):
     except Exception:
         return resp
     return resp
-
 # ==================== Telegram helpers ====================
 def _md_html(s: str) -> str:
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1620,7 +1618,6 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket.pop("positionSide", None)
         new_ticket["position_side"] = ""
     return new_ticket
-
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
 
@@ -1650,7 +1647,12 @@ def _require_bearer(request: Request) -> None:
     scheme, token = parts[0].strip(), parts[1].strip()
     if scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Unauthorized")
-    if token != API_BEARER_TOKEN:
+    # constant-time compare (per your patch)
+    try:
+        ok = hmac.compare_digest(token, API_BEARER_TOKEN)
+    except Exception:
+        ok = (token == API_BEARER_TOKEN)
+    if not ok:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 # ------- permissions helpers for alerts (HARDENED) -------
@@ -2466,21 +2468,17 @@ def _compute_indicators_from_klines(kl: List[List[Any]], period: int = 14) -> Di
     for i in range(1, len(highs)):
         up_move = highs[i] - highs[i-1]
         down_move = lows[i-1] - lows[i]
-        plus_dm.append((up_move > down_move and up_move > 0) * up_move)
-        minus_dm.append((down_move > up_move and down_move > 0) * down_move)
+        plus_dm.append(up_move if (up_move > down_move and up_move > 0) else 0.0)
+        minus_dm.append(down_move if (down_move > up_move and down_move > 0) else 0.0)
 
-    # Wilder smooth DM and TR
     if len(trs) < period + 1:
         adx = 0.0
     else:
-        tr_s = _wilder_smooth(trs, period)
+        tr_s  = _wilder_smooth(trs, period)
         pdm_s = _wilder_smooth(plus_dm, period)
         mdm_s = _wilder_smooth(minus_dm, period)
-        # Align lengths
-        n = min(len(tr_s := tr_s if (tr_s:=tr_s) else tr_s, len(tr_s)), len(pdm_s), len(mdm_s))  # type: ignore
-        tr_s = tr_s[-n:]
-        pdm_s = pdm_s[-n:]
-        mdm_s = mdm_s[-n:]
+        n = min(len(tr_s), len(pdm_s), len(mdm_s))
+        tr_s, pdm_s, mdm_s = tr_s[-n:], pdm_s[-n:], mdm_s[-n:]
         plus_di: List[float] = []
         minus_di: List[float] = []
         for i in range(n):
@@ -2565,9 +2563,6 @@ async def telegram_webhook(request: Request):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host=os.getenv("HOST", "0.0.0.0"), port=_port(), reload=bool(os.getenv("RELOAD", "0") in ("1","true","yes","on")))
-
-
-
 
 
 
