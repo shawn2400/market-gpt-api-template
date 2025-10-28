@@ -1,6 +1,0 @@
-symbol,market,enabled,weight
-BTCUSDT,futures,1,1.00
-ETHUSDT,futures,1,0.80
-SOLUSDT,futures,1,0.60
-BNBUSDT,futures,1,0.60
-NEARUSDT,futures,1,0.50
