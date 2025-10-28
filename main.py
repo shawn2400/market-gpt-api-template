@@ -2597,6 +2597,69 @@ async def about():
         "public_host": PUBLIC_HOST,
         "ns": NS,
     }
+@app.on_event("startup")
+async def _on_startup():
+    try:
+        # 1) Resolve Binance endpoints (HTTP/WS) with live health checks
+        await _resolve_binance_endpoints()
+
+        # 2) UI grid mode (local/proxy/off) → prevent router collisions, include the right UI router
+        _adjust_routes_autoload_filters()
+        _include_ui_grid_router()
+
+        # 3) Routes autoload (eager/background)
+        if ROUTES_AUTOLOAD:
+            if ROUTES_AUTOLOAD_MODE == "eager":
+                _routes_autoload_now()
+            else:
+                async def _bg_autoload():
+                    # give the loop a tick to finish startup
+                    await asyncio.sleep(0)
+                    _routes_autoload_now()
+                asyncio.create_task(_bg_autoload())
+
+        # 4) Public scan fallbacks so /topk & friends never 404 even if routes not loaded
+        _ensure_public_fallbacks()
+
+        # 5) Telegram webhook auto-setup (idempotent, safe if disabled/missing ENV)
+        with suppress(Exception):
+            await _ensure_telegram_webhook()
+
+        # 6) Optional startup notification
+        if STARTUP_NOTIFY_ENABLE:
+            with suppress(Exception):
+                base = PUBLIC_HOST or get_internal_base()
+                await _send_telegram_html(
+                    f"🚀 <b>{_md_html(APP_TITLE)}</b> v{_md_html(APP_VERSION)} started\n"
+                    f"• host: <code>{_md_html(base)}</code>\n"
+                    f"• http2: <code>{_http2_enabled_runtime()}</code>"
+                )
+
+        logger.info(
+            "startup: ok version=%s http2=%s public_host=%s",
+            APP_VERSION, _http2_enabled_runtime(), PUBLIC_HOST or "-"
+        )
+    except Exception as e:
+        logger.exception("startup_failed: %s", e)
+
+
+@app.on_event("shutdown")
+async def _on_shutdown():
+    # Close shared HTTP client
+    with suppress(Exception):
+        cli = getattr(app.state, "shared_async_client", None)
+        if cli and not cli.is_closed:
+            await cli.aclose()
+            logger.info("shutdown: http client closed")
+
+    # Close Redis connection (if any)
+    with suppress(Exception):
+        r = getattr(app.state, "redis", None)
+        if r:
+            await r.close()
+            logger.info("shutdown: redis closed")
+
+    logger.info("shutdown: complete")
 
 
 
