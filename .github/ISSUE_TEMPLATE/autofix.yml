@@ -1,0 +1,48 @@
+name: "AutoFix: apply regex/literal edits"
+description: "Describe problems; fill the autofix block. Label this issue with 'autofix'."
+labels: ["autofix"]
+body:
+  - type: textarea
+    id: details
+    attributes:
+      label: Describe the problems (human text)
+      description: What is broken / what to change (free text)
+  - type: textarea
+    id: autofix
+    attributes:
+      label: Autofix block (REQUIRED)
+      description: |
+        Provide YAML between ```autofix ... ``` with the edits. Example below.
+      value: |
+        ```autofix
+        base: main
+        title: "AutoFix: core bearer + scanner"
+        body: "Automated edits from Issue (core fixes)."
+        edits:
+          - path: main.py
+            mode: regex
+            flags: "ms"
+            find: "(def\\s+_require_bearer\\(request:\\s*Request\\)[\\s\\S]*?\\n\\s*)if\\s+token\\s*!=\\s*API_BEARER_TOKEN\\s*:"
+            replace: "$1try:\\n\\1    ok = hmac.compare_digest(token, API_BEARER_TOKEN)\\n\\1except Exception:\\n\\1    ok = (token == API_BEARER_TOKEN)\\n\\1if not ok:"
+            message: "autofix: constant-time bearer compare"
+
+          - path: main.py
+            mode: regex
+            flags: "ms"
+            find: "(app\\s*=\\s*FastAPI\\([^)]*\\)\\s*)(?![\\s\\S]*?/readyz)"
+            replace: "$1\\n# ---------- Safe HEAD & /readyz ----------\\n@app.middleware(\"http\")\\nasync def _head_compat_and_soft_readyz(request: Request, call_next):\\n    if request.url.path == \"/readyz\":\\n        return PlainTextResponse(\"ok\", status_code=200)\\n    if request.method == \"HEAD\":\\n        scope_copy = dict(request.scope)\\n        scope_copy[\"method\"] = \"GET\"\\n        new_req = Request(scope_copy, receive=request.receive)\\n        resp = await call_next(new_req)\\n        return StarletteResponse(status_code=resp.status_code, headers=dict(resp.headers), media_type=resp.media_type)\\n    return await call_next(request)\\n"
+            message: "autofix: /readyz + HEAD middleware"
+
+          - path: utils/multi_tf_scanner.py
+            mode: append
+            content: |
+              \n# --- autofix: futures symbols helper (USDT-PERP) ---\nimport os\nimport httpx\n\ndef get_all_futures_usdt_symbols(timeout: float = 8.0):\n    base = os.getenv(\"BIN_FAPI_BASE\", \"https://fapi.binance.com\")\n    url = base.rstrip(\"/\") + \"/fapi/v1/exchangeInfo\"\n    try:\n        with httpx.Client(timeout=timeout) as cli:\n            r = cli.get(url)\n            r.raise_for_status()\n            data = r.json()\n    except Exception:\n        return []\n    symbols = []\n    for sym in data.get(\"symbols\", []):\n        if sym.get(\"status\") != \"TRADING\":\n            continue\n        if sym.get(\"contractType\") != \"PERPETUAL\":\n            continue\n        if sym.get(\"quoteAsset\") != \"USDT\":\n            continue\n        s = sym.get(\"symbol\", \"\")\n        if s.endswith(\"USDT\"):\n            symbols.append(s)\n    return sorted(set(symbols))\n
+            message: "autofix: add futures symbols helper"
+
+          - path: utils/multi_tf_scanner.py
+            mode: regex
+            flags: "ms"
+            find: "(def\\s+scan_symbols\\([^)]*\\):\\s*\\n)"
+            replace: "$1    WATCHLIST_ONLY = os.getenv(\"WATCHLIST_ONLY\", \"0\").lower() in (\"1\",\"true\",\"yes\",\"on\")\\n    if not WATCHLIST_ONLY:\\n        try:\\n            _dyn = get_all_futures_usdt_symbols()\\n            if _dyn:\\n                symbols = _dyn if \"symbols\" in locals() else _dyn\\n        except Exception:\\n            pass\\n"
+            message: "autofix: enable dynamic futures list when WATCHLIST_ONLY=0"
+        ```
