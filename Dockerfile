@@ -7,9 +7,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    DEBIAN_FRONTEND=noninteractive
+    DEBIAN_FRONTEND=noninteractive \
+    LANG=C.UTF-8
 
-# כלים מינימליים לבנייה (לא יועברו לרUNTIME)
+# כלי בנייה מינימליים (לא עוברים ל-Runtime)
 RUN apt-get update -y && apt-get install -y --no-install-recommends \
     build-essential curl ca-certificates git \
  && rm -rf /var/lib/apt/lists/*
@@ -17,7 +18,7 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY requirements.txt .
 
-# התקנת תלויות לפייתון לנתיב /install (כדי להעתיק לרUNTIME)
+# התקנת תלויות לפייתון למסלול /install (להעתקה ל-Runtime)
 RUN python -m pip install --upgrade pip setuptools wheel \
  && pip install --prefix=/install --no-cache-dir --upgrade-strategy eager -r requirements.txt \
  && pip check
@@ -45,7 +46,9 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     GUNICORN_GRACEFUL_TIMEOUT=45 \
     GUNICORN_KEEPALIVE=30 \
     GUNICORN_MAX_REQUESTS=500 \
-    GUNICORN_MAX_REQUESTS_JITTER=50
+    GUNICORN_MAX_REQUESTS_JITTER=50 \
+    LANG=C.UTF-8 \
+    MPLCONFIGDIR=/app/.cache/matplotlib
 
 # ===== Runtime OS deps =====
 # curl: בדיקות HTTP/HEALTHCHECK
@@ -62,7 +65,7 @@ RUN apt-get update -y && apt-get install -y --no-install-recommends \
 # העתקת תלויות פייתון שנבנו בשלב ה-builder
 COPY --from=builder /install /usr/local
 
-# הבטחת 'python' מפנה ל-python3 בלבד (ללא לולאת סימלינקים)
+# הבטחת 'python' מפנה ל-python3 בלבד
 RUN set -eux; \
     PY3="$(command -v python3 || true)"; \
     if [ -z "$PY3" ]; then echo "ERROR: python3 not found in PATH" >&2; exit 1; fi; \
@@ -100,10 +103,7 @@ ENTRYPOINT ["/usr/bin/tini","--"]
 ENV APP_MODULE=main:app
 
 # הרצה עם Gunicorn+UvicornWorker
-CMD ["bash","-lc", "exec gunicorn -k uvicorn.workers.UvicornWorker \"${APP_MODULE:-main:app}\" --bind 0.0.0.0:${PORT:-10000} --timeout ${GUNICORN_TIMEOUT:-180} --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-45} --keep-alive ${GUNICORN_KEEPALIVE:-30} --max-requests ${GUNICORN_MAX_REQUESTS:-500} --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-50}"]
-
-
-
+CMD ["bash","-lc","exec gunicorn -k uvicorn.workers.UvicornWorker \"${APP_MODULE:-main:app}\" --bind 0.0.0.0:${PORT:-10000} --timeout ${GUNICORN_TIMEOUT:-180} --graceful-timeout ${GUNICORN_GRACEFUL_TIMEOUT:-45} --keep-alive ${GUNICORN_KEEPALIVE:-30} --max-requests ${GUNICORN_MAX_REQUESTS:-500} --max-requests-jitter ${GUNICORN_MAX_REQUESTS_JITTER:-50}"]
 
 
 
