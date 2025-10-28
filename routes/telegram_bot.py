@@ -126,23 +126,23 @@ def _get_default_chat_id() -> Optional[int]:
 
 def _validate_webhook_secret(request: Request) -> None:
     """
-    Enforce Telegram secret token if configured (optional hardening).
+    Enforce Telegram secret token אם מוגדר (אבטחה אופציונלית).
     """
     if WEBHOOK_SECRET:
         header = request.headers.get("x-telegram-bot-api-secret-token", "")
         if not header or header != WEBHOOK_SECRET:
-            # Do not leak details
+            # לא חושפים פרטים
             raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 def _extract_action_ticket_from_update(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """
-    Support two formats:
-    1) Native Telegram update with callback_query.data containing JSON or 'approve|reject|...'
-    2) Direct JSON posted by your infra: {"action":"approve|reject","ticket":{...}}
-    Returns dict {"action": "...", "ticket": {...}} or None.
+    תומך בשני פורמטים:
+    1) עדכון טלגרם רגיל עם callback_query.data (JSON או 'approve|{json}')
+    2) JSON ישיר: {"action":"approve|reject","ticket":{...}}
+    מחזיר {"action": "...", "ticket": {...}} או None.
     """
-    # Direct format
+    # פורמט ישיר
     if "action" in update and "ticket" in update:
         try:
             action = str(update.get("action", "")).lower().strip()
@@ -151,11 +151,11 @@ def _extract_action_ticket_from_update(update: Dict[str, Any]) -> Optional[Dict[
         except Exception:
             pass
 
-    # Telegram callback format
+    # פורמט טלגרם
     cb = update.get("callback_query") or {}
     data = cb.get("data")
     if isinstance(data, str) and data:
-        # Try JSON in data first
+        # JSON ב-data
         try:
             obj = json.loads(data)
             if isinstance(obj, dict) and "action" in obj and "ticket" in obj:
@@ -163,7 +163,7 @@ def _extract_action_ticket_from_update(update: Dict[str, Any]) -> Optional[Dict[
                 if action in ("approve", "reject") and isinstance(obj["ticket"], dict):
                     return {"action": action, "ticket": obj["ticket"]}
         except Exception:
-            # fallback simple pipe format: "approve|{json}"
+            # fallback: "approve|{json}"
             if data.startswith("approve|") or data.startswith("reject|"):
                 try:
                     action, js = data.split("|", 1)
@@ -173,7 +173,7 @@ def _extract_action_ticket_from_update(update: Dict[str, Any]) -> Optional[Dict[
                         return {"action": action, "ticket": obj}
                 except Exception:
                     pass
-            # plain word only
+            # מילה בלבד
             if data in ("approve", "reject"):
                 return {"action": data, "ticket": {}}
 
@@ -279,10 +279,10 @@ async def rest_status() -> Dict[str, Any]:
 @router.post("/webhook")
 async def telegram_webhook(request: Request) -> Dict[str, Any]:
     """
-    Unified webhook:
-    - Validates Telegram secret header if TELEGRAM_WEBHOOK_SECRET set.
-    - Accepts native Telegram update (callback_query.data) or direct JSON {"action","ticket"}.
-    - On "approve": calls execute_trade_live(...) with minimal fields.
+    Webhook מאוחד:
+    - מאמת כותרת סודית אם TELEGRAM_WEBHOOK_SECRET מוגדר.
+    - מקבל עדכון טלגרם (callback_query.data) או JSON ישיר {"action","ticket"}.
+    - על "approve": קורא execute_trade_live(...) עם שדות מינימליים.
     """
     _validate_webhook_secret(request)
 
@@ -293,7 +293,7 @@ async def telegram_webhook(request: Request) -> Dict[str, Any]:
 
     parsed = _extract_action_ticket_from_update(payload)
     if not parsed:
-        # Not an approval flow; acknowledge to Telegram to avoid retries
+        # לא חלק מתהליך אישור; מחזירים ack כדי למנוע retries
         return {"ok": True, "noop": True}
 
     action = parsed["action"]
@@ -333,8 +333,6 @@ async def telegram_webhook(request: Request) -> Dict[str, Any]:
         raise HTTPException(status_code=500, detail=f"trade failed: {e}")
 
     return {"ok": True, "status": "executed", "result": res}
-
-
 
 
 
