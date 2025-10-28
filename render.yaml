@@ -5,10 +5,10 @@ services:
     region: frankfurt
     plan: standard
     autoDeploy: true
+    rootDir: .
     dockerfilePath: ./Dockerfile
     healthCheckPath: /readyz
 
-    # Render: שימוש ב-disks (רבים) כרשימה
     disks:
       - name: data
         mountPath: /app/data
@@ -74,7 +74,7 @@ services:
       - key: AUTO_RUN
         value: "1"
 
-      # === ✅ PUBLIC / CORS — מצביעים לפרוד (Docker) ===
+      # === PUBLIC / CORS ===
       - key: PUBLIC_HOST
         value: "https://algogpt-docker.onrender.com"
       - key: CONTEXT_URL
@@ -97,7 +97,6 @@ services:
       - key: OPENAPI_PUBLIC_MAX_OPS
         value: "30"
 
-      # === ✅ CORS — הדומיין העדכני ===
       - key: CORS_ALLOW_ORIGINS
         value: "https://algogpt-docker.onrender.com"
       - key: CORS_ALLOW_ORIGINS_STRICT
@@ -186,7 +185,7 @@ services:
       - key: EXECUTOR_RL_NS
         value: "ops-executor:rl:prod"
 
-      # ===== Redis (required) =====
+      # ===== Redis =====
       - key: REDIS_URL
         fromSecret: REDIS_URL
       - key: REQUIRE_REDIS
@@ -874,7 +873,7 @@ services:
       - key: ROUTES_DENY_GLOBS
         value: "/_debug/*,/debug/*,/internal/*,/provider/*,/grid/*,/risk/*/internal*"
 
-      # ===== Secrets (from Render Dashboard) =====
+      # ===== Secrets (Render) =====
       - key: API_BEARER_TOKEN_RO
         fromSecret: API_BEARER_TOKEN_RO_PROD
       - key: API_BEARER_TOKEN_ACTION
@@ -908,7 +907,7 @@ services:
       - key: TELEGRAM_WEBHOOK_SECRET
         fromSecret: TELEGRAM_WEBHOOK_SECRET_PROD
 
-      # ===== Positions & Events (SSE/Redis) =====
+      # ===== Positions & Events =====
       - key: POS_PUB_ENABLE
         value: "1"
       - key: POS_PUB_INTERVAL_SEC
