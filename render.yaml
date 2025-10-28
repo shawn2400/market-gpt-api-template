@@ -8,11 +8,11 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /readyz
 
-    # Render בדרך כלל משתמש ב-"disk" יחיד. אם אצלך מופעל "disks", החלף בחזרה ל-disks:[...]
-    disk:
-      name: data
-      mountPath: /app/data
-      sizeGB: 1
+    # Render: שימוש ב-disks (רבים) כרשימה
+    disks:
+      - name: data
+        mountPath: /app/data
+        sizeGB: 1
 
     envVars:
       - key: APP_NAME
@@ -1131,8 +1131,6 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
-
-
 
 
 
