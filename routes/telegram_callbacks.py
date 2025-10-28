@@ -21,9 +21,6 @@ from fastapi import APIRouter, Request, HTTPException, Header
 from fastapi.responses import JSONResponse
 import httpx
 
-# ConfirmStore – מחסן האישור/כרטיסים. בהנחה שהוא קיים אצלך.
-from utils.trade_executor import ConfirmStore  # type: ignore
-
 logger = logging.getLogger("algogpt.telegram.callbacks")
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
@@ -41,6 +38,28 @@ def _is_admin(uid: int) -> bool:
     if not ADMIN_ONLY:
         return True
     return str(uid) in ADMIN_IDS
+
+# --- ConfirmStore (fallback-aware)
+# קודם מנסים מהמודול הייעודי approvals; אם לא קיים — נופלים אל trade_executor
+try:
+    from utils.approvals import ConfirmStore  # type: ignore
+except Exception:
+    try:
+        from utils.trade_executor import ConfirmStore  # type: ignore
+    except Exception:
+        class ConfirmStore:  # type: ignore
+            @staticmethod
+            def get(_cid: str) -> Dict[str, Any] | None:
+                return None
+            @staticmethod
+            def approve(_cid: str, approver: str | None = None) -> Dict[str, Any]:
+                return {"ok": False, "error": "ConfirmStore missing"}
+            @staticmethod
+            def reject(_cid: str, approver: str | None = None) -> Dict[str, Any]:
+                return {"ok": False, "error": "ConfirmStore missing"}
+            @staticmethod
+            async def run(_cid: str) -> Dict[str, Any]:
+                return {"ok": False, "error": "executor missing"}
 
 # --- Optional Redis-backed dedup for callback_query ids
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
@@ -118,6 +137,7 @@ async def _post_signed_approval(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     url = f"{PUBLIC_HOST}/ops/approve/signed"
     headers = {"X-Signature": sig, "Content-Type": "application/json"}
+    # שמרתי התאמה לגרסאות ישנות: אם יש טוקן, שולחים בכותרת X-API-Key; אם השרת דורש Bearer — בצד השרת יש תמיכה.
     if API_TOKEN:
         headers["X-API-Key"] = API_TOKEN
 
@@ -186,7 +206,7 @@ async def callback_handler(
         payload = (rec.get("payload") or {}).copy()
         payload.setdefault("position_side", "BOTH")
         result = await _post_signed_approval(payload)
-        status_txt = "✅ בוצע" if result.get("ok") else f"⚠️ כשל בביצוע"
+        status_txt = "✅ בוצע" if result.get("ok") else "⚠️ כשל בביצוע"
         await _tg_answer_callback(cb_id, status_txt)
         if chat_id and message_id:
             await _disable_kb(chat_id, message_id)
@@ -201,9 +221,6 @@ async def callback_handler(
 
     await _tg_answer_callback(cb_id, "פעולה לא מזוהה")
     return {"ok": True}
-
-
-
 
 
 
