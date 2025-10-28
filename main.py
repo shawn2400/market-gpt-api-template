@@ -2501,19 +2501,103 @@ async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...),
 @app.on_event("startup")
 async def _on_startup():
     try:
+        # קונפיג מסלולי UI כדי למנוע התנגשויות לפני autoload
         _adjust_routes_autoload_filters()
-        _include_ui_grid_router()
-        if ROUTES_AUTOLOAD:
-            if ROUTES_AUTOLOAD_MODE == "eager":
-                _routes_autoload_now()
-            else:
-                asyncio.create_task(asyncio.to_thread(_routes_autoload_now))
-        _ensure_public_fallbacks()
-        await _resolve_binance_endpoints()
-        await _ensure_telegram_webhook()
-        logger.info("startup: completed")
     except Exception as e:
-        logger.warning("startup: failed: %s", e)
+        logger.warning("adjust_routes_autoload_filters_failed: %s", e)
+
+    # כלליים: הכנות קליינט משותף ו־Redis (Lazy אבל מבוצע כאן first-touch)
+    try:
+        _ = _get_shared_async_client()
+    except Exception as e:
+        logger.warning("shared_http_client_init_failed: %s", e)
+
+    with suppress(Exception):
+        await _get_redis_cached()
+
+    # רזולב אוטומטי לכתובות Binance (HTTP/WS) — עם fallback אם אין רשת
+    try:
+        await _resolve_binance_endpoints()
+        logger.info(
+            "binance.endpoints: fut_http=%s fut_ws=%s spot_http=%s",
+            getattr(app.state, "BINANCE_FUTURES_HTTP_BASE", ""),
+            getattr(app.state, "BINANCE_FUTURES_WS_BASE", ""),
+            getattr(app.state, "BINANCE_SPOT_HTTP_BASE", ""),
+        )
+    except Exception as e:
+        logger.warning("binance_endpoints_resolve_failed: %s", e)
+
+    # UI Grid ראוטר — לפי מצב, מונע התנגשות
+    try:
+        _include_ui_grid_router()
+    except Exception as e:
+        logger.warning("ui_grid_include_failed: %s", e)
+
+    # הוספת נתיבי public פולי־בק לא ניתנים לכשל
+    _ensure_public_fallbacks()
+
+    # טעינת routes.* אוטומטית — כונן "eager" או ברקע
+    try:
+        if ROUTES_AUTOLOAD:
+            if ROUTES_AUTOLOAD_MODE == "background":
+                asyncio.create_task(asyncio.to_thread(_routes_autoload_now))
+                logger.info("routes_autoload: scheduled in background")
+            else:
+                _routes_autoload_now()
+    except Exception as e:
+        logger.warning("routes_autoload_startup_failed: %s", e)
+
+    # וובהוק לטלגרם (אם מאופשר ועומד בתנאים)
+    with suppress(Exception):
+        await _ensure_telegram_webhook()
+
+    # הודעת Startup (אופציונלי)
+    if STARTUP_NOTIFY_ENABLE:
+        with suppress(Exception):
+            await _send_telegram_html(
+                f"✅ <b>{_md_html(APP_TITLE)}</b> התחל לפעול.\n"
+                f"• גרסה: <code>{_md_html(APP_VERSION)}</code>\n"
+                f"• HTTP/2: <code>{'on' if _http2_enabled_runtime() else 'off'}</code>\n"
+                f"• Redis: <code>{'on' if (aioredis and REDIS_URL) else 'off'}</code>\n"
+                f"• Watchlist: <code>{_md_html(','.join(WATCHLIST))}</code>"
+            )
+
+@app.on_event("shutdown")
+async def _on_shutdown():
+    # סגירה נקייה של Redis
+    if aioredis and REDIS_URL:
+        with suppress(Exception):
+            r = getattr(app.state, "redis", None)
+            if r:
+                await r.close()
+                app.state.redis = None
+
+    # סגירה נקייה של httpx.AsyncClient משותף
+    with suppress(Exception):
+        cli = getattr(app.state, "shared_async_client", None)
+        if cli and not cli.is_closed:
+            await cli.aclose()
+            app.state.shared_async_client = None
+
+# ==================== Not Found helper (אופציונלי) ====================
+@app.get("/readyz")
+async def readyz_soft():
+    # התאמה עם המידלוור הקיים שמחזיר HEAD->GET; כאן GET מפורש
+    return PlainTextResponse("ok", status_code=200)
+
+# ======= דף סטטי קטן לבדיקת לייבנאס (אופציונלי, ניתן להסרה) =======
+@app.get("/about")
+async def about():
+    return {
+        "ok": True,
+        "service": APP_TITLE,
+        "version": APP_VERSION,
+        "http2": _http2_enabled_runtime(),
+        "redis": bool(aioredis and REDIS_URL),
+        "public_host": PUBLIC_HOST,
+        "ns": NS,
+    }
+
 
 
 
