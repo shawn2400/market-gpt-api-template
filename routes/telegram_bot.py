@@ -1,33 +1,27 @@
 # routes/telegram_bot.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, logging
+
+import os
+import json
+import logging
 from typing import Optional, Dict, Any
 
 import httpx
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, Field, ConfigDict
+from fastapi import APIRouter, HTTPException, Query, Request
 
 logger = logging.getLogger("algogpt.routes.telegram_bot")
 
-# אין כאן תלות ב-require_api_key. ההגנה מתבצעת במידלוואר של main.py.
 router = APIRouter(prefix="/telegram", tags=["Telegram"])
 
-BOT_TOKEN   = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-API_BASE    = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+API_BASE = f"https://api.telegram.org/bot{BOT_TOKEN}" if BOT_TOKEN else ""
 DEFAULT_CHAT = os.getenv("TELEGRAM_TEST_CHAT_ID", "").strip()
 PM_ENV: Optional[str] = (os.getenv("TELEGRAM_PARSE_MODE", "").strip() or None)
 WEBHOOK_SECRET = os.getenv("TELEGRAM_WEBHOOK_SECRET", "").strip()
-PUBLIC_HOST    = os.getenv("PUBLIC_HOST", "").strip()
+PUBLIC_HOST = os.getenv("PUBLIC_HOST", "").strip()
 
-class SendRequest(BaseModel):
-    # תאימות ל-Pydantic v2 + התעלמות משדות נוספים שמגיעים מבחוץ
-    model_config = ConfigDict(extra="ignore", populate_by_name=True)
-    chat_id: Optional[int] = Field(None, description="אם לא — יילקח מ־TELEGRAM_TEST_CHAT_ID")
-    text: str = Field(..., min_length=1, max_length=4096)
-    parse_mode: Optional[str] = Field(None, description="HTML / MarkdownV2 (אם לא נשלח — יילקח מה-ENV אם קיים)")
-    disable_preview: bool = Field(True, description="השבתת תצוגה מקדימה")
-
-# ─────────── Status Providers (fallback-safe) ───────────
+# Optional runtime counters (safe fallbacks)
 try:
     from utils.runtime_counters import ws_get_counters as _ws_get_counters  # type: ignore
 except Exception:
@@ -44,6 +38,42 @@ except Exception:
             "no_trade_streak": 0, "current_interval": 0,
         }
 
+# Try to import live executor; otherwise provide shim
+try:
+    from utils.trade_executor import execute_trade_live  # type: ignore
+except Exception:
+    async def execute_trade_live(**kwargs):
+        return {"ok": True, "mode": "shim", "kwargs": kwargs}
+
+
+# ===================== Models =====================
+try:
+    from pydantic import BaseModel, Field, ConfigDict
+    _PYD_V2 = True
+except Exception:
+    from pydantic import BaseModel, Field  # type: ignore
+    _PYD_V2 = False
+
+
+if _PYD_V2:
+    class SendRequest(BaseModel):
+        model_config = ConfigDict(extra="ignore", populate_by_name=True)
+        chat_id: Optional[int] = Field(None, description="אם לא — יילקח מ־TELEGRAM_TEST_CHAT_ID")
+        text: str = Field(..., min_length=1, max_length=4096)
+        parse_mode: Optional[str] = Field(None, description="HTML / MarkdownV2 (אם לא נשלח — יילקח מה-ENV אם קיים)")
+        disable_preview: bool = Field(True, description="השבתת תצוגה מקדימה")
+else:
+    class SendRequest(BaseModel):
+        class Config:
+            extra = "ignore"
+            allow_population_by_field_name = True
+        chat_id: Optional[int] = Field(None, description="אם לא — יילקח מ־TELEGRAM_TEST_CHAT_ID")
+        text: str = Field(..., min_length=1, max_length=4096)
+        parse_mode: Optional[str] = Field(None, description="HTML / MarkdownV2 (אם לא נשלח — יילקח מה-ENV אם קיים)")
+        disable_preview: bool = Field(True, description="השבתת תצוגה מקדימה")
+
+
+# ===================== Helpers =====================
 def _compose_status_json() -> Dict[str, Any]:
     ws = _ws_get_counters()
     ex = _exec_get_counters()
@@ -89,6 +119,68 @@ def _compose_status_json() -> Dict[str, Any]:
         "reasons": ["healthy"] if combined == "OK" else ["stale_ws" if ws_state != "OK" else "executor_warn"],
     }
 
+
+def _get_default_chat_id() -> Optional[int]:
+    return int(DEFAULT_CHAT) if DEFAULT_CHAT.isdigit() else None
+
+
+def _validate_webhook_secret(request: Request) -> None:
+    """
+    Enforce Telegram secret token if configured (optional hardening).
+    """
+    if WEBHOOK_SECRET:
+        header = request.headers.get("x-telegram-bot-api-secret-token", "")
+        if not header or header != WEBHOOK_SECRET:
+            # Do not leak details
+            raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _extract_action_ticket_from_update(update: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Support two formats:
+    1) Native Telegram update with callback_query.data containing JSON or 'approve|reject|...'
+    2) Direct JSON posted by your infra: {"action":"approve|reject","ticket":{...}}
+    Returns dict {"action": "...", "ticket": {...}} or None.
+    """
+    # Direct format
+    if "action" in update and "ticket" in update:
+        try:
+            action = str(update.get("action", "")).lower().strip()
+            if action in ("approve", "reject") and isinstance(update["ticket"], dict):
+                return {"action": action, "ticket": update["ticket"]}
+        except Exception:
+            pass
+
+    # Telegram callback format
+    cb = update.get("callback_query") or {}
+    data = cb.get("data")
+    if isinstance(data, str) and data:
+        # Try JSON in data first
+        try:
+            obj = json.loads(data)
+            if isinstance(obj, dict) and "action" in obj and "ticket" in obj:
+                action = str(obj.get("action", "")).lower().strip()
+                if action in ("approve", "reject") and isinstance(obj["ticket"], dict):
+                    return {"action": action, "ticket": obj["ticket"]}
+        except Exception:
+            # fallback simple pipe format: "approve|{json}"
+            if data.startswith("approve|") or data.startswith("reject|"):
+                try:
+                    action, js = data.split("|", 1)
+                    action = action.strip().lower()
+                    obj = json.loads(js)
+                    if isinstance(obj, dict):
+                        return {"action": action, "ticket": obj}
+                except Exception:
+                    pass
+            # plain word only
+            if data in ("approve", "reject"):
+                return {"action": data, "ticket": {}}
+
+    return None
+
+
+# ===================== Endpoints =====================
 @router.get("/health")
 async def health() -> Dict[str, Any]:
     if not BOT_TOKEN:
@@ -97,18 +189,19 @@ async def health() -> Dict[str, Any]:
         async with httpx.AsyncClient(timeout=8.0) as cli:
             me = await cli.get(f"{API_BASE}/getMe")
             wh = await cli.get(f"{API_BASE}/getWebhookInfo")
-        me_json = me.json() if "application/json" in me.headers.get("content-type","") else {}
-        wh_json = wh.json() if "application/json" in wh.headers.get("content-type","") else {}
+        me_json = me.json() if "application/json" in me.headers.get("content-type", "") else {}
+        wh_json = wh.json() if "application/json" in wh.headers.get("content-type", "") else {}
         return {"ok": True, "bot": me_json.get("result", {}), "webhook": wh_json.get("result", {})}
     except Exception as e:
         logger.warning("telegram/health failed: %s", e)
         return {"ok": False, "error": str(e)}
 
+
 @router.get("/test-ping")
 async def test_ping(chat_id: Optional[int] = Query(None)) -> Dict[str, Any]:
     if not BOT_TOKEN:
         raise HTTPException(500, "BOT_TOKEN missing")
-    cid = chat_id or (int(DEFAULT_CHAT) if DEFAULT_CHAT.isdigit() else None)
+    cid = chat_id or _get_default_chat_id()
     if not cid:
         raise HTTPException(400, "chat_id required (or set TELEGRAM_TEST_CHAT_ID)")
     payload: Dict[str, Any] = {
@@ -121,17 +214,18 @@ async def test_ping(chat_id: Optional[int] = Query(None)) -> Dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=8.0) as cli:
             r = await cli.post(f"{API_BASE}/sendMessage", json=payload)
-        j = r.json() if "application/json" in r.headers.get("content-type","") else {"ok": False, "raw": r.text}
+        j = r.json() if "application/json" in r.headers.get("content-type", "") else {"ok": False, "raw": r.text}
         return {"ok": bool(j.get("ok")), "result": j}
     except Exception as e:
         logger.error("telegram/test-ping failed: %s", e)
         raise HTTPException(502, str(e))
 
+
 @router.post("/send")
 async def send(req: SendRequest) -> Dict[str, Any]:
     if not BOT_TOKEN:
         raise HTTPException(500, "BOT_TOKEN missing")
-    cid = req.chat_id or (int(DEFAULT_CHAT) if DEFAULT_CHAT.isdigit() else None)
+    cid = req.chat_id or _get_default_chat_id()
     if not cid:
         raise HTTPException(400, "chat_id required (or set TELEGRAM_TEST_CHAT_ID)")
 
@@ -147,11 +241,12 @@ async def send(req: SendRequest) -> Dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=8.0) as cli:
             r = await cli.post(f"{API_BASE}/sendMessage", json=payload)
-        j = r.json() if "application/json" in r.headers.get("content-type","") else {"ok": False, "raw": r.text}
+        j = r.json() if "application/json" in r.headers.get("content-type", "") else {"ok": False, "raw": r.text}
         return {"ok": bool(j.get("ok")), "result": j}
     except Exception as e:
         logger.error("telegram/send failed: %s", e)
         raise HTTPException(502, str(e))
+
 
 @router.get("/set-webhook")
 async def set_webhook() -> Dict[str, Any]:
@@ -169,17 +264,75 @@ async def set_webhook() -> Dict[str, Any]:
     try:
         async with httpx.AsyncClient(timeout=10.0) as cli:
             r = await cli.post(f"{API_BASE}/setWebhook", json=body)
-        j = r.json() if "application/json" in r.headers.get("content-type","") else {"ok": False, "raw": r.text}
+        j = r.json() if "application/json" in r.headers.get("content-type", "") else {"ok": False, "raw": r.text}
         return {"ok": bool(j.get("ok")), "telegram_response": j, "requested_url": url}
     except Exception as e:
         logger.error("telegram/set-webhook failed: %s", e)
         raise HTTPException(502, str(e))
 
-# NEW: REST status summary (WS/Executor) for dashboards/scripts
+
 @router.get("/status")
 async def rest_status() -> Dict[str, Any]:
     return _compose_status_json()
 
+
+@router.post("/webhook")
+async def telegram_webhook(request: Request) -> Dict[str, Any]:
+    """
+    Unified webhook:
+    - Validates Telegram secret header if TELEGRAM_WEBHOOK_SECRET set.
+    - Accepts native Telegram update (callback_query.data) or direct JSON {"action","ticket"}.
+    - On "approve": calls execute_trade_live(...) with minimal fields.
+    """
+    _validate_webhook_secret(request)
+
+    try:
+        payload: Dict[str, Any] = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    parsed = _extract_action_ticket_from_update(payload)
+    if not parsed:
+        # Not an approval flow; acknowledge to Telegram to avoid retries
+        return {"ok": True, "noop": True}
+
+    action = parsed["action"]
+    ticket = parsed.get("ticket") or {}
+
+    if action == "reject":
+        return {"ok": True, "status": "rejected"}
+
+    # APPROVE path
+    symbol = str(ticket.get("symbol", "")).upper()
+    side = str(ticket.get("side", "")).upper()
+    if not symbol or side not in ("LONG", "SHORT"):
+        raise HTTPException(status_code=400, detail="invalid ticket (symbol/side)")
+
+    leverage = int(ticket.get("leverage", 10))
+    budget = float(ticket.get("budget", 50.0))
+    entry = float(ticket.get("entry", 0.0)) or None
+    sl = float(ticket.get("sl", 0.0)) or None
+    tp1 = float(ticket.get("tp1", 0.0)) or None
+    tp2 = float(ticket.get("tp2", 0.0)) or None
+
+    try:
+        res = await execute_trade_live(
+            symbol=symbol,
+            side=side,
+            leverage=leverage,
+            budget=budget,
+            entry=entry,
+            sl=sl,
+            tp1=tp1,
+            tp2=tp2,
+            reduce_only=False,
+            dry_run=os.getenv("DRY_RUN", "0").lower() in ("1", "true", "yes", "on"),
+        )
+    except Exception as e:
+        logger.exception("execute_trade_live failed")
+        raise HTTPException(status_code=500, detail=f"trade failed: {e}")
+
+    return {"ok": True, "status": "executed", "result": res}
 
 
 
