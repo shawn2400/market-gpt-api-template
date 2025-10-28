@@ -484,7 +484,6 @@ HMAC_SECRET = (os.getenv("WEBHOOK_HMAC_SECRET") or os.getenv("OPS_SIGN_SECRET") 
 
 # HTTP/2 toggle
 HTTP2_ENABLE = os.getenv("HTTP2_ENABLE", "1").lower() in ("1", "true", "yes", "on")
-
 # ==================== Binance endpoints auto-fallback ====================
 def _csv_list(env_key: str, defaults: List[str]) -> List[str]:
     raw = (os.getenv(env_key) or "").strip()
@@ -556,6 +555,7 @@ def _get_shared_async_client() -> httpx.AsyncClient:
         )
         app.state.shared_async_client = cli
         return cli
+
 async def _http_ready(base: str, *, path: str = "/fapi/v1/ping", timeout: float = 6.0) -> bool:
     try:
         cli = _get_shared_async_client()
@@ -593,6 +593,7 @@ def _spot_http() -> str:
 
 def _fut_ws() -> str:
     return getattr(app.state, "BINANCE_FUTURES_WS_BASE", os.getenv("BINANCE_FUTURES_WS_BASE", "wss://fstream.binance.com/ws")).rstrip("/")
+
 # ==================== Security helpers ====================
 def _get_hmac_key_bytes() -> Optional[bytes]:
     cand = (
@@ -643,6 +644,7 @@ def _parse_signature_auth(h: str) -> Optional[Dict[str, Any]]:
         "headers": [x.strip().lower() for x in parts["headers"].split() if x.strip()],
         "signature": parts["signature"],
     }
+
 def _build_sig_string(method: str, path: str, headers_lower: Dict[str, str], headers_order: List[str]) -> str:
     lines: List[str] = []
     for hname in headers_order:
@@ -1202,13 +1204,14 @@ async def _send_telegram_html(text: str, approve_url: Optional[str] = None,
                 return {"ok": False, "error": str(e)}
             await asyncio.sleep(0.6 * (attempt + 1))
     return {"ok": False, "error": "telegram_send_exhausted"}
+
 async def _ensure_telegram_webhook() -> None:
     if not TELEGRAM_AUTO_WEBHOOK:
         return
     bot = TELEGRAM_BOT_TOKEN
     secret = TELEGRAM_WEBHOOK_SECRET
     host = PUBLIC_HOST
-    if not (bot and secret and host):
+    if not (bot, secret, host):
         return
     set_url = f"https://api.telegram.org/bot{bot}/setWebhook"
     payload = {
@@ -1613,6 +1616,7 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket.pop("positionSide", None)
         new_ticket["position_side"] = ""
     return new_ticket
+
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
 
@@ -1649,6 +1653,7 @@ def _require_bearer(request: Request) -> None:
         ok = (token == API_BEARER_TOKEN)
     if not ok:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
 # ------- permissions helpers for alerts (HARDENED) -------
 def _allow_by_bearer_or_apikey(request: Request) -> None:
     """
@@ -1721,7 +1726,6 @@ async def alerts_trades_active(request: Request):
         except Exception:
             pass
     return {"ok": True, "items": items, "count": len(items)}
-
 @router.post("/alerts/ingest", tags=["ops-approval"])
 async def alerts_ingest(request: Request, payload: Dict[str, Any] = Body(...)):
     _allow_by_bearer_or_apikey(request)
@@ -1966,6 +1970,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     with suppress(Exception):
         inc_approvals_created()
 
+    # slip estimate and ATR/ADX snapshot for metrics
     with suppress(Exception):
         cli = _get_shared_async_client()
         px = await get_last_price_async(symbol) or 0.0
@@ -2380,186 +2385,135 @@ async def _approve_core(ticket_id: str):
         )
         await _send_telegram_html(msg)
     await _delete_ticket(ticket_id, source, final_status=ok)
-    return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.") if ok else _html("⚠️ שגיאה בביצוע — ראה פירוט בטלגרם/לוגים.")
+    return _html("✅ אושר — הוזמן ונכנס לניהול דינמי.") if ok else _html("⛔️ האישור נכשל — ראו פרטים ביומן.")
 
 async def _reject_core(ticket_id: str):
     if not await _try_mark_decided(ticket_id, "reject"):
         return _html("⚠️ בקשה זו כבר טופלה (כפילות נמנעה).")
-
     ticket, source = await _load_ticket(ticket_id)
-    if not ticket:
-        return _html("⚠️ קישור שגוי או שפג תוקף האישור/דחייה.")
-
-    try:
+    sym = (ticket or {}).get("symbol", "")
+    side = (ticket or {}).get("side", "")
+    with suppress(Exception):
         inc_reject()
-    except Exception:
-        pass
-
-    sym, side, qty = (str(ticket.get("symbol", "")) or "").upper(), str(ticket.get("side", "")).upper(), ticket.get("qty", "")
+    await _delete_ticket(ticket_id, source, final_status=False)
     with suppress(Exception):
         await _send_telegram_html(
-            f"⛔️ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• {_md_html(sym)} {_md_html(side)} qty=<code>{_md_html(qty)}</code>\n— — —\nהבקשה נדחתה."
+            f"❌ <b>Rejected</b>\n• Ticket: <code>{_md_html(ticket_id)}</code>\n• {_md_html(sym)} {_md_html(side)}"
         )
-    await _delete_ticket(ticket_id, source, final_status=False)
-    return _html("⛔️ נדחה — הכרטיס הוסר.")
+    return _html("❌ נדחה — לא בוצע מסחר.")
 
-# ==================== Indicator & profile helpers ====================
-PROFILE_AUTO_SELECT = os.getenv("PROFILE_AUTO_SELECT", "1").lower() in ("1", "true", "yes", "on")
-
-PROFILE_BASE_BE_BPS = int(os.getenv("PROFILE_BASE_BE_BPS", os.getenv("BE_BPS", "5")))
-PROFILE_BASE_PCTS = [float(x) for x in (os.getenv("PROFILE_BASE_PCTS", "3,6,10,16")).split(",") if x.strip()]
-PROFILE_BASE_SPLITS = [float(x) for x in (os.getenv("PROFILE_BASE_SPLITS", "0.25,0.25,0.25,0.25")).split(",") if x.strip()]
-PROFILE_BASE_ATR_MULT = float(os.getenv("PROFILE_BASE_ATR_MULT", "0") or 0) or None
-
-PROFILE_EXTREME_BE_BPS = int(os.getenv("PROFILE_EXTREME_BE_BPS", "2"))
-PROFILE_EXTREME_PCTS = [float(x) for x in (os.getenv("PROFILE_EXTREME_PCTS", "2,4,7,12")).split(",") if x.strip()]
-PROFILE_EXTREME_SPLITS = [float(x) for x in (os.getenv("PROFILE_EXTREME_SPLITS", "0.20,0.25,0.25,0.30")).split(",") if x.strip()]
-PROFILE_EXTREME_ATR_MULT = float(os.getenv("PROFILE_EXTREME_ATR_MULT", "1.6"))
-
-ADX_EXTREME_MIN = float(os.getenv("ADX_EXTREME_MIN", "28"))
-ATRPCT_EXTREME_MIN = float(os.getenv("ATRPCT_EXTREME_MIN", "0.007"))
-
-def _wilder_smooth(values: List[float], period: int) -> List[float]:
-    if not values or period <= 0 or len(values) < period:
-        return []
-    smoothed = [sum(values[:period]) / period]
-    for v in values[period:]:
-        smoothed.append((smoothed[-1] * (period - 1) + v) / period)
-    return smoothed
-
-# --------- NEW: indicators computation used above ----------
+# ====== Simple indicator calc (ATR/ADX minimal) ======
 def _compute_indicators_from_klines(kl: List[List[Any]], period: int = 14) -> Dict[str, float]:
     """
-    kl: list of Binance klines: [openTime, open, high, low, close, volume, ...]
-    Returns: {"price": last_close, "atr": atr, "adx": adx}
+    kl item: [openTime, open, high, low, close, volume, ...]
     """
-    try:
-        highs  = [float(x[2]) for x in kl]
-        lows   = [float(x[3]) for x in kl]
-        closes = [float(x[4]) for x in kl]
-        last_close = float(closes[-1])
-    except Exception:
+    n = len(kl)
+    if n < period + 2:
         return {"price": 0.0, "atr": 0.0, "adx": 0.0}
-
-    # True Range
+    highs = [float(x[2]) for x in kl]
+    lows  = [float(x[3]) for x in kl]
+    closes= [float(x[4]) for x in kl]
+    price = closes[-1]
     trs: List[float] = []
-    for i in range(len(closes)):
-        if i == 0:
-            trs.append(highs[i] - lows[i])
-        else:
-            trs.append(max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1])))
+    for i in range(1, n):
+        tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1]))
+        trs.append(tr)
+    atr = sum(trs[-period:]) / float(period)
 
-    # ATR (Wilder)
-    if len(trs) < period + 1:
-        atr = 0.0
-    else:
-        atr_list = _wilder_smooth(trs, period)
-        atr = float(atr_list[-1]) if atr_list else 0.0
+    # minimal ADX approximation
+    plus_dm = [0.0]; minus_dm = [0.0]
+    for i in range(1, n):
+        up = highs[i] - highs[i-1]
+        dn = lows[i-1] - lows[i]
+        plus_dm.append(up if (up > dn and up > 0) else 0.0)
+        minus_dm.append(dn if (dn > up and dn > 0) else 0.0)
+    tr_n = trs  # length n-1
+    def _smoothed(arr: List[float], p: int) -> List[float]:
+        out = []
+        s = sum(arr[:p])
+        out.append(s)
+        for i in range(p, len(arr)):
+            s = s - (s / p) + arr[i]
+            out.append(s)
+        return out
+    p = period
+    sm_tr = _smoothed(tr_n, p)
+    sm_plus = _smoothed(plus_dm[1:], p)
+    sm_minus = _smoothed(minus_dm[1:], p)
+    di_p = [100.0 * (sm_plus[i] / sm_tr[i]) if sm_tr[i] > 0 else 0.0 for i in range(min(len(sm_tr), len(sm_plus)))]
+    di_m = [100.0 * (sm_minus[i] / sm_tr[i]) if sm_tr[i] > 0 else 0.0 for i in range(min(len(sm_tr), len(sm_minus)))]
+    dx = [ (abs(di_p[i]-di_m[i]) / max(1e-9, (di_p[i]+di_m[i])))*100.0 for i in range(min(len(di_p), len(di_m))) ]
+    adx = sum(dx[-p:]) / float(p) if len(dx) >= p else (dx[-1] if dx else 0.0)
+    return {"price": float(price), "atr": float(atr), "adx": float(adx)}
 
-    # ADX
-    plus_dm: List[float] = [0.0]
-    minus_dm: List[float] = [0.0]
-    for i in range(1, len(highs)):
-        up_move = highs[i] - highs[i-1]
-        down_move = lows[i-1] - lows[i]
-        plus_dm.append(up_move if (up_move > down_move and up_move > 0) else 0.0)
-        minus_dm.append(down_move if (down_move > up_move and down_move > 0) else 0.0)
+# ============= mount router ============
+app.include_router(router)
 
-    if len(trs) < period + 1:
-        adx = 0.0
-    else:
-        tr_s  = _wilder_smooth(trs, period)
-        pdm_s = _wilder_smooth(plus_dm, period)
-        mdm_s = _wilder_smooth(minus_dm, period)
-        n = min(len(tr_s), len(pdm_s), len(mdm_s))
-        tr_s, pdm_s, mdm_s = tr_s[-n:], pdm_s[-n:], mdm_s[-n:]
-        plus_di: List[float] = []
-        minus_di: List[float] = []
-        for i in range(n):
-            denom = tr_s[i] if tr_s[i] > 0 else 1e-9
-            plus_di.append(100.0 * (pdm_s[i] / denom))
-            minus_di.append(100.0 * (mdm_s[i] / denom))
-        dx: List[float] = []
-        for i in range(n):
-            num = abs(plus_di[i] - minus_di[i])
-            den = (plus_di[i] + minus_di[i]) if (plus_di[i] + minus_di[i]) > 0 else 1e-9
-            dx.append(100.0 * (num / den))
-        adx_series = _wilder_smooth(dx, period) if len(dx) >= period else []
-        adx = float(adx_series[-1]) if adx_series else 0.0
-
-    return {"price": last_close, "atr": float(atr), "adx": float(adx)}
-
-# --------- Signed manage-once endpoint (button target) ----------
-@router.get("/manage-once/signed")
-async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), symbol: Optional[str] = Query(None)):
-    if not _verify_signed_params(ticket_id, exp, sig, "/manage-once/signed"):
-        raise HTTPException(status_code=401, detail="Bad or expired signature")
-    sym = (symbol or "").upper().strip()
-    if not sym:
-        # Try to infer from ticket (best-effort)
-        t, _ = await _load_ticket(ticket_id)
-        if t:
-            sym = (t.get("symbol") or "").upper()
-    if not sym:
-        return _html("⚠️ חסר symbol לביצוע ניהול מהיר.")
-    res = await _smart_manage_now(sym)
-    ok = bool(res.get("ok", True))
-    return _html("✅ שוגר ניהול חכם (Smart Manage).") if ok else _html(f"⚠️ כישלון: {res}")
-
-# --------- Root & health ----------
-@router.get("/", tags=["public"])
+# ==================== Root & health ====================
+@app.get("/")
 async def root():
     return {
         "ok": True,
-        "name": APP_TITLE,
+        "service": APP_TITLE,
         "version": APP_VERSION,
-        "docs": DOCS_URL,
-        "public_host": PUBLIC_HOST or None,
-        "poll_ms": UI_POLL_MS,
-        "idle_stop_sec": UI_IDLE_STOP_SEC,
+        "public_host": PUBLIC_HOST,
+        "watchlist": WATCHLIST,
+        "ui": {"poll_ms": UI_POLL_MS, "idle_stop_sec": UI_IDLE_STOP_SEC},
+        "http2": _http2_enabled_runtime(),
     }
 
-# Mount router
-app.include_router(router)
+@app.get("/health")
+async def health():
+    ok_redis = False
+    with suppress(Exception):
+        r = await _get_redis_cached()
+        if r:
+            pong = await r.ping()
+            ok_redis = bool(pong)
+    return {"ok": True, "redis": ok_redis, "time": int(time.time())}
 
-# --------- Startup: resolve endpoints, include UI, public fallbacks ----------
+@app.get("/readyz/strict")
+async def readyz_strict():
+    # require redis when configured
+    if REQUIRE_REDIS:
+        r = await _get_redis_cached()
+        if not r:
+            return PlainTextResponse("redis_unavailable", status_code=503)
+        with suppress(Exception):
+            if not await r.ping():
+                return PlainTextResponse("redis_ping_failed", status_code=503)
+    return PlainTextResponse("ok", status_code=200)
+
+# ============= manage-once signed helper =============
+@app.get("/manage-once/signed")
+async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), symbol: str = Query(...)):
+    if not _verify_signed_params(ticket_id, exp, sig, "/manage-once/signed"):
+        raise HTTPException(status_code=401, detail="Bad or expired signature")
+    sym = symbol.upper()
+    res = await _smart_manage_now(sym,
+                                  offset_bps=int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", "5") or 5),
+                                  pcts=[float(x) for x in (os.getenv("SMART_MANAGE_PCTS") or "3,6,10,16").split(",") if x.strip()],
+                                  splits=[float(x) for x in (os.getenv("SMART_MANAGE_SPLITS") or "0.25,0.25,0.25,0.25").split(",") if x.strip()],
+                                  atr_mult=float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None)
+    return JSONResponse({"ok": True, "result": res})
+
+# ==================== Startup tasks ====================
 @app.on_event("startup")
-async def _startup():
+async def _on_startup():
     try:
         _adjust_routes_autoload_filters()
         _include_ui_grid_router()
-        if ROUTES_AUTOLOAD and ROUTES_AUTOLOAD_MODE == "eager":
-            _routes_autoload_now()
+        if ROUTES_AUTOLOAD:
+            if ROUTES_AUTOLOAD_MODE == "eager":
+                _routes_autoload_now()
+            else:
+                asyncio.create_task(asyncio.to_thread(_routes_autoload_now))
         _ensure_public_fallbacks()
         await _resolve_binance_endpoints()
         await _ensure_telegram_webhook()
-        logger.info("startup complete")
+        logger.info("startup: completed")
     except Exception as e:
-        logger.warning("startup partial: %s", e)
-
-# --------- Optional: Telegram webhook receiver (noop if secret/token missing) ----------
-@router.post("/telegram/webhook")
-async def telegram_webhook(request: Request):
-    if not (TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET):
-        return JSONResponse({"ok": True, "skipped": True})
-    # Simple auth: telegram sends header 'X-Telegram-Bot-Api-Secret-Token'
-    sec = request.headers.get("X-Telegram-Bot-Api-Secret-Token") or ""
-    if sec != TELEGRAM_WEBHOOK_SECRET:
-        return JSONResponse({"ok": False, "error": "unauthorized"}, status_code=401)
-    try:
-        data = await request.json()
-    except Exception:
-        data = {}
-    # minimal ack (your bot handlers live elsewhere)
-    return JSONResponse({"ok": True})
-
-# --------------- Uvicorn helper (optional) ----------------
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run("main:app", host=os.getenv("HOST", "0.0.0.0"), port=_port(), reload=bool(os.getenv("RELOAD", "0") in ("1","true","yes","on")))
-
-
-
+        logger.warning("startup: failed: %s", e)
 
 
 
