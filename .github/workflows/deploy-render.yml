@@ -1,0 +1,26 @@
+name: CI Deploy to Render
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "main.py"
+      - "routes/**"
+      - "utils/**"
+      - "Dockerfile"
+      - "render.yaml"
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # כאן אפשר להוסיף linters / tests / build מהיר. אם משהו נכשל -> אין דיפלוי.
+      - name: Python quick check
+        run: |
+          python -V || true
+          echo "Quick sanity OK"
+
+      - name: Trigger Render Deploy
+        run: |
+          test -n "${{ secrets.RENDER_DEPLOY_HOOK }}" || { echo "missing RENDER_DEPLOY_HOOK"; exit 1; }
+          curl -fsSL -X POST "${{ secrets.RENDER_DEPLOY_HOOK }}"
