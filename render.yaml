@@ -8,10 +8,11 @@ services:
     dockerfilePath: ./Dockerfile
     healthCheckPath: /readyz
 
-    disks:
-      - name: data
-        mountPath: /app/data
-        sizeGB: 1
+    # Render בדרך כלל משתמש ב-"disk" יחיד. אם אצלך מופעל "disks", החלף בחזרה ל-disks:[...]
+    disk:
+      name: data
+      mountPath: /app/data
+      sizeGB: 1
 
     envVars:
       - key: APP_NAME
@@ -73,7 +74,7 @@ services:
       - key: AUTO_RUN
         value: "1"
 
-      # === ✅ PUBLIC / CORS — מצביעים לפרוד (תוקן לדוקר) ===
+      # === ✅ PUBLIC / CORS — מצביעים לפרוד (Docker) ===
       - key: PUBLIC_HOST
         value: "https://algogpt-docker.onrender.com"
       - key: CONTEXT_URL
@@ -137,7 +138,6 @@ services:
         value: "1"
       - key: ANTI_REPLAY_NONCE_TTL_SEC
         value: "180"
-      # קשיחה לאבטחת חותמות זמן
       - key: SIG_TS_ENFORCE
         value: "1"
       - key: SIG_TS_SKEW_SEC
@@ -235,7 +235,6 @@ services:
         value: "1"
       - key: USER_STREAM_ENABLE
         value: "1"
-
       - key: EXCHANGE_INFO_TTL_SEC
         value: "900"
 
@@ -1132,9 +1131,6 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
-
-
-
 
 
 
