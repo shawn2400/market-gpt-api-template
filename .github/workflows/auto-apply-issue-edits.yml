@@ -1,0 +1,114 @@
+name: Auto apply fixes from Issue (no shell)
+on:
+  issues:
+    types: [opened, edited, labeled, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: read
+
+jobs:
+  apply:
+    if: |
+      contains(github.event.issue.labels.*.name, 'autofix')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Use GitHub Script
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const owner = context.repo.owner;
+            const repo  = context.repo.repo;
+            const issue = context.payload.issue;
+
+            // --- extract "autofix" YAML block from issue body ---
+            const body = issue.body || "";
+            const m = body.match(/```autofix\s+([\s\S]*?)```/i);
+            if (!m) {
+              core.setFailed("No ```autofix ...``` block found in issue body");
+              return;
+            }
+            const yamlText = m[1];
+
+            // parse YAML -> list of edits
+            const yaml = require('js-yaml');
+            let spec;
+            try {
+              spec = yaml.load(yamlText);
+            } catch (e) {
+              core.setFailed("Invalid YAML in autofix block: " + e.message);
+              return;
+            }
+            if (!Array.isArray(spec?.edits) || spec.edits.length === 0) {
+              core.setFailed("No edits found under 'edits:'");
+              return;
+            }
+
+            // create branch
+            const baseBranch = spec.base || 'main';
+            const { data: baseRef } = await github.rest.git.getRef({ owner, repo, ref: `heads/${baseBranch}` });
+            const headBranch = `ops/autofix-${issue.number}-${Date.now()}`;
+            await github.rest.git.createRef({ owner, repo, ref: `refs/heads/${headBranch}`, sha: baseRef.object.sha });
+
+            // helpers
+            async function readFile(path) {
+              const { data } = await github.rest.repos.getContent({ owner, repo, path, ref: headBranch });
+              if (!('content' in data)) throw new Error(`No content in ${path}`);
+              return {
+                sha: data.sha,
+                text: Buffer.from(data.content, 'base64').toString('utf8'),
+              };
+            }
+            async function writeFile(path, oldSha, newText, message) {
+              await github.rest.repos.createOrUpdateFileContents({
+                owner, repo, path, branch: headBranch, message,
+                content: Buffer.from(newText, 'utf8').toString('base64'),
+                sha: oldSha,
+              });
+            }
+
+            // apply edits (regex/find & replace, or literal replace)
+            for (const e of spec.edits) {
+              const path = e.path;
+              const { sha, text } = await readFile(path).catch(async (err) => {
+                if (!e.create) throw err;
+                return { sha: undefined, text: "" };
+              });
+
+              let s = text;
+
+              if (e.mode === 'regex') {
+                // { path, mode: 'regex', find: '<js regex>', replace: '<string>' , flags?: 'ms' }
+                const flags = e.flags || 'ms';
+                const re = new RegExp(e.find, flags);
+                if (!re.test(s) && e.required !== false) {
+                  core.warning(`Pattern not found in ${path}: ${e.find}`);
+                }
+                s = s.replace(re, e.replace);
+              } else if (e.mode === 'literal') {
+                // replace whole file
+                s = e.content || "";
+              } else if (e.mode === 'append') {
+                s += e.content || "";
+              } else {
+                core.setFailed(`Unknown mode for ${path}: ${e.mode}`);
+                return;
+              }
+
+              await writeFile(path, sha, s, e.message || `autofix: ${path}`);
+            }
+
+            // open PR
+            const title = spec.title || `AutoFix from issue #${issue.number}`;
+            const bodyPR = spec.body || `Automated edits from issue #${issue.number}.`;
+            try {
+              await github.rest.pulls.create({
+                owner, repo, title, head: headBranch, base: spec.base || 'main', body: bodyPR
+              });
+            } catch (e) {
+              core.setFailed("PR create failed: " + e.message);
+            }
+      - name: Add js-yaml
+        run: echo "This step is not used; js-yaml is bundled by actions/github-script runtime"
