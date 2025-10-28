@@ -1,16 +1,8 @@
 # === Environment / secrets ===
 .env
+.env.*
 *.key
 *.pem
-
-# === Sensitive runtime data ===
-saved_trades.json
-pnl_tracker.json
-open_trades.json
-!watchlist.json
-
-# === Logs ===
-*.log
 
 # === Python cache / compiled ===
 __pycache__/
@@ -20,21 +12,25 @@ __pycache__/
 .cache/
 *.sqlite3
 
-# === Generated reports / snapshots ===
-*.pdf
+# === Logs ===
+*.log
+logs/
+!logs/.gitkeep
+
+# === Runtime data (לא לבונדל לבילד) ===
+data/*
+!data/.gitkeep
+
+# === Reports / Snapshots generated ===
 static/reports/
 static/snapshots/
 
-# === Static files ===
-static/
-!static/logo.png
-# אם תרצה להשאיר קבצים ספציפיים מהסטטיק – בטל הערה:
-# !static/styles.css
-# !static/favicon.ico
+# === Node / frontend ===
+node_modules/
+*.map
 
 # === Tests / debug ===
 .pytest_cache/
-test_algogpt.ps1
 tests/
 test_*.py
 
@@ -42,9 +38,12 @@ test_*.py
 .venv/
 venv/
 
-# === OS files ===
+# === OS / IDE ===
 .DS_Store
 Thumbs.db
+.vscode/
+.idea/
+*.iml
 
 # === Docker / build artifacts ===
 *.pid
@@ -54,15 +53,6 @@ Thumbs.db
 dist/
 build/
 *.spec
-
-# === IDE ===
-.vscode/
-.idea/
-*.iml
-
-# === Node / frontend ===
-node_modules/
-*.map
 
 
 
