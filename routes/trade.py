@@ -10,18 +10,26 @@ from pydantic import BaseModel
 try:
     # Pydantic v2
     from pydantic import field_validator as _field_validator  # type: ignore
+    from pydantic import model_validator as _model_validator  # type: ignore
 
     def FIELD_VALIDATOR(*fields, **kwargs):
         return _field_validator(*fields, **kwargs)
+
+    def ROOT_VALIDATOR(**kwargs):
+        return _model_validator(mode="after")
 except Exception:
     # Pydantic v1
     from pydantic import validator as _validator  # type: ignore
+    from pydantic import root_validator as _root_validator  # type: ignore
 
     def FIELD_VALIDATOR(*fields, **kwargs):
         return _validator(*fields, **kwargs)
 
+    def ROOT_VALIDATOR(**kwargs):
+        return _root_validator(**kwargs)
+
 logger = logging.getLogger("algogpt.trade")
-router = APIRouter(tags=["trade"])
+router = APIRouter(tags=["trade"])  # paths below are absolute (e.g., "/trade/execute")
 
 # ---------- metrics wiring (optional) ----------
 try:
@@ -117,11 +125,11 @@ def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) 
     try:
         sig = inspect.signature(fn)
         allowed = set(sig.parameters.keys())
-        return {k: v for k, v in kwargs.items() if k in allowed}
+        return {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     except Exception:
         # פולבק: הסר ידועים בעייתיים
         bad = {"tp_kind", "sl_kind", "entry_kind", "entry_offset", "tp_offset", "sl_offset"}
-        return {k: v for k, v in kwargs.items() if k not in bad}
+        return {k: v for k, v in kwargs.items() if k not in bad and v is not None}
 
 # --------- execution paths ----------
 async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
@@ -211,7 +219,7 @@ async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
     symbol = str(ticket.get("symbol", "")).upper()
     side = str(ticket.get("side", "")).upper()
-    qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
+    qty = ticket.get("qty") or ticket.get("quantity")
     leverage = int(ticket.get("leverage") or ticket.get("lev") or 0)
     pos_side = str(
         ticket.get("position_side") or ticket.get("positionSide") or ("LONG" if side == "BUY" else "SHORT")
@@ -221,16 +229,17 @@ async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
     tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0", "0.0") and float(x) > 0]
     sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
 
-    if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
+    if not (symbol and side in ("BUY", "SELL") and leverage > 0):
         return {"ok": False, "error": "bad_ticket_params"}
+    # ב-hybrid מותר qty=None אם נמסר budget (ה־execute_trade_live יחשב כמות)
 
     base_kwargs: Dict[str, Any] = dict(
         symbol=symbol,
         side=side,
-        budget=None,
+        budget=ticket.get("budget") or ticket.get("budget_usd"),
         leverage=leverage,
-        dry_run=False,
-        quantity=qty,  # אם הפונקציה לא תומכת — יוסר ע"י _filter_kwargs_for_callable
+        dry_run=bool(ticket.get("dry_run", False)),
+        quantity=(float(qty) if qty is not None else None),
         entry=None,
         tp_targets=tp_targets or None,
         sl_targets=sl_targets or None,
@@ -250,7 +259,10 @@ async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "armed_execute_failed", "detail": str(e)}
 
 def _choose_flow(req: "TradeRequest") -> str:
+    # אם סופקו TP/SL או אם אין quantity (ורק budget) — נעדיף HYBRID
     if any(x is not None for x in (req.tp1, req.tp2, req.tp3, req.sl)):
+        return "HYBRID"
+    if (req.quantity is None) and (req.budget_usd is not None):
         return "HYBRID"
     return "MARKET"
 
@@ -258,7 +270,7 @@ def _choose_flow(req: "TradeRequest") -> str:
 class TradeRequest(BaseModel):
     symbol: str
     side: str
-    quantity: float
+    quantity: Optional[float] = None
     leverage: int
     budget_usd: Optional[float] = None
     confirm_first: bool = False
@@ -287,13 +299,6 @@ class TradeRequest(BaseModel):
             raise ValueError("side must be BUY/SELL")
         return v
 
-    @FIELD_VALIDATOR("quantity")
-    @classmethod
-    def _qty_pos(cls, v: float) -> float:
-        if v is None or float(v) <= 0:
-            raise ValueError("quantity must be > 0")
-        return float(v)
-
     @FIELD_VALIDATOR("leverage")
     @classmethod
     def _lev_pos(cls, v: int) -> int:
@@ -301,6 +306,14 @@ class TradeRequest(BaseModel):
         if iv <= 0:
             raise ValueError("leverage must be > 0")
         return iv
+
+    @ROOT_VALIDATOR()
+    def _one_of_qty_or_budget(self):  # type: ignore[no-redef]
+        q = getattr(self, "quantity", None)
+        b = getattr(self, "budget_usd", None)
+        if (q is None or float(q) <= 0) and (b is None or float(b) <= 0):
+            raise ValueError("Provide positive quantity or positive budget_usd")
+        return self
 
 # --------- Routes ----------
 @router.post("/trade/execute")
@@ -323,13 +336,14 @@ async def trade_execute(
             payload = {
                 "symbol": req.symbol,
                 "side": req.side,
-                "qty": req.quantity,
+                "qty": (req.quantity if req.quantity is not None else None),
                 "leverage": req.leverage,
                 "tp1": req.tp1,
                 "tp2": req.tp2,
                 "tp3": req.tp3,
                 "sl": req.sl,
                 "tp_splits": req.tp_splits,
+                "budget": req.budget_usd,
                 "position_side": (req.position_side or ("LONG" if req.side == "BUY" else "SHORT")).upper(),
                 "note": req.note or "",
             }
@@ -342,6 +356,8 @@ async def trade_execute(
             )
             if api_key:
                 headers["X-API-Key"] = api_key.strip()
+            if x_idempotency_key:
+                headers["X-Idempotency-Key"] = x_idempotency_key
             async with httpx.AsyncClient(timeout=12.0) as cli:
                 r = await cli.post(f"{base.rstrip('/')}/ops/ticket", json=payload, headers=headers)
             data = r.json()
@@ -364,10 +380,15 @@ async def trade_execute(
             record_trade_fail(flow)
             raise HTTPException(status_code=502, detail=f"open_ops_ticket_failed: {e}")
 
+    # ללא צורך באישור — מבצעים מיד לפי ה-flow
+    # אם ה-flow MARKET אבל אין quantity -> נמסור ל-HYBRID (שיתמוך ב-budget)
+    if flow == "MARKET" and (req.quantity is None or float(req.quantity) <= 0):
+        flow = "HYBRID"
+
     ticket_exec = dict(
         symbol=req.symbol,
         side=req.side,
-        qty=req.quantity,
+        qty=(req.quantity if req.quantity is not None else None),
         leverage=req.leverage,
         note=req.note or "",
         tp1=req.tp1,
@@ -375,9 +396,16 @@ async def trade_execute(
         tp3=req.tp3,
         sl=req.sl,
         tp_splits=req.tp_splits,
+        budget=req.budget_usd,
         position_side=(req.position_side or ("LONG" if req.side == "BUY" else "SHORT")).upper(),
         reduce_only=bool(req.reduce_only),
     )
+
+    if flow == "MARKET":
+        # עדיין נדרשת כמות
+        if ticket_exec.get("qty") is None or float(ticket_exec["qty"]) <= 0:
+            record_trade_fail(flow)
+            raise HTTPException(status_code=400, detail="quantity required for MARKET flow")
 
     res = await (_execute_trade_direct(ticket_exec) if flow == "MARKET" else _execute_trade_hybrid(ticket_exec))
     ok = bool(res.get("ok"))
@@ -402,7 +430,7 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
         record_trade_approval("approve", False)
         return {"ok": False, "error": "not_found"}
 
-    flow = "HYBRID" if any(it.get(k) for k in ("tp1", "tp2", "tp3", "sl")) else "MARKET"
+    flow = "HYBRID" if any(it.get(k) for k in ("tp1", "tp2", "tp3", "sl")) or (it.get("budget") is not None) else "MARKET"
     res = await (_execute_trade_hybrid(it) if flow == "HYBRID" else _execute_trade_direct(it))
     ok = bool(res.get("ok"))
 
