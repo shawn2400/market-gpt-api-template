@@ -7,7 +7,7 @@ Full combined `main.py`
 - Hardened route protection (Bearer), signed links, anti-replay (HMAC+nonce+ts)
 - Futures execution helpers (qty/precision/positionSide)
 - Ticket create + preview/approve/reject (signed + bearer)
-- Smart manage-once endpoint
+- Smart manage-once endpoint (+ optional native BE/ATR manage)
 - Health/ready/version
 """
 
@@ -36,6 +36,24 @@ try:
     import httpx  # type: ignore
 except Exception as e:
     raise RuntimeError("httpx is required") from e
+
+# ======== Utility: safe string headers (fix 'Header.startswith' crash) ========
+def _to_str_header(val: Any) -> str:
+    try:
+        if val is None:
+            return ""
+        if isinstance(val, (bytes, bytearray)):
+            return val.decode("utf-8", "ignore")
+        return str(val)
+    except Exception:
+        return ""
+
+# ======== Utility: HMAC-safe compare for bearer/signature tokens ========
+def _ct_equal(a: str, b: str) -> bool:
+    try:
+        return hmac.compare_digest(a or "", b or "")
+    except Exception:
+        return (a or "") == (b or "")
 
 # =============== FastAPI / Starlette ===============
 from fastapi import FastAPI, APIRouter, Request, HTTPException, Body, Query, Depends
@@ -166,11 +184,7 @@ def _require_bearer(request: Request) -> None:
     scheme, token = parts[0].strip(), parts[1].strip()
     if scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Unauthorized")
-    try:
-        ok = hmac.compare_digest(token, API_BEARER_TOKEN)
-    except Exception:
-        ok = (token == API_BEARER_TOKEN)
-    if not ok:
+    if not _ct_equal(token, API_BEARER_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 # Allow either Bearer or X-API-Key (PRIMARY_API_TOKEN/API_TOKEN)
@@ -179,14 +193,13 @@ def _allow_by_bearer_or_apikey(request: Request) -> None:
     x_api_key = (request.headers.get("x-api-key") or request.headers.get("X-API-Key") or "").strip()
     if API_BEARER_TOKEN and want_bearer.lower().startswith("bearer "):
         token = want_bearer.split(" ", 1)[1].strip()
-        if hmac.compare_digest(token, API_BEARER_TOKEN):
+        if _ct_equal(token, API_BEARER_TOKEN):
             return
     api_tokens = [(os.getenv("PRIMARY_API_TOKEN") or "").strip(),
                   (os.getenv("API_TOKEN") or "").strip()]
-    if x_api_key and any(hmac.compare_digest(x_api_key, t) for t in api_tokens if t):
+    if x_api_key and any(_ct_equal(x_api_key, t) for t in api_tokens if t):
         return
     raise HTTPException(status_code=401, detail="Unauthorized")
-
 # Redis helper
 _redis_cached = None
 async def _get_redis_cached():
@@ -246,6 +259,7 @@ async def _send_telegram_html(html_text: str, approve_url: Optional[str] = None,
         return {"ok": ok, "status": r.status_code, "resp": (r.json() if ok else None), "buttons": btns}
     except Exception as e:
         return {"ok": False, "error": str(e), "buttons": btns}
+
 # ==================== Telegram webhook ensure ====================
 async def _ensure_telegram_webhook() -> None:
     if not TELEGRAM_AUTO_WEBHOOK:
@@ -374,7 +388,6 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
-
 # ==================== Execute trade helpers ====================
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
@@ -436,6 +449,179 @@ def _round_to_lot_size(client, symbol: str, qty: float) -> float:
     except Exception:
         return float(qty)
 
+def _round_to_tick(client, symbol: str, price: float) -> float:
+    try:
+        tick, _ = _get_filters(client, symbol)
+        if tick and tick > 0:
+            p = math.floor(float(price) / float(tick)) * float(tick)
+            s = str(tick)
+            dec = max(0, min(8, len(s.split(".")[1]) if "." in s else 0))
+            return float(f"{p:.{dec}f}")
+        return float(price)
+    except Exception:
+        return float(price)
+
+def _get_working_type() -> str:
+    return "MARK_PRICE" if os.getenv("ORDER_TRIGGER", "mark").lower().startswith("mark") else "CONTRACT_PRICE"
+
+# --- ATR from klines (SDK path) ---
+def _get_klines_via_sdk(cli, symbol: str, interval: str = "5m", limit: int = 120) -> List[List[Any]]:
+    with suppress(Exception):
+        kl = cli.futures_klines(symbol=symbol, interval=interval, limit=min(max(int(limit), 5), 1500))
+        if isinstance(kl, list) and kl and isinstance(kl[0], list):
+            return kl
+    return []
+
+def _calc_atr_from_klines(kl: List[List[Any]], period: int = 14) -> Optional[float]:
+    try:
+        if not kl or len(kl) < period + 1:
+            return None
+        highs = [float(x[2]) for x in kl]
+        lows  = [float(x[3]) for x in kl]
+        closes= [float(x[4]) for x in kl]
+        trs: List[float] = []
+        for i in range(1, len(kl)):
+            h, l, pc = highs[i], lows[i], closes[i-1]
+            tr = max(h - l, abs(h - pc), abs(l - pc))
+            trs.append(tr)
+        if len(trs) < period:
+            return None
+        return sum(trs[-period:]) / float(period)
+    except Exception:
+        return None
+
+def _side_close_for(entry_side: str) -> str:
+    return "SELL" if str(entry_side).upper() == "BUY" else "BUY"
+
+async def _ensure_native_tpsl_after_entry(
+    ticket: Dict[str, Any],
+    *,
+    entry_side: str,
+    pos_side: str,
+    symbol: str,
+    qty: float,
+    tp_targets: Optional[List[float]],
+    sl_target: Optional[float],
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"ok": True, "placed": []}
+    if os.getenv("NATIVE_TPSL_ENABLE", "1").lower() not in ("1", "true", "yes", "on"):
+        return {"ok": False, "skipped": True, "reason": "NATIVE_TPSL_ENABLE=0"}
+    try:
+        from binance.client import Client  # type: ignore
+    except Exception as e:
+        return {"ok": False, "error": "binance_client_import_failed", "detail": f"{e}"}
+
+    api_key = os.getenv("BINANCE_API_KEY", "").strip()
+    api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not (api_key and api_sec):
+        return {"ok": False, "error": "binance_keys_missing"}
+
+    try:
+        cli = Client(api_key, api_sec)
+        _align_position_mode(cli)
+        qty = _round_to_lot_size(cli, symbol, float(qty))
+        if qty <= 0:
+            return {"ok": False, "error": "qty_non_positive_after_round"}
+        working_type = _get_working_type()
+
+        # SL closePosition
+        if sl_target not in (None, 0, "0", "0.0"):
+            try:
+                order = cli.futures_create_order(
+                    symbol=symbol,
+                    side=_side_close_for(entry_side),
+                    type="STOP_MARKET",
+                    stopPrice=_round_to_tick(cli, symbol, float(sl_target)),
+                    closePosition=True,
+                    reduceOnly=True,
+                    workingType=working_type,
+                    priceProtect=True,
+                    newClientOrderId=build_client_order_id(symbol, _side_close_for(entry_side), role="SL"),
+                )
+                out["placed"].append({"kind": "SL", "resp": order})
+            except Exception as e:
+                out.setdefault("errors", []).append({"kind": "SL", "error": f"{e}"})
+
+        # TP splits
+        tps = list(tp_targets or [])
+        if tps:
+            splits = ticket.get("tp_splits")
+            if isinstance(splits, str):
+                with suppress(Exception):
+                    splits = [float(x) for x in splits.split(",") if x.strip()]
+            if not splits:
+                n = len(tps)
+                splits = [1.0] if n == 1 else ([0.5, 0.5] if n == 2 else [0.30, 0.30, 0.40][:n])
+            ssum = sum([float(x) for x in splits]) or 1.0
+            splits = [float(x)/ssum for x in splits]
+
+            remain = qty
+            for i, tp_price in enumerate(tps, start=1):
+                part = _round_to_lot_size(cli, symbol, max(0.0, remain * splits[i-1]))
+                if part <= 0 and i == len(tps) and remain > 0:
+                    part = _round_to_lot_size(cli, symbol, remain)
+                if part <= 0:
+                    continue
+                try:
+                    order = cli.futures_create_order(
+                        symbol=symbol,
+                        side=_side_close_for(entry_side),
+                        type="TAKE_PROFIT_MARKET",
+                        stopPrice=_round_to_tick(cli, symbol, float(tp_price)),
+                        quantity=part,
+                        reduceOnly=True,
+                        workingType=working_type,
+                        priceProtect=True,
+                        newClientOrderId=build_client_order_id(symbol, _side_close_for(entry_side), role=f"TP{i}"),
+                    )
+                    out["placed"].append({"kind": f"TP{i}", "qty": part, "resp": order})
+                    remain = max(0.0, remain - part)
+                except Exception as e:
+                    out.setdefault("errors", []).append({"kind": f"TP{i}", "error": f"{e}"})
+        return out
+    except Exception as e:
+        return {"ok": False, "error": "native_tpsl_exception", "detail": f"{e}"}
+
+# --- one-shot BE + ATR trailing helpers ---
+def _fetch_single_position(cli, symbol: str) -> Optional[Dict[str, Any]]:
+    with suppress(Exception):
+        pos = cli.futures_position_information(symbol=symbol)
+        if isinstance(pos, list) and pos:
+            for p in pos:
+                if abs(float(p.get("positionAmt", "0"))) > 0:
+                    return p
+            return pos[0]
+    return None
+
+def _compute_be_price(side: str, entry_price: float, be_offset_bps: float) -> float:
+    off = entry_price * (be_offset_bps / 10000.0)
+    return entry_price + off if side.upper() == "BUY" else entry_price - off
+
+def _trail_stop_from_mark(side: str, mark_price: float, atr: float, mult: float) -> float:
+    if side.upper() == "BUY":
+        return mark_price - (atr * mult)
+    return mark_price + (atr * mult)
+
+def _combine_be_trail(side: str, be_price: float, trail_price: float) -> float:
+    if side.upper() == "BUY":
+        return max(be_price, trail_price)
+    else:
+        return min(be_price, trail_price)
+
+def _place_or_replace_close_stop(cli, symbol: str, side: str, stop_price: float) -> Dict[str, Any]:
+    return cli.futures_create_order(
+        symbol=symbol,
+        side=_side_close_for(side),
+        type="STOP_MARKET",
+        stopPrice=_round_to_tick(cli, symbol, float(stop_price)),
+        closePosition=True,
+        reduceOnly=True,
+        workingType=_get_working_type(),
+        priceProtect=True,
+        newClientOrderId=build_client_order_id(symbol, _side_close_for(side), role="MG"),
+    )
+
+# ==================== Execute paths ====================
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
     with suppress(Exception):
         from utils.trade_executor import place_futures_market  # type: ignore
@@ -494,6 +680,7 @@ async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
                     return {"ok": False, "entered": False, "error": "order_failed", "detail": str(e3), "first_error": str(e1), "second_error": str(e2)}
     except Exception as e:
         return {"ok": False, "entered": False, "error": "order_failed", "detail": str(e)}
+
 async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     execute_trade_live = None
     with suppress(Exception):
@@ -505,6 +692,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
             execute_trade_live = _x
     if execute_trade_live is None:
         return {"ok": False, "entered": False, "error": "execute_trade_live_missing"}
+
     symbol = (ticket.get("symbol") or "").upper()
     side = (ticket.get("side") or "").upper()
     qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
@@ -514,8 +702,10 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
     tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0", "0.0") and float(x) > 0]
     sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
+
     if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
         return {"ok": False, "entered": False, "error": "bad_ticket_params"}
+
     try:
         from binance.client import Client  # type: ignore
         api_key = os.getenv("BINANCE_API_KEY", "").strip()
@@ -558,10 +748,27 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
             res = await maybe  # type: ignore[assignment]
         else:
             res = maybe  # type: ignore[assignment]
+
+        # === NEW: write native TP/SL after successful entry (optional) ===
+        entered_ok = bool(res.get("ok")) or bool(res.get("entered"))
+        if entered_ok and os.getenv("MANAGER_WRITES_ORDERS", "1").lower() in ("1", "true", "yes", "on"):
+            try:
+                res["tpsl_native"] = await _ensure_native_tpsl_after_entry(
+                    ticket,
+                    entry_side=side,
+                    pos_side=pos_side,
+                    symbol=symbol,
+                    qty=qty,
+                    tp_targets=tp_targets,
+                    sl_target=(sl_targets[0] if sl_targets else None),
+                )
+            except Exception as e:
+                res["tpsl_native"] = {"ok": False, "error": f"{e}"}
+
         try:
             if not res.get("ok") and "precision" in str(res).lower():
-                symbol2 = (ticket.get("symbol") or "").upper()
-                side2 = (ticket.get("side") or "").upper()
+                symbol2 = symbol
+                side2 = side
                 qty2 = float(ticket.get("qty") or ticket.get("quantity") or 0.0)
                 from binance.client import Client  # type: ignore
                 api_key = os.getenv("BINANCE_API_KEY", "").strip()
@@ -640,7 +847,6 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket.pop("positionSide", None)
         new_ticket["position_side"] = ""
     return new_ticket
-
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
 
@@ -812,7 +1018,7 @@ class ConfirmStore:
         cls._items.pop(str(ticket_id), None)
 
 def _require_not_expired(exp: Optional[Union[str,int,float]]) -> None:
-    if exp in (None, "", 0, "0", "0.0"): 
+    if exp in (None, "", 0, "0", "0.0"):
         return
     try:
         if int(float(exp)) < int(time.time()):
@@ -827,9 +1033,9 @@ def _maybe_protect_routes(request: Request) -> None:
 def _verify_http_signature(request: Request, raw: bytes, route_path: str = "") -> Tuple[bool, str]:
     if not HMAC_SECRET:
         return True, "no_secret"
-    ts_raw = (request.headers.get("X-Request-Timestamp") or request.headers.get("x-request-timestamp") or "").strip()
-    nonce_raw = (request.headers.get("X-Request-Nonce") or request.headers.get("x-request-nonce") or "").strip()
-    sig_hex = (request.headers.get("X-Signature-Hex") or request.headers.get("x-signature-hex") or "").strip()
+    ts_raw = _to_str_header(request.headers.get("X-Request-Timestamp") or request.headers.get("x-request-timestamp"))
+    nonce_raw = _to_str_header(request.headers.get("X-Request-Nonce") or request.headers.get("x-request-nonce"))
+    sig_hex = _to_str_header(request.headers.get("X-Signature-Hex") or request.headers.get("x-signature-hex"))
     if len(nonce_raw) < 16 or not ts_raw or not sig_hex:
         return False, "missing_headers"
     try:
@@ -842,9 +1048,10 @@ def _verify_http_signature(request: Request, raw: bytes, route_path: str = "") -
             return False, "timestamp_out_of_window"
     base = (f"{ts_raw}|{nonce_raw}").encode("utf-8") + b"\n" + raw
     want = _sign_hex(HMAC_SECRET, base)
-    if not hmac.compare_digest(sig_hex, want):
+    if not _ct_equal(sig_hex, want):
         return False, "bad_signature"
     return True, "ok"
+
 # ==================== Ticket/UI/Approve/Reject ====================
 @router.post("/ops/ticket")
 async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = None):
@@ -968,7 +1175,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
         notional = float(budget or 0.0)
         if notional <= 0 and px > 0 and qty > 0 and lev > 0:
             notional = float(px) * float(qty) / max(1.0, float(lev))
-        # Optional: slip estimator shims
         with suppress(Exception):
             from utils.slip_estimator import estimate_impact_slip_bps, set_last_slip_estimate_bps  # type: ignore
             est_bps = estimate_impact_slip_bps(spread_pct, atr_pct, notional, max_bps=float(os.getenv("IMPACT_SLIP_BPS_MAX", "25") or 25.0))
@@ -1040,7 +1246,7 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     if not API_BEARER_TOKEN:
         raise HTTPException(status_code=503, detail="Route protection enabled but API_BEARER_TOKEN missing")
     auth = request.headers.get("Authorization", "") if request else ""
-    if not (auth.startswith("Bearer ") and auth.split(" ", 1)[1].strip() == API_BEARER_TOKEN):
+    if not (auth.startswith("Bearer ") and _ct_equal(auth.split(" ", 1)[1].strip(), API_BEARER_TOKEN)):
         raise HTTPException(status_code=401, detail="Unauthorized")
     rec, _ = await _load_ticket(ticket_id)
     if not rec:
@@ -1205,19 +1411,17 @@ def _compute_indicators_from_klines(kl: List[List[Any]], period: int = 14) -> Di
     adx = sum(dx[-p:]) / float(p) if len(dx) >= p else (dx[-1] if dx else 0.0)
     return {"price": float(price), "atr": float(atr), "adx": float(adx)}
 
-# ============= Approve/Reject core ops (stubs to integrate with your executors) =============
+# ============= Approve/Reject core ops =============
 async def _approve_core(ticket_id: str) -> JSONResponse:
-    # Here you can fetch, execute trade via _execute_trade_armed or your pipeline
     rec, src = await _load_ticket(ticket_id)
     if not rec:
         raise HTTPException(status_code=404, detail="ticket_not_found")
     with suppress(Exception):
         ConfirmStore.decide(ticket_id, True)
     await _delete_ticket(ticket_id, src, final_status=True)
-    # Optionally execute armed trade here:
     with suppress(Exception):
         if os.getenv("APPROVE_EXECUTE_ARMED", "1").lower() in ("1","true","yes","on"):
-            _ = await _execute_trade_armed(rec)  # ignore result here; your notifier will report
+            _ = await _execute_trade_armed(rec)
     return JSONResponse({"ok": True, "approved": True, "ticket_id": ticket_id})
 
 async def _reject_core(ticket_id: str) -> JSONResponse:
@@ -1235,6 +1439,8 @@ async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...),
     if not _verify_signed_params(ticket_id, exp, sig, "/manage-once/signed"):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     sym = symbol.upper()
+
+    # 1) Delegate to smart manager (if exists)
     res = await _smart_manage_now(
         sym,
         offset_bps=int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", "5") or 5),
@@ -1242,6 +1448,40 @@ async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...),
         splits=[float(x) for x in (os.getenv("SMART_MANAGE_SPLITS") or "0.25,0.25,0.25,0.25").split(",") if x.strip()],
         atr_mult=float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None,
     )
+
+    # 2) Optional: native BE + ATR trailing one-shot
+    if os.getenv("TRADE_MANAGER_ENABLE", "1").lower() in ("1","true","yes","on"):
+        try:
+            from binance.client import Client  # type: ignore
+            api_key = os.getenv("BINANCE_API_KEY", "").strip()
+            api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
+            if api_key and api_sec:
+                cli = Client(api_key, api_sec)
+                _align_position_mode(cli)
+                s = sym if sym.endswith("USDT") else (sym + "USDT")
+                p = _fetch_single_position(cli, s)
+                if p:
+                    amt = float(p.get("positionAmt", "0"))
+                    side = "BUY" if amt > 0 else "SELL"
+                    entry = float(p.get("entryPrice", "0"))
+                    mark  = float(p.get("markPrice", entry or 0))
+                    period = int(os.getenv("MANAGER_ATR_PERIOD", "14"))
+                    mult   = float(os.getenv("MANAGER_ATR_MULT", "1.4"))
+                    kl = _get_klines_via_sdk(cli, s, interval="5m", limit=max(60, period+5))
+                    atr = _calc_atr_from_klines(kl, period=period) or 0.0
+                    be_bps = float(os.getenv("MANAGER_BE_OFFSET_BPS", "5.0"))
+                    be_price = _compute_be_price(side, entry, be_bps)
+                    trail_price = _trail_stop_from_mark(side, mark, atr or 0.0, mult)
+                    new_stop = _combine_be_trail(side, be_price, trail_price)
+                    placed = _place_or_replace_close_stop(cli, s, side, new_stop)
+                    res["manage_native"] = {"ok": True, "atr": atr, "be": be_price, "trail": trail_price, "stop": new_stop, "order": placed}
+                else:
+                    res["manage_native"] = {"ok": False, "reason": "no_position_for_symbol"}
+            else:
+                res["manage_native"] = {"ok": False, "reason": "binance_keys_missing"}
+        except Exception as e:
+            res["manage_native"] = {"ok": False, "error": f"{e}"}
+
     return JSONResponse({"ok": True, "result": res})
 
 # ============= Mount router =============
@@ -1293,7 +1533,6 @@ def _ensure_public_fallbacks() -> None:
 async def _resolve_binance_endpoints() -> None:
     pass
 async def _enforce_nonce_once(request: Request) -> None:
-    # optional: store nonce in Redis for anti-replay. No-op if REDIS missing.
     if not (aioredis and REDIS_URL and HMAC_SECRET):
         return
     try:
@@ -1339,6 +1578,7 @@ async def _on_startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False)
+
 
 
 
