@@ -200,6 +200,7 @@ def _allow_by_bearer_or_apikey(request: Request) -> None:
     if x_api_key and any(_ct_equal(x_api_key, t) for t in api_tokens if t):
         return
     raise HTTPException(status_code=401, detail="Unauthorized")
+
 # Redis helper
 _redis_cached = None
 async def _get_redis_cached():
@@ -388,6 +389,7 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
+
 # ==================== Execute trade helpers ====================
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
@@ -847,6 +849,211 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket.pop("positionSide", None)
         new_ticket["position_side"] = ""
     return new_ticket
+
+# ==================== OPS APPROVAL & EVENTS ROUTER ====================
+router = APIRouter(tags=["ops-approval"])
+
+@router.post("/webhook/whatever")
+async def webhook_whatever(request: Request):
+    body = await request.body()
+    headers = dict(request.headers)
+    try:
+        ok_first = await idem_for_request(body, headers, extra={"route": "/webhook/whatever"})
+    except Exception as e:
+        logger.warning("idem_for_request failed (permissive allow): %s", e)
+        ok_first = True
+    if not ok_first:
+        return JSONResponse({"ok": True, "skipped": True, "reason": "idem_duplicate"}, status_code=200)
+    return JSONResponse({"ok": True, "handled_once": True}, status_code=200)
+
+def _inc_counter_stub(name: str) -> None:
+    pass
+def inc_approvals_created() -> None:
+    _inc_counter_stub("approvals_created")
+
+def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
+    try:
+        if len(secret_hex_or_text) == 64:
+            key = bytes.fromhex(secret_hex_or_text)
+        else:
+            key = secret_hex_or_text.encode("utf-8")
+    except ValueError:
+        key = secret_hex_or_text.encode("utf-8")
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600, action: Optional[str] = None) -> str:
+    if not HMAC_SECRET:
+        if action in ("approve", "reject", "manage"):
+            raise RuntimeError("Signing secret missing; refusing to generate actionable link")
+        route = path if path else "/ops/ui/ticket"
+        sep = "&" if "?" in route else "?"
+        return f"{base}{route}{sep}ticket_id={ticket_id}"
+    exp = int(time.time()) + int(ttl_sec)
+    aud = (PUBLIC_HOST or "").rstrip("/")
+    to_sign = f"{aud}|{path}|{ticket_id}|{exp}|{NS}".encode("utf-8")
+    sig = _sign_hex(HMAC_SECRET, to_sign)
+    sep = "&" if "?" in path else "?"
+    return f"{base}{path}{sep}ticket_id={ticket_id}&exp={exp}&sig={sig}"
+
+def _verify_signed_params(ticket_id: str, exp: str, sig: str, path: str) -> bool:
+    if not (HMAC_SECRET and ticket_id and exp and sig):
+        return False
+    try:
+        exp_i = int(exp)
+        if exp_i < int(time.time()):
+            return False
+    except Exception:
+        return False
+    aud = (PUBLIC_HOST or "").rstrip("/")
+    expected = _sign_hex(HMAC_SECRET, f"{aud}|{path}|{ticket_id}|{exp}|{NS}".encode("utf-8"))
+    return hmac.compare_digest(expected, sig)
+
+def _md_html(s: str) -> str:
+    return (s or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
+
+def _rows_kv_html(t: Dict[str, Any]) -> str:
+    def cv(k, default="—"):
+        v = t.get(k, default)
+        return default if v in (None, "", []) else _md_html(str(v))
+    rows = []
+    for k in ("ticket_id","symbol","side","qty","leverage","position_side","budget","score",
+              "tp1","tp2","tp3","sl","eta_tp1_min","eta_tp2_min","eta_tp3_min",
+              "prob_overall_pct","prob_tp1_pct","prob_tp2_pct","prob_tp3_pct","tp_splits",
+              "expiry_ts","note"):
+        rows.append(
+            f"<tr><th style='text-align:left;padding:.35rem .6rem;background:#fafafa'>{k}</th>"
+            f"<td style='padding:.35rem .6rem'>{cv(k)}</td></tr>"
+        )
+    return "\n".join(rows)
+
+def _html(msg: str) -> HTMLResponse:
+    return HTMLResponse(
+        "<!doctype html><meta charset='utf-8'>"
+        "<body style='font-family:sans-serif;max-width:720px;margin:3rem auto;line-height:1.5'>"
+        f"<h2 style='margin:0 0 .5rem 0'>{msg}</h2>"
+        "<p style='color:#666'>אפשר לחזור חזרה לטלגרם.</p>"
+        "</body>"
+    )
+
+async def _load_ticket(ticket_id: str) -> Tuple[Optional[Dict[str, Any]], str]:
+    if aioredis and REDIS_URL:
+        try:
+            r = await _get_redis_cached()
+            if r:
+                raw = await r.get(f"{NS}:ticket:{ticket_id}")
+                if raw:
+                    obj = json.loads(raw)
+                    req = obj.get("req") or obj
+                    return dict(req), "redis"
+        except Exception as e:
+            logger.warning("load_ticket_redis_failed: %s", e)
+    if CONFIRMSTORE_ENABLE:
+        with suppress(Exception):
+            for it in ConfirmStore.pending():
+                if str(it.get("ticket_id")) == str(ticket_id):
+                    return dict(it.get("req") or it), "memory"
+    return None, "none"
+
+async def _delete_ticket(ticket_id: str, source: str, final_status: Optional[bool] = None) -> None:
+    event: Dict[str, Any] = {
+        "ts": time.time(),
+        "ticket_id": ticket_id,
+        "status": final_status,
+        "src": source,
+        "ns": NS,
+        "reason": ("expired" if final_status is None else ("approved" if final_status else "rejected")),
+    }
+    fetched_req: Optional[Dict[str, Any]] = None
+    if aioredis and REDIS_URL and source == "redis":
+        with suppress(Exception):
+            r = await _get_redis_cached()
+            if r:
+                raw = await r.get(f"{NS}:ticket:{ticket_id}")
+                if raw:
+                    obj = json.loads(raw)
+                    fetched_req = obj.get("req") or obj
+    if not fetched_req and source == "memory" and CONFIRMSTORE_ENABLE:
+        with suppress(Exception):
+            for it in ConfirmStore.pending():
+                if str(it.get("ticket_id")) == str(ticket_id):
+                    fetched_req = it.get("req") or it
+                    break
+    if fetched_req:
+        event["symbol"] = str(fetched_req.get("symbol", "")).upper()
+        event["side"] = str(fetched_req.get("side", "")).upper()
+        event["expiry_ts"] = fetched_req.get("expiry_ts")
+        event["note"] = fetched_req.get("note")
+        base = f"{ticket_id}:{event.get('symbol', '')}:{event.get('side', '')}"
+        event["idem"] = hashlib.md5(base.encode("utf-8")).hexdigest()[:10]
+    else:
+        event["symbol"] = ""
+        event["side"] = ""
+        event["idem"] = hashlib.md5(f"{ticket_id}".encode("utf-8")).hexdigest()[:10]
+    if aioredis and REDIS_URL:
+        with suppress(Exception):
+            r = await _get_redis_cached()
+            if r:
+                key_good = f"{NS}:expired_log"
+                key_bad = f"{NS}:expired_log_bad"
+                key = key_good if (event.get("symbol") and event.get("side")) else key_bad
+                await r.lpush(key, json.dumps(event, ensure_ascii=False, separators=(",", ":")))
+                await r.ltrim(key, 0, 2999)
+                await r.delete(f"{NS}:ticket:{ticket_id}")
+    with suppress(Exception):
+        ConfirmStore.remove(ticket_id)
+
+class ConfirmStore:
+    _items: Dict[str, Dict[str, Any]] = {}
+    @classmethod
+    def create(cls, req: Dict[str, Any]) -> None:
+        tid = str(req.get("ticket_id") or f"T_{int(time.time())}_{secrets.token_hex(3)}")
+        cls._items[tid] = {"ticket_id": tid, "req": dict(req), "ts": time.time(), "approved": None}
+    @classmethod
+    def decide(cls, ticket_id: str, approved: bool) -> None:
+        it = cls._items.get(str(ticket_id))
+        if it:
+            it["approved"] = bool(approved)
+    @classmethod
+    def pending(cls) -> List[Dict[str, Any]]:
+        return [v for v in cls._items.values() if v.get("approved") is None]
+    @classmethod
+    def remove(cls, ticket_id: str) -> None:
+        cls._items.pop(str(ticket_id), None)
+
+def _require_not_expired(exp: Optional[Union[str,int,float]]) -> None:
+    if exp in (None, "", 0, "0", "0.0"):
+        return
+    try:
+        if int(float(exp)) < int(time.time()):
+            raise HTTPException(status_code=401, detail="expired")
+    except Exception:
+        raise HTTPException(status_code=401, detail="exp_bad_format")
+
+def _maybe_protect_routes(request: Request) -> None:
+    _require_bearer(request)
+
+# Sign HTTP (fallback permissive if missing fields)
+def _verify_http_signature(request: Request, raw: bytes, route_path: str = "") -> Tuple[bool, str]:
+    if not HMAC_SECRET:
+        return True, "no_secret"
+    ts_raw = _to_str_header(request.headers.get("X-Request-Timestamp") or request.headers.get("x-request-timestamp"))
+    nonce_raw = _to_str_header(request.headers.get("X-Request-Nonce") or request.headers.get("x-request-nonce"))
+    sig_hex = _to_str_header(request.headers.get("X-Signature-Hex") or request.headers.get("x-signature-hex"))
+    if len(nonce_raw) < 16 or not ts_raw or not sig_hex:
+        return False, "missing_headers"
+    try:
+        ts_i = int(float(ts_raw))
+    except Exception:
+        return False, "timestamp_bad_format"
+    skew = int(os.getenv("SIG_TS_SKEW_SEC", "900") or 900)
+    if os.getenv("SIG_TS_ENFORCE", "1").lower() in ("1","true","yes","on"):
+        if abs(int(time.time()) - ts_i) > max(0, skew):
+            return False, "timestamp_out_of_window"
+    base = (f"{ts_raw}|{nonce_raw}").encode("utf-8") + b"\n" + raw
+    want = _sign_hex(HMAC_SECRET, base)
+    if not _ct_equal(sig_hex, want):
+        return False, "bad_signature"
+    return True, "ok"
 # ==================== OPS APPROVAL & EVENTS ROUTER ====================
 router = APIRouter(tags=["ops-approval"])
 
@@ -1578,9 +1785,6 @@ async def _on_startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False)
-
-
-
 
 
 
