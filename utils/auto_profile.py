@@ -134,3 +134,4 @@ def should_allow_trade(sym: str, *, beta: float = 1.0) -> Tuple[bool, str, str]:
     ok, rsn = correlation_guard(beta);     if not ok: return False, "correlation", rsn
     return True, "ok", "ok"
 
+
