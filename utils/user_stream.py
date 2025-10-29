@@ -219,13 +219,15 @@ async def _keepalive_loop(lk: str):
             await asyncio.sleep(int(os.getenv("LISTENKEY_KEEPALIVE_SEC", "1800")))
 
 def _is_reduce_only_tp(o: Dict[str, Any]) -> bool:
-    ty = str(o.get("o", "")).upper()
+    # Binance UDM userDataStream: orderType key is 'ot'
+    ty = str(o.get("ot", "")).upper()
     ro = str(o.get("R", "")).lower() in ("true", "1")
     st = str(o.get("X", "")).upper()
     return ty.startswith("TAKE_PROFIT") and ro and st in ("FILLED", "PARTIALLY_FILLED")
 
 def _is_sl_hit(o: Dict[str, Any]) -> bool:
-    ty = str(o.get("o", "")).upper()
+    # 'ot' – STOP/STOP_MARKET/TRAILING_STOP_MARKET
+    ty = str(o.get("ot", "")).upper()
     st = str(o.get("X", "")).upper()
     ro = str(o.get("R", "")).lower() in ("true", "1")
     return (ty in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET")) and ro and st in ("FILLED", "PARTIALLY_FILLED")
@@ -305,5 +307,4 @@ async def stop_user_stream_consumer():
         pass
     _keepalive_task = None
     logger.info({"event": "user_stream_stopped"})
-
 
