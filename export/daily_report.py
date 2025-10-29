@@ -35,3 +35,4 @@ def save_report_to_file(report: Dict[str, Any], path: str) -> None:
         json.dump(report, f, indent=2, ensure_ascii=False)
 
 
+
