@@ -494,6 +494,7 @@ def _calc_atr_from_klines(kl: List[List[Any]], period: int = 14) -> Optional[flo
 
 def _side_close_for(entry_side: str) -> str:
     return "SELL" if str(entry_side).upper() == "BUY" else "BUY"
+
 async def _ensure_native_tpsl_after_entry(
     ticket: Dict[str, Any],
     *,
@@ -582,7 +583,6 @@ async def _ensure_native_tpsl_after_entry(
         return out
     except Exception as e:
         return {"ok": False, "error": "native_tpsl_exception", "detail": f"{e}"}
-
 # --- one-shot BE + ATR trailing helpers ---
 def _fetch_single_position(cli, symbol: str) -> Optional[Dict[str, Any]]:
     with suppress(Exception):
@@ -1581,6 +1581,7 @@ async def _on_startup():
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False)
+
 
 
 
