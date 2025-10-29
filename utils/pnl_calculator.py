@@ -1,50 +1,45 @@
-# utils/pnl_calculator.py
 from __future__ import annotations
-from typing import List, Dict, Optional
-from utils.trade_state import Trade
+from typing import List, Dict, Optional, Any, Protocol
 
-def calculate_total_pnl(trades: List[Trade]) -> float:
-    return sum(t.realized_pnl for t in trades if isinstance(t.realized_pnl, (int, float)))
+class _TradeProto(Protocol):
+    realized_pnl: float
+    def to_dict(self) -> Dict[str, Any]: ...
 
-def calculate_win_rate(trades: List[Trade]) -> float:
-    wins = sum(1 for t in trades if t.realized_pnl > 0)
-    total = len(trades)
+def _pnl_of(t: Any) -> float:
+    # תמיכה ב־Trade או Dict
+    if hasattr(t, "realized_pnl"):
+        v = getattr(t, "realized_pnl")
+        try:
+            return float(v)
+        except Exception:
+            return 0.0
+    if isinstance(t, dict):
+        try:
+            return float(t.get("realized_pnl", t.get("pnl", 0.0)) or 0.0)
+        except Exception:
+            return 0.0
+    return 0.0
+
+def calculate_total_pnl(trades: List[Any]) -> float:
+    return sum(_pnl_of(t) for t in (trades or []))
+
+def calculate_win_rate(trades: List[Any]) -> float:
+    pnls = [_pnl_of(t) for t in (trades or [])]
+    wins = sum(1 for p in pnls if p > 0)
+    total = len(pnls)
     return round(100.0 * wins / total, 2) if total > 0 else 0.0
 
-def calculate_avg_pnl(trades: List[Trade]) -> float:
-    if not trades:
-        return 0.0
-    return round(sum(t.realized_pnl for t in trades) / len(trades), 2)
+def calculate_avg_pnl(trades: List[Any]) -> float:
+    pnls = [_pnl_of(t) for t in (trades or [])]
+    return round(sum(pnls) / len(pnls), 2) if pnls else 0.0
 
-def calculate_summary(trades: List[Trade]) -> Dict[str, float]:
+def calculate_summary(trades: List[Any]) -> Dict[str, float]:
     return {
         "total_pnl": calculate_total_pnl(trades),
         "win_rate_pct": calculate_win_rate(trades),
         "avg_pnl": calculate_avg_pnl(trades),
-        "num_trades": len(trades),
+        "num_trades": len(trades or []),
     }
 
-
-# export/daily_report.py
-from __future__ import annotations
-import datetime, json
-from typing import List, Dict, Any
-from utils.pnl_calculator import calculate_summary
-from utils.trade_state import Trade
-
-
-def generate_daily_report(trades: List[Trade]) -> Dict[str, Any]:
-    today = datetime.date.today().isoformat()
-    summary = calculate_summary(trades)
-    
-    return {
-        "date": today,
-        "summary": summary,
-        "trades": [t.to_dict() for t in trades],
-    }
-
-def save_report_to_file(report: Dict[str, Any], path: str) -> None:
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(report, f, indent=2, ensure_ascii=False)
 
 
