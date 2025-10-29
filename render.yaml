@@ -413,8 +413,8 @@ services:
         value: "0"
       - key: TELEGRAM_SEND_ENABLE
         value: "1"
-      - key: HTTP2_ENABLE
-        value: "1"
+      - key: HTTP2_ENABLED
+        value: "1"   # ← תואם ל-main.py (_http2_enabled_runtime)
 
       - key: EXECUTE_TRADES
         value: "1"
@@ -422,7 +422,7 @@ services:
         value: "1"
 
       - key: ORDERS_USE_OCO
-        value: "0"   # <-- שונה ל-0
+        value: "0"   # נשאר 0 לפי ההערה שלך
 
       - key: ORDER_ID_PREFIX
         value: "ALG"
@@ -482,7 +482,7 @@ services:
         value: "200"
 
       - key: NATIVE_TPSL_ENABLE
-        value: "0"   # <-- שונה ל-0
+        value: "0"   # נשאר 0
       - key: SL_MONOTONIC
         value: "1"
 
@@ -1128,5 +1128,12 @@ services:
         value: "45"
       - key: VAGGR_TIME_MIN_ROE_NEG
         value: "-0.35"
+
+      # ===== Alignment with main.py HTTP bases =====
+      - key: BIN_FUT_HTTP
+        value: "https://fapi.binance.com"
+      - key: BIN_SPOT_HTTP
+        value: "https://api.binance.com"
+
 
 
