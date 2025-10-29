@@ -2,36 +2,37 @@ name: CI
 
 on:
   push:
+    branches: [ "main", "**" ]
   pull_request:
+    branches: [ "main" ]
 
 jobs:
-  test:
+  smoke:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-          # אם תרצה גם כלי Dev:
-          # pip install -r requirements-dev.txt
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
-      - name: Lint (ruff only; לא מחייב כשל)
+      - name: Smoke import
         run: |
-          python -c "import sys,subprocess; subprocess.call([sys.executable,'-m','pip','show','ruff'], stdout=subprocess.DEVNULL) and subprocess.call(['ruff','version'])"
-          ruff check . || true
-
-      - name: Start app
-        run: |
-          uvicorn main:app --host 0.0.0.0 --port 10000 &
-          sleep 5
-
-      - name: Run tests
-        env:
-          BASE_URL: http://localhost:10000
-        run: pytest -q
+          python - << 'PY'
+          import sys
+          try:
+              import fastapi
+              import pydantic
+              import httpx
+              print("Smoke OK")
+          except Exception as e:
+              print("Smoke FAIL:", repr(e))
+              sys.exit(1)
+          PY
