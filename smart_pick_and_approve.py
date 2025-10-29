@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 # smart_pick_and_approve.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, json, hmac, hashlib, base64, time, secrets, http.client, urllib.parse, sys
 
@@ -7,7 +8,7 @@ G, R, N = "\033[32m", "\033[31m", "\033[0m"
 
 BASE_URL = os.getenv("BASE_URL", os.getenv("PUBLIC_HOST", "https://algogpt-prod.onrender.com")).rstrip("/")
 OPS_SIGN_SECRET = os.getenv("OPS_SIGN_SECRET") or os.getenv("WEBHOOK_HMAC_SECRET")
-CAP = int(os.getenv("PICK_CAP", "15"))  # כמה מועמדים למשוך ב-topk/now
+CAP = int(os.getenv("PICK_CAP", "15"))
 
 def _get_json(path: str):
     u = urllib.parse.urlparse(BASE_URL)
@@ -25,58 +26,47 @@ def _get_json(path: str):
         conn.close()
 
 def _listify(js):
-    if js is None:
-        return []
+    if js is None: return []
     if isinstance(js, dict):
         for k in ("results", "items", "topk", "data", "suggestions"):
             if k in js and isinstance(js[k], list):
                 return js[k]
-        # ייתכן שמדובר בפריט יחיד
         return [js] if js else []
-    if isinstance(js, list):
-        return js
+    if isinstance(js, list): return js
     return []
 
 def _score(x):
     for k in ("score", "quality", "quality_score", "qscore", "qs"):
         v = x.get(k)
-        try:
-            return float(v)
-        except Exception:
-            pass
+        try: return float(v)
+        except Exception: pass
     return -1.0
 
 def _ticket(x):
     for k in ("ticket_id", "ticket", "id"):
         v = x.get(k)
-        if isinstance(v, str) and v:
-            return v
+        if isinstance(v, str) and v: return v
     return None
 
 def _sym(x):
     for k in ("symbol", "sym", "pair"):
         v = x.get(k)
-        if isinstance(v, str):
-            return v.upper()
+        if isinstance(v, str): return v.upper()
     return "?"
 
 def _side(x):
     for k in ("side", "dir", "direction"):
         v = x.get(k)
-        if isinstance(v, str):
-            return v.upper()
+        if isinstance(v, str): return v.upper()
     return "?"
 
 def pick_best():
     for path in (f"/scan/public-topk?limit={CAP}", f"/scan/public-now?limit={CAP}", "/topk"):
-        js = _get_json(path)
-        arr = _listify(js)
-        if not arr:
-            continue
-        # סינון עדין לפיוצ'רס / זוגות USDT
-        arr = [a for a in arr if str(a.get("market", "futures")).lower().startswith("future") or "USDT" in str(a.get("symbol", "")).upper()]
-        if not arr:
-            continue
+        js = _get_json(path); arr = _listify(js)
+        if not arr: continue
+        arr = [a for a in arr if str(a.get("market", "futures")).lower().startswith("future")
+               or "USDT" in str(a.get("symbol", "")).upper()]
+        if not arr: continue
         best = max(arr, key=_score)
         return {
             "ticket_id": _ticket(best),
@@ -103,7 +93,6 @@ def approve_signed(ticket_id: str) -> bool:
     nonce = secrets.token_hex(16)
     digest_b64 = base64.b64encode(hashlib.sha256(body).digest()).decode("ascii")
 
-    # canonical string per your server contract
     req_target = f"post {path}"
     headers_list = "(request-target) host content-type x-request-nonce x-request-timestamp digest"
     sig_string = "\n".join([
