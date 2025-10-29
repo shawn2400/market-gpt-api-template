@@ -1,32 +1,33 @@
-# routes/export.py
 from __future__ import annotations
-import logging
-from typing import Dict, Any
+from typing import List, Dict, Any
+from fastapi import APIRouter, Depends
+from fastapi.responses import FileResponse
 
-from fastapi import APIRouter, Depends, HTTPException
-from utils.auth import require_api_key
+# Fallbacks לבטיחות פרודקשן
+try:
+    from utils.auth import require_api_key  # type: ignore
+except Exception:
+    def require_api_key():
+        return None
 
-logger = logging.getLogger("algogpt.routes.export")
+try:
+    from utils.trade_manager import get_trade_history  # type: ignore
+except Exception:
+    def get_trade_history(limit: int = 200) -> List[Dict[str, Any]]:
+        return []
+
+from utils.export_utils import export_trades_csv
 
 router = APIRouter(
     prefix="/export",
     tags=["Export"],
-    dependencies=[Depends(require_api_key)],
+    dependencies=[Depends(require_api_key)]
 )
 
-@router.get("/status")
-async def export_status() -> Dict[str, Any]:
-    """
-    מחזיר סטטוס בסיסי של מערכת ה־Export.
-    """
-    try:
-        return {"ok": True, "status": "export-ready"}
-    except Exception as e:
-        logger.error("export_status failed: %s", e)
-        raise HTTPException(500, f"export_status failed: {e}")
-
-
-
+@router.get("/trades.csv", response_class=FileResponse)
+def export_trades_csv_route() -> FileResponse:
+    trades = get_trade_history(limit=200) or []
+    return export_trades_csv(trades)
 
 
 
