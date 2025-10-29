@@ -1,0 +1,64 @@
+name: fix-loop
+on:
+  push:
+    branches:
+      - "fix/**"
+  workflow_dispatch: {}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install
+        run: |
+          if [ -f pyproject.toml ]; then
+            pip install -U pip
+            pip install -e .
+          elif [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          else
+            echo "no deps file"; fi
+      - name: Lint & Tests
+        run: |
+          python -m compileall .
+          pytest -q || exit 1
+
+  on-failure:
+    if: ${{ failure() }}
+    needs: [test]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect logs
+        id: logs
+        run: |
+          echo "FAILED_LOGS<<EOF" >> $GITHUB_OUTPUT
+          echo "Build or tests failed. Here are the last lines:" >> $GITHUB_OUTPUT
+          echo "----" >> $GITHUB_OUTPUT
+          tail -n 4000 $GITHUB_STEP_SUMMARY || true >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Send to FixBot
+        env:
+          FIXBOT_URL: ${{ secrets.FIXBOT_URL }}           # e.g., https://fixbot.your-domain/ci-callback
+          FIXBOT_TOKEN: ${{ secrets.FIXBOT_TOKEN }}       # אם תרצה Bearer משלך
+        run: |
+          PR_NUMBER=$(jq -r '.pull_requests[0].number' <<< '${{ toJson(github.event) }}')
+          if [ "$PR_NUMBER" = "null" ] || [ -z "$PR_NUMBER" ]; then
+            echo "No PR context; skipping."
+            exit 0
+          fi
+
+          # שליחה
+          curl -sS -X POST "$FIXBOT_URL" \
+            -H "Content-Type: application/json" \
+            -d @- <<EOF
+          {
+            "pr_number": $PR_NUMBER,
+            "failed_logs": "${{ steps.logs.outputs.FAILED_LOGS }}",
+            "iter_count": 1
+          }
+EOF
