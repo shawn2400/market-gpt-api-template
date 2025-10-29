@@ -1,20 +1,37 @@
-# export/daily_report.py
 from __future__ import annotations
-import pandas as pd
-from utils.pnl_summary import summarize_trades
-from utils.export_utils import save_json
-from datetime import datetime
-from typing import List, Dict, Any
+import datetime, json, os
 from pathlib import Path
+from typing import List, Dict, Any
 
-def generate_daily_report(trades: List[Dict[str, Any]], out_dir: str | Path = "static/reports") -> str:
-    df = summarize_trades(trades)
-    if df.empty:
-        raise ValueError("No trades to report")
+def _to_dict(t: Any) -> Dict[str, Any]:
+    if hasattr(t, "to_dict"):
+        try:
+            return t.to_dict()  # type: ignore
+        except Exception:
+            pass
+    if isinstance(t, dict):
+        return t
+    # best-effort
+    return {"repr": repr(t)}
 
-    date_str = datetime.utcnow().strftime("%Y-%m-%d")
-    report_path = Path(out_dir) / f"report_{date_str}.json"
-    save_json(df.to_dict(orient="records"), report_path)
-    return str(report_path)
+def generate_daily_report(trades: List[Any]) -> Dict[str, Any]:
+    today = datetime.date.today().isoformat()
+    # חישוב סיכום
+    try:
+        from utils.pnl_calculator import calculate_summary  # late import
+        summary = calculate_summary(trades)
+    except Exception:
+        summary = {}
+    return {
+        "date": today,
+        "summary": summary,
+        "trades": [_to_dict(t) for t in (trades or [])],
+    }
+
+def save_report_to_file(report: Dict[str, Any], path: str) -> None:
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with open(p, "w", encoding="utf-8") as f:
+        json.dump(report, f, indent=2, ensure_ascii=False)
 
 
