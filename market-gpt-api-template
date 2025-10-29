@@ -1,0 +1,99 @@
+# 1) ענף עבודה
+git checkout -b chore/hygiene-basics
+
+# 2) .gitignore (Python + venv + env + IDE)
+cat > .gitignore <<'EOF'
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+.build/
+dist/
+build/
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.dmypy.json
+
+.venv/
+venv/
+ENV/
+env/
+
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+.env
+.env.*
+*.key
+*.pem
+
+node_modules/
+EOF
+
+# 3) הוצאת venv מה-git (לא מוחק מקומית; רק מפסיק לעקוב)
+git rm -r --cached venv || true
+
+# 4) requirements.txt נקי (אפשר לשמור את הרשימה שלך אם תרצה — זו ליבה מינימלית)
+cat > requirements.txt <<'EOF'
+fastapi==0.111.0
+starlette==0.37.2
+uvicorn==0.30.6
+gunicorn==22.0.0
+pydantic==2.8.2
+pydantic-core==2.20.1
+python-multipart==0.0.9
+httpx[http2]==0.27.2
+EOF
+
+# 5) GitHub Actions - smoke CI
+mkdir -p .github/workflows
+cat > .github/workflows/ci.yml <<'EOF'
+name: CI
+on:
+  push:
+    branches: [ "main", "**" ]
+  pull_request:
+    branches: [ "main" ]
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - name: Smoke import
+        run: |
+          python - << 'PY'
+          import sys
+          try:
+              import fastapi, pydantic, httpx
+              print("Smoke OK")
+          except Exception as e:
+              print("Smoke FAIL:", repr(e))
+              sys.exit(1)
+          PY
+EOF
+
+# 6) קובץ עם שם חשוד (אם קיים): "main.py  ops-approval-web"
+if [ -f "main.py  ops-approval-web" ]; then
+  mkdir -p docs
+  git mv "main.py  ops-approval-web" docs/ops-approval-web.md
+fi
+
+# 7) Commit + Push + פתיחת PR
+git add -A
+git commit -m "chore(hygiene): add .gitignore, drop tracked venv, add requirements and CI"
+git push -u origin chore/hygiene-basics
