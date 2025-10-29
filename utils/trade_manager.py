@@ -293,7 +293,7 @@ async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> N
         for p in curr_positions or []:
             try:
                 sym = (p.get("symbol") or "").upper()
-                amt = float(p.get("positionAmt") or 0)
+                amt = float(p.get("positionAmt") or 0.0)
                 if sym and abs(amt) > 0:
                     curr_open[sym] = p
             except Exception:
@@ -654,7 +654,6 @@ async def _be_guard_tick():
             logger.info("[tm.be_guard] %s BE set", symbol)
         except Exception as e:
             logger.error("[tm.be_guard] error: %s", e)
-
 
 
 
