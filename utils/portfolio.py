@@ -17,7 +17,8 @@ class Portfolio:
     # ===============================
     def _save_history(self):
         try:
-            os.makedirs(os.path.dirname(TRADES_LOG_PATH), exist_ok=True)
+            base_dir = os.path.dirname(TRADES_LOG_PATH) or "."
+            os.makedirs(base_dir, exist_ok=True)
             with open(TRADES_LOG_PATH, "w", encoding="utf-8") as f:
                 json.dump(self.history, f, ensure_ascii=False, indent=2)
         except Exception as e:
@@ -77,11 +78,10 @@ class Portfolio:
         pos = self.positions.pop(symbol)
         entry = pos["entry"]
         side = pos["side"]
-        qty = pos["qty"]
         margin = pos["margin"]
         lev = pos["leverage"]
 
-        # PnL calculation
+        # PnL calculation (פשוט; ללא עמלות/דמי מימון)
         if side == "LONG":
             pnl = (close_price - entry) / entry * margin * lev
         else:
@@ -110,5 +110,6 @@ class Portfolio:
 
 # ✅ Singleton portfolio object
 portfolio = Portfolio(initial_balance=float(os.getenv("PORTFOLIO_BALANCE", 1000.0)))
+
 
 
