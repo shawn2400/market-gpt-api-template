@@ -10,11 +10,13 @@ from pydantic import BaseModel
 try:
     # Pydantic v2
     from pydantic import field_validator as _field_validator  # type: ignore
+
     def FIELD_VALIDATOR(*fields, **kwargs):
         return _field_validator(*fields, **kwargs)
 except Exception:
     # Pydantic v1
     from pydantic import validator as _validator  # type: ignore
+
     def FIELD_VALIDATOR(*fields, **kwargs):
         return _validator(*fields, **kwargs)
 
@@ -27,10 +29,14 @@ try:
         record_trade_request, record_trade_ok, record_trade_fail, record_trade_approval
     )
 except Exception:
-    def record_trade_request(flow: Optional[str] = None): pass
-    def record_trade_ok(flow: Optional[str] = None): pass
-    def record_trade_fail(flow: Optional[str] = None): pass
-    def record_trade_approval(action: str, ok: bool): pass
+    def record_trade_request(flow: Optional[str] = None):  # type: ignore
+        pass
+    def record_trade_ok(flow: Optional[str] = None):  # type: ignore
+        pass
+    def record_trade_fail(flow: Optional[str] = None):  # type: ignore
+        pass
+    def record_trade_approval(action: str, ok: bool):  # type: ignore
+        pass
 
 # --------- ConfirmStore (fallbacks) ----------
 try:
@@ -41,9 +47,12 @@ except Exception:
     except Exception:
         class ConfirmStore:  # type: ignore
             _P: Dict[str, Dict[str, Any]] = {}
+
             @classmethod
             def pending(cls) -> List[Dict[str, Any]]:
+                # החזרה של כל ה־tickets החיים (ללא TTL אמיתי בפולבק)
                 return list(cls._P.values())
+
             @classmethod
             def create(cls, payload: Dict[str, Any]) -> str:
                 tid = payload.get("ticket_id") or f"TKT-{int(time.time()*1000)}"
@@ -52,9 +61,11 @@ except Exception:
                 payload.setdefault("ttl_sec", int(os.getenv("OPS_TICKET_TTL_SEC", "1800")))
                 cls._P[tid] = payload
                 return tid
+
             @classmethod
             def get(cls, ticket_id: str) -> Optional[Dict[str, Any]]:
                 return cls._P.get(ticket_id)
+
             @classmethod
             def decide(cls, ticket_id: str, approved: bool) -> Dict[str, Any]:
                 it = cls._P.pop(ticket_id, None)
@@ -75,21 +86,23 @@ try:
     from utils.order_ids import build_client_order_id  # type: ignore
 except Exception:
     _SAFE = re.compile(r'[^A-Za-z0-9._:/-]')
+
     def build_client_order_id(symbol: str, side: str, role: str = "ENTRY") -> str:  # type: ignore
         pref = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
-        ts = int(time.time()*1000)
+        ts = int(time.time() * 1000)
         raw = f"{pref}-{str(symbol).upper()}-{str(side).upper()}-{str(role).upper()}-{ts}"
         s = _SAFE.sub("_", raw)
-        if len(s) <= 36: return s
+        if len(s) <= 36:
+            return s
         import hashlib
         h = hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
-        return f"{s[:36-(len(h)+1)]}_{h}"
+        return f"{s[:36 - (len(h) + 1)]}_{h}"
 
 # --------- helpers ----------
 def _hedge_mode_enabled() -> bool:
-    if os.getenv("POSITION_MODE_OVERRIDE","").strip().lower() in ("hedge","hedged"):
+    if os.getenv("POSITION_MODE_OVERRIDE", "").strip().lower() in ("hedge", "hedged"):
         return True
-    if os.getenv("BINANCE_FORCE_HEDGE_MODE","").strip().lower() in ("1","true","yes","on"):
+    if os.getenv("BINANCE_FORCE_HEDGE_MODE", "").strip().lower() in ("1", "true", "yes", "on"):
         return True
     return False
 
@@ -98,14 +111,19 @@ def _is_code_4061(err: Exception | str) -> bool:
     return "code=-4061" in s or "position side does not match" in s.lower()
 
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    מסנן kwargs בהתאם לחתימת הפונקציה כדי למנוע TypeError (למשל 'unexpected keyword argument "quantity"').
+    """
     try:
         sig = inspect.signature(fn)
         allowed = set(sig.parameters.keys())
         return {k: v for k, v in kwargs.items() if k in allowed}
     except Exception:
-        bad = {"tp_kind","sl_kind","entry_kind","entry_offset","tp_offset","sl_offset"}
+        # פולבק: הסר ידועים בעייתיים
+        bad = {"tp_kind", "sl_kind", "entry_kind", "entry_offset", "tp_offset", "sl_offset"}
         return {k: v for k, v in kwargs.items() if k not in bad}
 
+# --------- execution paths ----------
 async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
     # fast-path דרך מתאם פנימי אם זמין
     try:
@@ -118,19 +136,20 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
         return {"ok": False, "error": "binance_client_unavailable"}
 
     try:
-        api_key = os.getenv("BINANCE_API_KEY","").strip()
-        api_sec = os.getenv("BINANCE_API_SECRET","").strip()
+        api_key = os.getenv("BINANCE_API_KEY", "").strip()
+        api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
         if not (api_key and api_sec):
             return {"ok": False, "error": "binance_keys_missing"}
         client = Client(api_key, api_sec)
 
-        symbol = str(ticket.get("symbol","")).upper()
-        side = str(ticket.get("side","")).upper()
+        symbol = str(ticket.get("symbol", "")).upper()
+        side = str(ticket.get("side", "")).upper()
         qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
         leverage = int(ticket.get("leverage") or 0)
-        if not(symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
+        if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
 
+        # עדכון מינוף (best-effort)
         try:
             client.futures_change_leverage(symbol=symbol, leverage=leverage)
         except Exception as e:
@@ -159,7 +178,7 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
             if not _is_code_4061(e1):
                 logger.error("futures_create_order failed: %s", e1)
                 return {"ok": False, "error": "order_failed", "detail": str(e1)}
-            # ‎-4061: נסה בלי/עם הצד ההפוך
+            # ‎-4061: נסה ללא/עם הצד ההפוך
             try:
                 if "positionSide" in attempt_order:
                     retry_kwargs = dict(base_kwargs)
@@ -170,12 +189,18 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
                 return {"ok": True, "exchange": "binance_futures", "order": order, "retry": True}
             except Exception as e2:
                 logger.error("futures_create_order after 4061 retry failed: %s", e2)
-                return {"ok": False, "error": "order_failed", "detail": str(e2), "first_error": str(e1)}
+                return {
+                    "ok": False,
+                    "error": "order_failed",
+                    "detail": str(e2),
+                    "first_error": str(e1),
+                }
     except Exception as e:
         logger.error("order_execute_direct_failed: %s", e)
         return {"ok": False, "error": "order_failed", "detail": str(e)}
 
 async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
+    # העדפת מתאם חי (עם ניהול TP/SL וכו')
     try:
         try:
             from utils.trade_executor import execute_trade_live  # type: ignore
@@ -184,17 +209,19 @@ async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         return {"ok": False, "error": "execute_trade_live_missing", "detail": str(e)}
 
-    symbol = str(ticket.get("symbol","")).upper()
-    side = str(ticket.get("side","")).upper()
+    symbol = str(ticket.get("symbol", "")).upper()
+    side = str(ticket.get("side", "")).upper()
     qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
     leverage = int(ticket.get("leverage") or ticket.get("lev") or 0)
-    pos_side = str(ticket.get("position_side") or ticket.get("positionSide") or ("LONG" if side=="BUY" else "SHORT")).upper()
+    pos_side = str(
+        ticket.get("position_side") or ticket.get("positionSide") or ("LONG" if side == "BUY" else "SHORT")
+    ).upper()
 
     tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
-    tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0","0.0") and float(x) > 0]
+    tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0", "0.0") and float(x) > 0]
     sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
 
-    if not (symbol and side in ("BUY","SELL") and qty > 0 and leverage > 0):
+    if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
         return {"ok": False, "error": "bad_ticket_params"}
 
     base_kwargs: Dict[str, Any] = dict(
@@ -203,7 +230,7 @@ async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
         budget=None,
         leverage=leverage,
         dry_run=False,
-        quantity=qty,
+        quantity=qty,  # אם הפונקציה לא תומכת — יוסר ע"י _filter_kwargs_for_callable
         entry=None,
         tp_targets=tp_targets or None,
         sl_targets=sl_targets or None,
@@ -227,6 +254,7 @@ def _choose_flow(req: "TradeRequest") -> str:
         return "HYBRID"
     return "MARKET"
 
+# --------- Schemas ----------
 class TradeRequest(BaseModel):
     symbol: str
     side: str
@@ -247,29 +275,34 @@ class TradeRequest(BaseModel):
     @classmethod
     def _sym_upper(cls, v: str) -> str:
         v = (v or "").strip().upper()
-        if not v: raise ValueError("symbol required")
+        if not v:
+            raise ValueError("symbol required")
         return v
 
     @FIELD_VALIDATOR("side")
     @classmethod
     def _side_upper(cls, v: str) -> str:
         v = (v or "").strip().upper()
-        if v not in ("BUY", "SELL"): raise ValueError("side must be BUY/SELL")
+        if v not in ("BUY", "SELL"):
+            raise ValueError("side must be BUY/SELL")
         return v
 
     @FIELD_VALIDATOR("quantity")
     @classmethod
     def _qty_pos(cls, v: float) -> float:
-        if v is None or float(v) <= 0: raise ValueError("quantity must be > 0")
+        if v is None or float(v) <= 0:
+            raise ValueError("quantity must be > 0")
         return float(v)
 
     @FIELD_VALIDATOR("leverage")
     @classmethod
     def _lev_pos(cls, v: int) -> int:
         iv = int(v or 0)
-        if iv <= 0: raise ValueError("leverage must be > 0")
+        if iv <= 0:
+            raise ValueError("leverage must be > 0")
         return iv
 
+# --------- Routes ----------
 @router.post("/trade/execute")
 async def trade_execute(
     request: Request,
@@ -279,33 +312,41 @@ async def trade_execute(
     flow = _choose_flow(req)
     record_trade_request(flow)
 
-    force_approve = os.getenv("REQUIRE_TELEGRAM_APPROVAL","0").lower() in ("1","true","yes","on")
+    force_approve = os.getenv("REQUIRE_TELEGRAM_APPROVAL", "0").lower() in ("1", "true", "yes", "on")
     need_approval = bool(req.confirm_first or force_approve)
 
     if need_approval:
         try:
             import httpx
-            public_host = os.getenv("PUBLIC_HOST","").strip()
+            public_host = os.getenv("PUBLIC_HOST", "").strip()
             base = public_host if public_host else str(request.base_url).rstrip("/")
             payload = {
-                "symbol": req.symbol, "side": req.side, "qty": req.quantity, "leverage": req.leverage,
-                "tp1": req.tp1, "tp2": req.tp2, "tp3": req.tp3, "sl": req.sl,
+                "symbol": req.symbol,
+                "side": req.side,
+                "qty": req.quantity,
+                "leverage": req.leverage,
+                "tp1": req.tp1,
+                "tp2": req.tp2,
+                "tp3": req.tp3,
+                "sl": req.sl,
                 "tp_splits": req.tp_splits,
-                "position_side": (req.position_side or ("LONG" if req.side=="BUY" else "SHORT")).upper(),
+                "position_side": (req.position_side or ("LONG" if req.side == "BUY" else "SHORT")).upper(),
                 "note": req.note or "",
             }
-            headers: Dict[str,str] = {}
+            headers: Dict[str, str] = {}
             api_key = (
                 os.getenv("API_TOKEN")
                 or os.getenv("PRIMARY_API_TOKEN")
                 or os.getenv("API_BEARER_TOKEN")
                 or os.getenv("ALGOGPT_API_TOKEN")
             )
-            if api_key: headers["X-API-Key"] = api_key.strip()
+            if api_key:
+                headers["X-API-Key"] = api_key.strip()
             async with httpx.AsyncClient(timeout=12.0) as cli:
                 r = await cli.post(f"{base.rstrip('/')}/ops/ticket", json=payload, headers=headers)
             data = r.json()
-            if not data.get("ok"): raise RuntimeError(f"ops.ticket failed: {data}")
+            if not data.get("ok"):
+                raise RuntimeError(f"ops.ticket failed: {data}")
             return {
                 "ok": False,
                 "error": "pending_approval",
@@ -315,7 +356,7 @@ async def trade_execute(
                     "approve_url": data.get("approve_url"),
                     "reject_url": data.get("reject_url"),
                     "preview_url": data.get("preview_url"),
-                    "ttl_sec": int(os.getenv("OPS_TICKET_TTL_SEC","1800")),
+                    "ttl_sec": int(os.getenv("OPS_TICKET_TTL_SEC", "1800")),
                 },
             }
         except Exception as e:
@@ -324,13 +365,21 @@ async def trade_execute(
             raise HTTPException(status_code=502, detail=f"open_ops_ticket_failed: {e}")
 
     ticket_exec = dict(
-        symbol=req.symbol, side=req.side, qty=req.quantity, leverage=req.leverage,
-        note=req.note or "", tp1=req.tp1, tp2=req.tp2, tp3=req.tp3, sl=req.sl,
-        tp_splits=req.tp_splits, position_side=(req.position_side or ("LONG" if req.side=="BUY" else "SHORT")).upper(),
+        symbol=req.symbol,
+        side=req.side,
+        qty=req.quantity,
+        leverage=req.leverage,
+        note=req.note or "",
+        tp1=req.tp1,
+        tp2=req.tp2,
+        tp3=req.tp3,
+        sl=req.sl,
+        tp_splits=req.tp_splits,
+        position_side=(req.position_side or ("LONG" if req.side == "BUY" else "SHORT")).upper(),
         reduce_only=bool(req.reduce_only),
     )
 
-    res = await (_execute_trade_direct(ticket_exec) if flow=="MARKET" else _execute_trade_hybrid(ticket_exec))
+    res = await (_execute_trade_direct(ticket_exec) if flow == "MARKET" else _execute_trade_hybrid(ticket_exec))
     ok = bool(res.get("ok"))
     (record_trade_ok if ok else record_trade_fail)(flow)
     return {"ok": ok, "flow": flow, "result": res}
@@ -341,7 +390,8 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
     try:
         for t in (ConfirmStore.pending() or []):
             if str(t.get("idem") or t.get("ticket_id")) == str(id):
-                it = t; break
+                it = t
+                break
     except Exception:
         try:
             it = ConfirmStore.get(id)  # type: ignore
@@ -352,8 +402,8 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
         record_trade_approval("approve", False)
         return {"ok": False, "error": "not_found"}
 
-    flow = "HYBRID" if any(it.get(k) for k in ("tp1","tp2","tp3","sl")) else "MARKET"
-    res = await (_execute_trade_hybrid(it) if flow=="HYBRID" else _execute_trade_direct(it))
+    flow = "HYBRID" if any(it.get(k) for k in ("tp1", "tp2", "tp3", "sl")) else "MARKET"
+    res = await (_execute_trade_hybrid(it) if flow == "HYBRID" else _execute_trade_direct(it))
     ok = bool(res.get("ok"))
 
     try:
