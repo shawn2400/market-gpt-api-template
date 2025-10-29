@@ -1,12 +1,12 @@
 # /app/routes/trade.py
 from __future__ import annotations
-import os, time, logging, inspect, re, asyncio
+import os, time, logging, inspect, re, asyncio, json, hashlib
 from typing import Any, Dict, Optional, List, Callable
 
 from fastapi import APIRouter, Header, HTTPException, Request, Body, Query, Depends
 from pydantic import BaseModel
 
-# --- Pydantic v1/v2 compatibility for validators ---
+# --- Pydantic v1/v2 compatibility for validators & config ---
 try:
     # Pydantic v2
     from pydantic import field_validator as _field_validator  # type: ignore
@@ -17,6 +17,8 @@ try:
 
     def ROOT_VALIDATOR(**kwargs):
         return _model_validator(mode="after")
+
+    _EXTRA_IGNORE_CONFIG = {"extra": "ignore"}  # ignore unknown fields in JSON
 except Exception:
     # Pydantic v1
     from pydantic import validator as _validator  # type: ignore
@@ -28,7 +30,11 @@ except Exception:
     def ROOT_VALIDATOR(**kwargs):
         return _root_validator(**kwargs)
 
-# --- Router + Auth dependency ---
+    class _Cfg:  # pydantic v1 style
+        extra = "ignore"
+    _EXTRA_IGNORE_CONFIG = {"Config": _Cfg}
+
+# --- Router + Auth dependency (optional) ---
 try:
     from utils.auth import require_api_key
     _router_deps = [Depends(require_api_key)]
@@ -108,7 +114,6 @@ except Exception:
         s = _SAFE.sub("_", raw)
         if len(s) <= 36:
             return s
-        import hashlib
         h = hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
         return f"{s[:36 - (len(h) + 1)]}_{h}"
 
@@ -262,7 +267,6 @@ async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
         try:
             return await exec_live_async(base_kwargs)
         except TypeError:
-            # אולי exec_live_async מקבל kwargs אחרים: נסנן
             clean = _filter_kwargs_for_callable(exec_live_async, base_kwargs)
             return await exec_live_async(clean)
 
@@ -287,15 +291,24 @@ class TradeRequest(BaseModel):
     quantity: Optional[float] = None
     leverage: int
     budget_usd: Optional[float] = None
-    confirm_first: bool = False
+    confirm_first: bool = False              # legacy flag to force approval
+    require_approval: bool = False           # explicit flag; default False => no ops ticket
     note: Optional[str] = None
     tp1: Optional[float] = None
     tp2: Optional[float] = None
     tp3: Optional[float] = None
     sl: Optional[float] = None
     tp_splits: Optional[List[float]] = None
-    position_side: Optional[str] = None
+    position_side: Optional[str] = None      # "LONG"/"SHORT"
+    positionSide: Optional[str] = None       # alias from clients
     reduce_only: Optional[bool] = False
+
+    # allow extra keys (e.g. "approval", "tp_sl_mode", etc.) without failing
+    # Pydantic v2: model_config; v1: Config class above
+    if "extra" in _EXTRA_IGNORE_CONFIG:
+        model_config = _EXTRA_IGNORE_CONFIG  # type: ignore[attr-defined]
+    else:
+        Config = _EXTRA_IGNORE_CONFIG["Config"]  # type: ignore[misc, assignment]
 
     @FIELD_VALIDATOR("symbol")
     @classmethod
@@ -322,7 +335,14 @@ class TradeRequest(BaseModel):
         return iv
 
     @ROOT_VALIDATOR()
-    def _one_of_qty_or_budget(self):  # type: ignore[no-redef]
+    def _normalize_and_require_qty_or_budget(self):  # type: ignore[no-redef]
+        # Normalize position_side alias
+        ps = getattr(self, "position_side", None)
+        ps_alias = getattr(self, "positionSide", None)
+        if not ps and ps_alias:
+            self.position_side = ps_alias
+
+        # Require either positive quantity or positive budget
         q = getattr(self, "quantity", None)
         b = getattr(self, "budget_usd", None)
         if (q is None or float(q) <= 0) and (b is None or float(b) <= 0):
@@ -339,9 +359,12 @@ async def trade_execute(
     flow = _choose_flow(req)
     record_trade_request(flow)
 
-    force_approve = os.getenv("REQUIRE_TELEGRAM_APPROVAL", "0").lower() in ("1", "true", "yes", "on")
-    need_approval = bool(req.confirm_first or force_approve)
+    # Global toggle may force approvals
+    force_approve_env = os.getenv("REQUIRE_TELEGRAM_APPROVAL", "0").lower() in ("1", "true", "yes", "on")
+    # Respect explicit require_approval or legacy confirm_first
+    need_approval = bool(req.require_approval or req.confirm_first or force_approve_env)
 
+    # === Approval Gate ===
     if need_approval:
         try:
             import httpx
@@ -374,7 +397,12 @@ async def trade_execute(
                 headers["X-Idempotency-Key"] = x_idempotency_key
             async with httpx.AsyncClient(timeout=12.0) as cli:
                 r = await cli.post(f"{base.rstrip('/')}/ops/ticket", json=payload, headers=headers)
-            data = r.json()
+            # defensive JSON parse
+            try:
+                data = r.json()
+            except Exception as e:
+                logger.warning("ops_ticket_non_json_or_empty: %s", e)
+                data = {"ok": False, "error": "non_json_ticket"}
             if not data.get("ok"):
                 raise RuntimeError(f"ops.ticket failed: {data}")
             return {
@@ -392,9 +420,12 @@ async def trade_execute(
         except Exception as e:
             logger.error("open_ops_ticket_failed: %s", e)
             record_trade_fail(flow)
+            # Preserve behavior ONLY when approval was actually required
             raise HTTPException(status_code=502, detail=f"open_ops_ticket_failed: {e}")
 
+    # === No approval path ===
     if flow == "MARKET" and (req.quantity is None or float(req.quantity) <= 0):
+        # if MARKET but no qty -> promote to HYBRID (budget-based execution)
         flow = "HYBRID"
 
     ticket_exec = dict(
@@ -465,7 +496,6 @@ async def trade_reject(id: str = Query(..., description="idempotency key or tick
     record_trade_approval("reject", ok)
     record_trade_fail("HYBRID")
     return {"ok": True, "rejected": True, "id": id}
-
 
 
 
