@@ -88,7 +88,7 @@ async def _get_json(url: str, params: Dict[str, Any] | None = None) -> Any:
         return r.json()
 
 # ===================== Binance data =====================
-async def _fetch_klines(symbol: string, interval: str = "15m", limit: int = 300) -> pd.DataFrame:
+async def _fetch_klines(symbol: str, interval: str = "15m", limit: int = 300) -> pd.DataFrame:
     sym = str(symbol).strip().upper()
     if not sym.endswith("USDT"):
         sym += "USDT"
@@ -142,8 +142,8 @@ def _atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) ->
     return tr.ewm(alpha=1/period, adjust=False).mean()
 
 def _macd(close: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9) -> Tuple[pd.Series,pd.Series,pd.Series]:
-    ema_fast = _ema(close, fast)
-    ema_slow = _ema(close, slow)
+    ema_fast = _ema(close, 12)
+    ema_slow = _ema(close, 26)
     macd_line = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
     hist = macd_line - signal_line
