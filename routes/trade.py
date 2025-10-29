@@ -1,9 +1,9 @@
 # /app/routes/trade.py
 from __future__ import annotations
-import os, time, logging, inspect, re
+import os, time, logging, inspect, re, asyncio
 from typing import Any, Dict, Optional, List, Callable
 
-from fastapi import APIRouter, Header, HTTPException, Request, Body, Query
+from fastapi import APIRouter, Header, HTTPException, Request, Body, Query, Depends
 from pydantic import BaseModel
 
 # --- Pydantic v1/v2 compatibility for validators ---
@@ -28,8 +28,15 @@ except Exception:
     def ROOT_VALIDATOR(**kwargs):
         return _root_validator(**kwargs)
 
+# --- Router + Auth dependency ---
+try:
+    from utils.auth import require_api_key
+    _router_deps = [Depends(require_api_key)]
+except Exception:
+    _router_deps = []
+
 logger = logging.getLogger("algogpt.trade")
-router = APIRouter(tags=["trade"])  # paths below are absolute (e.g., "/trade/execute")
+router = APIRouter(prefix="/trade", tags=["trade"], dependencies=_router_deps)
 
 # ---------- metrics wiring (optional) ----------
 try:
@@ -58,7 +65,6 @@ except Exception:
 
             @classmethod
             def pending(cls) -> List[Dict[str, Any]]:
-                # החזרה של כל ה־tickets החיים (ללא TTL אמיתי בפולבק)
                 return list(cls._P.values())
 
             @classmethod
@@ -119,15 +125,11 @@ def _is_code_4061(err: Exception | str) -> bool:
     return "code=-4061" in s or "position side does not match" in s.lower()
 
 def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    מסנן kwargs בהתאם לחתימת הפונקציה כדי למנוע TypeError (למשל 'unexpected keyword argument "quantity"').
-    """
     try:
         sig = inspect.signature(fn)
         allowed = set(sig.parameters.keys())
         return {k: v for k, v in kwargs.items() if k in allowed and v is not None}
     except Exception:
-        # פולבק: הסר ידועים בעייתיים
         bad = {"tp_kind", "sl_kind", "entry_kind", "entry_offset", "tp_offset", "sl_offset"}
         return {k: v for k, v in kwargs.items() if k not in bad and v is not None}
 
@@ -168,7 +170,6 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
             "side": side,
             "type": "MARKET",
             "quantity": qty,
-            # ✅ COID חוקי (<=36) עם סניטיזציה
             "newClientOrderId": build_client_order_id(symbol, side, role="ENTRY"),
         }
 
@@ -186,7 +187,6 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
             if not _is_code_4061(e1):
                 logger.error("futures_create_order failed: %s", e1)
                 return {"ok": False, "error": "order_failed", "detail": str(e1)}
-            # ‎-4061: נסה ללא/עם הצד ההפוך
             try:
                 if "positionSide" in attempt_order:
                     retry_kwargs = dict(base_kwargs)
@@ -209,13 +209,21 @@ async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
 async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
     # העדפת מתאם חי (עם ניהול TP/SL וכו')
+    exec_live = None
+    exec_live_async = None
     try:
-        try:
-            from utils.trade_executor import execute_trade_live  # type: ignore
-        except Exception:
-            from app.trade_executor import execute_trade_live  # type: ignore
-    except Exception as e:
-        return {"ok": False, "error": "execute_trade_live_missing", "detail": str(e)}
+        from utils.trade_executor import execute_trade_live as _live  # type: ignore
+        exec_live = _live
+    except Exception:
+        pass
+    try:
+        from utils.trade_executor import execute_trade_live_async as _live_async  # type: ignore
+        exec_live_async = _live_async
+    except Exception:
+        pass
+
+    if exec_live_async is None and exec_live is None:
+        return {"ok": False, "error": "execute_trade_live_missing"}
 
     symbol = str(ticket.get("symbol", "")).upper()
     side = str(ticket.get("side", "")).upper()
@@ -231,7 +239,6 @@ async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
 
     if not (symbol and side in ("BUY", "SELL") and leverage > 0):
         return {"ok": False, "error": "bad_ticket_params"}
-    # ב-hybrid מותר qty=None אם נמסר budget (ה־execute_trade_live יחשב כמות)
 
     base_kwargs: Dict[str, Any] = dict(
         symbol=symbol,
@@ -250,16 +257,23 @@ async def _execute_trade_hybrid(ticket: Dict[str, Any]) -> Dict[str, Any]:
         position_side=pos_side,
         reduce_only=bool(ticket.get("reduce_only", False)),
     )
-    clean = _filter_kwargs_for_callable(execute_trade_live, base_kwargs)
 
-    try:
-        res = await execute_trade_live(**clean)
-        return res
-    except Exception as e:
-        return {"ok": False, "error": "armed_execute_failed", "detail": str(e)}
+    if exec_live_async is not None:
+        try:
+            return await exec_live_async(base_kwargs)
+        except TypeError:
+            # אולי exec_live_async מקבל kwargs אחרים: נסנן
+            clean = _filter_kwargs_for_callable(exec_live_async, base_kwargs)
+            return await exec_live_async(clean)
+
+    # fallback: exec_live sync
+    clean = _filter_kwargs_for_callable(exec_live, base_kwargs)  # type: ignore[arg-type]
+    if inspect.iscoroutinefunction(exec_live):  # type: ignore[arg-type]
+        return await exec_live(**clean)  # type: ignore[misc]
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, lambda: exec_live(**clean))  # type: ignore[misc]
 
 def _choose_flow(req: "TradeRequest") -> str:
-    # אם סופקו TP/SL או אם אין quantity (ורק budget) — נעדיף HYBRID
     if any(x is not None for x in (req.tp1, req.tp2, req.tp3, req.sl)):
         return "HYBRID"
     if (req.quantity is None) and (req.budget_usd is not None):
@@ -316,7 +330,7 @@ class TradeRequest(BaseModel):
         return self
 
 # --------- Routes ----------
-@router.post("/trade/execute")
+@router.post("/execute")
 async def trade_execute(
     request: Request,
     req: TradeRequest = Body(...),
@@ -380,8 +394,6 @@ async def trade_execute(
             record_trade_fail(flow)
             raise HTTPException(status_code=502, detail=f"open_ops_ticket_failed: {e}")
 
-    # ללא צורך באישור — מבצעים מיד לפי ה-flow
-    # אם ה-flow MARKET אבל אין quantity -> נמסור ל-HYBRID (שיתמוך ב-budget)
     if flow == "MARKET" and (req.quantity is None or float(req.quantity) <= 0):
         flow = "HYBRID"
 
@@ -402,7 +414,6 @@ async def trade_execute(
     )
 
     if flow == "MARKET":
-        # עדיין נדרשת כמות
         if ticket_exec.get("qty") is None or float(ticket_exec["qty"]) <= 0:
             record_trade_fail(flow)
             raise HTTPException(status_code=400, detail="quantity required for MARKET flow")
@@ -412,7 +423,7 @@ async def trade_execute(
     (record_trade_ok if ok else record_trade_fail)(flow)
     return {"ok": ok, "flow": flow, "result": res}
 
-@router.get("/trade/approve")
+@router.get("/approve")
 async def trade_approve(id: str = Query(..., description="idempotency key or ticket_id")):
     it: Optional[Dict[str, Any]] = None
     try:
@@ -439,30 +450,21 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
     except Exception:
         pass
 
-    # metrics
     record_trade_approval("approve", ok)
     (record_trade_ok if ok else record_trade_fail)(flow)
 
     return {"ok": ok, "flow": flow, "result": res}
 
-@router.get("/trade/reject")
+@router.get("/reject")
 async def trade_reject(id: str = Query(..., description="idempotency key or ticket_id")):
     try:
         ConfirmStore.decide(str(id), approved=False)
         ok = True
     except Exception:
         ok = False
-    # approval-plane metric
     record_trade_approval("reject", ok)
-    # נסמן כ-fail בהקשר ביצוע (לא התרחש ביצוע)
     record_trade_fail("HYBRID")
     return {"ok": True, "rejected": True, "id": id}
-
-
-
-
-
-
 
 
 
