@@ -66,6 +66,7 @@ try:
     )
     # Stage 6 metrics:
     from utils.metrics_tracker import inc_time_stop_keep, inc_time_stop_move_be, inc_struct_sl_applied  # type: ignore
+    from utils.metrics_tracker import observe_time_to_tp1  # type: ignore
 except Exception:
     def inc_approve_ok():  # type: ignore
         pass
@@ -85,18 +86,12 @@ except Exception:
         pass
     def set_last_slip_estimate_bps(_v: float):  # type: ignore
         pass
-    # Stage 6 metrics fallbacks:
     def inc_time_stop_keep():  # type: ignore
         pass
     def inc_time_stop_move_be():  # type: ignore
         pass
     def inc_struct_sl_applied():  # type: ignore
         pass
-
-# (NEW) optional histogram for time-to-TP1
-try:
-    from utils.metrics_tracker import observe_time_to_tp1  # type: ignore
-except Exception:
     def observe_time_to_tp1(_v: float):  # type: ignore
         pass
 
@@ -138,7 +133,7 @@ _inline_env_defaults: Dict[str, str] = {
     "USE_WS": "1",
     "WS_KEEPALIVE_SEC": "25",
     # --- NEW: Signed-POST timestamp enforcement knobs (hardened defaults) ---
-    "SIG_TS_ENFORCE": "1",          # was "0"
+    "SIG_TS_ENFORCE": "1",
     "SIG_TS_SKEW_SEC": "900",
     # --- NEW: enable anti-replay by default ---
     "ANTI_REPLAY_ENABLE": "1",
@@ -226,6 +221,7 @@ app = FastAPI(
     redoc_url=REDOC_URL,
     openapi_url=OPENAPI_URL,
 )
+
 # ============================================================
 #  Universal OPTIONS handlers (solve CORS preflight for '/')
 # ============================================================
@@ -254,7 +250,7 @@ def _safe_include(router_module_path: str):
 # עדיף להכליל קריטיים ידנית (גם אם autoload רץ):
 _safe_include("routes.manager")
 _safe_include("routes.position_ops")
-_safe_include("routes.scan")
+_safe_include("routes.scan")  # סורק
 # השאר ימשיכו להגיע דרך האוטולואד
 
 # ---- Auto-discovery of all other routes.* modules (smart & dynamic) ----
@@ -300,9 +296,6 @@ def _adjust_routes_autoload_filters() -> None:
         _append_env_csv("ROUTES_DENY", ["routes.ui_grid", "server.routes.ui_grid", "server.routes.ui_grid_proxy"])
 
 def _include_ui_grid_router():
-    """
-    כולל *רק* ראותר אחד לפי UI_GRID_MODE...
-    """
     try:
         if UI_GRID_MODE == "local":
             _safe_include("routes.ui_grid")
@@ -402,7 +395,6 @@ if CORS_ALLOW_CREDENTIALS and _origins_list == ["*"]:
     if strict_env:
         _origins_list = strict_env
     else:
-        # Harden: fail-fast instead of running insecurely
         raise RuntimeError(
             "CORS misconfiguration: allow_credentials=True with wildcard origins. "
             "Set CORS_ALLOW_ORIGINS to explicit origins or provide CORS_ALLOW_ORIGINS_STRICT."
@@ -415,6 +407,7 @@ app.add_middleware(
     allow_methods=[m.strip() for m in CORS_ALLOW_METHODS.split(",")] if CORS_ALLOW_METHODS else ["*"],
     allow_headers=[h.strip() for h in CORS_ALLOW_HEADERS.split(",")] if CORS_ALLOW_HEADERS else ["*"],
 )
+
 # ============== Request ID middleware (observability) ==============
 @app.middleware("http")
 async def _request_id_mw(request: Request, call_next):
@@ -625,14 +618,12 @@ def _parse_signature_auth(h: str) -> Optional[Dict[str, Any]]:
     s = h[len("Signature "):].strip()
     parts: Dict[str, str] = {}
     for kv in re.split(r'\s*,\s*', s):
-        # expect key="value" pairs
         if '="' not in kv:
             continue
         k, v = kv.split("=", 1)
         v = v.strip()
         if v.startswith('"') and v.endswith('"'):
             v = v[1:-1]
-        # normalize the key and store value
         k = k.strip()
         parts[k] = v
     if not {"keyId", "algorithm", "headers", "signature"}.issubset(parts.keys()):
@@ -675,22 +666,20 @@ def _verify_http_signature(request: Request, body: bytes, *, route_path: str) ->
     # Require at least one body-digest header to be signed
     if not (("digest" in got) or ("x-content-sha256" in got)):
         return False, "missing_body_digest_header"
-    # Also ensure those headers are actually present on the request
+    # Also ensure those headers are present
     for hname in got:
         if hname != "(request-target)" and hname not in hdrs_lower:
             return False, f"header_missing:{hname}"
 
-    # Basic nonce strength & presence checks
     nonce_val = (hdrs_lower.get("x-request-nonce") or "").strip()
     if not nonce_val:
         return False, "nonce_missing"
     if len(nonce_val) < 16:
         return False, "nonce_too_short"
-    # Content-Type presence enforced above; ensure non-empty value
+
     if not (hdrs_lower.get("content-type") or "").strip():
         return False, "content_type_missing"
 
-    # Digest / x-content-sha256
     if "digest" in hdrs_lower:
         try:
             scheme, b64v = (hdrs_lower["digest"] or "").split("=", 1)
@@ -755,6 +744,22 @@ def _require_not_expired(exp_val: Optional[Union[int, str]]) -> None:
     if exp_i < int(time.time()):
         raise HTTPException(status_code=401, detail="expired")
 
+# Anti-replay nonce (Redis or in-memory)
+try:
+    import redis.asyncio as aioredis  # type: ignore
+except Exception:
+    aioredis = None  # type: ignore
+
+async def _get_redis_cached():
+    if not (aioredis and REDIS_URL):
+        return None
+    r = getattr(app.state, "redis", None)
+    if r:
+        return r
+    r = aioredis.from_url(REDIS_URL, decode_responses=True)
+    app.state.redis = r
+    return r
+
 async def _enforce_nonce_once(request: Request) -> None:
     if os.getenv("ANTI_REPLAY_ENABLE", "1").lower() not in ("1", "true", "yes", "on"):
         return
@@ -779,15 +784,12 @@ async def _enforce_nonce_once(request: Request) -> None:
             raise
         except Exception:
             pass
-    # in-memory fallback
     bucket = getattr(app.state, "_nonce_mem", None)
     if bucket is None:
         bucket = {}
         app.state._nonce_mem = bucket
-    # bound memory to avoid unbounded growth
     try:
         if len(bucket) > 5000:
-            # drop ~10% oldest keys (best-effort)
             for k, _ts in list(bucket.items())[:500]:
                 bucket.pop(k, None)
     except Exception:
@@ -799,85 +801,6 @@ async def _enforce_nonce_once(request: Request) -> None:
     if key in bucket:
         raise HTTPException(status_code=401, detail="nonce_replay")
     bucket[key] = now
-
-def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
-    try:
-        if len(secret_hex_or_text) == 64:
-            key = bytes.fromhex(secret_hex_or_text)
-        else:
-            key = secret_hex_or_text.encode("utf-8")
-    except ValueError:
-        key = secret_hex_or_text.encode("utf-8")
-    return hmac.new(key, payload, hashlib.sha256).hexdigest()
-
-def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600, action: Optional[str] = None) -> str:
-    if not HMAC_SECRET:
-        # Safer default: allow unsigned preview-only links, refuse actionable links
-        if action in ("approve", "reject", "manage"):
-            raise RuntimeError("Signing secret missing; refusing to generate actionable link")
-        # preview fallback (read-only)
-        route = path if path else "/ops/ui/ticket"
-        sep = "&" if "?" in route else "?"
-        return f"{base}{route}{sep}ticket_id={ticket_id}"
-    exp = int(time.time()) + int(ttl_sec)
-    # Bind signature to audience (PUBLIC_HOST) to prevent cross-host replay
-    aud = (PUBLIC_HOST or "").rstrip("/")
-    to_sign = f"{aud}|{path}|{ticket_id}|{exp}|{NS}".encode("utf-8")
-    sig = _sign_hex(HMAC_SECRET, to_sign)
-    sep = "&" if "?" in path else "?"
-    return f"{base}{path}{sep}ticket_id={ticket_id}&exp={exp}&sig={sig}"
-
-def _verify_signed_params(ticket_id: str, exp: str, sig: str, path: str) -> bool:
-    if not (HMAC_SECRET and ticket_id and exp and sig):
-        return False
-    try:
-        exp_i = int(exp)
-        if exp_i < int(time.time()):
-            return False
-    except Exception:
-        return False
-    aud = (PUBLIC_HOST or "").rstrip("/")
-    expected = _sign_hex(HMAC_SECRET, f"{aud}|{path}|{ticket_id}|{exp}|{NS}".encode("utf-8"))
-    return hmac.compare_digest(expected, sig)
-
-# ==================== Simple ConfirmStore (in-memory fallback) ====================
-class ConfirmStore:
-    _items: Dict[str, Dict[str, Any]] = {}
-
-    @classmethod
-    def create(cls, req: Dict[str, Any]) -> None:
-        tid = str(req.get("ticket_id") or f"T_{int(time.time())}_{secrets.token_hex(3)}")
-        cls._items[tid] = {"ticket_id": tid, "req": dict(req), "ts": time.time(), "approved": None}
-
-    @classmethod
-    def decide(cls, ticket_id: str, approved: bool) -> None:
-        it = cls._items.get(str(ticket_id))
-        if it:
-            it["approved"] = bool(approved)
-
-    @classmethod
-    def pending(cls) -> List[Dict[str, Any]]:
-        return [v for v in cls._items.values() if v.get("approved") is None]
-
-    @classmethod
-    def remove(cls, ticket_id: str) -> None:
-        cls._items.pop(str(ticket_id), None)
-
-# ==================== Shared HTTP and Redis ====================
-try:
-    import redis.asyncio as aioredis  # type: ignore
-except Exception:
-    aioredis = None  # type: ignore
-
-async def _get_redis_cached():
-    if not (aioredis and REDIS_URL):
-        return None
-    r = getattr(app.state, "redis", None)
-    if r:
-        return r
-    r = aioredis.from_url(REDIS_URL, decode_responses=True)
-    app.state.redis = r
-    return r
 
 # ==================== Security headers middleware ====================
 @app.middleware("http")
@@ -896,7 +819,6 @@ async def _security_headers(request: Request, call_next):
     if _enable_coep:
         resp.headers.setdefault("Cross-Origin-Embedder-Policy", "require-corp")
     resp.headers.setdefault("X-XSS-Protection", "0")
-    # CSP (נשלט ENV)
     try:
         if os.getenv("ENABLE_CSP", "0").lower() in ("1", "true", "yes", "on"):
             pol = os.getenv("CSP_POLICY", "default-src 'none'")
@@ -909,7 +831,6 @@ async def _security_headers(request: Request, call_next):
 
 # ==================== Helpers for guards & RL logs ====================
 def _client_ip(request: Request) -> str:
-    # Trust proxy/XFF headers only if explicitly enabled.
     try:
         trust_xff = os.getenv("TRUST_XFF", "0").lower() in ("1", "true", "yes", "on")
     except Exception:
@@ -942,7 +863,6 @@ def _split_env_list(name: str, default: str = "") -> List[str]:
     return [p.strip() for p in raw.split(",") if p.strip()]
 
 _PUBLIC_PATHS    = set(_split_env_list("SECURITY_PUBLIC_PATHS", ""))
-# Safer default: no public prefixes unless explicitly configured
 _PUBLIC_PREFIXES = _split_env_list("SECURITY_PUBLIC_PREFIXES", "")
 _PROTECTED_PATHS = set(_split_env_list(
     "SECURITY_PROTECTED_PATHS",
@@ -1021,10 +941,8 @@ async def _rl_hit(path_key: str, window_sec: int, limit: int, ip: str) -> bool:
         bucket = {}
         app.state.rlm_epoch = time.time()
         app.state.rl_mem = bucket
-    # Soft cap to avoid unbounded growth under heavy traffic
     try:
         if len(bucket) > 5000:
-            # drop ~10% oldest keys (best-effort)
             for k in list(bucket.keys())[:500]:
                 bucket.pop(k, None)
     except Exception:
@@ -1285,7 +1203,6 @@ async def _fetch_klines_http(symbol: str, interval: str = "15m", limit: int = 12
     except Exception:
         pass
     return []
-
 # ==================== Misc helpers ====================
 _MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
 def _parse_mode(note: Optional[str]) -> Optional[str]:
@@ -1314,6 +1231,7 @@ def _align_position_mode(client) -> None:
             client.futures_change_position_mode(dualSidePosition="true")
         elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
             client.futures_change_position_mode(dualSidePosition="false")
+
 # ==================== Order ID helper ====================
 try:
     from utils.order_ids import build_client_order_id  # type: ignore
@@ -1331,6 +1249,7 @@ except Exception:
         ts = str(int(time.time() * 1000))
         base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
         return _coid_fit_local(base, 36)
+
 # ==================== Execute trade helpers ====================
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
@@ -1557,7 +1476,7 @@ def _round_qty(q: float, dec: int) -> float:
         fmt = "{:0." + str(int(dec)) + "f}"
         return float(fmt.format(q))
     except Exception:
-        return float(f"{q:.3f}")  # fallback
+        return float(f"{q:.3f}")
 
 async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Dict[str, Any]]:  # noqa: C901
     symbol = (ticket.get("symbol") or "").upper()
@@ -1644,7 +1563,6 @@ def _require_bearer(request: Request) -> None:
     scheme, token = parts[0].strip(), parts[1].strip()
     if scheme.lower() != "bearer":
         raise HTTPException(status_code=401, detail="Unauthorized")
-    # constant-time compare (per your patch)
     try:
         ok = hmac.compare_digest(token, API_BEARER_TOKEN)
     except Exception:
@@ -1656,7 +1574,6 @@ def _require_bearer(request: Request) -> None:
 def _allow_by_bearer_or_apikey(request: Request) -> None:
     """
     מרשה או Bearer (API_BEARER_TOKEN) או x-api-key (API_TOKEN/PRIMARY_API_TOKEN).
-    (הוסר האליאס ל-API_BEARER_TOKEN בתוך x-api-key)
     """
     want_bearer = (request.headers.get("authorization") or request.headers.get("Authorization") or "").strip()
     x_api_key = (request.headers.get("x-api-key") or request.headers.get("X-API-Key") or "").strip()
@@ -1690,7 +1607,6 @@ async def ops_manager_health():
 async def ops_manager_tick(request: Request):
     _require_bearer(request)
     return {"ok": True, "tick": int(time.time())}
-
 @router.get("/alerts/trades/active", tags=["ops-approval"])
 async def alerts_trades_active(request: Request):
     _require_bearer(request)
@@ -1748,7 +1664,6 @@ async def alerts_trades_update(request: Request, body: Dict[str, Any] = Body(...
     sig_hex = request.headers.get("X-Signature-Hex") or request.headers.get("x-signature-hex") or ""
     if not HMAC_SECRET:
         raise HTTPException(status_code=503, detail="OPS_SIGN_SECRET/WEBHOOK_HMAC_SECRET missing")
-    # Enforce timestamp & nonce
     ts_raw = (request.headers.get("X-Request-Timestamp") or request.headers.get("x-request-timestamp") or "").strip()
     nonce_raw = (request.headers.get("X-Request-Nonce") or request.headers.get("x-request-nonce") or "").strip()
     if len(nonce_raw) < 16:
@@ -1761,12 +1676,10 @@ async def alerts_trades_update(request: Request, body: Dict[str, Any] = Body(...
     now_i = int(time.time())
     if abs(now_i - ts_i) > max(0, skew):
         raise HTTPException(status_code=401, detail="timestamp_out_of_window", headers={"Replay-Window": str(skew)})
-    # Bind signature to headers + body to prevent detached replay
     base = (f"{ts_raw}|{nonce_raw}").encode("utf-8") + b"\n" + raw
     want = _sign_hex(HMAC_SECRET, base)
     if not sig_hex or not hmac.compare_digest(sig_hex.strip(), want):
         raise HTTPException(status_code=401, detail="bad_signature")
-    # Anti-replay (nonce cache)
     await _enforce_nonce_once(request)
     _require_not_expired(body.get("exp"))
     ticket_id = str(body.get("ticket_id") or "").strip()
@@ -1778,6 +1691,61 @@ async def alerts_trades_update(request: Request, body: Dict[str, Any] = Body(...
     return await _reject_core(ticket_id)
 
 # ==================== Ticket/UI/Approve/Reject ====================
+class ConfirmStore:
+    _items: Dict[str, Dict[str, Any]] = {}
+    @classmethod
+    def create(cls, req: Dict[str, Any]) -> None:
+        tid = str(req.get("ticket_id") or f"T_{int(time.time())}_{secrets.token_hex(3)}")
+        cls._items[tid] = {"ticket_id": tid, "req": dict(req), "ts": time.time(), "approved": None}
+    @classmethod
+    def decide(cls, ticket_id: str, approved: bool) -> None:
+        it = cls._items.get(str(ticket_id))
+        if it:
+            it["approved"] = bool(approved)
+    @classmethod
+    def pending(cls) -> List[Dict[str, Any]]:
+        return [v for v in cls._items.values() if v.get("approved") is None]
+    @classmethod
+    def remove(cls, ticket_id: str) -> None:
+        cls._items.pop(str(ticket_id), None)
+
+def _sign_hex(secret_hex_or_text: str, payload: bytes) -> str:
+    try:
+        if len(secret_hex_or_text) == 64:
+            key = bytes.fromhex(secret_hex_or_text)
+        else:
+            key = secret_hex_or_text.encode("utf-8")
+    except ValueError:
+        key = secret_hex_or_text.encode("utf-8")
+    return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+def _build_signed_link(base: str, path: str, ticket_id: str, ttl_sec: int = 600, action: Optional[str] = None) -> str:
+    if not HMAC_SECRET:
+        if action in ("approve", "reject", "manage"):
+            raise RuntimeError("Signing secret missing; refusing to generate actionable link")
+        route = path if path else "/ops/ui/ticket"
+        sep = "&" if "?" in route else "?"
+        return f"{base}{route}{sep}ticket_id={ticket_id}"
+    exp = int(time.time()) + int(ttl_sec)
+    aud = (PUBLIC_HOST or "").rstrip("/")
+    to_sign = f"{aud}|{path}|{ticket_id}|{exp}|{NS}".encode("utf-8")
+    sig = _sign_hex(HMAC_SECRET, to_sign)
+    sep = "&" if "?" in path else "?"
+    return f"{base}{path}{sep}ticket_id={ticket_id}&exp={exp}&sig={sig}"
+
+def _verify_signed_params(ticket_id: str, exp: str, sig: str, path: str) -> bool:
+    if not (HMAC_SECRET and ticket_id and exp and sig):
+        return False
+    try:
+        exp_i = int(exp)
+        if exp_i < int(time.time()):
+            return False
+    except Exception:
+        return False
+    aud = (PUBLIC_HOST or "").rstrip("/")
+    expected = _sign_hex(HMAC_SECRET, f"{aud}|{path}|{ticket_id}|{exp}|{NS}".encode("utf-8"))
+    return hmac.compare_digest(expected, sig)
+
 def _rows_kv_html(t: Dict[str, Any]) -> str:
     def cv(k, default="—"):
         v = t.get(k, default)
@@ -1969,7 +1937,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     with suppress(Exception):
         inc_approvals_created()
 
-    # slip estimate and ATR/ADX snapshot for metrics
     with suppress(Exception):
         cli = _get_shared_async_client()
         px = await get_last_price_async(symbol) or 0.0
@@ -2002,7 +1969,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
 
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
 
-    # Build links (action links require signing secret; preview may fall back unsigned)
     try:
         preview_url = _build_signed_link(base, "/ops/ui/ticket/signed", tid, ttl_sec=900, action="preview")
     except Exception:
@@ -2019,7 +1985,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     manage_url = ""
     try:
         sym_for_btn = str(symbol or "").upper()
-        manage_url = _build_signed_link(base, "/manage-once/signed", sym_for_btn, ttl_sec=600, action="manage")
+        manage_url = _build_signed_link(base, "/manage-once/signed", tid, ttl_sec=600, action="manage")
         if "?" in manage_url:
             manage_url += f"&symbol={sym_for_btn}"
         else:
@@ -2131,7 +2097,6 @@ async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), s
 async def public_ticket_inspect(ticket_id: str = Query(...)):
     rec, _ = await _load_ticket(ticket_id)
     if rec:
-        # Redact sensitive fields for public readout
         allowed = {
             "ticket_id","symbol","side","qty","leverage","position_side",
             "tp1","tp2","tp3","sl","score","eta_tp1_min","eta_tp2_min","eta_tp3_min",
@@ -2419,14 +2384,13 @@ def _compute_indicators_from_klines(kl: List[List[Any]], period: int = 14) -> Di
         trs.append(tr)
     atr = sum(trs[-period:]) / float(period)
 
-    # minimal ADX approximation
     plus_dm = [0.0]; minus_dm = [0.0]
     for i in range(1, n):
         up = highs[i] - highs[i-1]
         dn = lows[i-1] - lows[i]
         plus_dm.append(up if (up > dn and up > 0) else 0.0)
         minus_dm.append(dn if (dn > up and dn > 0) else 0.0)
-    tr_n = trs  # length n-1
+    tr_n = trs
     def _smoothed(arr: List[float], p: int) -> List[float]:
         out = []
         s = sum(arr[:p])
@@ -2447,6 +2411,7 @@ def _compute_indicators_from_klines(kl: List[List[Any]], period: int = 14) -> Di
 
 # ============= mount router ============
 app.include_router(router)
+
 # ==================== Root & health ====================
 @app.get("/")
 async def root():
@@ -2472,7 +2437,6 @@ async def health():
 
 @app.get("/readyz/strict")
 async def readyz_strict():
-    # require redis when configured
     if REQUIRE_REDIS:
         r = await _get_redis_cached()
         if not r:
@@ -2495,52 +2459,30 @@ async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...),
                                   atr_mult=float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None)
     return JSONResponse({"ok": True, "result": res})
 
-# ==================== Autoload + UI + Fallback wiring ====================
-def _bootstrap_routes_and_ui() -> None:
-    _adjust_routes_autoload_filters()
-    _include_ui_grid_router()
-    if ROUTES_AUTOLOAD:
-        if ROUTES_AUTOLOAD_MODE == "eager":
-            _routes_autoload_now()
-        else:
-            # background to avoid blocking startup
-            try:
-                loop = asyncio.get_event_loop()
-                loop.create_task(asyncio.to_thread(_routes_autoload_now))
-            except Exception:
-                pass
-    _ensure_public_fallbacks()
-
-# ==================== Startup / Shutdown ====================
+# ==================== Lifespan (startup tasks) ====================
 @app.on_event("startup")
 async def _on_startup():
     try:
-        _bootstrap_routes_and_ui()
+        _adjust_routes_autoload_filters()
+        if ROUTES_AUTOLOAD and ROUTES_AUTOLOAD_MODE == "eager":
+            _routes_autoload_now()
+        _include_ui_grid_router()
+        _ensure_public_fallbacks()
     except Exception as e:
-        logger.warning("bootstrap_routes_ui_failed: %s", e)
-    # Resolve Binance endpoints
-    with suppress(Exception):
+        logger.warning("startup.routing: %s", e)
+    try:
         await _resolve_binance_endpoints()
-    # Ensure Telegram webhook
-    with suppress(Exception):
+    except Exception as e:
+        logger.warning("startup.resolve_binance: %s", e)
+    try:
         await _ensure_telegram_webhook()
-    # Startup ping (optional)
-    if STARTUP_NOTIFY_ENABLE:
-        with suppress(Exception):
-            await _send_telegram_html("🟢 <b>AlgoGPT API started</b>")
+    except Exception as e:
+        logger.warning("startup.telegram_webhook: %s", e)
 
-@app.on_event("shutdown")
-async def _on_shutdown():
-    # close shared httpx client
-    with suppress(Exception):
-        cli = getattr(app.state, "shared_async_client", None)
-        if cli and not cli.is_closed:
-            await cli.aclose()
-
-# ==================== If run directly (dev) ====================
+# ==================== __main__ ====================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False, http="h11" if not _http2_enabled_runtime() else "h2")
 
 
 
