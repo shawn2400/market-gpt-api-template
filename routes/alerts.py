@@ -272,22 +272,41 @@ async def alerts_ingest(
     else:
         sl_dict = {}
     
+    # Smart portfolio management
+    score = float(req.score or 0)
+    base_lev = int(req.leverage or int(os.getenv("DEFAULT_LEVERAGE","5")))
+    
+    # Apply score-based leverage and budget allocation
+    try:
+        from utils.portfolio_manager import calculate_score_based_leverage, calculate_trade_budget
+        
+        smart_lev = calculate_score_based_leverage(base_lev, score, max_lev=20)
+        budget_result = calculate_trade_budget(score)
+        
+        if budget_result.get("ok") and not req.budget_usd:
+            smart_budget = budget_result["budget_usdt"]
+        else:
+            smart_budget = float(req.budget_usd or 0)
+    except Exception:
+        smart_lev = base_lev
+        smart_budget = float(req.budget_usd or 0)
+    
     plan: Dict[str, Any] = {
         "symbol": sym,
         "side": side,
         "market": (req.market or "futures").lower(),
         "timeframe": req.timeframe,
-        "leverage": int(req.leverage or int(os.getenv("DEFAULT_LEVERAGE","5"))),
+        "leverage": smart_lev,  # Score-based leverage
         "qty": float(req.qty or 0),
-        "score": float(req.score or 0),
+        "score": score,
         "why": req.reason or "",
         "tp": tp_list,
         "sl": sl_dict,
-        "budget_usd": float(req.budget_usd or 0),
+        "budget_usd": smart_budget,  # Smart budget allocation
         "order_type": "MARKET",
         "require_approval": bool(req.require_approval if req.require_approval is not None else True),
         "entry": _to_float(req.entry),
-        "success_pct": _to_float(req.success_pct) if req.success_pct else float(req.score or 0),
+        "success_pct": _to_float(req.success_pct) if req.success_pct else score,
     }
 
     tid = req.ticket_id or _ticket_id_for(req)

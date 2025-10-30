@@ -62,6 +62,26 @@ cd /home/runner/$REPL_SLUG && \nPYTHONPATH=/home/runner/$REPL_SLUG \nTRADE_AUTO_
 [workflows.workflow.metadata]
 outputType = "console"
 
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Position Monitor"
+
+[[workflows.workflow]]
+name = "Position Monitor"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_POSITION_MONITOR=1 POSITION_REPORT_INTERVAL_SEC=1800 python workers/position_monitor.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[ports]]
 localPort = 5000
 externalPort = 80

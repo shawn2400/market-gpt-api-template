@@ -200,6 +200,13 @@ The system uses **strict multi-layer filters** to protect capital:
 
 ## Recent Changes
 
+- **2025-10-30**: Smart Portfolio Management & Monitoring System
+  - ✅ **Position Monitor Worker** - Reports every 30-60 minutes with PNL updates
+  - ✅ **Smart Budget Allocation** - Automatically splits wallet across 2-4 trades
+  - ✅ **Score-Based Leverage** - Higher quality trades get more leverage (up to 1.5x boost)
+  - ✅ **Portfolio Manager** - Prevents over-trading, manages concurrent positions
+  - ✅ **Consolidated Reports** - Single Telegram message every 30 min with all trades
+  - ✅ **Grid Trading Integration** - Grid executor, planner, and tracker modules ready
 - **2025-10-30**: Enhanced Telegram notifications with inline buttons
   - ✅ Added rich HTML formatting with comprehensive trade details
   - ✅ Implemented inline keyboard (APPROVE/REJECT/Details buttons)
