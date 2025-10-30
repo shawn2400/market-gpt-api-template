@@ -127,7 +127,7 @@ TELEGRAM_ADD_PENDING_URL = "/telegram/pending/add"
 ALERTS_INGEST_URL = os.getenv("ALERTS_INGEST_URL", "http://127.0.0.1:8000/alerts/trade-ingest").strip()
 
 # =======================
-# Endpoints
+# Endpoints (protected by API key)
 # =======================
 @router.get("/ping")
 async def ping():
@@ -138,6 +138,11 @@ async def ai_health():
     ok = bool((os.getenv("OPENAI_API_KEY") or "").strip())
     return {"ok": ok, "model": os.getenv("OPENAI_MODEL", "gpt-4o"),
             "reason": None if ok else "Missing OPENAI_API_KEY"}
+
+# NEW: simple POST /ai/test for agent scripts (Bearer required via router deps)
+@router.post("/test")
+async def ai_test():
+    return {"ok": True, "echo": "pong", "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
 
 @router.get("/price")
 async def ai_price(symbol: str = Query(..., description="e.g. BTCUSDT")):
@@ -267,6 +272,7 @@ async def suggest_and_queue(req: SuggestQueueRequest):
                     queued.append({"symbol": c["symbol"], "side": c["side"], "target": "sink", "error": str(e)})
 
     return {"ok": True, "mode": req.mode, "queued": len([q for q in queued if "error" not in q]), "details": queued}
+
 
 
 
