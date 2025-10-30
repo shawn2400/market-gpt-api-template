@@ -49,10 +49,6 @@ args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG TRADE_A
 localPort = 5000
 externalPort = 80
 
-[[ports]]
-localPort = 44481
-externalPort = 3000
-
 [deployment]
 deploymentTarget = "vm"
 run = ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]

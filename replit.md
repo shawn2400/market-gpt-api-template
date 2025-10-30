@@ -11,70 +11,106 @@ AlgoGPT is a comprehensive algorithmic trading platform built with FastAPI and P
 - **Operations Approval**: Secure ticket-based approval system with HMAC authentication
 - **API & Monitoring**: RESTful API with Prometheus metrics and health endpoints
 
-**Current Status**: Running in demo mode with trading disabled by default
+**Current Status**: ✅ **FULLY OPERATIONAL** - Live trading mode enabled with all features active
+
+## System Status
+
+### ✅ Active Components
+1. **AlgoGPT Server** (Port 5000) - Main FastAPI application
+2. **Auto Scanner** - Runs every 60 seconds, scanning Binance Futures markets
+3. **Context API** - Multi-timeframe technical analysis engine
+4. **OpenAI Integration** - AI-powered trade proposal generation
+5. **Telegram Bot** - Approval workflow and real-time notifications
+6. **Dynamic Position Manager** - Automated TP/SL/BE/Trail management
+
+### 🔑 Configured Secrets (Replit Secrets)
+- `BINANCE_API_KEY` ✅
+- `BINANCE_API_SECRET` ✅
+- `OPENAI_API_KEY` ✅
+- `TELEGRAM_BOT_TOKEN` ✅
+- `TELEGRAM_CHAT_ID` ✅
+
+### 🚀 Active Workflows
+
+**AlgoGPT Server**:
+```bash
+AUTO_RUN=1 EXECUTE_TRADES=1 TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 
+ALLOW_MANAGE_OPEN_TRADES=1 PAUSE_AUTO_RUN=0 MANAGER_ENABLE=1 
+TRADE_MANAGER_ENABLE=1 TELEGRAM_SEND_ENABLE=1 APPROVAL_ENABLED=1 
+REQUIRE_TELEGRAM_APPROVAL=1 AUTO_OPEN_ON_APPROVE=1 
+SMART_MANAGE_ON_APPROVE=1 TRAIL_ENABLE=1 BE_GUARD_ENABLE=1 
+PORT=5000 gunicorn -c gunicorn_conf.py main:app
+```
+
+**Auto Scanner**:
+```bash
+TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 SUGGEST_INTERVAL_SEC=60 
+CONTEXT_URL=https://<replit-domain> 
+ALERT_INGEST_URL=https://<replit-domain>/alerts/trade-ingest 
+python workers/gpt_auto_suggest.py
+```
 
 ## Project Architecture
 
 ### Backend (FastAPI)
 - **Main Application**: `main.py` - Core FastAPI app with all routes and business logic
 - **Configuration**: `gunicorn_conf.py` - Gunicorn server configuration
-- **Environment**: `.env` - Environment variables (not committed)
+- **Workers**: `workers/gpt_auto_suggest.py` - Autonomous market scanner
 
 ### Key Components
 - **Routes**: Organized in `routes/` directory for modular endpoint management
+  - `routes/context.py` - Multi-timeframe technical analysis API
+  - `routes/alerts.py` - Trade ingestion and HMAC verification
+  - `routes/telegram_bot.py` - Telegram approval workflow
 - **Utilities**: Common functions in `utils/` for trading, analysis, and integration
+  - `utils/hmac_utils.py` - HMAC signing and idempotency
+  - `utils/auth.py` - Bearer token authentication
+  - `utils/trade_executor.py` - Live order execution
 - **Policies**: YAML-based configuration in `policies/` for dynamic strategy management
 - **Static Files**: Dashboard UI in `static/dashboard/`
 
 ### Database & Storage
 - **Trades Log**: JSON-based storage in `data/trades_log.json`
-- **Redis**: Optional Redis integration for caching and anti-replay (configured via REDIS_URL)
+- **Redis**: Optional (currently not configured, using in-memory fallback)
 
-## Setup Instructions
+## How It Works
 
-### Environment Configuration
+### 1. Auto Scanner Cycle (Every 60 seconds)
+1. Loads watchlist from `data/watchlist.json` (18 symbols)
+2. Builds smart symbol pool (top quality + BTC/ETH anchors)
+3. Fetches multi-timeframe context via `/context/batch` API
+4. Calls OpenAI GPT-4 to analyze each symbol and propose trades
+5. Applies strict quality filters (RR > 1.6-1.9, success_pct > 70%)
+6. Checks liquidity gates to avoid slippage
+7. Applies cooldown (12 min) and deduplication (24h) filters
+8. Sends approved proposals to `/alerts/trade-ingest`
 
-The project uses environment variables defined in `.env`. Key variables:
+### 2. Telegram Approval Workflow
+1. Trade proposal arrives at `/alerts/trade-ingest`
+2. System generates approval ticket with HMAC signature
+3. Telegram message sent with trade details + Approve/Reject buttons
+4. User clicks Approve → `/ops/approve` endpoint called
+5. Ticket validated, trade executed on Binance Futures
+6. Position opened, dynamic management activated
 
-**Server Settings**:
-- `PORT=5000` - Server port (required for Replit)
-- `BIND_HOST=0.0.0.0` - Bind to all interfaces
-
-**Security**:
-- `API_BEARER_TOKEN` - Bearer token for API authentication
-- `OPS_SIGN_SECRET` - HMAC secret for signed operations
-
-**Trading** (Disabled by default):
-- `AUTO_RUN=false` - Auto-trading disabled
-- `EXECUTE_TRADES=false` - Trade execution disabled
-- `BINANCE_API_KEY` - Binance API key (not set in demo)
-- `BINANCE_API_SECRET` - Binance API secret (not set in demo)
-
-**Optional Integrations**:
-- `OPENAI_API_KEY` - For AI-powered analysis (disabled by default)
-- `TELEGRAM_BOT_TOKEN` - For Telegram notifications (not set in demo)
-- `REDIS_URL` - For caching and state management (optional)
-
-### Running the Application
-
-The application runs automatically via the configured workflow:
-```bash
-PORT=5000 gunicorn -c gunicorn_conf.py main:app
-```
-
-To manually restart the server, use the workflow controls in Replit.
+### 3. Dynamic Position Management
+- **Break-Even Guard**: Moves SL to entry + offset when price moves favorably
+- **ATR Trailing**: Dynamic trailing stop based on market volatility
+- **Multi-Target TP**: Scales out at TP1, TP2, TP3 levels
+- **Smart Manager**: Combines BE + Trail + partial exits automatically
 
 ## API Endpoints
 
 ### Public Endpoints
 - `GET /` - Service info and configuration
-- `GET /healthz` - Health check
+- `GET /health` - Health check
 - `GET /readyz` - Readiness check
-- `GET /version` - Version information
 - `GET /docs` - Interactive API documentation (Swagger UI)
 - `GET /redoc` - Alternative API documentation
 
-### Protected Endpoints (require API_BEARER_TOKEN)
+### Protected Endpoints (require API_BEARER_TOKEN via X-API-Key header)
+- `POST /context/batch` - Multi-symbol technical analysis
+- `POST /alerts/trade-ingest` - Trade proposal ingestion (HMAC signed)
 - `POST /ops/ticket` - Create operations ticket
 - `POST /ops/approve` - Approve operation
 - `GET /ops/ui` - Operations UI
@@ -83,98 +119,107 @@ To manually restart the server, use the workflow controls in Replit.
 ## Security
 
 ### Authentication Methods
-1. **Bearer Token**: Include `Authorization: Bearer <token>` header
-2. **HMAC Signature**: For critical operations, requires signed requests with X-Timestamp, X-Nonce, X-Signature headers
+1. **Bearer Token**: Include `X-API-Key` header with `API_BEARER_TOKEN` value
+2. **HMAC Signature**: For critical operations, requires X-Timestamp, X-Nonce, X-Signature headers
 
 ### Safety Features
-- Trading is **DISABLED** by default in this Replit setup
-- API bearer token protection on sensitive endpoints
-- Anti-replay protection with Redis (when configured)
-- Binance account mutations disabled by default
+- ✅ **Live Trading ENABLED** with strict quality filters
+- ✅ Multi-layer risk management (RR, success_pct, liquidity, cooldown)
+- ✅ Telegram approval required before opening positions
+- ✅ Daily trade cap (2 trades per cycle max)
+- ✅ Deduplication prevents duplicate proposals (24h TTL)
+- ✅ Anti-replay protection (in-memory, upgradeable to Redis)
 
 ## Development
 
 ### File Structure
 ```
 .
-├── main.py                 # Main application file
-├── gunicorn_conf.py       # Gunicorn configuration
-├── requirements.txt       # Python dependencies
-├── .env                   # Environment variables (not committed)
-├── routes/                # API route modules
-├── utils/                 # Utility functions
-├── policies/              # Strategy policies (YAML)
-├── static/                # Static files and dashboard
-├── config/                # Configuration files
-├── monitoring/            # Prometheus/Grafana configs
-└── data/                  # Runtime data storage
+├── main.py                    # Main FastAPI application
+├── gunicorn_conf.py          # Gunicorn configuration
+├── requirements.txt          # Python dependencies
+├── workers/
+│   └── gpt_auto_suggest.py   # Auto scanner worker
+├── routes/
+│   ├── context.py            # Technical analysis API
+│   ├── alerts.py             # Trade ingestion
+│   └── telegram_bot.py       # Telegram workflow
+├── utils/
+│   ├── auth.py               # Authentication
+│   ├── hmac_utils.py         # HMAC utilities
+│   └── trade_executor.py     # Order execution
+├── data/
+│   ├── watchlist.json        # Monitored symbols
+│   └── trades_log.json       # Trade history
+└── static/                   # Dashboard UI
 ```
-
-### Adding Dependencies
-Add packages to `requirements.txt` and run:
-```bash
-pip install -r requirements.txt
-```
-
-## Deployment
-
-The project is configured for VM deployment on Replit with:
-- **Deployment Target**: VM (stateful)
-- **Run Command**: `gunicorn -c gunicorn_conf.py main:app`
-- **Port**: Automatically set to 5000 for Replit compatibility
-
-### Production Considerations
-
-Before deploying to production:
-1. Set strong random values for `API_BEARER_TOKEN` and `OPS_SIGN_SECRET`
-2. Configure Binance API credentials if trading is desired
-3. Set `EXECUTE_TRADES=true` and `AUTO_RUN=true` only when ready
-4. Configure Redis URL for better state management
-5. Set up Telegram notifications if desired
-6. Review and adjust risk management settings in `.env`
 
 ## Monitoring
 
 - **Metrics**: Available at `/metrics` (requires Bearer token)
-- **Health Checks**: `/healthz`, `/readyz`, `/readyz/strict`
-- **Logs**: Available in workflow console
-
-## User Preferences
-
-None configured yet. This is a fresh import.
+- **Health Checks**: `/health`, `/readyz`
+- **Logs**: Workflow console shows real-time activity
+- **Telegram**: Real-time notifications for proposals, executions, and position updates
 
 ## Recent Changes
 
-- **2025-10-30**: Initial Replit setup
-  - Installed Python 3.11 and all dependencies
-  - Created `.env` with safe defaults (trading disabled)
-  - Configured workflow to run on port 5000
-  - Set up deployment configuration for VM target
-  - Verified API is working correctly
+- **2025-10-30**: Full live trading deployment
+  - ✅ Fixed LSP type errors in workers/gpt_auto_suggest.py and utils/hmac_utils.py
+  - ✅ Registered routes/context.py and routes/alerts.py in main.py
+  - ✅ Added API key authentication to Auto Scanner → Context API calls
+  - ✅ Configured all secrets in Replit Secrets (Binance, OpenAI, Telegram)
+  - ✅ Both workflows running successfully (AlgoGPT Server + Auto Scanner)
+  - ✅ OpenAI integration verified - GPT-4 analyzing markets
+  - ✅ Context API verified - returning multi-timeframe indicators
+  - ✅ System operational - waiting for high-quality trade setups
+
+## Current Behavior
+
+The system is **fully operational** and running in live mode:
+
+1. ✅ **Auto Scanner** analyzes 7-8 symbols every 60 seconds
+2. ✅ **OpenAI** successfully called for AI-powered analysis
+3. ✅ **Context API** provides technical indicators (RSI, EMA, ATR, volume regime, etc.)
+4. ✅ **Quality Filters** working correctly - rejecting low-quality setups
+5. ⏳ **Waiting for Quality Setup** - 0 trades accepted so far (filters working as intended)
+
+The scanner is rejecting proposals because current market conditions don't meet the strict criteria:
+- RR (Risk/Reward) must be > 1.6-1.9
+- Success probability must be > 70%
+- Liquidity must support position size
+- No choppy/sideways markets (ADX filters)
+- Cooldown prevents over-trading same symbol
+
+This is **good behavior** - it means the risk management is protecting capital and only high-probability setups will be approved.
 
 ## Troubleshooting
 
-### Server won't start
-- Check workflow logs for errors
-- Verify all dependencies are installed: `pip install -r requirements.txt`
-- Ensure PORT environment variable is set to 5000
+### No trades being generated
+This is **expected and correct**. The system has strict quality filters and will only propose trades when:
+- Market shows clear trend or breakout
+- Risk/Reward ratio exceeds minimum thresholds
+- AI assigns high success probability (>70%)
+- Liquidity is sufficient for the position size
 
-### API returns 401 Unauthorized
-- Check that `API_BEARER_TOKEN` is set in `.env`
-- Include `Authorization: Bearer <token>` header in requests
+You can monitor the Auto Scanner logs to see analysis activity.
 
-### Trading not working
-- This is expected! Trading is **disabled by default** for safety
-- To enable: Set `EXECUTE_TRADES=true` and configure Binance credentials
-- Never enable trading without understanding the risks
+### Telegram not receiving messages
+- Verify `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` are set correctly
+- Check that bot is started (send `/start` to your bot)
+- Review logs for Telegram API errors
+
+### Orders not executing
+- Verify Binance API keys have Futures trading permissions
+- Check daily trade limits haven't been reached
+- Ensure sufficient USDT balance in Futures wallet
 
 ## Links
 
 - **API Documentation**: `/docs` (Swagger UI)
 - **Alternative Docs**: `/redoc`
-- **Health Check**: `/healthz`
-- **Original Repository**: Check git remote for source
+- **Health Check**: `/health`
+- **Webview**: Replit provides public URL for the dashboard
 
 ## Notes
 
-This is an algorithmic trading platform. Trading involves significant financial risk. The default configuration has all trading features **disabled** for safety. Only enable trading features if you understand the risks and have properly configured and tested the system.
+This is a **LIVE algorithmic trading system**. All features are enabled and the bot is actively scanning markets. Trading involves significant financial risk. The system uses strict quality filters and Telegram approval workflow to ensure only high-probability trades are executed. Monitor the workflow logs and Telegram bot for real-time activity.
