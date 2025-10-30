@@ -1,88 +1,77 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# === צבעים ===
-G="\033[1;32m"; Y="\033[1;33m"; R="\033[1;31m"; N="\033[0m"
+BASE="https://algogpt-docker.onrender.com"
+TG_TOKEN="${TELEGRAM_BOT_TOKEN:?set TELEGRAM_BOT_TOKEN in secrets}"
+TG_CHAT="${TELEGRAM_CHAT_ID:?set TELEGRAM_CHAT_ID in secrets}"
+G="\033[1;32m"; R="\033[1;31m"; Y="\033[1;33m"; B="\033[1;34m"; N="\033[0m"
 
-# === משתנים ===
-RENDER_APP="algogpt-docker"
-BASE="https://${RENDER_APP}.onrender.com"
-BEARER="${API_BEARER_TOKEN:-}"
-TG_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
-TG_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
-LOG_FILE="deploy_log.txt"
-
-# === פונקציה: שליחת טלגרם ===
-notify_tg() {
-  local text="$1"
-  if [[ -n "$TG_TOKEN" && -n "$TG_CHAT_ID" ]]; then
-    curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
-      -d "chat_id=${TG_CHAT_ID}" \
-      -d "text=${text}" \
-      -d "parse_mode=HTML" >/dev/null || true
-  fi
+send_tg() {
+  local msg="$1"
+  curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+       -d "chat_id=${TG_CHAT}" -d "text=${msg}" -d "parse_mode=HTML" >/dev/null || true
 }
 
-# === לוג מקומי ===
-log() { echo -e "$1" | tee -a "$LOG_FILE"; }
+header() { echo -e "${B}\n==============================\n🚀 AlgoGPT Auto Deploy Started\n==============================${N}"; }
 
-echo "" > "$LOG_FILE"
-log "=============================="
-log "🚀 AlgoGPT Auto Deploy Started"
-log "=============================="
+deploy() {
+  header
+  echo -e "${Y}📦 שלב 1: בדיקת מצב Git...${N}"
+  git fetch origin main >/dev/null 2>&1 || true
+  echo -e "${G}✅ Fetch הצליח${N}"
 
-# === שלב 1: שמירת שינויים מקומיים ===
-log "${Y}💾 שומר שינויים מקומיים...${N}"
-git add -A || true
-if git diff --cached --quiet; then
-  log "ℹ️ אין שינויים לשמור."
-else
-  git commit -m "deploy: auto-fix $(date -Iseconds)" || true
-fi
-
-# === שלב 2: ריבייס עם ה־Remote ===
-log "${Y}🔄 מבצע git fetch + rebase...${N}"
-git fetch origin main || true
-if ! git rebase origin/main; then
-  log "${Y}⚠️ קונפליקט או שגיאה — מנסה שוב עם stash.${N}"
-  git stash push -m "pre-rebase"
-  git rebase origin/main || true
-  git stash pop || true
-fi
-
-# === שלב 3: שליחת Commit ל־GitHub ===
-commit_hash=$(git rev-parse --short HEAD || echo "unknown")
-tries=0
-until git push origin main; do
-  tries=$((tries + 1))
-  if (( tries >= 3 )); then
-    log "${R}❌ Git push נכשל אחרי 3 ניסיונות.${N}"
-    notify_tg "❌ <b>Deploy נכשל</b> אחרי 3 ניסיונות push 🚫%0ACommit: <code>${commit_hash}</code>"
-    exit 1
+  if ! git diff --quiet; then
+    echo -e "${Y}💾 שומר שינויים זמניים (stash)...${N}"
+    git add -A && git stash push -m "auto-stash-before-deploy" >/dev/null || true
   fi
-  log "🔁 ניסיון נוסף (${tries}/3)..."
-  sleep 3
-done
 
-log "${G}✔️ נשלח ל-GitHub. Render יבצע Auto-Deploy.${N}"
-notify_tg "🚀 <b>AlgoGPT Deploy התחיל</b> 🔧%0A📦 Commit: <code>${commit_hash}</code>"
+  echo -e "${Y}🔁 מרנדר שינויים מקומיים עם remote...${N}"
+  git pull --rebase origin main || {
+    echo -e "${R}⚠️ Rebase נכשל — מנסה פתרון אוטומטי${N}"
+    git rebase --abort >/dev/null 2>&1 || true
+    git reset --merge origin/main || true
+  }
 
-# === שלב 4: המתנה ל-Render ===
-log "${Y}⌛ ממתין ש-Render יעלה גרסה חדשה...${N}"
-for i in {1..20}; do
-  sleep 10
-  STATUS=$(curl -fs -o /dev/null -w "%{http_code}" "$BASE/readyz" || true)
-  if [[ "$STATUS" == "200" ]]; then
-    version_json=$(curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/version" || echo "")
-    log "${G}✅ Render מוכן (${BASE})${N}"
-    log "📄 גרסה: ${version_json}"
-    notify_tg "✅ <b>Deploy הושלם בהצלחה</b>%0A🌐 <code>${BASE}</code>%0ACommit: <code>${commit_hash}</code>%0A📄 גרסה: <code>${version_json}</code>"
-    exit 0
-  fi
-  log "🔄 עדיין ממתין (status=$STATUS)..."
-done
+  echo -e "${Y}🧱 מבצע commit${N}"
+  git add -A
+  git commit -m "deploy: auto-sync $(date -u +'%Y-%m-%dT%H:%M:%S%z')" || true
 
-log "${R}❌ Render לא עלה בזמן.${N}"
-notify_tg "⚠️ <b>Deploy נכשל</b> – Render לא עלה בזמן ⏱️%0ACommit: <code>${commit_hash}</code>"
-exit 1
+  echo -e "${Y}🚀 שולח עדכון ל-GitHub...${N}"
+  attempt=1
+  until git push origin main >/dev/null 2>&1; do
+    echo -e "${R}❌ ניסיון $attempt נכשל${N}"
+    ((attempt++))
+    if ((attempt > 3)); then
+      echo -e "${R}💥 Git push נכשל אחרי 3 ניסיונות${N}"
+      send_tg "❌ <b>Deploy Failed</b>\nReason: <code>Git push failed after 3 retries</code>"
+      exit 1
+    fi
+    echo -e "${Y}⏳ מנסה שוב...${N}"
+    git fetch origin main && git rebase origin/main || true
+    sleep 3
+  done
+
+  echo -e "${G}✔️ Git push הצליח — Render יבצע Auto-Deploy${N}"
+
+  echo -e "${Y}⌛ ממתין ש-Render יסיים להעלות גרסה חדשה...${N}"
+  for i in {1..15}; do
+    sleep 4
+    status=$(curl -s "$BASE/readyz" || echo "fail")
+    if [[ "$status" == *"ok"* || "$status" == *"true"* ]]; then
+      echo -e "${G}✅ Render מוכן (${i})${N}"
+      break
+    fi
+    echo -e "${Y}🔄 ממתין... ($i)${N}"
+  done
+
+  version=$(curl -s "$BASE/version" | grep -o '"algogpt_version":"[^"]*"' | cut -d'"' -f4 || echo "unknown")
+  commit=$(git rev-parse --short HEAD)
+  msg="✅ <b>Deploy Success</b>\n🌐 <a href='${BASE}'>Service Online</a>\n📦 Commit: <code>${commit}</code>\n🧠 Version: <code>${version}</code>"
+  send_tg "$msg"
+
+  echo -e "${G}✅ Deploy Success — Commit:${N} ${commit}"
+  echo -e "${Y}📄 גרסה:${N} ${version}"
+}
+
+deploy
 
