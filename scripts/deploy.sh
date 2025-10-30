@@ -4,14 +4,19 @@ set -euo pipefail
 # צבעים
 G="\033[1;32m"; Y="\033[1;33m"; R="\033[1;31m"; N="\033[0m"
 
+echo -e "${Y}📥  מושך עדכונים מ-GitHub...${N}"
+git fetch origin main
+git rebase origin/main || true
+
 echo -e "${Y}▶️  שולח עדכונים ל-GitHub...${N}"
 git add -A
 git commit -m "deploy: auto-fix $(date -Iseconds)" || true
-git push origin main
+git push origin main || (echo -e "${R}⚠️  בעיה ב-push!${N}"; exit 1)
+
 echo -e "${G}✔️  נשלח ל-GitHub. Render יבצע Auto-Deploy.${N}"
 
 # הגדרות שירות
-RENDER_APP="algogpt-docker"   # שנה אם שם השירות שונה
+RENDER_APP="algogpt-docker"
 BASE="https://${RENDER_APP}.onrender.com"
 BEARER="${API_BEARER_TOKEN:-}"
 
