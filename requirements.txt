@@ -120,3 +120,35 @@ jsonschema==4.23.0
 
 
 
+aiohttp
+binance
+dateparser
+fastapi
+fpdf
+gunicorn
+httpx[http2]
+jsonschema
+matplotlib
+numpy
+openai
+orjson
+pandas
+Pillow
+prometheus-client
+psutil
+pydantic
+pydantic-core
+pytest
+python-binance
+python-dotenv
+python-multipart
+PyYAML
+redis
+requests
+scipy
+starlette
+structlog
+ta
+typing-extensions
+uvicorn
+websockets
