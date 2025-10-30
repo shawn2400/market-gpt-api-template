@@ -4,7 +4,7 @@ services:
     env: docker
     region: frankfurt
     plan: standard
-    autoDeploy: true
+    autoDeploy: false        # <<< עצרנו דיפלוי אוטומטי. דיפלוי יהיה ידני בלבד
     rootDir: .
     dockerfilePath: ./Dockerfile
     healthCheckPath: /readyz
@@ -414,7 +414,7 @@ services:
       - key: TELEGRAM_SEND_ENABLE
         value: "1"
       - key: HTTP2_ENABLED
-        value: "1"   # ← תואם ל-main.py (_http2_enabled_runtime)
+        value: "1"
 
       - key: EXECUTE_TRADES
         value: "1"
@@ -422,7 +422,7 @@ services:
         value: "1"
 
       - key: ORDERS_USE_OCO
-        value: "0"   # נשאר 0 לפי ההערה שלך
+        value: "0"
 
       - key: ORDER_ID_PREFIX
         value: "ALG"
@@ -482,7 +482,7 @@ services:
         value: "200"
 
       - key: NATIVE_TPSL_ENABLE
-        value: "0"   # נשאר 0
+        value: "0"
       - key: SL_MONOTONIC
         value: "1"
 
@@ -1134,6 +1134,7 @@ services:
         value: "https://fapi.binance.com"
       - key: BIN_SPOT_HTTP
         value: "https://api.binance.com"
+
 
 
 
