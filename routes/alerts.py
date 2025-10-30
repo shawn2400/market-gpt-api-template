@@ -159,9 +159,17 @@ async def alerts_ingest(
             return {"ok": False, "error": f"hmac_{why}"}
 
     sym = (req.symbol or "").upper().strip()
-    side = (req.side or "").upper().strip()
-    if sym == "" or side not in ("BUY","SELL"):
+    side_raw = (req.side or "").upper().strip()
+    # תמיכה ב-LONG/SHORT (Futures) וגם ב-BUY/SELL (קלאסי)
+    if side_raw in ("LONG", "BUY"):
+        side = "BUY"
+    elif side_raw in ("SHORT", "SELL"):
+        side = "SELL"
+    else:
         return {"ok": False, "error": "bad_symbol_or_side"}
+    
+    if sym == "":
+        return {"ok": False, "error": "bad_symbol"}
 
     qty = req.qty
     if qty is None:

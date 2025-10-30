@@ -62,10 +62,13 @@ cd /home/runner/$REPL_SLUG && \nPYTHONPATH=/home/runner/$REPL_SLUG \nTRADE_AUTO_
 [workflows.workflow.metadata]
 outputType = "console"
 
-# === Ports Mapping ===
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[[ports]]
+localPort = 42329
+externalPort = 3000
 
 # === Deployment (VM Target) ===
 [deployment]
