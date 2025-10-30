@@ -30,10 +30,11 @@ _IDEM_TTL = int(os.getenv("IDEMPOTENCY_TTL_SEC", "300"))
 
 # Redis (אופציונלי)
 _RED = None
-if os.getenv("REDIS_URL"):
+_redis_url = os.getenv("REDIS_URL")
+if _redis_url:
     try:
         import redis  # type: ignore
-        _RED = redis.from_url(os.getenv("REDIS_URL"), decode_responses=True)
+        _RED = redis.from_url(_redis_url, decode_responses=True)
     except Exception as e:
         logger.warning("Redis unavailable for idem_seen: %s", e)
         _RED = None
@@ -82,7 +83,7 @@ def verify_hmac(signature: Optional[str], raw_body: bytes) -> bool:
       - "<hex>" נקי
     """
     # העדפה למימוש מרכזי אם זמין
-    if _sec_verify_hmac is not None:
+    if _sec_verify_hmac is not None and callable(_sec_verify_hmac):
         try:
             return bool(_sec_verify_hmac(signature, raw_body))
         except Exception:
@@ -133,7 +134,7 @@ def idem_seen(key: Optional[str]) -> bool:
     if _RED is not None:
         try:
             # SET NX EX: יוצר אם לא קיים (מחזיר True אם חדש)
-            created = _RED.set(f"idem:{key}", "1", nx=True, ex=_IDEM_TTL)
+            created = _RED.set(f"idem:{key or ''}", "1", nx=True, ex=_IDEM_TTL)
             return not bool(created)  # אם לא נוצר – כבר קיים => כפילות
         except Exception as e:
             logger.warning("Redis idem_seen error: %s", e)

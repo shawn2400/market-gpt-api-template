@@ -99,9 +99,14 @@ async def _fetch_context_batch(symbols: List[str], interval: str = DEFAULT_INTER
         LOGGER.warning("CONTEXT_URL not set – worker running without context (reduced gating).")
         return {}
     payload = {"symbols": symbols, "interval": interval, "compact": True}
+    # Get API key from environment for authentication
+    api_key = os.getenv("API_BEARER_TOKEN") or os.getenv("PRIMARY_API_TOKEN") or os.getenv("API_TOKEN") or ""
+    headers = {}
+    if api_key:
+        headers["X-API-Key"] = api_key
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            r = await client.post(CONTEXT_URL.rstrip("/") + "/context/batch", json=payload)
+            r = await client.post(CONTEXT_URL.rstrip("/") + "/context/batch", json=payload, headers=headers)
             r.raise_for_status()
             out = {}
             for it in r.json().get("items", []):
@@ -264,7 +269,7 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
             max_tokens=300,
             response_format={"type":"json_object"},
         )
-        content = resp.choices[0].message.content
+        content = resp.choices[0].message.content or ""
         data = _parse_json_safe(content) or {}
         side = str(data.get("side","")).upper()
         if for_spot and side != "LONG":  # SPOT always LONG
@@ -339,7 +344,8 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     notional = float(budget) * float(leverage)
 
     # נזילות (סליפג')
-    lg = await liquidity_gate_safe(symbol, prop["side"], notional_usd=notional)
+    lg_result = liquidity_gate_safe(symbol, prop["side"], notional_usd=notional)
+    lg = await lg_result if hasattr(lg_result, '__await__') else lg_result
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
 
@@ -382,7 +388,8 @@ async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -
 
     budget = _calc_dynamic_budget(symbol, ctx)
     # נזילות לנוטיונל = budget בלבד
-    lg = await liquidity_gate_safe(symbol, "LONG", notional_usd=budget)
+    lg_result = liquidity_gate_safe(symbol, "LONG", notional_usd=budget)
+    lg = await lg_result if hasattr(lg_result, '__await__') else lg_result
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
 
@@ -417,7 +424,8 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
 
     # נזילות לנוטיונל ≈ budget (גריד לא ממונף כאן)
     budget = float(plan.get("budget_usd") or _calc_dynamic_budget(symbol, ctx))
-    lg = await liquidity_gate_safe(symbol, plan["grid_side"], notional_usd=budget)
+    lg_result = liquidity_gate_safe(symbol, plan["grid_side"], notional_usd=budget)
+    lg = await lg_result if hasattr(lg_result, '__await__') else lg_result
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
 

@@ -1426,6 +1426,19 @@ async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...),
 # ============= Mount router =============
 app.include_router(router)
 
+# ============= Mount additional routes =============
+try:
+    from routes.context import router as context_router
+    app.include_router(context_router)
+except Exception as e:
+    logger.warning("Failed to load context routes: %s", e)
+
+try:
+    from routes.alerts import router as alerts_router
+    app.include_router(alerts_router)
+except Exception as e:
+    logger.warning("Failed to load alerts routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():
