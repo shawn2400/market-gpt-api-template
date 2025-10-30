@@ -1,3 +1,4 @@
+# === main.py (PART 1/2) ===
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
@@ -37,7 +38,7 @@ try:
 except Exception as e:
     raise RuntimeError("httpx is required") from e
 
-# ======== Utility: safe string headers (fix 'Header.startswith' crash) ========
+# ======== Utility: safe string headers ========
 def _to_str_header(val: Any) -> str:
     try:
         if val is None:
@@ -48,7 +49,7 @@ def _to_str_header(val: Any) -> str:
     except Exception:
         return ""
 
-# ======== Utility: HMAC-safe compare for bearer/signature tokens ========
+# ======== Utility: HMAC-safe compare ========
 def _ct_equal(a: str, b: str) -> bool:
     try:
         return hmac.compare_digest(a or "", b or "")
@@ -112,7 +113,7 @@ app = FastAPI(
     openapi_url=OPENAPI_URL,
 )
 
-# CORS (relaxed by default; tighten as needed)
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -127,7 +128,6 @@ def _http2_enabled_runtime() -> bool:
 
 @lru_cache(maxsize=1)
 def _get_shared_async_client() -> httpx.AsyncClient:
-    # single shared client; http2 toggle via env
     return httpx.AsyncClient(http2=_http2_enabled_runtime(), timeout=httpx.Timeout(15.0))
 
 def _port() -> int:
@@ -142,7 +142,7 @@ def _spot_http() -> str:
 def _fut_http() -> str:
     return os.getenv("BIN_FUT_HTTP", "https://fapi.binance.com").rstrip("/")
 
-# Safe HEAD & public ready endpoints (plus HEAD->GET compatibility)
+# Safe HEAD & public ready endpoints
 @app.middleware("http")
 async def _head_compat_and_soft_readyz(request: Request, call_next):
     if request.url.path == "/readyz":
@@ -187,7 +187,7 @@ def _require_bearer(request: Request) -> None:
     if not _ct_equal(token, API_BEARER_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
 
-# Allow either Bearer or X-API-Key (PRIMARY_API_TOKEN/API_TOKEN)
+# Allow either Bearer or X-API-Key
 def _allow_by_bearer_or_apikey(request: Request) -> None:
     want_bearer = (request.headers.get("authorization") or request.headers.get("Authorization") or "").strip()
     x_api_key = (request.headers.get("x-api-key") or request.headers.get("X-API-Key") or "").strip()
@@ -343,54 +343,38 @@ async def _fetch_klines_http(symbol: str, interval: str = "15m", limit: int = 12
         pass
     return []
 
-# ==================== Misc helpers ====================
-_MODE_RX = re.compile(r"\[mode:\s*(MARKET|HYBRID|AUTO)\s*\]", flags=re.I)
-def _parse_mode(note: Optional[str]) -> Optional[str]:
-    if not note:
-        return None
-    m = _MODE_RX.search(str(note))
-    return m.group(1).upper() if m else None
+# ====== Simple indicator calc (ATR/ADX minimal) ======
+def _compute_indicators_from_klines(kl: List[List[Any]], period: int = 14) -> Dict[str, float]:
+    n = len(kl)
+    if n < period + 2:
+        return {"price": 0.0, "atr": 0.0, "adx": 0.0}
+    highs = [float(x[2]) for x in kl]; lows = [float(x[3]) for x in kl]; closes = [float(x[4]) for x in kl]
+    price = closes[-1]
+    trs: List[float] = []
+    for i in range(1, n):
+        tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1]))
+        trs.append(tr)
+    atr = sum(trs[-period:]) / float(period)
+    plus_dm = [0.0]; minus_dm = [0.0]
+    for i in range(1, n):
+        up = highs[i] - highs[i-1]; dn = lows[i-1] - lows[i]
+        plus_dm.append(up if (up > dn and up > 0) else 0.0)
+        minus_dm.append(dn if (dn > up and dn > 0) else 0.0)
+    def _smoothed(arr: List[float], p: int) -> List[float]:
+        out = []; s = sum(arr[:p]); out.append(s)
+        for i in range(p, len(arr)): s = s - (s / p) + arr[i]; out.append(s)
+        return out
+    p = period
+    sm_tr = _smoothed(trs, p); sm_plus = _smoothed(plus_dm[1:], p); sm_minus = _smoothed(minus_dm[1:], p)
+    di_p = [100.0 * (sm_plus[i] / sm_tr[i]) if sm_tr[i] > 0 else 0.0 for i in range(min(len(sm_tr), len(sm_plus)))]
+    di_m = [100.0 * (sm_minus[i] / sm_tr[i]) if sm_tr[i] > 0 else 0.0 for i in range(min(len(sm_tr), len(sm_minus)))]
+    dx = [(abs(di_p[i]-di_m[i]) / max(1e-9, (di_p[i]+di_m[i])))*100.0 for i in range(min(len(di_p), len(di_m)))]
+    adx = sum(dx[-p:]) / float(p) if len(dx) >= p else (dx[-1] if dx else 0.0)
+    return {"price": float(price), "atr": float(atr), "adx": float(adx)}
+# === main.py (PART 2/2) ===
+from starlette.responses import JSONResponse  # ensure available here
 
-def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
-    try:
-        sig = inspect.signature(fn)
-        allowed = set(sig.parameters.keys())
-        return {k: v for k, v in kwargs.items() if k in allowed}
-    except Exception:
-        bad = {"tp_kind", "sl_kind", "entry_kind", "entry_offset", "tp_offset", "sl_offset"}
-        return {k: v for k, v in kwargs.items() if k not in bad}
-
-def _is_code_4061(err: Union[Exception, str]) -> bool:
-    s = str(err)
-    return "code=-4061" in s or "position side does not match" in s.lower()
-
-def _align_position_mode(client) -> None:
-    mode_override = (os.getenv("POSITION_MODE_OVERRIDE", "") or "").strip().lower()
-    with suppress(Exception):
-        if mode_override in ("hedge", "dual", "dual_side", "dual_side_position", "dualposition"):
-            client.futures_change_position_mode(dualSidePosition="true")
-        elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
-            client.futures_change_position_mode(dualSidePosition="false")
-
-# ==================== Order ID helper ====================
-try:
-    from utils.order_ids import build_client_order_id  # type: ignore
-except Exception:
-    def _coid_fit_local(s: str, limit: int = 36) -> str:
-        if len(s) <= limit:
-            return s
-        h = hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
-        return f"{s[:limit - (len(h) + 1)]}_{h}"
-    def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Optional[str] = None) -> str:
-        prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
-        sym = str(symbol).upper()
-        sd = str(side).upper()
-        rl = str(role).upper().replace("@", "_")
-        ts = str(int(time.time() * 1000))
-        base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
-        return _coid_fit_local(base, 36)
-
-# ==================== Execute trade helpers ====================
+# ==================== Execute trade helpers & flows ====================
 def _bn_round(value: float, step: float) -> float:
     if step <= 0:
         return value
@@ -466,161 +450,35 @@ def _round_to_tick(client, symbol: str, price: float) -> float:
 def _get_working_type() -> str:
     return "MARK_PRICE" if os.getenv("ORDER_TRIGGER", "mark").lower().startswith("mark") else "CONTRACT_PRICE"
 
-# --- ATR from klines (SDK path) ---
-def _get_klines_via_sdk(cli, symbol: str, interval: str = "5m", limit: int = 120) -> List[List[Any]]:
+def _is_code_4061(err: Union[Exception, str]) -> bool:
+    s = str(err)
+    return "code=-4061" in s or "position side does not match" in s.lower()
+
+def _align_position_mode(client) -> None:
+    mode_override = (os.getenv("POSITION_MODE_OVERRIDE", "") or "").strip().lower()
     with suppress(Exception):
-        kl = cli.futures_klines(symbol=symbol, interval=interval, limit=min(max(int(limit), 5), 1500))
-        if isinstance(kl, list) and kl and isinstance(kl[0], list):
-            return kl
-    return []
+        if mode_override in ("hedge", "dual", "dual_side", "dual_side_position", "dualposition"):
+            client.futures_change_position_mode(dualSidePosition="true")
+        elif mode_override in ("oneway", "one_way", "single", "single_side", "oneside"):
+            client.futures_change_position_mode(dualSidePosition="false")
 
-def _calc_atr_from_klines(kl: List[List[Any]], period: int = 14) -> Optional[float]:
-    try:
-        if not kl or len(kl) < period + 1:
-            return None
-        highs = [float(x[2]) for x in kl]
-        lows  = [float(x[3]) for x in kl]
-        closes= [float(x[4]) for x in kl]
-        trs: List[float] = []
-        for i in range(1, len(kl)):
-            h, l, pc = highs[i], lows[i], closes[i-1]
-            tr = max(h - l, abs(h - pc), abs(l - pc))
-            trs.append(tr)
-        if len(trs) < period:
-            return None
-        return sum(trs[-period:]) / float(period)
-    except Exception:
-        return None
-
-def _side_close_for(entry_side: str) -> str:
-    return "SELL" if str(entry_side).upper() == "BUY" else "BUY"
-async def _ensure_native_tpsl_after_entry(
-    ticket: Dict[str, Any],
-    *,
-    entry_side: str,
-    pos_side: str,
-    symbol: str,
-    qty: float,
-    tp_targets: Optional[List[float]],
-    sl_target: Optional[float],
-) -> Dict[str, Any]:
-    out: Dict[str, Any] = {"ok": True, "placed": []}
-    if os.getenv("NATIVE_TPSL_ENABLE", "1").lower() not in ("1", "true", "yes", "on"):
-        return {"ok": False, "skipped": True, "reason": "NATIVE_TPSL_ENABLE=0"}
-    try:
-        from binance.client import Client  # type: ignore
-    except Exception as e:
-        return {"ok": False, "error": "binance_client_import_failed", "detail": f"{e}"}
-
-    api_key = os.getenv("BINANCE_API_KEY", "").strip()
-    api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
-    if not (api_key and api_sec):
-        return {"ok": False, "error": "binance_keys_missing"}
-
-    try:
-        cli = Client(api_key, api_sec)
-        _align_position_mode(cli)
-        qty = _round_to_lot_size(cli, symbol, float(qty))
-        if qty <= 0:
-            return {"ok": False, "error": "qty_non_positive_after_round"}
-        working_type = _get_working_type()
-
-        # SL closePosition
-        if sl_target not in (None, 0, "0", "0.0"):
-            try:
-                order = cli.futures_create_order(
-                    symbol=symbol,
-                    side=_side_close_for(entry_side),
-                    type="STOP_MARKET",
-                    stopPrice=_round_to_tick(cli, symbol, float(sl_target)),
-                    closePosition=True,
-                    reduceOnly=True,
-                    workingType=working_type,
-                    priceProtect=True,
-                    newClientOrderId=build_client_order_id(symbol, _side_close_for(entry_side), role="SL"),
-                )
-                out["placed"].append({"kind": "SL", "resp": order})
-            except Exception as e:
-                out.setdefault("errors", []).append({"kind": "SL", "error": f"{e}"})
-
-        # TP splits
-        tps = list(tp_targets or [])
-        if tps:
-            splits = ticket.get("tp_splits")
-            if isinstance(splits, str):
-                with suppress(Exception):
-                    splits = [float(x) for x in splits.split(",") if x.strip()]
-            if not splits:
-                n = len(tps)
-                splits = [1.0] if n == 1 else ([0.5, 0.5] if n == 2 else [0.30, 0.30, 0.40][:n])
-            ssum = sum([float(x) for x in splits]) or 1.0
-            splits = [float(x)/ssum for x in splits]
-
-            remain = qty
-            for i, tp_price in enumerate(tps, start=1):
-                part = _round_to_lot_size(cli, symbol, max(0.0, remain * splits[i-1]))
-                if part <= 0 and i == len(tps) and remain > 0:
-                    part = _round_to_lot_size(cli, symbol, remain)
-                if part <= 0:
-                    continue
-                try:
-                    order = cli.futures_create_order(
-                        symbol=symbol,
-                        side=_side_close_for(entry_side),
-                        type="TAKE_PROFIT_MARKET",
-                        stopPrice=_round_to_tick(cli, symbol, float(tp_price)),
-                        quantity=part,
-                        reduceOnly=True,
-                        workingType=working_type,
-                        priceProtect=True,
-                        newClientOrderId=build_client_order_id(symbol, _side_close_for(entry_side), role=f"TP{i}"),
-                    )
-                    out["placed"].append({"kind": f"TP{i}", "qty": part, "resp": order})
-                    remain = max(0.0, remain - part)
-                except Exception as e:
-                    out.setdefault("errors", []).append({"kind": f"TP{i}", "error": f"{e}"})
-        return out
-    except Exception as e:
-        return {"ok": False, "error": "native_tpsl_exception", "detail": f"{e}"}
-
-# --- one-shot BE + ATR trailing helpers ---
-def _fetch_single_position(cli, symbol: str) -> Optional[Dict[str, Any]]:
-    with suppress(Exception):
-        pos = cli.futures_position_information(symbol=symbol)
-        if isinstance(pos, list) and pos:
-            for p in pos:
-                if abs(float(p.get("positionAmt", "0"))) > 0:
-                    return p
-            return pos[0]
-    return None
-
-def _compute_be_price(side: str, entry_price: float, be_offset_bps: float) -> float:
-    off = entry_price * (be_offset_bps / 10000.0)
-    return entry_price + off if side.upper() == "BUY" else entry_price - off
-
-def _trail_stop_from_mark(side: str, mark_price: float, atr: float, mult: float) -> float:
-    if side.upper() == "BUY":
-        return mark_price - (atr * mult)
-    return mark_price + (atr * mult)
-
-def _combine_be_trail(side: str, be_price: float, trail_price: float) -> float:
-    if side.upper() == "BUY":
-        return max(be_price, trail_price)
-    else:
-        return min(be_price, trail_price)
-
-def _place_or_replace_close_stop(cli, symbol: str, side: str, stop_price: float) -> Dict[str, Any]:
-    return cli.futures_create_order(
-        symbol=symbol,
-        side=_side_close_for(side),
-        type="STOP_MARKET",
-        stopPrice=_round_to_tick(cli, symbol, float(stop_price)),
-        closePosition=True,
-        reduceOnly=True,
-        workingType=_get_working_type(),
-        priceProtect=True,
-        newClientOrderId=build_client_order_id(symbol, _side_close_for(side), role="MG"),
-    )
+# ==================== Order ID helper ====================
+try:
+    from utils.order_ids import build_client_order_id  # type: ignore
+except Exception:
+    def _coid_fit_local(s: str, limit: int = 36) -> str:
+        if len(s) <= limit:
+            return s
+        h = hashlib.md5(s.encode("utf-8")).hexdigest()[:6]
+        return f"{s[:limit - (len(h) + 1)]}_{h}"
+    def build_client_order_id(symbol: str, side: str, role: str = "ENTRY", extra: Optional[str] = None) -> str:
+        prefix = (os.getenv("ORDER_ID_PREFIX") or "ALG").strip() or "ALG"
+        sym = str(symbol).upper()
+        sd = str(side).upper()
+        rl = str(role).upper().replace("@", "_")
+        ts = str(int(time.time() * 1000))
+        base = "-".join([prefix, sym, sd, rl, ts] + ([str(extra)] if extra else []))
+        return _coid_fit_local(base, 36)
 
 # ==================== Execute paths ====================
 async def _execute_trade(ticket: Dict[str, Any]) -> Dict[str, Any]:
@@ -746,11 +604,11 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     try:
         maybe = execute_trade_live(**clean)  # type: ignore[misc]
         if inspect.isawaitable(maybe):
-            res = await maybe  # type: ignore[assignment]
+            res = await maybe
         else:
-            res = maybe  # type: ignore[assignment]
+            res = maybe
 
-        # === NEW: write native TP/SL after successful entry (optional) ===
+        # Optional native TP/SL write
         entered_ok = bool(res.get("ok")) or bool(res.get("entered"))
         if entered_ok and os.getenv("MANAGER_WRITES_ORDERS", "1").lower() in ("1", "true", "yes", "on"):
             try:
@@ -781,7 +639,7 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
                 return await _execute_trade(ticket2)
         except Exception:
             pass
-        return {"entered": bool(res.get("ok")), **res}  # type: ignore[arg-type]
+        return {"entered": bool(res.get("ok")), **res}
     except Exception as e:
         return {"ok": False, "entered": False, "error": "armed_execute_failed", "detail": f"{e}", "trace": traceback.format_exc()}
 
@@ -849,7 +707,28 @@ async def _apply_auto_qty_on_ticket_async(ticket: Dict[str, Any]) -> Optional[Di
         new_ticket["position_side"] = ""
     return new_ticket
 
-# ==================== OPS APPROVAL & EVENTS ROUTER ====================
+# ============= Nonce enforcement (anti-replay) =============
+async def _enforce_nonce_once(request: Request) -> None:
+    if not (aioredis and REDIS_URL and HMAC_SECRET):
+        return
+    try:
+        r = await _get_redis_cached()
+        if not r:
+            return
+        nonce = (request.headers.get("X-Request-Nonce") or request.headers.get("x-request-nonce") or "").strip()
+        if len(nonce) < 16:
+            raise HTTPException(status_code=401, detail="nonce_missing_or_weak")
+        key = f"{NS}:nonce:{nonce}"
+        ok = await r.setnx(key, "1")
+        if not ok:
+            raise HTTPException(status_code=401, detail="replay_detected")
+        await r.expire(key, int(os.getenv("ANTI_REPLAY_NONCE_TTL_SEC", "1800") or 1800))
+    except HTTPException:
+        raise
+    except Exception:
+        pass
+
+# ============= OPS APPROVAL & EVENTS ROUTER =============
 router = APIRouter(tags=["ops-approval"])
 
 @router.post("/webhook/whatever")
@@ -1153,7 +1032,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     with suppress(Exception):
         inc_approvals_created()
 
-    # enrich ETA/slip/ATR for preview (non-fatal best-effort)
+    # enrich ETA/slip/ATR for preview (best-effort)
     with suppress(Exception):
         cli = _get_shared_async_client()
         px = await get_last_price_async(symbol) or 0.0
@@ -1175,13 +1054,6 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
             price = float(ind.get("price") or 0.0) or px
             atr = float(ind.get("atr") or 0.0)
             atr_pct = (atr / price) * 100.0 if price > 0 else 0.0
-        notional = float(budget or 0.0)
-        if notional <= 0 and px > 0 and qty > 0 and lev > 0:
-            notional = float(px) * float(qty) / max(1.0, float(lev))
-        with suppress(Exception):
-            from utils.slip_estimator import estimate_impact_slip_bps, set_last_slip_estimate_bps  # type: ignore
-            est_bps = estimate_impact_slip_bps(spread_pct, atr_pct, notional, max_bps=float(os.getenv("IMPACT_SLIP_BPS_MAX", "25") or 25.0))
-            set_last_slip_estimate_bps(float(est_bps))
 
     base = PUBLIC_HOST.rstrip("/") if PUBLIC_HOST else (str(request.base_url).rstrip("/") if request else "")
     try:
@@ -1360,7 +1232,7 @@ async def reject_signed_post(request: Request, payload: Dict[str, Any] = Body(..
         raise HTTPException(status_code=422, detail="approve_true_on_reject_endpoint")
     return await _reject_core(ticket_id)
 
-# --- Smart manage wrapper (delegates to routes.manager/app.manager if exists) ---
+# --- Smart manage wrapper (delegates) ---
 async def _smart_manage_now(symbol: str,
                             offset_bps: Optional[int] = None,
                             pcts: Optional[List[float]] = None,
@@ -1385,34 +1257,98 @@ async def _smart_manage_now(symbol: str,
     except Exception as e:
         return {"ok": False, "error": "smart_manage_now_failed", "detail": f"{e}"}
 
-# ====== Simple indicator calc (ATR/ADX minimal) ======
-def _compute_indicators_from_klines(kl: List[List[Any]], period: int = 14) -> Dict[str, float]:
-    n = len(kl)
-    if n < period + 2:
-        return {"price": 0.0, "atr": 0.0, "adx": 0.0}
-    highs = [float(x[2]) for x in kl]; lows = [float(x[3]) for x in kl]; closes = [float(x[4]) for x in kl]
-    price = closes[-1]
-    trs: List[float] = []
-    for i in range(1, n):
-        tr = max(highs[i]-lows[i], abs(highs[i]-closes[i-1]), abs(lows[i]-closes[i-1]))
-        trs.append(tr)
-    atr = sum(trs[-period:]) / float(period)
-    plus_dm = [0.0]; minus_dm = [0.0]
-    for i in range(1, n):
-        up = highs[i] - highs[i-1]; dn = lows[i-1] - lows[i]
-        plus_dm.append(up if (up > dn and up > 0) else 0.0)
-        minus_dm.append(dn if (dn > up and dn > 0) else 0.0)
-    def _smoothed(arr: List[float], p: int) -> List[float]:
-        out = []; s = sum(arr[:p]); out.append(s)
-        for i in range(p, len(arr)): s = s - (s / p) + arr[i]; out.append(s)
+# --- Native TP/SL helpers (used by armed execute) ---
+def _side_close_for(entry_side: str) -> str:
+    return "SELL" if str(entry_side).upper() == "BUY" else "BUY"
+
+async def _ensure_native_tpsl_after_entry(
+    ticket: Dict[str, Any],
+    *,
+    entry_side: str,
+    pos_side: str,
+    symbol: str,
+    qty: float,
+    tp_targets: Optional[List[float]],
+    sl_target: Optional[float],
+) -> Dict[str, Any]:
+    out: Dict[str, Any] = {"ok": True, "placed": []}
+    if os.getenv("NATIVE_TPSL_ENABLE", "1").lower() not in ("1", "true", "yes", "on"):
+        return {"ok": False, "skipped": True, "reason": "NATIVE_TPSL_ENABLE=0"}
+    try:
+        from binance.client import Client  # type: ignore
+    except Exception as e:
+        return {"ok": False, "error": "binance_client_import_failed", "detail": f"{e}"}
+
+    api_key = os.getenv("BINANCE_API_KEY", "").strip()
+    api_sec = os.getenv("BINANCE_API_SECRET", "").strip()
+    if not (api_key and api_sec):
+        return {"ok": False, "error": "binance_keys_missing"}
+
+    try:
+        cli = Client(api_key, api_sec)
+        _align_position_mode(cli)
+        qty = _round_to_lot_size(cli, symbol, float(qty))
+        if qty <= 0:
+            return {"ok": False, "error": "qty_non_positive_after_round"}
+        working_type = _get_working_type()
+
+        # SL closePosition
+        if sl_target not in (None, 0, "0", "0.0"):
+            try:
+                order = cli.futures_create_order(
+                    symbol=symbol,
+                    side=_side_close_for(entry_side),
+                    type="STOP_MARKET",
+                    stopPrice=_round_to_tick(cli, symbol, float(sl_target)),
+                    closePosition=True,
+                    reduceOnly=True,
+                    workingType=working_type,
+                    priceProtect=True,
+                    newClientOrderId=build_client_order_id(symbol, _side_close_for(entry_side), role="SL"),
+                )
+                out["placed"].append({"kind": "SL", "resp": order})
+            except Exception as e:
+                out.setdefault("errors", []).append({"kind": "SL", "error": f"{e}"})
+
+        # TP splits
+        tps = list(tp_targets or [])
+        if tps:
+            splits = ticket.get("tp_splits")
+            if isinstance(splits, str):
+                with suppress(Exception):
+                    splits = [float(x) for x in splits.split(",") if x.strip()]
+            if not splits:
+                n = len(tps)
+                splits = [1.0] if n == 1 else ([0.5, 0.5] if n == 2 else [0.30, 0.30, 0.40][:n])
+            ssum = sum([float(x) for x in splits]) or 1.0
+            splits = [float(x)/ssum for x in splits]
+
+            remain = qty
+            for i, tp_price in enumerate(tps, start=1):
+                part = _round_to_lot_size(cli, symbol, max(0.0, remain * splits[i-1]))
+                if part <= 0 and i == len(tps) and remain > 0:
+                    part = _round_to_lot_size(cli, symbol, remain)
+                if part <= 0:
+                    continue
+                try:
+                    order = cli.futures_create_order(
+                        symbol=symbol,
+                        side=_side_close_for(entry_side),
+                        type="TAKE_PROFIT_MARKET",
+                        stopPrice=_round_to_tick(cli, symbol, float(tp_price)),
+                        quantity=part,
+                        reduceOnly=True,
+                        workingType=working_type,
+                        priceProtect=True,
+                        newClientOrderId=build_client_order_id(symbol, _side_close_for(entry_side), role=f"TP{i}"),
+                    )
+                    out["placed"].append({"kind": f"TP{i}", "qty": part, "resp": order})
+                    remain = max(0.0, remain - part)
+                except Exception as e:
+                    out.setdefault("errors", []).append({"kind": f"TP{i}", "error": f"{e}"})
         return out
-    p = period
-    sm_tr = _smoothed(trs, p); sm_plus = _smoothed(plus_dm[1:], p); sm_minus = _smoothed(minus_dm[1:], p)
-    di_p = [100.0 * (sm_plus[i] / sm_tr[i]) if sm_tr[i] > 0 else 0.0 for i in range(min(len(sm_tr), len(sm_plus)))]
-    di_m = [100.0 * (sm_minus[i] / sm_tr[i]) if sm_tr[i] > 0 else 0.0 for i in range(min(len(sm_tr), len(sm_minus)))]
-    dx = [(abs(di_p[i]-di_m[i]) / max(1e-9, (di_p[i]+di_m[i])))*100.0 for i in range(min(len(di_p), len(di_m)))]
-    adx = sum(dx[-p:]) / float(p) if len(dx) >= p else (dx[-1] if dx else 0.0)
-    return {"price": float(price), "atr": float(atr), "adx": float(adx)}
+    except Exception as e:
+        return {"ok": False, "error": "native_tpsl_exception", "detail": f"{e}"}
 
 # ============= Approve/Reject core ops =============
 async def _approve_core(ticket_id: str) -> JSONResponse:
@@ -1447,7 +1383,7 @@ async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...),
     res = await _smart_manage_now(
         sym,
         offset_bps=int(os.getenv("SMART_MANAGE_BE_OFFSET_BPS", "5") or 5),
-        pcts=[float(x) for x in (os.getenv("SMART_MANAGE_PCTS") or "3,6,10,16").split(",") if x.strip()]:
+        pcts=[float(x) for x in (os.getenv("SMART_MANAGE_PCTS") or "3,6,10,16").split(",") if x.strip()],
         splits=[float(x) for x in (os.getenv("SMART_MANAGE_SPLITS") or "0.25,0.25,0.25,0.25").split(",") if x.strip()],
         atr_mult=float(os.getenv("SMART_MANAGE_TRAIL_ATR_MULT", "0") or 0) or None,
     )
@@ -1490,7 +1426,7 @@ async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...),
 # ============= Mount router =============
 app.include_router(router)
 
-# ============= Root & health =============
+# ============= Root & health & AI test =============
 @app.get("/")
 async def root():
     return {
@@ -1524,6 +1460,19 @@ async def readyz_strict():
                 return PlainTextResponse("redis_ping_failed", status_code=503)
     return PlainTextResponse("ok", status_code=200)
 
+# === NEW: /ai/test to prevent 405 and validate auth ===
+@app.post("/ai/test")
+async def ai_test_post(request: Request):
+    _require_bearer(request)
+    # לא קורא החוצה כדי לא לתקוע — רק החזר OK+אינפו
+    return {"ok": True, "model": os.getenv("OPENAI_MODEL") or os.getenv("DEEPSEEK_MODEL") or "unset",
+            "base": os.getenv("OPENAI_API_BASE") or os.getenv("DEEPSEEK_API_BASE") or "unset"}
+
+@app.get("/ai/ping")
+async def ai_ping(request: Request):
+    _require_bearer(request)
+    return {"ok": True, "ts": int(time.time())}
+
 # ==================== Startup (lifespan) ====================
 def _adjust_routes_autoload_filters() -> None:
     pass
@@ -1535,34 +1484,12 @@ def _ensure_public_fallbacks() -> None:
     pass
 async def _resolve_binance_endpoints() -> None:
     pass
-async def _enforce_nonce_once(request: Request) -> None:
-    if not (aioredis and REDIS_URL and HMAC_SECRET):
-        return
-    try:
-        r = await _get_redis_cached()
-        if not r:
-            return
-        nonce = (request.headers.get("X-Request-Nonce") or request.headers.get("x-request-nonce") or "").strip()
-        if len(nonce) < 16:
-            raise HTTPException(status_code=401, detail="nonce_missing_or_weak")
-        key = f"{NS}:nonce:{nonce}"
-        ok = await r.setnx(key, "1")
-        if not ok:
-            raise HTTPException(status_code=401, detail="replay_detected")
-        await r.expire(key, int(os.getenv("ANTI_REPLAY_NONCE_TTL_SEC", "1800") or 1800))
-    except HTTPException:
-        raise
-    except Exception:
-        pass
-
-ROUTES_AUTOLOAD = os.getenv("ROUTES_AUTOLOAD", "0").lower() in ("1","true","yes","on")
-ROUTES_AUTOLOAD_MODE = (os.getenv("ROUTES_AUTOLOAD_MODE") or "eager").lower()
 
 @app.on_event("startup")
 async def _on_startup():
     try:
         _adjust_routes_autoload_filters()
-        if ROUTES_AUTOLOAD and ROUTES_AUTOLOAD_MODE == "eager":
+        if os.getenv("ROUTES_AUTOLOAD", "0").lower() in ("1","true","yes","on") and (os.getenv("ROUTES_AUTOLOAD_MODE","eager").lower() == "eager"):
             _routes_autoload_now()
         _include_ui_grid_router()
         _ensure_public_fallbacks()
@@ -1580,7 +1507,9 @@ async def _on_startup():
 # ==================== __main__ ====================
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=_port(), reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
+# === END main.py (PART 2/2) ===
+
 
 
 
