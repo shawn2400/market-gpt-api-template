@@ -34,10 +34,6 @@ waitForPort = 5000
 localPort = 5000
 externalPort = 80
 
-[[ports]]
-localPort = 42031
-externalPort = 3000
-
 [deployment]
 deploymentTarget = "vm"
 run = ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]

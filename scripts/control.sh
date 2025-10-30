@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-BASE="${BASE:-https://<your-render-app>.onrender.com}"
+BASE="${BASE:-https://algogpt-docker.onrender.com}"
 BEARER="${API_BEARER_TOKEN:?set API_BEARER_TOKEN in Replit secrets}"
 
 call() {
