@@ -66,10 +66,6 @@ outputType = "console"
 localPort = 5000
 externalPort = 80
 
-[[ports]]
-localPort = 42329
-externalPort = 3000
-
 # === Deployment (VM Target) ===
 [deployment]
 deploymentTarget = "vm"
