@@ -1,0 +1,59 @@
+❌ Git push נכשל אחרי 3 ניסיונות.
+~/workspace$ git fetch origin main
+git pull --rebase origin main
+From https://github.com/shawn2400/market-gpt-api-template
+ * branch            main       -> FETCH_HEAD
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+~/workspace$ git add -A
+git commit -m "chore: sync before patch"
+git push origin main
+[main 5d03be3] chore: sync before patch
+ 2 files changed, 83 insertions(+)
+ create mode 100644 attached_assets/Pasted--GET-fapi-v2-account-HTTP-2-Host-fapi-binance-com-User-Agent-curl-8-14-1-Accept--1761865304098_1761865304099.txt
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (non-fast-forward)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the tip of your current branch is behind
+hint: its remote counterpart. If you want to integrate the remote changes,
+hint: use 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ # 1. בטל את ה-rebase
+git rebase --abort
+
+# 2. נקה את ה-stash
+git stash drop
+
+# 3. איפוס קל (שומר שינויים)
+git reset --soft HEAD~1
+
+# 4. Pull עם merge
+git pull origin main --no-rebase
+
+# 5. פתור conflict ב-scripts/menu.sh אם יש
+# (פתח את הקובץ, מחק את ה-<<<, ===, >>> ובחר את הגרסה הנכונה)
+
+# 6. Commit
+git add .
+git commit -m "Merge: fix menu.sh conflict + Binance API working"
+
+# 7. Push
+git push origin main
+fatal: no rebase in progress
+Dropped refs/stash@{0} (810c673c701b5e41743ef9d9c4220d1ed92fd790)
+From https://github.com/shawn2400/market-gpt-api-template
+ * branch            main       -> FETCH_HEAD
+Auto-merging scripts/menu.sh
+CONFLICT (content): Merge conflict in scripts/menu.sh
+Automatic merge failed; fix conflicts and then commit the result.
+[main 3aadbcb] Merge: fix menu.sh conflict + Binance API working
+Enumerating objects: 37, done.
+Counting objects: 100% (34/34), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (25/25), done.
+Writing objects: 100% (25/25), 7.16 KiB | 3.58 MiB/s, done.
+Total 25 (delta 18), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (18/18), completed with 7 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   364c475..3aadbcb  main -> main
+~/workspace$ 
