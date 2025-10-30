@@ -172,7 +172,57 @@ class _MemIdem:
             cls._store.pop(k, None)
 
 
-__all__ = ["verify_hmac", "verify_inbound", "idem_seen"]
+def generate_idempotency_key() -> str:
+    """
+    יצירת מפתח אידמפוטנסיות ייחודי.
+    """
+    import uuid
+    return str(uuid.uuid4())
+
+
+def build_signed_outbound(
+    secret: str,
+    payload: dict,
+    idempotency_key: Optional[str] = None,
+    extra_headers: Optional[dict] = None,
+) -> tuple[bytes, dict]:
+    """
+    בונה בקשה יוצאת חתומה ב-HMAC-SHA256.
+    
+    Args:
+        secret: המפתח הסודי לחתימה
+        payload: הנתונים לשליחה (dict)
+        idempotency_key: מפתח אידמפוטנסיות (אופציונלי)
+        extra_headers: headers נוספים (אופציונלי)
+    
+    Returns:
+        tuple של (body_bytes, headers_dict)
+    """
+    import json
+    
+    # המרה ל-JSON
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    
+    # חישוב חתימה
+    secret_bytes = secret.encode("utf-8") if isinstance(secret, str) else secret
+    signature = _hmac_sha256_hex(secret_bytes, body)
+    
+    # בניית headers
+    headers = {
+        "X-Signature": f"sha256={signature}",
+        "X-Timestamp": str(int(time.time())),
+    }
+    
+    if idempotency_key:
+        headers["X-Idempotency-Key"] = idempotency_key
+    
+    if extra_headers:
+        headers.update(extra_headers)
+    
+    return body, headers
+
+
+__all__ = ["verify_hmac", "verify_inbound", "idem_seen", "build_signed_outbound", "generate_idempotency_key"]
 
 
 
