@@ -12,7 +12,7 @@ TG_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TG_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
 LOG_FILE="deploy_log.txt"
 
-# === פונקציית שליחת הודעות לטלגרם ===
+# === פונקציה: שליחת טלגרם ===
 notify_tg() {
   local text="$1"
   if [[ -n "$TG_TOKEN" && -n "$TG_CHAT_ID" ]]; then
@@ -23,55 +23,66 @@ notify_tg() {
   fi
 }
 
-# === פונקציה לרישום ללוג ===
-log() {
-  echo -e "$1" | tee -a "$LOG_FILE"
-}
+# === לוג מקומי ===
+log() { echo -e "$1" | tee -a "$LOG_FILE"; }
 
 echo "" > "$LOG_FILE"
 log "=============================="
 log "🚀 AlgoGPT Auto Deploy Started"
 log "=============================="
 
-# === שלב 1: סנכרון עם GitHub ===
-log "${Y}📥  מושך עדכונים מ-GitHub...${N}"
-git fetch origin main >>"$LOG_FILE" 2>&1
-git rebase origin/main || true
-
-log "${Y}▶️  שולח עדכונים ל-GitHub...${N}"
-git add -A
-git_commit_msg="deploy: auto-fix $(date -Iseconds)"
-git commit -m "$git_commit_msg" || true
-
-commit_hash=$(git rev-parse --short HEAD || echo "unknown")
-
-if git push origin main >>"$LOG_FILE" 2>&1; then
-  log "${G}✔️  נשלח ל-GitHub. Render יבצע Auto-Deploy.${N}"
-  notify_tg "🚀 <b>AlgoGPT Deploy</b> התחיל 🔧%0ACommit: <code>${commit_hash}</code>%0A📦 ${git_commit_msg}"
+# === שלב 1: שמירת שינויים מקומיים ===
+log "${Y}💾 שומר שינויים מקומיים...${N}"
+git add -A || true
+if git diff --cached --quiet; then
+  log "ℹ️ אין שינויים לשמור."
 else
-  log "${R}❌ בעיה ב-push ל-GitHub.${N}"
-  notify_tg "❌ <b>Deploy נכשל</b> בזמן push ל-GitHub 🚫%0ACommit: <code>${commit_hash}</code>"
-  exit 1
+  git commit -m "deploy: auto-fix $(date -Iseconds)" || true
 fi
 
-# === שלב 2: בדיקת Render ===
-log "${Y}⌛  ממתין ש-Render יעלה גרסה חדשה...${N}"
+# === שלב 2: ריבייס עם ה־Remote ===
+log "${Y}🔄 מבצע git fetch + rebase...${N}"
+git fetch origin main || true
+if ! git rebase origin/main; then
+  log "${Y}⚠️ קונפליקט או שגיאה — מנסה שוב עם stash.${N}"
+  git stash push -m "pre-rebase"
+  git rebase origin/main || true
+  git stash pop || true
+fi
+
+# === שלב 3: שליחת Commit ל־GitHub ===
+commit_hash=$(git rev-parse --short HEAD || echo "unknown")
+tries=0
+until git push origin main; do
+  tries=$((tries + 1))
+  if (( tries >= 3 )); then
+    log "${R}❌ Git push נכשל אחרי 3 ניסיונות.${N}"
+    notify_tg "❌ <b>Deploy נכשל</b> אחרי 3 ניסיונות push 🚫%0ACommit: <code>${commit_hash}</code>"
+    exit 1
+  fi
+  log "🔁 ניסיון נוסף (${tries}/3)..."
+  sleep 3
+done
+
+log "${G}✔️ נשלח ל-GitHub. Render יבצע Auto-Deploy.${N}"
+notify_tg "🚀 <b>AlgoGPT Deploy התחיל</b> 🔧%0A📦 Commit: <code>${commit_hash}</code>"
+
+# === שלב 4: המתנה ל-Render ===
+log "${Y}⌛ ממתין ש-Render יעלה גרסה חדשה...${N}"
 for i in {1..20}; do
   sleep 10
   STATUS=$(curl -fs -o /dev/null -w "%{http_code}" "$BASE/readyz" || true)
   if [[ "$STATUS" == "200" ]]; then
-    log "${G}✅ Render מוכן (${BASE})${N}"
     version_json=$(curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/version" || echo "")
-    log "📄 גרסת שירות: ${version_json}"
+    log "${G}✅ Render מוכן (${BASE})${N}"
+    log "📄 גרסה: ${version_json}"
     notify_tg "✅ <b>Deploy הושלם בהצלחה</b>%0A🌐 <code>${BASE}</code>%0ACommit: <code>${commit_hash}</code>%0A📄 גרסה: <code>${version_json}</code>"
-    log "✅ Deploy Success — ${commit_hash}"
     exit 0
   fi
-  log "🔄 עדיין בטעינה (status=$STATUS)..."
+  log "🔄 עדיין ממתין (status=$STATUS)..."
 done
 
-# === Render לא עלה ===
-log "${R}❌ Render לא חזר ל-OK אחרי 200 שניות.${N}"
-notify_tg "⚠️ <b>Deploy נכשל</b> – Render לא עלה בזמן ⏱️%0ACommit: <code>${commit_hash}</code>%0A📎 לוג: <code>${BASE}/static/deploy_log.txt</code>"
+log "${R}❌ Render לא עלה בזמן.${N}"
+notify_tg "⚠️ <b>Deploy נכשל</b> – Render לא עלה בזמן ⏱️%0ACommit: <code>${commit_hash}</code>"
 exit 1
 
