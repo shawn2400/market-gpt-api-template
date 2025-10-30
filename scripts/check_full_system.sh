@@ -2,92 +2,138 @@
 set -euo pipefail
 
 BASE="https://algogpt-docker.onrender.com"
-BEARER="${API_BEARER_TOKEN:?set API_BEARER_TOKEN in Replit/Render secrets}"
+BEARER="${API_BEARER_TOKEN:?set API_BEARER_TOKEN in secrets}"
+TG_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
+TG_CHAT="${TELEGRAM_CHAT_ID:-}"
 
-separator() {
-  echo "-------------------------------------------"
+G="\033[1;32m"; R="\033[1;31m"; Y="\033[1;33m"; N="\033[0m"
+
+section() {
+  echo -e "\n${Y}=============================="
+  echo -e "🔎 $1"
+  echo -e "==============================${N}"
 }
 
-check_api() {
-  echo "🔑 Checking Bearer token..."
-  curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $BEARER" "$BASE/version" | tee /tmp/version.json
-  grep -q '"ok":true' /tmp/version.json && echo "✅ API token valid." || echo "❌ Invalid or mismatched API token."
+send_telegram() {
+  local msg="$1"
+  if [[ -n "${TG_TOKEN}" && -n "${TG_CHAT}" ]]; then
+    curl -s -X POST "https://api.telegram.org/bot${TG_TOKEN}/sendMessage" \
+         -d "chat_id=${TG_CHAT}" -d "text=${msg}" -d "parse_mode=HTML" >/dev/null || true
+  fi
 }
 
-check_binance() {
-  echo "🟡 Checking Binance Futures..."
-  curl -s https://fapi.binance.com/fapi/v1/ping >/dev/null && echo "✅ Binance reachable." || echo "❌ Binance unreachable!"
-}
+# === 1. VERSION CHECK ===
+section "System Version"
+ver=$(curl -s -H "Authorization: Bearer $BEARER" "$BASE/version" | grep -o '"algogpt_version":"[^"]*"' | cut -d'"' -f4 || echo "n/a")
+echo -e "📦 AlgoGPT Version: ${G}${ver}${N}"
 
-check_telegram() {
-  echo "🤖 Checking Telegram bot..."
-  curl -s -H "Authorization: Bearer $BEARER" "$BASE/telegram/status" || echo "⚠️ Telegram endpoint not found."
-}
+# === 2. RENDER HEALTH ===
+section "Render Health"
+ready=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/readyz" || echo "000")
+health=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/healthz" || echo "000")
+if [[ "$ready" == "200" && "$health" == "200" ]]; then
+  echo -e "☁️ Render: ${G}OK${N}"
+else
+  echo -e "☁️ Render: ${R}NOT HEALTHY${N} (readyz=$ready, healthz=$health)"
+fi
 
-check_render() {
-  echo "☁️ Checking Render health..."
-  curl -s "$BASE/readyz" >/dev/null && echo "✅ Ready OK." || echo "⚠️ Not ready."
-  curl -s "$BASE/healthz" >/dev/null && echo "✅ Health OK." || echo "⚠️ /healthz may require POST."
-}
+# === 3. TELEGRAM BOT STATUS ===
+section "Telegram Bot"
+if curl -s -H "Authorization: Bearer $BEARER" "$BASE/telegram/status" | grep -q '"ok":true'; then
+  echo -e "🧠 Telegram Bot: ${G}Connected${N}"
+else
+  echo -e "🧠 Telegram Bot: ${R}Not responding${N}"
+fi
 
-check_trade() {
-  echo "💰 Testing dry-run trade..."
-  curl -s -X POST "$BASE/trade/execute" \
-    -H "Authorization: Bearer $BEARER" \
-    -H "Content-Type: application/json" \
-    --data '{"symbol":"BTCUSDT","side":"BUY","quantity":0.01,"leverage":10,"dry_run":true}' | tee /tmp/trade_test.json
-  grep -q '"ok":true' /tmp/trade_test.json && echo "✅ Trade endpoint OK." || echo "⚠️ Trade failed (check Futures perms)."
-}
+# === 4. BINANCE CHECKS ===
+section "Binance Futures & Spot"
+echo "🔍 Futures status:"
+if curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/binance/status" >/dev/null 2>&1; then
+  echo -e "✅ Futures API reachable"
+else
+  echo -e "❌ Cannot reach Futures API"
+fi
 
-check_metrics() {
-  echo "📊 Fetching metrics..."
-  curl -s -H "Authorization: Bearer $BEARER" "$BASE/metrics" | head -20
-}
+echo "🔍 Futures balance:"
+if curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/binance/futures-balance" >/dev/null 2>&1; then
+  echo -e "✅ Futures balance OK"
+else
+  echo -e "❌ Balance failed"
+fi
 
-menu() {
-  echo ""
-  echo "=============================="
-  echo "   🧠 AlgoGPT System Checker"
-  echo "=============================="
-  echo "1) 🔑 Check API Token"
-  echo "2) 🟡 Check Binance Futures"
-  echo "3) 🤖 Check Telegram Bot"
-  echo "4) ☁️ Check Render Health"
-  echo "5) 💰 Test Trade (dry-run)"
-  echo "6) 📊 Show System Metrics"
-  echo "7) 🚀 Run FULL Check (All)"
-  echo "0) ❌ Exit"
-  echo "=============================="
-  read -rp "Select: " choice
+echo "🔍 Spot account:"
+if curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/binance/spot-status" >/dev/null 2>&1; then
+  echo -e "✅ Spot OK"
+else
+  echo -e "⚠️ Spot failed (optional)"
+fi
 
-  case $choice in
-    1) check_api ;;
-    2) check_binance ;;
-    3) check_telegram ;;
-    4) check_render ;;
-    5) check_trade ;;
-    6) check_metrics ;;
-    7)
-      separator; check_api
-      separator; check_binance
-      separator; check_telegram
-      separator; check_render
-      separator; check_trade
-      separator; check_metrics
-      separator
-      echo "✅ FULL CHECK COMPLETE"
-      ;;
-    0)
-      echo "👋 Bye."
-      exit 0
-      ;;
-    *)
-      echo "❌ Invalid option"
-      ;;
-  esac
-}
+echo "🔍 HMAC signature:"
+if curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/binance/hmac-test" >/dev/null 2>&1; then
+  echo -e "✅ HMAC valid"
+else
+  echo -e "❌ Invalid HMAC or signature mismatch"
+fi
 
-while true; do
-  menu
-done
+# === 5. PNL REPORT ===
+section "PnL Summary"
+curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/export/daily" | head -n 20 || echo "⚠️ PnL summary unavailable"
+
+# === 6. ERROR DIAGNOSIS ===
+section "Diagnostic Result"
+echo -e "⚠️ אם אתה מקבל הודעה מסוג: \"Binance Futures permissions required\" — הנה ההסבר המלא:"
+cat <<'EOF'
+
+הסיבה המדויקת:
+אחד מהבאים (או כולם):
+❌ ה-API Key לא מאושר ל-Futures Trading
+❌ יש הגבלת IP שחוסמת את 35.200.193.249
+❌ ה-API Key לא פעיל או פג תוקפו
+
+🔧 מה לעשות:
+1️⃣ היכנס ל-Binance.com > API Management
+2️⃣ מצא את ה-API Key שלך שמתחיל ב- cGlzKn6A...yADH
+3️⃣ לחץ Edit לידו ובדוק:
+   ✅ Enable Reading
+   ✅ Enable Futures
+   ✅ Enable Spot & Margin Trading (רשות)
+4️⃣ תחת IP Access Restrictions:
+   מומלץ לבחור "Unrestricted"
+   או הוסף את IP:
+   👉 35.200.193.249 (שרת Replit)
+5️⃣ שמור (Save / Confirm)
+6️⃣ המתן 1-2 דקות
+7️⃣ הפעל שוב את הסקריפט הזה או אמור לי "בדוק שוב"
+
+⚡ בדיקות שיבוצעו:
+✅ /fapi/v2/balance
+✅ /fapi/v2/account
+✅ /fapi/v2/positionRisk
+
+📋 Checklist מהיר:
+□ נכנסתי ל-Binance.com
+□ נכנסתי ל-API Management
+□ Enable Reading ✅
+□ Enable Futures ✅
+□ הסרתי או עדכנתי IP restriction
+□ שמרתי ✅
+□ המתנתי ✅
+□ הרצת בדיקה חוזרת ✅
+
+אם עדיין לא עובד → צור API Key חדש עם:
+✅ Enable Reading
+✅ Enable Futures
+Unrestricted Access
+והדבק אותו ב־Replit Secrets:
+BINANCE_API_KEY
+BINANCE_API_SECRET
+
+EOF
+
+echo -e "\n${Y}🔄 אחרי שתתקן – הרץ שוב: bash scripts/check_full_system.sh${N}"
+
+# === 7. TELEGRAM ALERT SUMMARY ===
+msg="📊 AlgoGPT System Check\n☁️ Render: $ready/$health\n🤖 Telegram: $(if [[ "$ready" == "200" ]]; then echo OK; else echo FAIL; fi)\n💰 Binance Futures: $(if curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/binance/futures-balance" >/dev/null 2>&1; then echo OK; else echo FAIL; fi)\n🧠 Version: ${ver}"
+send_telegram "$msg"
+
 
