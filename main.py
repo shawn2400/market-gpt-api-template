@@ -1439,6 +1439,12 @@ try:
 except Exception as e:
     logger.warning("Failed to load alerts routes: %s", e)
 
+try:
+    from routes.telegram_callbacks import router as telegram_router
+    app.include_router(telegram_router)
+except Exception as e:
+    logger.warning("Failed to load telegram callbacks routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():

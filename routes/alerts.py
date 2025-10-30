@@ -49,25 +49,86 @@ if not _HAS_CONFIRM:
             cls._items[str(req.get("ticket_id","TKT"))] = {"req": dict(req), "ts": time.time()}
     _HAS_CONFIRM = True
 
-# ===== Telegram send helper (רך) =====
+# ===== Telegram send helper (משופר עם כפתורים ופרטים מלאים) =====
 async def _tg_send_plan(plan: Dict[str, Any]) -> None:
     with suppress(Exception):
         from utils.alerts import send_telegram_message  # type: ignore
-        sym = plan.get("symbol","")
-        side = plan.get("side","")
-        lev = plan.get("leverage","")
-        qty = plan.get("qty","")
+        
+        sym = plan.get("symbol", "")
+        side = plan.get("side", "")
+        lev = plan.get("leverage", "")
+        qty = plan.get("qty", "")
+        ticket_id = plan.get("ticket_id", "")
+        
+        # חלץ TP/SL מהנתונים
+        tp_list = plan.get("tp", [])
+        sl_dict = plan.get("sl", {})
+        
+        # בנה הודעה עשירה בפרטים
+        emoji_side = "🟢" if side == "BUY" else "🔴"
         lines = [
-            "🔔 <b>Trade Ingest</b>",
-            f"• {sym} {side} qty=<code>{qty}</code> lev=<code>{lev}</code>",
+            f"{emoji_side} <b>NEW TRADE PROPOSAL</b>",
+            f"",
+            f"💎 <b>{sym}</b>",
+            f"📊 Direction: <b>{side}</b> (Leverage: x{lev})",
+            f"💰 Quantity: <code>{qty:.6f}</code>",
         ]
+        
         if plan.get("budget_usd"):
-            lines.append(f"• Budget: <code>${plan['budget_usd']}</code>")
-        if plan.get("score") is not None:
-            lines.append(f"• Score: <code>{plan['score']}</code>")
+            lines.append(f"💵 Budget: <code>${plan['budget_usd']:.2f}</code>")
+        
+        # הוסף Entry/SL/TP אם קיימים
+        entry = plan.get("entry")
+        if entry:
+            lines.append(f"🎯 Entry: <code>{entry:.2f}</code>")
+        
+        if sl_dict and sl_dict.get("stopPrice"):
+            lines.append(f"🛑 Stop Loss: <code>{sl_dict['stopPrice']:.2f}</code>")
+        
+        if tp_list:
+            lines.append(f"🎯 Take Profit:")
+            for i, tp in enumerate(tp_list[:3], 1):
+                if isinstance(tp, dict) and tp.get("price"):
+                    lines.append(f"   TP{i}: <code>{tp['price']:.2f}</code>")
+        
+        # חישובי RR ו-Success
+        if plan.get("score"):
+            lines.append(f"⭐ Quality Score: <code>{plan['score']:.1f}/10</code>")
+        
+        # Success % אם קיים
+        success_pct = plan.get("success_pct")
+        if success_pct:
+            lines.append(f"📈 Success Probability: <code>{success_pct:.1f}%</code>")
+        
+        # סיבה/אסטרטגיה
         if plan.get("why"):
-            lines.append(f"• Note: {plan['why']}")
-        await send_telegram_message("\n".join(lines), parse_mode="HTML", disable_preview=True)
+            lines.append(f"")
+            lines.append(f"📝 Strategy: {plan['why'][:150]}")
+        
+        lines.append(f"")
+        lines.append(f"⏱️ Timeframe: <code>{plan.get('timeframe', '15m')}</code>")
+        lines.append(f"")
+        lines.append(f"<i>🤖 Auto-analyzed by AI Scanner</i>")
+        
+        # כפתורים ירוקים/אדומים (פורמט: CONFIRM:ACTION:TICKET_ID)
+        keyboard = {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ APPROVE", "callback_data": f"CONFIRM:APPROVE:{ticket_id}"},
+                    {"text": "❌ REJECT", "callback_data": f"CONFIRM:REJECT:{ticket_id}"}
+                ],
+                [
+                    {"text": "📊 View Full Details", "callback_data": f"CONFIRM:DETAILS:{ticket_id}"}
+                ]
+            ]
+        }
+        
+        await send_telegram_message(
+            "\n".join(lines), 
+            parse_mode="HTML", 
+            disable_preview=True,
+            reply_markup=keyboard
+        )
 
 # ===== Binance helpers (רק למחיר) =====
 def _get_client_soft():
@@ -92,7 +153,7 @@ def _last_price(client, symbol: str) -> float:
 class IngestReq(BaseModel):
     # חובה:
     symbol: str
-    side: str  # BUY | SELL
+    side: str  # BUY | SELL | LONG | SHORT
     market: str = "futures"
     # אחת מהאפשרויות: qty או budget_usd (+ leverage)
     qty: Optional[float] = None
@@ -108,6 +169,9 @@ class IngestReq(BaseModel):
     tp2: Optional[dict] | Optional[float] = None
     tp3: Optional[dict] | Optional[float] = None
     sl: Optional[dict] | Optional[float] = None
+    entry: Optional[float] = None
+    success_pct: Optional[float] = None
+    current_price: Optional[float] = None
     note: Optional[str] = None
 
 def _ticket_id_for(req: IngestReq) -> str:
@@ -134,6 +198,12 @@ def _compute_qty_from_budget(symbol: str, budget_usd: float, leverage: int) -> t
         return float(qty), None
     except Exception as e:
         return 0.0, f"price_fetch_failed: {e}"
+
+def _to_float(x):
+    try:
+        return float(x) if x is not None else None
+    except:
+        return None
 
 # ===== Endpoints =====
 @router.post("/alerts/ingest")
@@ -183,6 +253,25 @@ async def alerts_ingest(
         req.qty = qty
         req.leverage = lev
 
+    # המר TP/SL מ-float ל-dict אם צריך (תמיכה ב-Worker format)
+    def _to_tp_dict(val, idx):
+        if isinstance(val, dict):
+            return val
+        elif isinstance(val, (int, float)) and float(val) > 0:
+            return {"price": float(val), "pct": 25.0 if idx == 1 else (33.0 if idx == 2 else 100.0)}
+        return None
+    
+    tp_dicts = [_to_tp_dict(x, i) for i, x in enumerate([req.tp1, req.tp2, req.tp3], 1)]
+    tp_list = [x for x in tp_dicts if x is not None]
+    
+    sl_data = req.sl
+    if isinstance(sl_data, (int, float)) and float(sl_data) > 0:
+        sl_dict = {"stopPrice": float(sl_data)}
+    elif isinstance(sl_data, dict):
+        sl_dict = sl_data
+    else:
+        sl_dict = {}
+    
     plan: Dict[str, Any] = {
         "symbol": sym,
         "side": side,
@@ -192,11 +281,13 @@ async def alerts_ingest(
         "qty": float(req.qty or 0),
         "score": float(req.score or 0),
         "why": req.reason or "",
-        "tp": [x for x in (req.tp1, req.tp2, req.tp3) if isinstance(x, dict)],
-        "sl": ({"stopPrice": float(req.sl)} if isinstance(req.sl,(int,float)) and float(req.sl)>0 else (req.sl if isinstance(req.sl,dict) else {})),
+        "tp": tp_list,
+        "sl": sl_dict,
         "budget_usd": float(req.budget_usd or 0),
         "order_type": "MARKET",
         "require_approval": bool(req.require_approval if req.require_approval is not None else True),
+        "entry": _to_float(req.entry),
+        "success_pct": _to_float(req.success_pct) if req.success_pct else float(req.score or 0),
     }
 
     tid = req.ticket_id or _ticket_id_for(req)

@@ -60,8 +60,9 @@ python workers/gpt_auto_suggest.py
 ### Key Components
 - **Routes**: Organized in `routes/` directory for modular endpoint management
   - `routes/context.py` - Multi-timeframe technical analysis API
-  - `routes/alerts.py` - Trade ingestion and HMAC verification
-  - `routes/telegram_bot.py` - Telegram approval workflow
+  - `routes/alerts.py` - Trade ingestion with enhanced Telegram notifications
+  - `routes/telegram_callbacks.py` - Telegram callback handler (approve/reject buttons)
+  - `routes/telegram_bot.py` - Telegram bot integration
 - **Utilities**: Common functions in `utils/` for trading, analysis, and integration
   - `utils/hmac_utils.py` - HMAC signing and idempotency
   - `utils/auth.py` - Bearer token authentication
@@ -85,13 +86,20 @@ python workers/gpt_auto_suggest.py
 7. Applies cooldown (12 min) and deduplication (24h) filters
 8. Sends approved proposals to `/alerts/trade-ingest`
 
-### 2. Telegram Approval Workflow
+### 2. Telegram Approval Workflow (Enhanced with Rich UI)
 1. Trade proposal arrives at `/alerts/trade-ingest`
-2. System generates approval ticket with HMAC signature
-3. Telegram message sent with trade details + Approve/Reject buttons
-4. User clicks Approve → `/ops/approve` endpoint called
-5. Ticket validated, trade executed on Binance Futures
-6. Position opened, dynamic management activated
+2. System generates approval ticket with unique ID
+3. **Rich Telegram message sent with**:
+   - ✅ **Green APPROVE** button & ❌ **Red REJECT** button
+   - 💎 Full trade details: Entry price, SL, TP1/TP2/TP3 levels
+   - ⭐ Quality score (0-10) & Success probability (%)
+   - 📊 Direction (LONG/SHORT), Leverage, Budget, Quantity
+   - 📝 AI-generated strategy reasoning
+   - ⏱️ Timeframe & comprehensive analysis
+4. User clicks **✅ APPROVE** → `/telegram/callback` → `/ops/approve/signed`
+5. Ticket validated with HMAC, trade executed on Binance Futures
+6. Position opened, dynamic management (TP/SL/BE/Trail) activated automatically
+7. Telegram buttons removed, confirmation message sent
 
 ### 3. Dynamic Position Management
 - **Break-Even Guard**: Moves SL to entry + offset when price moves favorably
@@ -161,8 +169,44 @@ python workers/gpt_auto_suggest.py
 - **Logs**: Workflow console shows real-time activity
 - **Telegram**: Real-time notifications for proposals, executions, and position updates
 
+## Key Features
+
+### 🔄 Auto-Flip (Dynamic LONG/SHORT Analysis)
+The system **automatically adapts to market conditions every 60 seconds**:
+- Scanner analyzes each symbol independently
+- AI decides LONG or SHORT based on real-time market data
+- If market reverses, AI naturally proposes opposite direction
+- No manual intervention needed - system "breathes with the market"
+- Example: BTC was LONG → Market weakens → Next cycle AI suggests SHORT
+
+### 📱 Enhanced Telegram Notifications
+Every trade proposal includes:
+- **Visual Buttons**: ✅ Green APPROVE / ❌ Red REJECT / 📊 Details
+- **Complete Trade Info**: Entry, SL, TP1/TP2/TP3, Leverage, Budget
+- **AI Analysis**: Quality score, success probability, strategy reasoning
+- **Professional Format**: HTML formatting with emojis and clear structure
+- **Interactive**: One-click approval, instant execution feedback
+
+### 🎯 Quality Filters (Why Few Trades?)
+The system uses **strict multi-layer filters** to protect capital:
+1. **Risk/Reward Ratio** > 1.6-1.9 (minimum)
+2. **AI Success Probability** > 70%
+3. **Liquidity Gates**: Sufficient volume to avoid slippage
+4. **Trend Filters**: ADX checks to avoid choppy markets
+5. **Cooldown**: 12 minutes between trades on same symbol
+6. **Deduplication**: Won't send duplicate setups (24h TTL)
+
+**This is intentional!** Better to wait for high-quality setups than trade mediocre ones.
+
 ## Recent Changes
 
+- **2025-10-30**: Enhanced Telegram notifications with inline buttons
+  - ✅ Added rich HTML formatting with comprehensive trade details
+  - ✅ Implemented inline keyboard (APPROVE/REJECT/Details buttons)
+  - ✅ Registered `routes/telegram_callbacks` for button handling
+  - ✅ Callback flow: Button click → HMAC-signed approval → Binance execution
+  - ✅ Support for entry/sl/tp1/tp2/tp3 as float or dict format
+  - ✅ Auto-flip already working - AI analyzes independently each cycle
 - **2025-10-30**: Full live trading deployment
   - ✅ Fixed LSP type errors in workers/gpt_auto_suggest.py and utils/hmac_utils.py
   - ✅ Registered routes/context.py and routes/alerts.py in main.py
