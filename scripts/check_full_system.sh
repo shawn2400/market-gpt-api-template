@@ -1,70 +1,93 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# === CONFIG ===
 BASE="https://algogpt-docker.onrender.com"
 BEARER="${API_BEARER_TOKEN:?set API_BEARER_TOKEN in Replit/Render secrets}"
-echo ""
-echo "==============================================="
-echo "🤖 AlgoGPT Full System Check (Render + Replit)"
-echo "==============================================="
 
-# === 1️⃣ API Bearer Validation ===
-echo "🔑 Checking Bearer token..."
-curl -s -w "\nHTTP %{http_code}\n" \
-  -H "Authorization: Bearer $BEARER" \
-  "$BASE/version" | tee /tmp/version_test.json
+separator() {
+  echo "-------------------------------------------"
+}
 
-if grep -q '"ok":true' /tmp/version_test.json; then
-  echo "✅ API token valid."
-else
-  echo "❌ API token invalid or mismatched between Replit ↔ Render."
-  echo "➡ Fix: copy the token from Render → Environment → API_BEARER_TOKEN into Replit secrets."
-fi
-echo ""
+check_api() {
+  echo "🔑 Checking Bearer token..."
+  curl -s -w "\nHTTP %{http_code}\n" -H "Authorization: Bearer $BEARER" "$BASE/version" | tee /tmp/version.json
+  grep -q '"ok":true' /tmp/version.json && echo "✅ API token valid." || echo "❌ Invalid or mismatched API token."
+}
 
-# === 2️⃣ Binance Futures API ===
-echo "🟡 Checking Binance Futures connectivity..."
-curl -s https://fapi.binance.com/fapi/v1/ping >/dev/null && echo "✅ Binance Futures reachable." || echo "❌ Cannot reach Binance."
-echo ""
+check_binance() {
+  echo "🟡 Checking Binance Futures..."
+  curl -s https://fapi.binance.com/fapi/v1/ping >/dev/null && echo "✅ Binance reachable." || echo "❌ Binance unreachable!"
+}
 
-# === 3️⃣ Telegram Bot Check ===
-echo "🤖 Checking Telegram webhook..."
-curl -s -H "Authorization: Bearer $BEARER" "$BASE/telegram/status" || echo "⚠️ Telegram endpoint not found (check /telegram_bot route)"
-echo ""
+check_telegram() {
+  echo "🤖 Checking Telegram bot..."
+  curl -s -H "Authorization: Bearer $BEARER" "$BASE/telegram/status" || echo "⚠️ Telegram endpoint not found."
+}
 
-# === 4️⃣ Render Service Health ===
-echo "☁️ Checking Render health..."
-curl -s "$BASE/readyz" >/dev/null && echo "✅ Render ready." || echo "⚠️ Render not ready."
-curl -s "$BASE/healthz" >/dev/null && echo "✅ Render health OK." || echo "⚠️ /healthz may require POST."
-echo ""
+check_render() {
+  echo "☁️ Checking Render health..."
+  curl -s "$BASE/readyz" >/dev/null && echo "✅ Ready OK." || echo "⚠️ Not ready."
+  curl -s "$BASE/healthz" >/dev/null && echo "✅ Health OK." || echo "⚠️ /healthz may require POST."
+}
 
-# === 5️⃣ Trade Simulation ===
-echo "💰 Testing dry-run trade..."
-curl -s -X POST "$BASE/trade/execute" \
-  -H "Authorization: Bearer $BEARER" \
-  -H "Content-Type: application/json" \
-  --data '{"symbol":"BTCUSDT","side":"BUY","quantity":0.01,"leverage":10,"dry_run":true}' | tee /tmp/trade_test.json
+check_trade() {
+  echo "💰 Testing dry-run trade..."
+  curl -s -X POST "$BASE/trade/execute" \
+    -H "Authorization: Bearer $BEARER" \
+    -H "Content-Type: application/json" \
+    --data '{"symbol":"BTCUSDT","side":"BUY","quantity":0.01,"leverage":10,"dry_run":true}' | tee /tmp/trade_test.json
+  grep -q '"ok":true' /tmp/trade_test.json && echo "✅ Trade endpoint OK." || echo "⚠️ Trade failed (check Futures perms)."
+}
 
-if grep -q '"ok":true' /tmp/trade_test.json; then
-  echo "✅ Trade endpoint working fine."
-else
-  echo "⚠️ Trade test failed (likely Futures permissions)."
-fi
-echo ""
+check_metrics() {
+  echo "📊 Fetching metrics..."
+  curl -s -H "Authorization: Bearer $BEARER" "$BASE/metrics" | head -20
+}
 
-# === 6️⃣ System Metrics ===
-echo "📊 Fetching system metrics..."
-curl -s -H "Authorization: Bearer $BEARER" "$BASE/metrics" | head -20
-echo ""
+menu() {
+  echo ""
+  echo "=============================="
+  echo "   🧠 AlgoGPT System Checker"
+  echo "=============================="
+  echo "1) 🔑 Check API Token"
+  echo "2) 🟡 Check Binance Futures"
+  echo "3) 🤖 Check Telegram Bot"
+  echo "4) ☁️ Check Render Health"
+  echo "5) 💰 Test Trade (dry-run)"
+  echo "6) 📊 Show System Metrics"
+  echo "7) 🚀 Run FULL Check (All)"
+  echo "0) ❌ Exit"
+  echo "=============================="
+  read -rp "Select: " choice
 
-# === 7️⃣ Summary ===
-echo "==============================================="
-echo "🎯 Summary:"
-echo "✅ Render       → health OK"
-echo "✅ Binance      → ping OK"
-echo "✅ API Token    → verified"
-echo "✅ Telegram     → reachable"
-echo "✅ Trade Route  → active"
-echo "==============================================="
-echo "✨ All systems ready for LIVE trading! 🚀"
+  case $choice in
+    1) check_api ;;
+    2) check_binance ;;
+    3) check_telegram ;;
+    4) check_render ;;
+    5) check_trade ;;
+    6) check_metrics ;;
+    7)
+      separator; check_api
+      separator; check_binance
+      separator; check_telegram
+      separator; check_render
+      separator; check_trade
+      separator; check_metrics
+      separator
+      echo "✅ FULL CHECK COMPLETE"
+      ;;
+    0)
+      echo "👋 Bye."
+      exit 0
+      ;;
+    *)
+      echo "❌ Invalid option"
+      ;;
+  esac
+}
+
+while true; do
+  menu
+done
+
