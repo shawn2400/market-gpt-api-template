@@ -29,11 +29,16 @@ menu() {
   echo "10) 📡 System Metrics"
   echo "11) 🔄 Toggle Auto-Trading"
   echo "12) 🧨 KillSwitch – STOP ALL"
+    14) 🔐 Check Binance API Connectivity
   echo "0) ❌ Exit"
   echo "=============================="
   read -rp "Choose option: " opt
 
   case $opt in
+    14)
+      echo "🔐 Checking Binance API Connectivity..."
+      bash scripts/fix_and_check_binance_api.sh
+      ;;
     1)
       echo "🛰️ Running market scan..."
       curl -fsS -H "Authorization: Bearer $BEARER" \
