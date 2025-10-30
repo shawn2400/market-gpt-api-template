@@ -19,7 +19,7 @@ send_telegram() {
 
 show_output() { cat; }
 
-# === Quick Status Live Line + Telegram Alert ===
+# === Quick Status Live Line ===
 quick_status() {
   local version tg_ok render_ok trades cur_state prev_state
   version=$(curl -s -H "Authorization: Bearer $BEARER" "$BASE/version" | grep -o '"algogpt_version":"[^"]*"' | cut -d'"' -f4 || echo "n/a")
@@ -38,17 +38,6 @@ quick_status() {
   fi
 
   trades=$(curl -s -H "Authorization: Bearer $BEARER" "$BASE/trade/active" | grep -c '"symbol"' || echo "0")
-
-  cur_state="${render_ok}|${tg_ok}"
-  prev_state=$(cat "$STATE_FILE" 2>/dev/null || echo "")
-  if [[ "$cur_state" != "$prev_state" ]]; then
-    echo "$cur_state" >"$STATE_FILE"
-    if [[ "$render_ok" != "OK" || "$tg_ok" != "OK" ]]; then
-      send_telegram "⚠️ <b>AlgoGPT Alert</b>\n🔴 Render: ${render_ok}\n🤖 Telegram: ${tg_ok}\n🕐 $(date '+%H:%M:%S %d/%m/%Y')"
-    else
-      send_telegram "✅ <b>AlgoGPT Recovered</b>\n☁️ Render OK\n🧠 Telegram OK\n🕐 $(date '+%H:%M:%S %d/%m/%Y')"
-    fi
-  fi
 
   echo -e "${G}🟢 v${version}${N} | ${tg_display} | ${render_display} | 💰 Active: ${Y}${trades}${N}"
 }
@@ -73,9 +62,10 @@ menu() {
   echo "10) 📡 System Metrics"
   echo "11) 🔄 Toggle Auto-Trading"
   echo "12) 🧨 KillSwitch – STOP ALL"
-  echo "13) 🧩 System Diagnostic (Full Check)"
+  echo "13) 🧩 System Diagnostic (Quick)"
   echo "14) 🔐 Check Binance Permissions"
   echo "15) 🧰 Auto-Fix Binance Keys"
+  echo "16) 🧠 Full System Check (Auto Diagnostic)"
   echo "0) ❌ Exit"
   echo "=============================="
   read -rp "Choose option: " opt
@@ -113,49 +103,14 @@ menu() {
           curl -fsS -X POST -H "Authorization: Bearer $BEARER" "$BASE/trade/stop-all" | show_output
           echo "🛑 All trading stopped."
         else echo "❌ Cancelled."; fi ;;
-   13)  echo "🧩 Running full system diagnostic..."
-        bash scripts/check_full_system.sh ;;
+   13)  echo "🧩 Running quick diagnostic..."
+        bash scripts/check_full_system.sh | head -n 40 ;;
    14)  echo "🔐 Checking Binance API permissions..."
-        echo "-------------------------------------"
-        echo "🔍 Testing Futures account access..."
-        curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/binance/status" | show_output || echo "⚠️ Cannot reach /binance/status"
-        echo ""; echo "🔍 Testing Futures balance..."
-        curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/binance/futures-balance" | show_output || echo "⚠️ Futures balance check failed"
-        echo ""; echo "🔍 Testing Spot account info..."
-        curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/binance/spot-status" | show_output || echo "⚠️ Spot check failed"
-        echo ""; echo "🔍 Validating HMAC signature..."
-        curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/binance/hmac-test" | show_output || echo "⚠️ HMAC validation failed"
-        echo "-------------------------------------"
-        echo "✅ Permission test completed. Check messages above." ;;
-   15)  echo "🧰 Auto-Fix Binance Keys started..."
-        echo "-------------------------------------"
-        echo "🔍 Checking current Futures connectivity..."
-        if curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/binance/futures-balance" >/dev/null 2>&1; then
-          echo "✅ Futures API appears working. No fix required."
-        else
-          echo "⚠️ Futures API not responding — attempting repair..."
-          BIN_KEY="${BINANCE_API_KEY:-}"
-          BIN_SECRET="${BINANCE_API_SECRET:-}"
-          if [[ -z "$BIN_KEY" || -z "$BIN_SECRET" ]]; then
-            echo "❌ Missing BINANCE_API_KEY or BINANCE_API_SECRET!"
-            send_telegram "⚠️ <b>AlgoGPT Binance Fix Failed</b>\nMissing API keys in environment."
-          else
-            echo "🔧 Sending keys to backend for verification..."
-            curl -fsS -X POST "$BASE/binance/reload-keys" \
-                 -H "Authorization: Bearer $BEARER" \
-                 -H "Content-Type: application/json" \
-                 --data "{\"api_key\":\"$BIN_KEY\",\"api_secret\":\"$BIN_SECRET\"}" | show_output
-            echo "🔁 Re-testing connectivity..."
-            if curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/binance/futures-balance" >/dev/null 2>&1; then
-              echo "✅ Binance Futures connection restored."
-              send_telegram "✅ <b>AlgoGPT Binance API Fixed</b>\nFutures connection verified and operational."
-            else
-              echo "❌ Binance Futures still not responding."
-              send_telegram "❌ <b>AlgoGPT Binance Fix Failed</b>\nFutures check still returning error."
-            fi
-          fi
-        fi
-        echo "-------------------------------------" ;;
+        bash scripts/check_full_system.sh | grep -A10 "Binance Futures" ;;
+   15)  echo "🧰 Running Binance API Fix..."
+        bash scripts/menu_auto_fix.sh || echo "⚠️ Auto-fix script missing (menu_auto_fix.sh)" ;;
+   16)  echo "🧠 Running full system diagnostic..."
+        bash scripts/check_full_system.sh ;;
     0)  echo "👋 Exiting. Stay sharp!"; exit 0 ;;
     *)  echo "❌ Invalid option." ;;
   esac
@@ -164,7 +119,6 @@ menu() {
 while true; do
   menu
 done
-
 
 
 
