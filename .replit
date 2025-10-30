@@ -1,27 +1,22 @@
 modules = ["c-clang14", "cpp-clang14", "bash", "python-3.11"]
+
 [agent]
 expertMode = true
 
 [nix]
 channel = "stable-25_05"
-packages = ["cairo", "cargo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "lcms2", "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "libyaml", "openjpeg", "pkg-config", "qhull", "rustc", "tcl", "tk", "xsimd", "zlib"]
+packages = [
+  "cairo", "cargo", "ffmpeg-full", "freetype", "ghostscript",
+  "glibcLocales", "gobject-introspection", "gtk3", "lcms2",
+  "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp",
+  "libxcrypt", "libyaml", "openjpeg", "pkg-config", "qhull",
+  "rustc", "tcl", "tk", "xsimd", "zlib"
+]
 
 [workflows]
-runButton = "Project"
+runButton = "AlgoGPT Server"
 
-[[workflows.workflow]]
-name = "Project"
-mode = "parallel"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "AlgoGPT Server"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Auto Scanner"
-
+# === Workflow 1: AlgoGPT Server (FastAPI + Gunicorn) ===
 [[workflows.workflow]]
 name = "AlgoGPT Server"
 author = "agent"
@@ -31,9 +26,17 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "AUTO_RUN=1 EXECUTE_TRADES=1 TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 ALLOW_MANAGE_OPEN_TRADES=1 PAUSE_AUTO_RUN=0 MANAGER_ENABLE=1 TRADE_MANAGER_ENABLE=1 TELEGRAM_SEND_ENABLE=1 APPROVAL_ENABLED=1 REQUIRE_TELEGRAM_APPROVAL=1 AUTO_OPEN_ON_APPROVE=1 SMART_MANAGE_ON_APPROVE=1 TRAIL_ENABLE=1 BE_GUARD_ENABLE=1 PORT=5000 gunicorn -c gunicorn_conf.py main:app"
+args = '''
+AUTO_RUN=1 EXECUTE_TRADES=1 TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 \
+ALLOW_MANAGE_OPEN_TRADES=1 PAUSE_AUTO_RUN=0 MANAGER_ENABLE=1 \
+TRADE_MANAGER_ENABLE=1 TELEGRAM_SEND_ENABLE=1 APPROVAL_ENABLED=1 \
+REQUIRE_TELEGRAM_APPROVAL=1 AUTO_OPEN_ON_APPROVE=1 SMART_MANAGE_ON_APPROVE=1 \
+TRAIL_ENABLE=1 BE_GUARD_ENABLE=1 PORT=5000 \
+gunicorn -c gunicorn_conf.py main:app
+'''
 waitForPort = 5000
 
+# === Workflow 2: Auto Scanner (Background Worker) ===
 [[workflows.workflow]]
 name = "Auto Scanner"
 author = "agent"
@@ -43,12 +46,22 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 SUGGEST_INTERVAL_SEC=60 CONTEXT_URL=https://1f0c42a6-48ab-4140-b304-bba617ce2b45-00-2k2qds7gg7vaz.sisko.replit.dev ALERT_INGEST_URL=https://1f0c42a6-48ab-4140-b304-bba617ce2b45-00-2k2qds7gg7vaz.sisko.replit.dev/alerts/trade-ingest WEBHOOK_HMAC_SECRET=demo_secret_change_in_production python workers/gpt_auto_suggest.py"
+args = '''
+cd /home/runner/$REPL_SLUG && \
+PYTHONPATH=/home/runner/$REPL_SLUG \
+TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 SUGGEST_INTERVAL_SEC=60 \
+CONTEXT_URL=https://${REPL_SLUG}.${REPL_OWNER}.repl.co \
+ALERT_INGEST_URL=https://${REPL_SLUG}.${REPL_OWNER}.repl.co/alerts/trade-ingest \
+WEBHOOK_HMAC_SECRET=demo_secret_change_in_production \
+python workers/gpt_auto_suggest.py
+'''
 
+# === Ports Mapping ===
 [[ports]]
 localPort = 5000
 externalPort = 80
 
+# === Deployment (VM Target) ===
 [deployment]
 deploymentTarget = "vm"
 run = ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
