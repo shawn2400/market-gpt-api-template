@@ -1,0 +1,9 @@
+
+==============================
+🚀 AlgoGPT Auto Deploy Started
+==============================
+[1;33m📥  מושך עדכונים מ-GitHub...[0m
+From https://github.com/shawn2400/market-gpt-api-template
+ * branch            main       -> FETCH_HEAD
+   eb45e0d..00b43ee  main       -> origin/main
+[1;33m▶️  שולח עדכונים ל-GitHub...[0m

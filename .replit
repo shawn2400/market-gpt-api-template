@@ -14,7 +14,7 @@ packages = [
 ]
 
 [workflows]
-runButton = "AlgoGPT Server"
+runButton = "Project"
 
 # === Workflow 1: AlgoGPT Server (FastAPI + Gunicorn) ===
 [[workflows.workflow]]
@@ -55,6 +55,18 @@ ALERT_INGEST_URL=https://${REPL_SLUG}.${REPL_OWNER}.repl.co/alerts/trade-ingest 
 WEBHOOK_HMAC_SECRET=demo_secret_change_in_production \
 python workers/gpt_auto_suggest.py
 '''
+
+[[workflows.workflow]]
+name = "Auto Scanner"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = 'cd /home/runner/$REPL_SLUG && \nPYTHONPATH=/home/runner/$REPL_SLUG \nTRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 SUGGEST_INTERVAL_SEC=60 \nCONTEXT_URL=https://${REPL_SLUG}.${REPL_OWNER}.repl.co \nALERT_INGEST_URL=https://${REPL_SLUG}.${REPL_OWNER}.repl.co/alerts/ingest \nWEBHOOK_HMAC_SECRET=demo_secret_change_in_production \npython workers/gpt_auto_suggest.py'
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 # === Ports Mapping ===
 [[ports]]
