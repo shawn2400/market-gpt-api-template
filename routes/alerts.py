@@ -104,9 +104,9 @@ class IngestReq(BaseModel):
     score: Optional[float] = 0.0
     reason: Optional[str] = ""
     require_approval: Optional[bool] = True
-    tp1: Optional[dict] = None
-    tp2: Optional[dict] = None
-    tp3: Optional[dict] = None
+    tp1: Optional[dict] | Optional[float] = None
+    tp2: Optional[dict] | Optional[float] = None
+    tp3: Optional[dict] | Optional[float] = None
     sl: Optional[dict] | Optional[float] = None
     note: Optional[str] = None
 
