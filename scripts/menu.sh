@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# === CONFIG ===
 BASE="https://algogpt-docker.onrender.com"
 BEARER="${API_BEARER_TOKEN:?set API_BEARER_TOKEN in Replit or Render secrets}"
 TG_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TG_CHAT="${TELEGRAM_CHAT_ID:-}"
 STATE_FILE="scripts/.last_status"
 
-# === Colors ===
-G="\033[1;32m"; R="\033[1;31m"; Y="\033[1;33m"; N="\033[0m"
+G="\033[1;32m"; R="\033[1;31m"; Y="\033[1;33m"; C="\033[1;36m"; N="\033[0m"
 
 send_telegram() {
   local msg="$1"
@@ -72,6 +70,7 @@ menu() {
   echo "13) 🧩 System Diagnostic (Full Check)"
   echo "14) 🔐 Check Binance Permissions"
   echo "15) 🔄 Git Sync & Push (Auto)"
+  echo "16) 🧠 Full Auto-Heal & Sync"
   echo "0) ❌ Exit"
   echo "=============================="
   read -rp "Choose option: " opt
@@ -92,6 +91,11 @@ menu() {
     13) echo "🧩 Running full system diagnostic..."; bash scripts/check_full_system.sh ;;
     14) echo "🔐 Checking Binance API connectivity..."; bash scripts/check_binance_api.sh ;;
     15) echo "🔄 Running Git auto-sync..."; bash scripts/git_fix_sync.sh ;;
+    16)
+      echo -e "${Y}🧠 Running Full Auto-Heal & Sync...${N}"
+      send_telegram "🧠 <b>Full Auto-Heal Triggered</b>\nRunning complete system check + Git self-sync..."
+      bash scripts/check_full_system.sh
+      ;;
     0) echo "👋 Exiting. Stay sharp!"; exit 0 ;;
     *) echo "❌ Invalid option." ;;
   esac
