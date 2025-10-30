@@ -7,3 +7,11 @@ From https://github.com/shawn2400/market-gpt-api-template
  * branch            main       -> FETCH_HEAD
    eb45e0d..00b43ee  main       -> origin/main
 [1;33m▶️  שולח עדכונים ל-GitHub...[0m
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (non-fast-forward)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the tip of your current branch is behind
+hint: its remote counterpart. If you want to integrate the remote changes,
+hint: use 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+[1;31m❌ בעיה ב-push ל-GitHub.[0m

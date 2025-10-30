@@ -36,25 +36,17 @@ gunicorn -c gunicorn_conf.py main:app
 '''
 waitForPort = 5000
 
-# === Workflow 2: Auto Scanner (Background Worker) ===
 [[workflows.workflow]]
 name = "Auto Scanner"
+mode = "parallel"
 author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = '''
-cd /home/runner/$REPL_SLUG && \
-PYTHONPATH=/home/runner/$REPL_SLUG \
-TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 SUGGEST_INTERVAL_SEC=60 \
-CONTEXT_URL=https://${REPL_SLUG}.${REPL_OWNER}.repl.co \
-ALERT_INGEST_URL=https://${REPL_SLUG}.${REPL_OWNER}.repl.co/alerts/trade-ingest \
-WEBHOOK_HMAC_SECRET=demo_secret_change_in_production \
-python workers/gpt_auto_suggest.py
-'''
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 SUGGEST_INTERVAL_SEC=60 CONTEXT_URL=https://1f0c42a6-48ab-4140-b304-bba617ce2b45-00-2k2qds7gg7vaz.sisko.replit.dev ALERT_INGEST_URL=https://1f0c42a6-48ab-4140-b304-bba617ce2b45-00-2k2qds7gg7vaz.sisko.replit.dev/alerts/ingest WEBHOOK_HMAC_SECRET=demo_secret_change_in_production python workers/gpt_auto_suggest.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[workflows.workflow]]
 name = "Auto Scanner"
@@ -63,7 +55,9 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = 'cd /home/runner/$REPL_SLUG && \nPYTHONPATH=/home/runner/$REPL_SLUG \nTRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 SUGGEST_INTERVAL_SEC=60 \nCONTEXT_URL=https://${REPL_SLUG}.${REPL_OWNER}.repl.co \nALERT_INGEST_URL=https://${REPL_SLUG}.${REPL_OWNER}.repl.co/alerts/ingest \nWEBHOOK_HMAC_SECRET=demo_secret_change_in_production \npython workers/gpt_auto_suggest.py'
+args = '''
+cd /home/runner/$REPL_SLUG && \nPYTHONPATH=/home/runner/$REPL_SLUG \nTRADE_AUTO_SUGGEST=1 \nSUGGEST_FUTURES=1 \nSUGGEST_INTERVAL_SEC=60 \nCONTEXT_URL=https://1f0c42a6-48ab-4140-b304-bba617ce2b45-00-2k2qds7gg7vaz.sisko.replit.dev \nALERT_INGEST_URL=https://1f0c42a6-48ab-4140-b304-bba617ce2b45-00-2k2qds7gg7vaz.sisko.replit.dev/alerts/ingest \nWEBHOOK_HMAC_SECRET=demo_secret_change_in_production \npython workers/gpt_auto_suggest.py
+'''
 
 [workflows.workflow.metadata]
 outputType = "console"
