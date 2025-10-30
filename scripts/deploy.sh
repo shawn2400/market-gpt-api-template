@@ -4,14 +4,15 @@ set -euo pipefail
 # === צבעים ===
 G="\033[1;32m"; Y="\033[1;33m"; R="\033[1;31m"; N="\033[0m"
 
-# === משתנים נדרשים ===
+# === משתנים ===
 RENDER_APP="algogpt-docker"
 BASE="https://${RENDER_APP}.onrender.com"
 BEARER="${API_BEARER_TOKEN:-}"
 TG_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TG_CHAT_ID="${TELEGRAM_CHAT_ID:-}"
+LOG_FILE="deploy_log.txt"
 
-# === פונקציה: שליחת הודעה לטלגרם ===
+# === פונקציית שליחת הודעות לטלגרם ===
 notify_tg() {
   local text="$1"
   if [[ -n "$TG_TOKEN" && -n "$TG_CHAT_ID" ]]; then
@@ -22,44 +23,55 @@ notify_tg() {
   fi
 }
 
+# === פונקציה לרישום ללוג ===
+log() {
+  echo -e "$1" | tee -a "$LOG_FILE"
+}
+
+echo "" > "$LOG_FILE"
+log "=============================="
+log "🚀 AlgoGPT Auto Deploy Started"
+log "=============================="
+
 # === שלב 1: סנכרון עם GitHub ===
-echo -e "${Y}📥  מושך עדכונים מ-GitHub...${N}"
-git fetch origin main
+log "${Y}📥  מושך עדכונים מ-GitHub...${N}"
+git fetch origin main >>"$LOG_FILE" 2>&1
 git rebase origin/main || true
 
-echo -e "${Y}▶️  שולח עדכונים ל-GitHub...${N}"
+log "${Y}▶️  שולח עדכונים ל-GitHub...${N}"
 git add -A
 git_commit_msg="deploy: auto-fix $(date -Iseconds)"
 git commit -m "$git_commit_msg" || true
 
-# שמור hash של ה-commit הנוכחי
 commit_hash=$(git rev-parse --short HEAD || echo "unknown")
 
-if git push origin main; then
-  echo -e "${G}✔️  נשלח ל-GitHub. Render יבצע Auto-Deploy.${N}"
+if git push origin main >>"$LOG_FILE" 2>&1; then
+  log "${G}✔️  נשלח ל-GitHub. Render יבצע Auto-Deploy.${N}"
   notify_tg "🚀 <b>AlgoGPT Deploy</b> התחיל 🔧%0ACommit: <code>${commit_hash}</code>%0A📦 ${git_commit_msg}"
 else
-  echo -e "${R}⚠️  בעיה ב-push!${N}"
+  log "${R}❌ בעיה ב-push ל-GitHub.${N}"
   notify_tg "❌ <b>Deploy נכשל</b> בזמן push ל-GitHub 🚫%0ACommit: <code>${commit_hash}</code>"
   exit 1
 fi
 
 # === שלב 2: בדיקת Render ===
-echo -e "${Y}⌛  ממתין ש-Render יעלה גרסה חדשה...${N}"
+log "${Y}⌛  ממתין ש-Render יעלה גרסה חדשה...${N}"
 for i in {1..20}; do
   sleep 10
   STATUS=$(curl -fs -o /dev/null -w "%{http_code}" "$BASE/readyz" || true)
   if [[ "$STATUS" == "200" ]]; then
-    echo -e "${G}✅ Render מוכן (${BASE})${N}"
+    log "${G}✅ Render מוכן (${BASE})${N}"
     version_json=$(curl -fsS -H "Authorization: Bearer $BEARER" "$BASE/version" || echo "")
+    log "📄 גרסת שירות: ${version_json}"
     notify_tg "✅ <b>Deploy הושלם בהצלחה</b>%0A🌐 <code>${BASE}</code>%0ACommit: <code>${commit_hash}</code>%0A📄 גרסה: <code>${version_json}</code>"
+    log "✅ Deploy Success — ${commit_hash}"
     exit 0
   fi
-  echo -e "🔄 עדיין בטעינה (status=$STATUS)..."
+  log "🔄 עדיין בטעינה (status=$STATUS)..."
 done
 
-# === אם לא חזר ל-OK ===
-echo -e "${R}❌ Render לא חזר ל-OK אחרי 200 שניות.${N}"
-notify_tg "⚠️ <b>Deploy נכשל</b> – Render לא עלה בזמן ⏱️%0ACommit: <code>${commit_hash}</code>"
+# === Render לא עלה ===
+log "${R}❌ Render לא חזר ל-OK אחרי 200 שניות.${N}"
+notify_tg "⚠️ <b>Deploy נכשל</b> – Render לא עלה בזמן ⏱️%0ACommit: <code>${commit_hash}</code>%0A📎 לוג: <code>${BASE}/static/deploy_log.txt</code>"
 exit 1
 
