@@ -3,3 +3,9 @@
 🚀 AlgoGPT Auto Deploy Started
 ==============================
 [1;33m💾 שומר שינויים מקומיים...[0m
+[1;33m🔄 מבצע git fetch + rebase...[0m
+[1;33m⚠️ קונפליקט או שגיאה — מנסה שוב עם stash.[0m
+[1;32m✔️ נשלח ל-GitHub. Render יבצע Auto-Deploy.[0m
+[1;33m⌛ ממתין ש-Render יעלה גרסה חדשה...[0m
+[1;32m✅ Render מוכן (https://algogpt-docker.onrender.com)[0m
+📄 גרסה: {"ok":true,"algogpt_version":"2.18.0","strategy_version":"unknown","git_commit":null}

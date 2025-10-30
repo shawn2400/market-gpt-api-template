@@ -71,6 +71,53 @@ def _validate_item(it: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     except Exception:
         return None
 
+def _get_all_binance_futures_symbols() -> List[Dict[str, Any]]:
+    """
+    סורק דינמית את כל הסימבולים הזמינים ב-Binance Futures
+    מחזיר רשימה במבנה: [{"symbol": "BTCUSDT", "quality_score": 7}, ...]
+    """
+    try:
+        try:
+            from utils.binance_client import _init_client
+        except:
+            from utils.binance_client import init_client as _init_client
+        
+        client = _init_client()
+        if not client:
+            logger.warning("Cannot get Binance client - dynamic scan disabled")
+            return []
+        
+        # Get all Futures exchange info
+        exchange_info = client.futures_exchange_info()
+        
+        # Filter active USDT perpetual contracts
+        symbols_list = []
+        for symbol_info in exchange_info.get("symbols", []):
+            symbol = symbol_info.get("symbol", "")
+            status = symbol_info.get("status", "")
+            contract_type = symbol_info.get("contractType", "")
+            quote_asset = symbol_info.get("quoteAsset", "")
+            
+            # Only USDT perpetuals that are TRADING
+            if (quote_asset == "USDT" and 
+                contract_type == "PERPETUAL" and 
+                status == "TRADING"):
+                
+                # Assign quality score based on TOP10
+                quality = 8 if symbol in TOP10_SET else 7
+                
+                symbols_list.append({
+                    "symbol": symbol,
+                    "quality_score": quality
+                })
+        
+        logger.info({"event": "binance_futures_scan", "total_symbols": len(symbols_list)})
+        return symbols_list
+    
+    except Exception as e:
+        logger.error({"event": "binance_futures_scan_failed", "error": str(e)})
+        return []
+
 def _ensure_anchor(watchlist: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     if not any(it.get("symbol") == ANCHOR_SYMBOL for it in watchlist):
         watchlist.insert(0, {"symbol": ANCHOR_SYMBOL, "direction": "LONG", "quality_score": 8})
@@ -78,6 +125,36 @@ def _ensure_anchor(watchlist: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     return watchlist
 
 def load_watchlist(min_quality: Optional[int] = None, path: str = WATCHLIST_PATH) -> List[Dict[str, Any]]:
+    # Check if dynamic scan is enabled
+    use_dynamic = os.getenv("USE_DYNAMIC_SCAN", "1").lower() in ("1", "true", "yes")
+    
+    if use_dynamic:
+        # Scan all Binance Futures dynamically
+        all_symbols = _get_all_binance_futures_symbols()
+        
+        if all_symbols:
+            # Filter by minimum quality if specified
+            if isinstance(min_quality, int):
+                filtered = [s for s in all_symbols if s.get("quality_score", 0) >= min_quality]
+            else:
+                filtered = all_symbols
+            
+            # Ensure anchor and sort
+            filtered = _ensure_anchor(filtered)
+            filtered.sort(key=lambda d: (-(d.get("quality_score", -1)), d["symbol"]))
+            
+            logger.info({
+                "event": "watchlist_load", 
+                "src": "binance_dynamic_scan", 
+                "total": len(all_symbols), 
+                "after_filter": len(filtered)
+            })
+            return filtered
+        
+        # Fallback to file if dynamic scan fails
+        logger.warning("Dynamic scan failed or returned no symbols, falling back to file watchlist")
+    
+    # Original file/redis logic
     data: Optional[List[Dict[str, Any]]] = None
     if redis_client:
         try:

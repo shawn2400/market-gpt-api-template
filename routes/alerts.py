@@ -53,12 +53,14 @@ if not _HAS_CONFIRM:
 async def _tg_send_plan(plan: Dict[str, Any]) -> None:
     with suppress(Exception):
         from utils.alerts import send_telegram_message  # type: ignore
+        from utils.trade_reports import get_israel_time_str, is_trade_expired  # type: ignore
         
         sym = plan.get("symbol", "")
         side = plan.get("side", "")
         lev = plan.get("leverage", "")
         qty = plan.get("qty", "")
         ticket_id = plan.get("ticket_id", "")
+        created_at = plan.get("created_at", "")
         
         # חלץ TP/SL מהנתונים
         tp_list = plan.get("tp", [])
@@ -66,9 +68,18 @@ async def _tg_send_plan(plan: Dict[str, Any]) -> None:
         
         # בנה הודעה עשירה בפרטים
         emoji_side = "🟢" if side == "BUY" else "🔴"
+        
+        # בדוק אם ההצעה פגה תוקף
+        expired = is_trade_expired(created_at, max_age_hours=2)
+        expired_tag = "⚠️ <b>פג תוקף</b> | " if expired else ""
+        
+        # קבל timestamp ישראלי
+        israel_time = get_israel_time_str()
+        
         lines = [
             f"{emoji_side} <b>NEW TRADE PROPOSAL</b>",
-            f"",
+            f"🕐 <b>שעון ישראל:</b> {israel_time}",
+            f"{expired_tag}",
             f"💎 <b>{sym}</b>",
             f"📊 Direction: <b>{side}</b> (Leverage: x{lev})",
             f"💰 Quantity: <code>{qty:.6f}</code>",

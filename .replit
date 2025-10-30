@@ -71,6 +71,10 @@ author = "agent"
 task = "workflow.run"
 args = "Position Monitor"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Daily Digest"
+
 [[workflows.workflow]]
 name = "Position Monitor"
 author = "agent"
@@ -82,9 +86,24 @@ args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_
 [workflows.workflow.metadata]
 outputType = "console"
 
+[[workflows.workflow]]
+name = "Daily Digest"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/daily_digest.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[ports]]
 localPort = 5000
 externalPort = 80
+
+[[ports]]
+localPort = 39479
+externalPort = 3000
 
 # === Deployment (VM Target) ===
 [deployment]

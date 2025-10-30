@@ -200,6 +200,14 @@ The system uses **strict multi-layer filters** to protect capital:
 
 ## Recent Changes
 
+- **2025-10-30**: Dynamic Scanning & Comprehensive Reporting System
+  - ✅ **Dynamic Binance Scan** - Now scans ALL 530+ Binance Futures symbols (not just static list!)
+  - ✅ **Trade Summary Reports** - Detailed post-trade analysis with grades (A-D) for Entry/Risk/Exit
+  - ✅ **Daily Digest** - Automatic report at midnight (Israel time) with day's performance
+  - ✅ **Israel Timezone** - All notifications show Israel time (🕐 שעון ישראל)
+  - ✅ **Expired Trade Alerts** - Shows "⚠️ פג תוקף" for stale proposals (>2 hours old)
+  - ✅ **Colorful Emojis** - Rich formatting with emojis throughout all messages
+  - ✅ **Improvement Recommendations** - AI-powered suggestions after each trade
 - **2025-10-30**: Smart Portfolio Management & Monitoring System
   - ✅ **Position Monitor Worker** - Reports every 30-60 minutes with PNL updates
   - ✅ **Smart Budget Allocation** - Automatically splits wallet across 2-4 trades
