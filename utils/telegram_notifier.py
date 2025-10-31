@@ -59,6 +59,8 @@ def make_callback(action: str, trade_id: Optional[str] = None, symbol: Optional[
     יוצר callback_data חתום (אם יש secret). פורמטים נתמכים:
     - CONFIRM:<APPROVE|REJECT>:<trade_id>[:<ts>:<sig>]
     - POS:<ACTION>:<symbol>[:<pct>][:<ts>:<sig>]
+    
+    IMPORTANT: Telegram limits callback_data to 64 bytes!
     """
     base: List[str] = []
     now = int(time.time())
@@ -72,8 +74,22 @@ def make_callback(action: str, trade_id: Optional[str] = None, symbol: Optional[
     if not _SIGN_SECRET:
         return data
     raw = f"{data}:{now}"
-    sig = _hmac(raw)
-    return f"{raw}:{sig}"
+    sig_full = _hmac(raw)
+    # קיצור חתימה ל-12 תווים (6 בתים hex) - מספיק לאבטחה בסיסית
+    sig_short = sig_full[:12]
+    callback = f"{raw}:{sig_short}"
+    
+    # ודא שלא עברנו את הגבול (64 בתים)
+    if len(callback) > 64:
+        # קצר את trade_id/symbol
+        if action in ("APPROVE","REJECT") and trade_id:
+            tid_short = trade_id[-8:]  # 8 תווים אחרונים
+            data_short = f"CONFIRM:{action}:{tid_short}"
+            raw_short = f"{data_short}:{now}"
+            sig_short = _hmac(raw_short)[:12]
+            callback = f"{raw_short}:{sig_short}"
+    
+    return callback
 
 def verify_callback_data(data: str) -> Dict[str, Any]:
     """
@@ -93,9 +109,12 @@ def verify_callback_data(data: str) -> Dict[str, Any]:
             if len(parts) < 5:
                 raise ValueError("unsigned_callback")
             ts  = int(float(parts[-2]))
-            sig = parts[-1]
+            sig_received = parts[-1]
             raw = ":".join(parts[:-1])
-            if sig != _hmac(raw):
+            sig_calc_full = _hmac(raw)
+            # קיצור חתימה ל-12 תווים כמו במ make_callback
+            sig_calc = sig_calc_full[:12]
+            if sig_received != sig_calc:
                 raise ValueError("bad_sig")
             now = int(time.time())
             if abs(now - ts) > max(_CB_TTL_SEC, _SKEW_SEC):
