@@ -12,6 +12,7 @@ from utils.redis_client import redis_client as RED
 from utils.hours_profile import hours_profile_now
 from utils.risk_rules import gate_trade, rr_from_levels, entry_gap_ok
 from utils.budget import get_trade_budget_usdt  # ← תקציב דינמי
+from utils.dynamic_filters import get_dynamic_thresholds, explain_filters  # ← סינונים דינמיים
 
 # Grid helper
 try:
@@ -327,10 +328,14 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     if not entry_gap_ok(price, prop["entry"]):  # לא לרדוף
         return None
 
-    # דרישת RR דינמית
+    # ✨ סינונים דינמיים לפי תנאי השוק
+    dynamic_filters = get_dynamic_thresholds(symbol, ctx)
+    min_rr = dynamic_filters["rr_top10_min"] if is_top10(symbol) else dynamic_filters["rr_alt_min"]
+    success_req = dynamic_filters["success_pct_min"]
+    
+    # דרישת RR + funding bias
     rr = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
-    min_rr = _min_rr_for(symbol, (ctx or {}).get("filters") or {})
-    min_rr, success_req, fb_note = await _apply_funding_bias_req(prop["side"], symbol, min_rr, success_floor)
+    min_rr, success_req, fb_note = await _apply_funding_bias_req(prop["side"], symbol, min_rr, success_req)
     if rr is None or rr < min_rr:
         return None
 
@@ -464,6 +469,12 @@ async def process_cycle():
     except Exception:
         wl = load_watchlist(min_quality=None)
         pool_syms = [it["symbol"] for it in wl if it.get("symbol")] or ["BTCUSDT","ETHUSDT"]
+    
+    # 🎯 Log dynamic filters for first symbol (for debugging)
+    if pool_syms:
+        sample_ctx = {"symbol": pool_syms[0], "filters": {}}
+        sample_filters = get_dynamic_thresholds(pool_syms[0], sample_ctx)
+        LOGGER.info(f"Dynamic Filters: {explain_filters(sample_filters)}")
 
     # שמור על POOL_PER_CYCLE אם ביקשת ספציפית
     random.shuffle(pool_syms)
