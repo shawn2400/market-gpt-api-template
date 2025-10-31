@@ -348,7 +348,8 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     g = gate_trade(symbol, prop["side"], price, prop["entry"], prop["sl"], prop["tp1"],
                    vol_regime=vol_reg, success_pct=prop.get("success_pct"), leverage=prop.get("leverage"))
     if not g["ok"]:
-        LOGGER.info(f"REJECTED {symbol}: gate_trade failed - {g.get('reason', 'unknown')}")
+        reason = ", ".join(g.get("errors", ["unknown"]))
+        LOGGER.info(f"REJECTED {symbol}: gate_trade failed - {reason}")
         return None
 
     if (prop.get("success_pct") or 0) < success_req:  # סף הצלחה דינמי

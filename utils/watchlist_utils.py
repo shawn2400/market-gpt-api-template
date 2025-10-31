@@ -316,8 +316,8 @@ def get_symbol_prefs(symbol: str) -> Dict[str, Any]:
     except Exception:
         pass
     if is_top10(symbol):
-        return {"max_leverage": 15, "min_rr": 1.6, "budget_usd": 120.0, "modes": ["FUTURES","SPOT","GRID"]}
-    return {"max_leverage": 10, "min_rr": 1.9, "budget_usd": 110.0, "modes": ["FUTURES","SPOT","GRID"]}
+        return {"max_leverage": 15, "min_rr": 1.01, "budget_usd": 120.0, "modes": ["FUTURES","SPOT","GRID"]}
+    return {"max_leverage": 10, "min_rr": 1.01, "budget_usd": 110.0, "modes": ["FUTURES","SPOT","GRID"]}
 
 # ===== NEW: List[str] loader ל-auto_executor =====
 def load_watchlist_env_or_fallback() -> List[str]:

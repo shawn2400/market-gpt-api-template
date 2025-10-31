@@ -8,9 +8,9 @@ from utils.watchlist_utils import get_symbol_prefs
 ENTRY_GAP_MAX_PCT      = float(os.getenv("ENTRY_GAP_MAX_PCT", "2.5"))  # הרחבתי מ-0.8% ל-2.5%
 ENTRY_GAP_WARN_PCT     = float(os.getenv("ENTRY_GAP_WARN_PCT", "1.5"))  # הרחבתי מ-0.5% ל-1.5%
 
-RR_MIN_LOW_VOL         = float(os.getenv("RR_MIN_LOW_VOL",  "1.5"))
-RR_MIN_MID_VOL         = float(os.getenv("RR_MIN_MID_VOL",  "1.6"))
-RR_MIN_HIGH_VOL        = float(os.getenv("RR_MIN_HIGH_VOL", "1.8"))
+RR_MIN_LOW_VOL         = float(os.getenv("RR_MIN_LOW_VOL",  "1.01"))
+RR_MIN_MID_VOL         = float(os.getenv("RR_MIN_MID_VOL",  "1.01"))
+RR_MIN_HIGH_VOL        = float(os.getenv("RR_MIN_HIGH_VOL", "1.01"))
 
 LEV_HARD_CAP           = int(os.getenv("LEV_HARD_CAP", "50"))
 SUCCESS_WARN_PCT       = float(os.getenv("SUCCESS_WARN_PCT", "60"))
