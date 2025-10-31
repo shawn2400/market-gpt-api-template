@@ -6,6 +6,7 @@ from contextlib import suppress
 
 from fastapi import APIRouter, Body, Header, Request, HTTPException
 from pydantic import BaseModel
+from utils.telegram_notifier import make_callback
 
 logger = logging.getLogger("algogpt.alerts")
 router = APIRouter(tags=["alerts"])
@@ -121,12 +122,12 @@ async def _tg_send_plan(plan: Dict[str, Any]) -> None:
         lines.append(f"")
         lines.append(f"<i>🤖 Auto-analyzed by AI Scanner</i>")
         
-        # כפתורים ירוקים/אדומים (פורמט: CONFIRM:ACTION:TICKET_ID)
+        # כפתורים ירוקים/אדומים (פורמט: CONFIRM:ACTION:TICKET_ID עם חתימה HMAC)
         keyboard = {
             "inline_keyboard": [
                 [
-                    {"text": "✅ APPROVE", "callback_data": f"CONFIRM:APPROVE:{ticket_id}"},
-                    {"text": "❌ REJECT", "callback_data": f"CONFIRM:REJECT:{ticket_id}"}
+                    {"text": "✅ APPROVE", "callback_data": make_callback("APPROVE", ticket_id)},
+                    {"text": "❌ REJECT", "callback_data": make_callback("REJECT", ticket_id)}
                 ],
                 [
                     {"text": "📊 View Full Details", "callback_data": f"CONFIRM:DETAILS:{ticket_id}"}
