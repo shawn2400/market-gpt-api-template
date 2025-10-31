@@ -88,8 +88,8 @@ SUGGEST_GRID      = os.getenv("SUGGEST_GRID","0").lower() in ("1","true","yes")
 
 DEFAULT_INTERVAL  = os.getenv("DEFAULT_INTERVAL","15m")
 
-MIN_RR_TOP10 = float(os.getenv("MIN_RR_TOP10", "1.6"))
-MIN_RR_ALT   = float(os.getenv("MIN_RR_ALT", "1.9"))
+MIN_RR_TOP10 = float(os.getenv("MIN_RR_TOP10", "1.01"))
+MIN_RR_ALT   = float(os.getenv("MIN_RR_ALT", "1.01"))
 
 # גג מינוף להצעות GPT (ביטחון)
 SUGGEST_MAX_LEVERAGE = int(os.getenv("SUGGEST_MAX_LEVERAGE","10"))
@@ -248,18 +248,14 @@ async def _apply_funding_bias_req(side: str, symbol: str, min_rr: float, success
     # fb>0 → תומך LONG; fb<0 → תומך SHORT
     opposed = (side=="LONG" and fb < 0) or (side=="SHORT" and fb > 0)
     aligned = (side=="LONG" and fb > 0) or (side=="SHORT" and fb < 0)
+    
+    # ביטול funding bias - מחזיר ערכים מקוריים!
     if opposed:
-        # החמרה קלה
-        min_rr += min(0.15, 0.1 * abs(fb))  # הורדתי מ-0.25 ל-0.15
-        success_min += min(3.0, 5.0 * abs(fb))  # הורדתי מ-5.0 ל-3.0
         reason = f"funding_opposed({fb:+.2f})"
     elif aligned:
-        min_rr -= min(0.1, 0.1 * abs(fb))
-        success_min -= min(2.0, 3.0 * abs(fb))
-        success_min = max(40.0, success_min)  # הורדתי מ-55.0 ל-40.0
-        min_rr = max(1.01, min_rr)  # הורדתי מ-1.3 ל-1.01!
         reason = f"funding_aligned({fb:+.2f})"
-    return (min_rr, success_min, reason)
+    
+    return (min_rr, success_min, reason)  # אין שינוי בסף!
 
 async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Optional[Dict[str, Any]]:
     if not OPENAI_API_KEY:
