@@ -72,6 +72,7 @@ menu() {
   echo "15) 🔄 Git Sync & Push (Auto)"
   echo "16) 🧠 Full Auto-Heal & Sync"
   echo "17) ⚙️ Set Render Executor (Live Trading Route)"
+  echo "18) 📜 View AutoExecutor Logs (Live Tail)"
   echo "0) ❌ Exit"
   echo "=============================="
   read -rp "Choose option: " opt
@@ -93,7 +94,16 @@ menu() {
     14) echo "🔐 Checking Binance API connectivity..."; bash scripts/check_binance_api.sh ;;
     15) echo "🔄 Running Git auto-sync..."; bash scripts/git_fix_sync.sh ;;
     16) echo -e "${Y}🧠 Running Full Auto-Heal & Sync...${N}"; send_telegram "🧠 <b>Full Auto-Heal Triggered</b>\nRunning complete system check + Git self-sync..."; bash scripts/check_full_system.sh ;;
-    17) echo -e "${C}⚙️ Switching to Render Executor mode...${N}"; bash scripts/set_render_executor.sh; send_telegram "✅ <b>Render Executor Activated</b>\nAll live trades now routed through Render.\nAutoExecutor restarted."; ;;
+    17) echo -e "${C}⚙️ Switching to Render Executor mode...${N}"; bash scripts/set_render_executor.sh; send_telegram "✅ <b>Render Executor Activated</b>\nAll live trades now routed through Render.\n♻️ AutoExecutor Restarted (check logs)."; ;;
+    18)
+      echo -e "${Y}📜 Tailing AutoExecutor logs (Ctrl+C to exit)...${N}"
+      LOG_FILE="/tmp/auto_executor.log"
+      if [[ -f "$LOG_FILE" ]]; then
+        tail -n 30 -f "$LOG_FILE"
+      else
+        echo -e "${R}No log file found: $LOG_FILE${N}"
+      fi
+      ;;
     0) echo "👋 Exiting. Stay sharp!"; exit 0 ;;
     *) echo "❌ Invalid option." ;;
   esac
