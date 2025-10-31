@@ -6,6 +6,7 @@ BEARER="${API_BEARER_TOKEN:?set API_BEARER_TOKEN in Replit or Render secrets}"
 TG_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TG_CHAT="${TELEGRAM_CHAT_ID:-}"
 STATE_FILE="scripts/.last_status"
+LOG_FILE="/tmp/auto_executor.log"
 
 G="\033[1;32m"; R="\033[1;31m"; Y="\033[1;33m"; C="\033[1;36m"; N="\033[0m"
 
@@ -71,7 +72,7 @@ menu() {
   echo "14) 🔐 Check Binance Permissions"
   echo "15) 🔄 Git Sync & Push (Auto)"
   echo "16) 🧠 Full Auto-Heal & Sync"
-  echo "17) ⚙️ Set Render Executor (Live Trading Route)"
+  echo "17) ⚙️ Restart AutoExecutor (Render Executor Mode)"
   echo "18) 📜 View AutoExecutor Logs (Live Tail)"
   echo "0) ❌ Exit"
   echo "=============================="
@@ -94,15 +95,13 @@ menu() {
     14) echo "🔐 Checking Binance API connectivity..."; bash scripts/check_binance_api.sh ;;
     15) echo "🔄 Running Git auto-sync..."; bash scripts/git_fix_sync.sh ;;
     16) echo -e "${Y}🧠 Running Full Auto-Heal & Sync...${N}"; send_telegram "🧠 <b>Full Auto-Heal Triggered</b>\nRunning complete system check + Git self-sync..."; bash scripts/check_full_system.sh ;;
-    17) echo -e "${C}⚙️ Switching to Render Executor mode...${N}"; bash scripts/set_render_executor.sh; send_telegram "✅ <b>Render Executor Activated</b>\nAll live trades now routed through Render.\n♻️ AutoExecutor Restarted (check logs)."; ;;
+    17)
+      echo -e "${C}⚙️ Restarting AutoExecutor safely...${N}"
+      bash scripts/auto_executor_restart.sh
+      ;;
     18)
-      echo -e "${Y}📜 Tailing AutoExecutor logs (Ctrl+C to exit)...${N}"
-      LOG_FILE="/tmp/auto_executor.log"
-      if [[ -f "$LOG_FILE" ]]; then
-        tail -n 30 -f "$LOG_FILE"
-      else
-        echo -e "${R}No log file found: $LOG_FILE${N}"
-      fi
+      echo -e "${Y}📜 Viewing AutoExecutor logs (Ctrl+C to exit)...${N}"
+      [[ -f "$LOG_FILE" ]] && tail -n 40 -f "$LOG_FILE" || echo -e "${R}No log file found ($LOG_FILE)${N}"
       ;;
     0) echo "👋 Exiting. Stay sharp!"; exit 0 ;;
     *) echo "❌ Invalid option." ;;
@@ -112,5 +111,6 @@ menu() {
 while true; do
   menu
 done
+
 
 
