@@ -322,10 +322,13 @@ def _calc_dynamic_budget(symbol: str, ctx: Dict[str, Any]) -> float:
 
 async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float) -> Optional[Dict[str, Any]]:
     prop = await _gpt_suggest(symbol, ctx, for_spot=False)
-    if not prop: return None
+    if not prop:
+        LOGGER.info(f"NO PROPOSAL from AI for {symbol}")
+        return None
 
     price = (ctx or {}).get("price")
     if not entry_gap_ok(price, prop["entry"]):  # לא לרדוף
+        LOGGER.info(f"REJECTED {symbol}: entry_gap_ok failed (price={price}, entry={prop['entry']})")
         return None
 
     # ✨ סינונים דינמיים לפי תנאי השוק
@@ -337,6 +340,7 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     rr = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
     min_rr, success_req, fb_note = await _apply_funding_bias_req(prop["side"], symbol, min_rr, success_req)
     if rr is None or rr < min_rr:
+        LOGGER.info(f"REJECTED {symbol}: rr={rr} < {min_rr}")
         return None
 
     # גייטינג כללי
@@ -344,9 +348,11 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     g = gate_trade(symbol, prop["side"], price, prop["entry"], prop["sl"], prop["tp1"],
                    vol_regime=vol_reg, success_pct=prop.get("success_pct"), leverage=prop.get("leverage"))
     if not g["ok"]:
+        LOGGER.info(f"REJECTED {symbol}: gate_trade failed - {g.get('reason', 'unknown')}")
         return None
 
     if (prop.get("success_pct") or 0) < success_req:  # סף הצלחה דינמי
+        LOGGER.info(f"REJECTED {symbol}: success_pct={prop.get('success_pct')} < {success_req}")
         return None
 
     # תקציב דינמי → נוטיונל ≈ budget*lev
@@ -394,6 +400,7 @@ async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -
     if rr is None or rr < min_rr:
         return None
     if (prop.get("success_pct") or 0) < success_req:
+        LOGGER.info(f"REJECTED SPOT {symbol}: success_pct={prop.get('success_pct')} < {success_req}")
         return None
 
     budget = _calc_dynamic_budget(symbol, ctx)

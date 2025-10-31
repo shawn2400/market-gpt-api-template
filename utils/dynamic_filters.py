@@ -7,21 +7,21 @@ from __future__ import annotations
 import os
 from typing import Dict, Any, Optional
 
-# ====== Base thresholds (Conservative) ======
-BASE_SUCCESS_PCT = 70.0
-BASE_RR_TOP10 = 1.6
-BASE_RR_ALT = 1.9
-BASE_QUALITY = 7.0
+# ====== Base thresholds (VERY Aggressive - GET TRADES NOW!) ======
+BASE_SUCCESS_PCT = 50.0  # נמוך מאוד!
+BASE_RR_TOP10 = 1.05     # נמוך מאוד!
+BASE_RR_ALT = 1.1        # נמוך מאוד!
+BASE_QUALITY = 5.0       # נמוך מאוד!
 
 # ====== Adjustment ranges ======
-SUCCESS_MIN = 55.0
-SUCCESS_MAX = 75.0
-RR_TOP10_MIN = 1.2
-RR_TOP10_MAX = 1.8
-RR_ALT_MIN = 1.4
-RR_ALT_MAX = 2.0
-QUALITY_MIN = 5.5
-QUALITY_MAX = 8.0
+SUCCESS_MIN = 40.0       # מינימום מאוד נמוך
+SUCCESS_MAX = 60.0       # מקסימום נמוך
+RR_TOP10_MIN = 1.01      # מינימום מינימלי!
+RR_TOP10_MAX = 1.3       # מקסימום נמוך
+RR_ALT_MIN = 1.05        # מינימום מינימלי!
+RR_ALT_MAX = 1.4         # מקסימום נמוך
+QUALITY_MIN = 4.0        # מינימום מאוד נמוך
+QUALITY_MAX = 6.5        # מקסימום נמוך
 
 # ====== Market regime weights ======
 REGIME_WEIGHTS = {
