@@ -12,9 +12,9 @@ set -euo pipefail
 BASE="${BASE:-https://algogpt-docker.onrender.com}"
 BEARER="${API_BEARER_TOKEN:-}"
 INTERVAL_FILE="/tmp/algogpt_intel_interval.txt"
-LOG_FILE="/app/logs/auto_intel.log"
+LOG_FILE="/tmp/logs/auto_intel.log"
 
-mkdir -p /app/logs || true
+mkdir -p /tmp/logs || true
 
 run_cycle() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] Running auto_intel.sh..." >> "$LOG_FILE"
