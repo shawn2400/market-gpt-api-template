@@ -99,6 +99,10 @@ externalPort = 3001
 localPort = 43085
 externalPort = 3000
 
+[[ports]]
+localPort = 45257
+externalPort = 3002
+
 # === Deployment (VM Target) ===
 [deployment]
 deploymentTarget = "vm"
