@@ -13,13 +13,13 @@ BASE_RR_TOP10 = 1.01     # מינימום מוחלט!
 BASE_RR_ALT = 1.01       # מינימום מוחלט!
 BASE_QUALITY = 4.0       # קבל כמעט הכל!
 
-# ====== Adjustment ranges ======
+# ====== Adjustment ranges (RR קבוע ללא adjustment!) ======
 SUCCESS_MIN = 40.0       # מינימום מאוד נמוך
 SUCCESS_MAX = 60.0       # מקסימום נמוך
-RR_TOP10_MIN = 1.01      # מינימום מינימלי!
-RR_TOP10_MAX = 1.3       # מקסימום נמוך
-RR_ALT_MIN = 1.05        # מינימום מינימלי!
-RR_ALT_MAX = 1.4         # מקסימום נמוך
+RR_TOP10_MIN = 1.01      # מינימום מוחלט - קבוע!
+RR_TOP10_MAX = 1.01      # מקסימום=מינימום → ללא adjustment!
+RR_ALT_MIN = 1.01        # מינימום מוחלט - קבוע!
+RR_ALT_MAX = 1.01        # מקסימום=מינימום → ללא adjustment!
 QUALITY_MIN = 4.0        # מינימום מאוד נמוך
 QUALITY_MAX = 6.5        # מקסימום נמוך
 
