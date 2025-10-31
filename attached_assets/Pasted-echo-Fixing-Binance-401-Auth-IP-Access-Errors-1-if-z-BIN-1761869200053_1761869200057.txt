@@ -1,0 +1,56 @@
+echo "🔧 Fixing Binance 401 Auth & IP Access Errors..."
+
+# 1️⃣ בדוק שהמפתחות קיימים
+if [ -z "$BINANCE_API_KEY" ] || [ -z "$BINANCE_API_SECRET" ]; then
+  echo "❌ Missing BINANCE_API_KEY or BINANCE_API_SECRET!"
+  echo "👉 Add them in your environment (.env / Render / Replit Secrets) first."
+  exit 1
+fi
+
+# 2️⃣ הדפס מצב הרשאות קיים
+echo "🔍 Current Binance permissions (check manually in your Binance dashboard):"
+echo "☑️ Enable Reading"
+echo "☑️ Enable Spot & Margin Trading"
+echo "☑️ Enable Futures"
+echo "☑️ Unrestricted access (no IP lock)"
+echo "⚠️ If IP-restricted, add this IP below ⬇️"
+
+# 3️⃣ מצא את ה־External IP של המערכת
+echo "🌐 Fetching external IP..."
+curl -s https://api.ipify.org && echo ""
+MYIP=$(curl -s https://api.ipify.org)
+echo "📡 Your current external IP (for Binance whitelist): $MYIP"
+
+# 4️⃣ בדוק אזור הריצה (Render region)
+echo "🏗️ Checking Render region..."
+if curl -s http://169.254.169.254/latest/meta-data/placement/availability-zone 2>/dev/null | grep -qi "eu"; then
+  echo "✅ Region appears to be Frankfurt (EU)"
+else
+  echo "⚠️ Verify Render region in dashboard → should be 'Frankfurt (EU Central)'"
+fi
+
+# 5️⃣ בדיקת חיבור וחתימה (Spot + Futures)
+TS=$(date +%s%3N)
+QS="timestamp=$TS"
+SIG=$(echo -n "$QS" | openssl dgst -sha256 -hmac "$BINANCE_API_SECRET" -hex | sed 's/^.* //')
+
+echo "🔹 Testing Binance Futures..."
+curl -s -w "\nHTTP %{http_code}\n" -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
+"https://fapi.binance.com/fapi/v2/account?$QS&signature=$SIG" | tee /tmp/fut_auth.log
+
+echo "🔹 Testing Binance Spot..."
+curl -s -w "\nHTTP %{http_code}\n" -H "X-MBX-APIKEY: $BINANCE_API_KEY" \
+"https://api.binance.com/api/v3/account?$QS&signature=$SIG" | tee /tmp/spot_auth.log
+
+if grep -q "HTTP 200" /tmp/fut_auth.log && grep -q "HTTP 200" /tmp/spot_auth.log; then
+  echo "✅ Binance API Auth OK (Spot + Futures authorized)"
+else
+  echo "❌ Binance Auth failed — likely wrong key, disabled permission, or IP restriction"
+  echo "🪪 Fix suggestion:"
+  echo "  1️⃣ Recreate new Binance API key"
+  echo "  2️⃣ Enable: Reading, Spot, Margin, Futures"
+  echo "  3️⃣ Set IP: $MYIP (or Unrestricted)"
+  echo "  4️⃣ Re-add keys to Render/Replit"
+fi
+
+echo "🚀 Done — run trade test again via menu option 2 (live mode)."
