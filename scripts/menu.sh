@@ -72,7 +72,7 @@ menu() {
   echo "14) 🔐 Check Binance Permissions"
   echo "15) 🔄 Git Sync & Push (Auto)"
   echo "16) 🧠 Full Auto-Heal & Sync"
-  echo "17) ⚙️ Restart AutoExecutor (Render Executor Mode)"
+  echo "17) ⚙️ View Render Executor Mode (Info Only)"
   echo "18) 📜 View AutoExecutor Logs (Live Tail)"
   echo "0) ❌ Exit"
   echo "=============================="
@@ -94,11 +94,8 @@ menu() {
     13) echo "🧩 Running full system diagnostic..."; bash scripts/check_full_system.sh ;;
     14) echo "🔐 Checking Binance API connectivity..."; bash scripts/check_binance_api.sh ;;
     15) echo "🔄 Running Git auto-sync..."; bash scripts/git_fix_sync.sh ;;
-    16) echo -e "${Y}🧠 Running Full Auto-Heal & Sync...${N}"; send_telegram "🧠 <b>Full Auto-Heal Triggered</b>\nRunning complete system check + Git self-sync..."; bash scripts/check_full_system.sh ;;
-    17)
-      echo -e "${C}⚙️ Restarting AutoExecutor safely...${N}"
-      bash scripts/auto_executor_restart.sh
-      ;;
+    16) echo "🧠 Running Full Auto-Heal diagnostics (no restart)..."; bash scripts/check_full_system.sh ;;
+    17) echo "⚙️ Render Executor mode is informational only — no restart performed."; ;;
     18)
       echo -e "${Y}📜 Viewing AutoExecutor logs (Ctrl+C to exit)...${N}"
       [[ -f "$LOG_FILE" ]] && tail -n 40 -f "$LOG_FILE" || echo -e "${R}No log file found ($LOG_FILE)${N}"
@@ -111,6 +108,7 @@ menu() {
 while true; do
   menu
 done
+
 
 
 
