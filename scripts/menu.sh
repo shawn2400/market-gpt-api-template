@@ -71,6 +71,7 @@ menu() {
   echo "14) 🔐 Check Binance Permissions"
   echo "15) 🔄 Git Sync & Push (Auto)"
   echo "16) 🧠 Full Auto-Heal & Sync"
+  echo "17) ⚙️ Set Render Executor (Live Trading Route)"
   echo "0) ❌ Exit"
   echo "=============================="
   read -rp "Choose option: " opt
@@ -91,11 +92,8 @@ menu() {
     13) echo "🧩 Running full system diagnostic..."; bash scripts/check_full_system.sh ;;
     14) echo "🔐 Checking Binance API connectivity..."; bash scripts/check_binance_api.sh ;;
     15) echo "🔄 Running Git auto-sync..."; bash scripts/git_fix_sync.sh ;;
-    16)
-      echo -e "${Y}🧠 Running Full Auto-Heal & Sync...${N}"
-      send_telegram "🧠 <b>Full Auto-Heal Triggered</b>\nRunning complete system check + Git self-sync..."
-      bash scripts/check_full_system.sh
-      ;;
+    16) echo -e "${Y}🧠 Running Full Auto-Heal & Sync...${N}"; send_telegram "🧠 <b>Full Auto-Heal Triggered</b>\nRunning complete system check + Git self-sync..."; bash scripts/check_full_system.sh ;;
+    17) echo -e "${C}⚙️ Switching to Render Executor mode...${N}"; bash scripts/set_render_executor.sh; send_telegram "✅ <b>Render Executor Activated</b>\nAll live trades now routed through Render."; ;;
     0) echo "👋 Exiting. Stay sharp!"; exit 0 ;;
     *) echo "❌ Invalid option." ;;
   esac
@@ -104,3 +102,4 @@ menu() {
 while true; do
   menu
 done
+
