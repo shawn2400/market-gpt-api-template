@@ -82,14 +82,6 @@ def verify_hmac(signature: Optional[str], raw_body: bytes) -> bool:
       - "sha256=<hex>"
       - "<hex>" נקי
     """
-    # העדפה למימוש מרכזי אם זמין
-    if _sec_verify_hmac is not None and callable(_sec_verify_hmac):
-        try:
-            return bool(_sec_verify_hmac(signature, raw_body))
-        except Exception:
-            # נפילה חזרה למימוש המקומי
-            pass
-
     if not SECRET:
         logger.warning("WEBHOOK_HMAC_SECRET/HMAC_SECRET not configured")
         return False
@@ -120,15 +112,15 @@ def idem_seen(key: Optional[str]) -> bool:
 
     Redis אם זמין, אחרת בזיכרון מקומי.
     """
+    if not key:
+        return False
+        
     # העדפה למימוש מרכזי אם זמין
     if _sec_idem_seen is not None:
         try:
             return bool(_sec_idem_seen(key))
         except Exception:
             pass
-
-    if not key:
-        return False
 
     # Redis backend
     if _RED is not None:

@@ -2,20 +2,13 @@
 set -euo pipefail
 
 # === CONFIG ===
-<<<<<<< HEAD
 G="\033[1;32m"; R="\033[1;31m"; Y="\033[1;33m"; C="\033[1;36m"; N="\033[0m"
-=======
-G="\033[1;32m"; R="\033[1;31m"; Y="\033[1;33m"; N="\033[0m"
->>>>>>> a48ff12 (Add script to monitor Binance API endpoints and send Telegram alerts)
 API_KEY="${BINANCE_API_KEY:?missing key}"
 API_SECRET="${BINANCE_API_SECRET:?missing secret}"
 TG_TOKEN="${TELEGRAM_BOT_TOKEN:-}"
 TG_CHAT="${TELEGRAM_CHAT_ID:-}"
 
-<<<<<<< HEAD
 BASE_SPOT="https://api.binance.com"
-=======
->>>>>>> a48ff12 (Add script to monitor Binance API endpoints and send Telegram alerts)
 BASE_FUT="https://fapi.binance.com"
 
 send_tg() {
@@ -26,17 +19,13 @@ send_tg() {
   fi
 }
 
-<<<<<<< HEAD
-=======
 # === Helper: sign query with HMAC ===
->>>>>>> a48ff12 (Add script to monitor Binance API endpoints and send Telegram alerts)
 sign_query() {
   local query="$1"
   printf '%s' "$query" | openssl dgst -sha256 -hmac "$API_SECRET" -hex | sed 's/^.* //'
 }
 
 check_endpoint() {
-<<<<<<< HEAD
   local base="$1" endpoint="$2" label="$3"
   local start=$(date +%s%3N)
   local query="timestamp=$start"
@@ -81,48 +70,3 @@ fi
 
 echo -e "${C}------------------------------------"
 echo -e "${G}✅ Binance connectivity test finished.${N}"
-=======
-  local endpoint="$1"
-  local query="timestamp=$(($(date +%s%3N)))"
-  local sig
-  sig=$(sign_query "$query")
-  local res
-  res=$(curl -s -w "\n%{http_code}" -H "X-MBX-APIKEY: $API_KEY" "$BASE_FUT$endpoint?$query&signature=$sig")
-  local body http_code
-  body=$(echo "$res" | head -n1)
-  http_code=$(echo "$res" | tail -n1)
-  echo "$body" | grep -q 'code' && echo "$body" | jq -r '.msg' 2>/dev/null || true
-  echo "$http_code"
-}
-
-echo -e "${Y}🔍 Checking Binance Futures connectivity...${N}"
-
-# === Step 1: Check balance endpoint ===
-code=$(check_endpoint "/fapi/v2/balance")
-if [[ "$code" == "200" ]]; then
-  echo -e "${G}✅ Balance endpoint OK${N}"
-else
-  echo -e "${R}❌ Balance check failed (${code})${N}"
-  send_tg "⚠️ <b>Binance API Error</b>: /fapi/v2/balance failed (${code})"
-fi
-
-# === Step 2: Check account info ===
-code=$(check_endpoint "/fapi/v2/account")
-if [[ "$code" == "200" ]]; then
-  echo -e "${G}✅ Account endpoint OK${N}"
-else
-  echo -e "${R}❌ Account check failed (${code})${N}"
-  send_tg "⚠️ <b>Binance API Error</b>: /fapi/v2/account failed (${code})"
-fi
-
-# === Step 3: Check position risk ===
-code=$(check_endpoint "/fapi/v2/positionRisk")
-if [[ "$code" == "200" ]]; then
-  echo -e "${G}✅ PositionRisk OK${N}"
-else
-  echo -e "${R}❌ PositionRisk failed (${code})${N}"
-  send_tg "⚠️ <b>Binance API Error</b>: /fapi/v2/positionRisk failed (${code})"
-fi
-
-echo -e "${Y}⏳ Done.${N}"
->>>>>>> a48ff12 (Add script to monitor Binance API endpoints and send Telegram alerts)
