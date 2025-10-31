@@ -5,13 +5,7 @@ expertMode = true
 
 [nix]
 channel = "stable-25_05"
-packages = [
-  "cairo", "cargo", "ffmpeg-full", "freetype", "ghostscript",
-  "glibcLocales", "gobject-introspection", "gtk3", "lcms2",
-  "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp",
-  "libxcrypt", "libyaml", "openjpeg", "pkg-config", "qhull",
-  "rustc", "tcl", "tk", "xsimd", "zlib"
-]
+packages = ["cairo", "cargo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "lcms2", "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "libyaml", "openjpeg", "pkg-config", "qhull", "rustc", "tcl", "tk", "xsimd", "zlib", "nettools", "iproute2"]
 
 [workflows]
 runButton = "Project"
@@ -98,6 +92,10 @@ externalPort = 3001
 [[ports]]
 localPort = 43085
 externalPort = 3000
+
+[[ports]]
+localPort = 43433
+externalPort = 3002
 
 # === Deployment (VM Target) ===
 [deployment]

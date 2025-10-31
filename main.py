@@ -1445,6 +1445,12 @@ try:
 except Exception as e:
     logger.warning("Failed to load telegram callbacks routes: %s", e)
 
+try:
+    from routes.metrics import router as metrics_router
+    app.include_router(metrics_router)
+except Exception as e:
+    logger.warning("Failed to load metrics routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():
