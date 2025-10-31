@@ -186,11 +186,27 @@ async def callback_handler(
         await _tg_answer_callback(cb_id, "לא נתמך")
         return {"ok": True}
 
-    # Supported formats: CONFIRM:APPROVE:<confirm_id> | CONFIRM:REJECT:<confirm_id>
+    # Import verify_callback_data to properly validate signed callbacks
     try:
-        _, action, cid = data.split(":", 2)
-    except ValueError:
+        from utils.telegram_notifier import verify_callback_data
+        parsed = verify_callback_data(data)
+        action = parsed.get("action", "")
+        cid = parsed.get("trade_id", "")
+    except ValueError as e:
+        error_msg = str(e)
+        if error_msg == "unsigned_callback":
+            await _tg_answer_callback(cb_id, "⚠️ חתימה חסרה")
+        elif error_msg == "bad_sig":
+            await _tg_answer_callback(cb_id, "⚠️ חתימה לא תקינה")
+        elif error_msg == "expired":
+            await _tg_answer_callback(cb_id, "⏰ פג תוקף")
+        else:
+            await _tg_answer_callback(cb_id, f"שגיאה: {error_msg}")
+        logger.warning(f"[callback] verify failed: {error_msg} | data={data}")
+        return {"ok": True}
+    except Exception as e:
         await _tg_answer_callback(cb_id, "פורמט לא תקין")
+        logger.error(f"[callback] parse error: {e}")
         return {"ok": True}
 
     rec = ConfirmStore.get(cid)
