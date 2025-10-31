@@ -7,11 +7,11 @@ from __future__ import annotations
 import os
 from typing import Dict, Any, Optional
 
-# ====== Base thresholds (VERY Aggressive - GET TRADES NOW!) ======
-BASE_SUCCESS_PCT = 50.0  # נמוך מאוד!
-BASE_RR_TOP10 = 1.05     # נמוך מאוד!
-BASE_RR_ALT = 1.1        # נמוך מאוד!
-BASE_QUALITY = 5.0       # נמוך מאוד!
+# ====== Base thresholds (ULTRA Aggressive - ACCEPT ALMOST ANYTHING!) ======
+BASE_SUCCESS_PCT = 45.0  # קבל כמעט הכל!
+BASE_RR_TOP10 = 1.01     # מינימום מוחלט!
+BASE_RR_ALT = 1.01       # מינימום מוחלט!
+BASE_QUALITY = 4.0       # קבל כמעט הכל!
 
 # ====== Adjustment ranges ======
 SUCCESS_MIN = 40.0       # מינימום מאוד נמוך

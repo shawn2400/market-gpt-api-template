@@ -250,14 +250,14 @@ async def _apply_funding_bias_req(side: str, symbol: str, min_rr: float, success
     aligned = (side=="LONG" and fb > 0) or (side=="SHORT" and fb < 0)
     if opposed:
         # החמרה קלה
-        min_rr += min(0.25, 0.2 * abs(fb))
-        success_min += min(5.0, 10.0 * abs(fb))
+        min_rr += min(0.15, 0.1 * abs(fb))  # הורדתי מ-0.25 ל-0.15
+        success_min += min(3.0, 5.0 * abs(fb))  # הורדתי מ-5.0 ל-3.0
         reason = f"funding_opposed({fb:+.2f})"
     elif aligned:
-        min_rr -= min(0.15, 0.15 * abs(fb))
-        success_min -= min(3.0, 6.0 * abs(fb))
-        success_min = max(55.0, success_min)
-        min_rr = max(1.3, min_rr)
+        min_rr -= min(0.1, 0.1 * abs(fb))
+        success_min -= min(2.0, 3.0 * abs(fb))
+        success_min = max(40.0, success_min)  # הורדתי מ-55.0 ל-40.0
+        min_rr = max(1.01, min_rr)  # הורדתי מ-1.3 ל-1.01!
         reason = f"funding_aligned({fb:+.2f})"
     return (min_rr, success_min, reason)
 
