@@ -20,10 +20,16 @@ except Exception:
     build_grid_plan = None
 
 # Funding bias (אופציונלי)
-try:
-    from utils.funding_bias import funding_bias_for_symbol  # returns float in [-1,1], positive favors LONG
-except Exception:
-    def funding_bias_for_symbol(symbol: str) -> float:
+async def funding_bias_for_symbol(symbol: str) -> float:
+    """
+    Wrapper async - מחזיר bias factor ∈ [-1,1].
+    חיובי → favors LONG, שלילי → favors SHORT.
+    """
+    try:
+        from utils.funding_bias import get_funding_rate, funding_bias_factor  # type: ignore
+        rate = await get_funding_rate(symbol)
+        return funding_bias_factor(rate, side=None)
+    except Exception:
         return 0.0
 
 # Liquidity gate — אם אין פונקציה ייעודית, נשתמש בהערכת סליפג' בסיסית
@@ -235,8 +241,8 @@ def _min_rr_for(symbol: str, ctx_filters: Dict[str, Any]) -> float:
         return float(ctx_filters["min_rr"])
     return MIN_RR_TOP10 if is_top10(symbol) else MIN_RR_ALT
 
-def _apply_funding_bias_req(side: str, symbol: str, min_rr: float, success_min: float) -> Tuple[float, float, str]:
-    fb = float(funding_bias_for_symbol(symbol))
+async def _apply_funding_bias_req(side: str, symbol: str, min_rr: float, success_min: float) -> Tuple[float, float, str]:
+    fb = float(await funding_bias_for_symbol(symbol))
     reason = ""
     # fb>0 → תומך LONG; fb<0 → תומך SHORT
     opposed = (side=="LONG" and fb < 0) or (side=="SHORT" and fb > 0)
@@ -324,7 +330,7 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     # דרישת RR דינמית
     rr = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
     min_rr = _min_rr_for(symbol, (ctx or {}).get("filters") or {})
-    min_rr, success_req, fb_note = _apply_funding_bias_req(prop["side"], symbol, min_rr, success_floor)
+    min_rr, success_req, fb_note = await _apply_funding_bias_req(prop["side"], symbol, min_rr, success_floor)
     if rr is None or rr < min_rr:
         return None
 
@@ -344,8 +350,7 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     notional = float(budget) * float(leverage)
 
     # נזילות (סליפג')
-    lg_result = liquidity_gate_safe(symbol, prop["side"], notional_usd=notional)
-    lg = await lg_result if hasattr(lg_result, '__await__') else lg_result
+    lg = await liquidity_gate_safe(symbol, prop["side"], notional_usd=notional)
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
 
@@ -379,7 +384,7 @@ async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -
     rr = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
     min_rr = _min_rr_for(symbol, (ctx or {}).get("filters") or {})
     # SPOT תמיד LONG; funding חיובי עוזר, שלילי מחמיר
-    min_rr, success_req, fb_note = _apply_funding_bias_req("LONG", symbol, min_rr, success_floor)
+    min_rr, success_req, fb_note = await _apply_funding_bias_req("LONG", symbol, min_rr, success_floor)
 
     if rr is None or rr < min_rr:
         return None
@@ -388,8 +393,7 @@ async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -
 
     budget = _calc_dynamic_budget(symbol, ctx)
     # נזילות לנוטיונל = budget בלבד
-    lg_result = liquidity_gate_safe(symbol, "LONG", notional_usd=budget)
-    lg = await lg_result if hasattr(lg_result, '__await__') else lg_result
+    lg = await liquidity_gate_safe(symbol, "LONG", notional_usd=budget)
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
 
@@ -424,8 +428,7 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
 
     # נזילות לנוטיונל ≈ budget (גריד לא ממונף כאן)
     budget = float(plan.get("budget_usd") or _calc_dynamic_budget(symbol, ctx))
-    lg_result = liquidity_gate_safe(symbol, plan["grid_side"], notional_usd=budget)
-    lg = await lg_result if hasattr(lg_result, '__await__') else lg_result
+    lg = await liquidity_gate_safe(symbol, plan["grid_side"], notional_usd=budget)
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
 
