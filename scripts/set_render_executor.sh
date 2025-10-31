@@ -38,6 +38,14 @@ else
   exit 1
 fi
 
+# === בדיקת DRY_RUN ===
+if [[ "${DRY_RUN:-true}" == "true" ]]; then
+  echo -e "${Y}⚠️ DRY_RUN is still enabled. Disabling now...${N}"
+  export DRY_RUN=false
+else
+  echo -e "${G}✅ DRY_RUN already disabled${N}"
+fi
+
 # === בדיקת משתני סביבה קריטיים ===
 req_vars=(API_BEARER_TOKEN TELEGRAM_BOT_TOKEN TELEGRAM_CHAT_ID)
 for v in "${req_vars[@]}"; do
@@ -54,11 +62,20 @@ mkdir -p static/cache
 echo "{\"executor\":\"$EXEC_ENV\",\"timestamp\":\"$TS\"}" > static/cache/executor_state.json
 echo -e "${G}✅ Executor route updated to Render${N}"
 
-# === נוטיפיקציה לטלגרם אם יש הגדרות ===
+# === נוטיפיקציה לטלגרם ===
 if [[ -n "${TELEGRAM_BOT_TOKEN:-}" && -n "${TELEGRAM_CHAT_ID:-}" ]]; then
   MSG="✅ <b>Render Executor Activated</b>%0AAll trades will now route via Render.%0A🕐 $(date '+%H:%M:%S %d/%m/%Y')"
   curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
        -d "chat_id=${TELEGRAM_CHAT_ID}" -d "text=${MSG}" -d "parse_mode=HTML" >/dev/null || true
 fi
 
-echo -e "${G}🚀 Render Executor is now active!${N}"
+# === הפעלה מחדש של AutoExecutor ===
+if [[ -x "scripts/auto_executor_restart.sh" ]]; then
+  echo -e "${C}♻️ Restarting AutoExecutor...${N}"
+  bash scripts/auto_executor_restart.sh
+  echo -e "${G}✅ AutoExecutor restarted${N}"
+else
+  echo -e "${Y}ℹ️ No auto_executor_restart.sh found, skipping restart${N}"
+fi
+
+echo -e "${G}🚀 Render Executor is now active and managing live trades!${N}"
