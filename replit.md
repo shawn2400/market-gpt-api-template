@@ -36,11 +36,81 @@ A dashboard UI is located in `static/dashboard/`. Telegram notifications are enh
   - MARKET Order precision handling with minNotional protection and overshoot guards
 
 ## Recent Changes (November 1, 2025)
+
+### Phase 1: Foundation (Completed)
 1. **Enhanced AI Prompt**: Changed from weak "Favor RR≥1.6" to mandatory "RR≥1.3 MINIMUM, TARGET ≥1.5-2.0" with concrete examples.
 2. **AI Response Validation**: Added early rejection of proposals with RR<1.2 or unrealistic success_pct.
 3. **GRID Trading Integration**: Connected grid_builder.py, grid_manager.py, and routes/grid.py to main.py; enabled SUGGEST_GRID=1 in Auto Scanner.
 4. **Telegram Visual Tagging**: Added 🔷 GRID Trade vs ⚡ Futures/Spot Trade labels in approval messages.
 5. **Validated Existing Infrastructure**: Confirmed ATR Trailing, Multi-TP, Position Sizing, and MARKET Orders are all implemented and working.
+
+### Phase 2: Self-Adaptive Trading Engine (NEW - November 1, 2025)
+
+**🧠 Market Intelligence Engine (`utils/market_intelligence.py`)**
+- **Market Regime Detection**: Automatically classifies markets as Trending/Sideways/Choppy/Volatile using ADX, ATR, and Bollinger Bands
+- **Market Mood Analysis**: Identifies Bullish/Bearish/Neutral conditions using EMAs, MACD, and RSI
+- **Volatility Classification**: Categorizes volatility as High/Medium/Low based on ATR percentage
+- **Trend Strength Scoring**: 0-100 score indicating trend clarity and confidence
+- **Adaptive Thresholds**: Dynamic min_rr and quality thresholds that adjust based on market conditions
+
+**📝 Adaptive AI Prompts (`utils/adaptive_prompts.py`)**
+- **Regime-Specific Prompts**: Different AI instructions for each market condition
+  - Trending Bullish → Aggressive long setups, breakouts
+  - Trending Bearish → Aggressive short setups, breakdowns
+  - Sideways → GRID trading recommendations
+  - Choppy → Ultra-selective, high-quality only
+  - Volatile → Wait or extreme caution
+- **Dynamic RR Requirements**: Higher RR required in uncertain markets, lower in strong trends
+- **Strategy Optimization**: AI tailored to extract maximum profit from each regime
+
+**🛡️ Portfolio Intelligence (`utils/portfolio_intelligence.py`)**
+- **Exposure Management**: Prevents over-exposure with configurable limits
+  - Max total exposure: 80% of account equity (default)
+  - Max LONG exposure: 60% of equity
+  - Max SHORT exposure: 60% of equity
+  - Max per-symbol concentration: 15% of equity
+- **Position Limits**: Max 8 open positions simultaneously
+- **Daily Trade Caps**: Limit 10 trades per day (configurable)
+- **Circuit Breaker**: Auto-stop trading if daily loss exceeds -5%
+- **Correlation Prevention**: Avoids opening too many correlated positions
+
+**📊 Performance Tracker (`utils/performance_tracker.py`)**
+- **Trade Performance Analytics**: Tracks every trade with market context
+- **Win Rate Analysis**: By strategy type, market regime, and market mood
+- **AI Accuracy Monitoring**: Compares predicted vs actual success rates
+- **Auto-Calibration**: Recommends threshold adjustments based on results
+- **Weekly Reports**: Automated performance summaries
+- **Continuous Learning**: System improves based on historical results
+
+### How It All Works Together
+
+**Decision Flow (Every 60 seconds):**
+1. **Market Analysis**: Market Intelligence analyzes 531 symbols
+2. **Regime Classification**: Each symbol categorized (Trending/Sideways/etc)
+3. **Strategy Selection**: System auto-selects best approach (Regular/GRID/Wait)
+4. **Adaptive Prompt**: AI receives regime-optimized instructions
+5. **Dynamic Thresholds**: RR requirements adapt to conditions (1.2-1.5+)
+6. **Quality Filtering**: Multi-layer validation (AI → Dynamic → Portfolio)
+7. **Portfolio Check**: Exposure limits and correlation analysis
+8. **Telegram Approval**: User approves high-quality proposals
+9. **Performance Tracking**: Results logged for continuous improvement
+
+**Example Scenarios:**
+- **Strong Bullish Trend**: AI receives "aggressive long" prompt with RR≥1.2, focuses on breakouts
+- **Weak Sideways Market**: AI receives "GRID" prompt, looks for range-bound setups
+- **Choppy Volatile**: AI receives "ultra-selective" prompt with RR≥1.5, most setups rejected
+- **Portfolio Full**: New trades blocked even if high quality (risk management)
+
+### System Capabilities
+
+The Self-Adaptive Engine enables AlgoGPT to:
+✅ **Adapt to Any Market**: Bullish, bearish, sideways, choppy - always has a strategy
+✅ **Maximize Profit**: Different approach for each regime optimizes returns
+✅ **Minimize Risk**: Portfolio intelligence prevents over-exposure
+✅ **Learn Continuously**: Performance tracker enables auto-improvement
+✅ **Scale Intelligently**: From 0 to 10 trades/day based on opportunities
+✅ **Stay Disciplined**: Automated limits prevent emotional trading
+✅ **Protect Capital**: Circuit breakers and drawdown protection
 
 ## External Dependencies
 

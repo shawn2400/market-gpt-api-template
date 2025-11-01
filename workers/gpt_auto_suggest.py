@@ -13,6 +13,10 @@ from utils.hours_profile import hours_profile_now
 from utils.risk_rules import gate_trade, rr_from_levels, entry_gap_ok
 from utils.budget import get_trade_budget_usdt  # ← תקציב דינמי
 from utils.dynamic_filters import get_dynamic_thresholds, explain_filters  # ← סינונים דינמיים
+from utils.market_intelligence import get_market_intelligence  # ← Market Intelligence Engine
+from utils.adaptive_prompts import get_adaptive_prompt_engine  # ← Adaptive AI Prompts
+from utils.portfolio_intelligence import get_portfolio_intelligence  # ← Portfolio Intelligence
+from utils.performance_tracker import get_performance_tracker  # ← Performance Tracker
 
 # Grid helper
 try:
@@ -301,9 +305,24 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
     if not OPENAI_API_KEY:
         LOGGER.error("OPENAI_API_KEY missing")
         return None
+    
+    # 🧠 SELF-ADAPTIVE ENGINE: Analyze market conditions
+    mi_engine = get_market_intelligence()
+    market_condition = mi_engine.analyze_market(ctx or {})
+    
+    # 📝 Generate adaptive prompt based on market regime
+    prompt_engine = get_adaptive_prompt_engine()
+    
+    # For SPOT, use conservative prompt; for FUTURES, use regime-specific prompt
+    if for_spot:
+        sys_prompt = PROMPT_SYS_SPOT  # SPOT keeps original prompt
+    else:
+        # 🎯 Adaptive Futures prompt based on market conditions
+        sys_prompt = prompt_engine.generate_prompt(market_condition, symbol, ctx or {})
+    
     cli = _get_client()
-    sys_prompt = PROMPT_SYS_SPOT if for_spot else PROMPT_SYS_FUT
     user = _build_user_ctx(symbol, ctx or {})
+    
     try:
         resp = cli.chat.completions.create(
             model=OPENAI_MODEL,
@@ -336,12 +355,16 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
         if prop["entry"] is None or prop["sl"] is None or prop["tp1"] is None:
             return None
         
-        # ✨ AI Response Validation - אכיפת דרישת RR≥1.2!
-        # בדיקת RR מינימום 1.2 (ה-AI מגיב לפרומפט, מתכוונן בהדרגה ל-1.3-1.5)
+        # ✨ ADAPTIVE AI Response Validation - Dynamic RR threshold!
+        # Use market-intelligent minimum RR (adapts to conditions)
         rr_check = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
-        MIN_AI_RR = 1.2  # סף מינימלי - הסינונים הדינמיים ידאגו לשאר
+        MIN_AI_RR = market_condition.min_rr_threshold  # 🎯 DYNAMIC threshold
+        
         if rr_check is not None and rr_check < MIN_AI_RR:
-            LOGGER.info(f"AI_REJECTED {symbol}: AI returned weak RR={rr_check:.3f} < {MIN_AI_RR} (quality gate)")
+            LOGGER.info(
+                f"AI_REJECTED {symbol}: RR={rr_check:.3f} < {MIN_AI_RR:.2f} "
+                f"(regime={market_condition.regime}, mood={market_condition.mood})"
+            )
             return None
         
         # בדיקת success_pct סביר (לא 0 או 100)
@@ -349,6 +372,12 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
             if prop["success_pct"] < 35 or prop["success_pct"] > 95:
                 LOGGER.info(f"AI_REJECTED {symbol}: unrealistic success_pct={prop['success_pct']} (should be 35-95%)")
                 return None
+        
+        # ✅ Log market intelligence for debugging
+        LOGGER.debug(
+            f"Market Intel for {symbol}: {market_condition.regime}/{market_condition.mood}, "
+            f"strategy={market_condition.recommended_strategy}, min_rr={MIN_AI_RR:.2f}"
+        )
         
         return prop
     except Exception as e:
@@ -553,6 +582,26 @@ async def process_cycle():
         nonlocal accepted
         if not payload:
             return
+        
+        # 🛡️ PORTFOLIO INTELLIGENCE: Check exposure limits before emitting
+        portfolio_intel = get_portfolio_intelligence()
+        symbol = payload.get("symbol", "")
+        side = payload.get("side", "")
+        size_usd = payload.get("budget_usd", 100.0)  # Get budget from payload
+        
+        can_open, rejection_reason = portfolio_intel.can_open_trade(
+            symbol=symbol,
+            side=side,
+            size_usd=size_usd,
+            reason=f"{ttype} proposal"
+        )
+        
+        if not can_open:
+            LOGGER.info(
+                f"🛡️ Portfolio blocked {symbol} {side}: {rejection_reason}"
+            )
+            return
+        
         # שמירת "טוקן" נסיונות כדי להגביל כמות שליחות בפועל
         async with accepted_lock:
             if accepted >= cap_per_cycle:
