@@ -464,7 +464,11 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     overall_p = probs.get("overall") or probs.get("success") or probs.get("p_overall")
     market_line = get_btc_anchor_summary()
 
-    title = f"🟡 <b>Trade Pending Approval</b> · <b>{kind}</b>"
+    # תיוג GRID vs Regular
+    trade_icon = "🔷" if kind.upper() == "GRID" else "⚡"
+    trade_label = f"{trade_icon} <b>{kind} Trade</b>"
+    
+    title = f"🟡 <b>Trade Pending Approval</b> · {trade_label}"
     badge = _entry_score_badge(plan)
 
     lines: List[str] = []

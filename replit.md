@@ -1,7 +1,7 @@
 # AlgoGPT - Algorithmic Trading Platform
 
 ## Overview
-AlgoGPT is a comprehensive algorithmic trading platform built with FastAPI and Python, designed for real-time trading orchestration on Binance Futures. It automates trade execution, manages live positions with advanced TP/SL/trailing stops, incorporates multi-timeframe technical analysis, and includes robust risk management with daily caps and pre-trade validation. The platform features a secure, ticket-based approval system via Telegram, ensuring human oversight for trade execution.
+AlgoGPT is a comprehensive algorithmic trading platform built with FastAPI and Python, designed for **24/7 live Binance Futures trading** with automated market scanning (530+ symbols), AI-powered trade decisions via GPT-4, GRID trading options (FUTURES GRID), and professional automated dynamic management. Target: 4-10 high-quality trades per day with large profits and minimal losses.
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
@@ -13,13 +13,15 @@ The core application is built with FastAPI (`main.py`) and uses Gunicorn for ser
 
 ### Key Features
 - **Automated Trading Modes**: Supports MARKET, HYBRID, and AUTO execution modes.
-- **Live Trade Management**: Dynamic management of open positions with Take Profit (TP), Stop Loss (SL), Break-Even (BE) logic, and ATR-based trailing stops.
-- **Market Scanner**: An autonomous worker (`workers/gpt_auto_suggest.py`) performs multi-timeframe technical analysis every 60 seconds across Binance Futures markets, using an integrated Context API.
-- **AI-Powered Proposals**: OpenAI GPT-4 analyzes market data and generates trade proposals.
-- **Risk Management**: Implements strict quality filters (e.g., Risk/Reward > 1.6-1.9, AI success probability > 70%), liquidity checks, cooldown periods, deduplication, and daily trade caps.
-- **Telegram Approval Workflow**: Trade proposals are sent to Telegram with rich details and interactive buttons for approval or rejection, requiring HMAC-signed confirmation for execution.
-- **Dynamic Position Management**: Features like Break-Even Guard, ATR Trailing, and Multi-Target TP are automatically applied to managed positions.
-- **Auto-Flip**: The system dynamically adapts to market conditions, proposing LONG or SHORT trades based on real-time analysis without manual intervention.
+- **Live Trade Management**: Dynamic management of open positions with Take Profit (TP), Stop Loss (SL), Break-Even (BE) logic, and ATR-based trailing stops with freeze logic and spike detection.
+- **Market Scanner**: An autonomous worker (`workers/gpt_auto_suggest.py`) performs multi-timeframe technical analysis every 60 seconds across 531 Binance Futures markets.
+- **AI-Powered Proposals**: OpenAI GPT-4 analyzes market data and generates trade proposals with mandatory RR≥1.3 (TARGET ≥1.5-2.0).
+- **AI Response Validation**: Early rejection of proposals with RR<1.2 or unrealistic success_pct (outside 35%-95% range).
+- **GRID Trading**: Integrated FUTURES GRID trading for choppy/sideways markets (routes/grid.py, utils/grid_manager.py, utils/grid_executor.py).
+- **Risk Management**: Implements strict quality filters, dynamic filters based on market mood/regime, liquidity checks, cooldown periods, deduplication, and daily trade caps.
+- **Telegram Approval Workflow**: Trade proposals sent to Telegram with rich HTML formatting, visual tagging (🔷 GRID Trade vs ⚡ Regular Trade), and interactive approval buttons.
+- **Dynamic Position Management**: ATR Trailing (freeze logic, spike detection), Multi-level TP ladder, Dynamic Position Sizing (equity%, quality, volatility), MARKET order precision.
+- **Auto-Flip**: The system dynamically adapts to market conditions, proposing LONG or SHORT trades based on real-time analysis.
 
 ### UI/UX
 A dashboard UI is located in `static/dashboard/`. Telegram notifications are enhanced with rich HTML formatting, emojis, and inline interactive buttons for a better user experience.
@@ -27,6 +29,18 @@ A dashboard UI is located in `static/dashboard/`. Telegram notifications are enh
 ### Technical Implementations
 - **Authentication**: Uses Bearer Token (`X-API-Key`) and HMAC Signature for secure access and critical operations.
 - **Security**: Includes anti-replay protection, strict quality filters, multi-layer risk management, and mandatory Telegram approval for trade execution.
+- **Advanced Features**:
+  - ATR Trailing Stop with freeze logic, spike detection, ADX-based adjustments
+  - Multi-level TP ladder (tp1/tp2/tp3) with configurable splits (40%-35%-25%)
+  - Dynamic Position Sizing based on equity percentage, quality multiplier, and volatility multiplier
+  - MARKET Order precision handling with minNotional protection and overshoot guards
+
+## Recent Changes (November 1, 2025)
+1. **Enhanced AI Prompt**: Changed from weak "Favor RR≥1.6" to mandatory "RR≥1.3 MINIMUM, TARGET ≥1.5-2.0" with concrete examples.
+2. **AI Response Validation**: Added early rejection of proposals with RR<1.2 or unrealistic success_pct.
+3. **GRID Trading Integration**: Connected grid_builder.py, grid_manager.py, and routes/grid.py to main.py; enabled SUGGEST_GRID=1 in Auto Scanner.
+4. **Telegram Visual Tagging**: Added 🔷 GRID Trade vs ⚡ Futures/Spot Trade labels in approval messages.
+5. **Validated Existing Infrastructure**: Confirmed ATR Trailing, Multi-TP, Position Sizing, and MARKET Orders are all implemented and working.
 
 ## External Dependencies
 

@@ -179,14 +179,54 @@ def _get_client() -> OpenAI:
     return _client
 
 PROMPT_SYS = (
-    "You are a crypto trading assistant.\n"
+    "You are an expert crypto trading strategist focused on HIGH-QUALITY, HIGH-PROFIT trades.\n"
     "You will receive compact market context: current price and boolean/enum filters.\n"
     "Return ONLY JSON with fields:\n"
     "  side ('LONG'|'SHORT'), entry, sl, tp1, tp2, tp3, leverage (int), success_pct (0..100), reason (short).\n"
-    "Rules:\n"
-    "- Respect trend flags and avoid chop (danger_chop).\n"
-    "- Do NOT chase far from price; use nearby logical pullbacks/breakouts.\n"
-    "- Favor RR>=1.6 when reasonable.\n"
+    "\n"
+    "⚠️ MANDATORY: ALL TRADES **MUST** HAVE RR (Risk/Reward) ≥ 1.3 MINIMUM! ⚠️\n"
+    "CRITICAL RULES (MUST FOLLOW):\n"
+    "1. Risk/Reward (RR) calculation - **THIS IS MANDATORY**:\n"
+    "   - RR = |entry - tp1| / |entry - sl|\n"
+    "   - **MINIMUM RR = 1.3** (proposals with RR<1.3 will be AUTO-REJECTED)\n"
+    "   - TARGET RR ≥ 1.5-2.0 for best results\n"
+    "   \n"
+    "   Examples:\n"
+    "   ✓ GOOD: entry=100, sl=98 (-2%), tp1=103 (+3%) → RR=1.5 PASS\n"
+    "   ✓ GREAT: entry=100, sl=98 (-2%), tp1=104 (+4%) → RR=2.0 PASS\n"
+    "   ✗ BAD: entry=100, sl=98 (-2%), tp1=101.5 (+1.5%) → RR=0.75 REJECT\n"
+    "   ✗ BAD: entry=100, sl=98 (-2%), tp1=102.4 (+2.4%) → RR=1.2 REJECT\n"
+    "\n"
+    "2. Entry placement:\n"
+    "   - MUST be within 0.3-1.0% of current price (no far chasing!)\n"
+    "   - Use logical support/resistance, demand/supply zones\n"
+    "   - Entry at confirmation: breakout, pullback completion, or reversal signal\n"
+    "\n"
+    "3. Stop-Loss (SL) - realistic and protective:\n"
+    "   - Major coins (BTC/ETH): 1-2.5% from entry\n"
+    "   - Altcoins: 2-4% from entry\n"
+    "   - Place BEYOND key support (LONG) or resistance (SHORT), not at round numbers\n"
+    "\n"
+    "4. Take-Profit targets (realistic, achievable):\n"
+    "   - tp1: Conservative (≥70% probability) - for 40-50% position exit\n"
+    "   - tp2: Moderate (≥55% probability) - for 30-40% exit\n"
+    "   - tp3: Aggressive (≥40% probability) - for remaining 10-20%\n"
+    "   - All TPs must be profitable and align with recent price action\n"
+    "\n"
+    "5. Trend respect:\n"
+    "   - NEVER trade against strong trends (danger_chop=true → avoid)\n"
+    "   - Align with momentum: uptrend → LONG bias, downtrend → SHORT bias\n"
+    "\n"
+    "6. Success probability (realistic):\n"
+    "   - Report 50-70% for solid setups (not 80-90%!)\n"
+    "   - Consider: trend strength, volume, support/resistance quality\n"
+    "\n"
+    "EXAMPLES OF GOOD TRADES:\n"
+    "- BTCUSDT at 68500: LONG entry=68350, sl=67600 (1.1% risk), tp1=69800 (2.1% reward) → RR=1.91\n"
+    "- ETHUSDT at 2450: SHORT entry=2455, sl=2505 (2.0% risk), tp1=2360 (3.9% reward) → RR=1.95\n"
+    "- SOLUSDT at 145: LONG entry=144.8, sl=142 (1.9% risk), tp1=148.5 (2.6% reward) → RR=1.37\n"
+    "\n"
+    "If market is choppy or no clear setup exists, return minimal/null values.\n"
 )
 
 PROMPT_SYS_SPOT = PROMPT_SYS + "This request is for SPOT trading. side must be 'LONG'. leverage MUST be 1.\n"
@@ -295,6 +335,21 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
             return None
         if prop["entry"] is None or prop["sl"] is None or prop["tp1"] is None:
             return None
+        
+        # ✨ AI Response Validation - אכיפת דרישת RR≥1.2!
+        # בדיקת RR מינימום 1.2 (ה-AI מגיב לפרומפט, מתכוונן בהדרגה ל-1.3-1.5)
+        rr_check = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
+        MIN_AI_RR = 1.2  # סף מינימלי - הסינונים הדינמיים ידאגו לשאר
+        if rr_check is not None and rr_check < MIN_AI_RR:
+            LOGGER.info(f"AI_REJECTED {symbol}: AI returned weak RR={rr_check:.3f} < {MIN_AI_RR} (quality gate)")
+            return None
+        
+        # בדיקת success_pct סביר (לא 0 או 100)
+        if prop.get("success_pct") is not None:
+            if prop["success_pct"] < 35 or prop["success_pct"] > 95:
+                LOGGER.info(f"AI_REJECTED {symbol}: unrealistic success_pct={prop['success_pct']} (should be 35-95%)")
+                return None
+        
         return prop
     except Exception as e:
         LOGGER.warning("gpt error %s", e)

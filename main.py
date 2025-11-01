@@ -1451,6 +1451,12 @@ try:
 except Exception as e:
     logger.warning("Failed to load metrics routes: %s", e)
 
+try:
+    from routes.grid import router as grid_router
+    app.include_router(grid_router)
+except Exception as e:
+    logger.warning("Failed to load grid routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():
