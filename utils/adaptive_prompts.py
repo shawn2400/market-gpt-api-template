@@ -78,7 +78,7 @@ class AdaptivePromptEngine:
     ) -> str:
         """Optimized prompt for bullish trending markets"""
         
-        prompt = f"""You are analyzing {symbol} in a BULLISH TRENDING market.
+        prompt = f"""You are analyzing {symbol} in a BULLISH TRENDING market. Return ONLY JSON.
 
 **MARKET REGIME: TRENDING UP ↗️**
 **STRATEGY: FUTURES LONG (breakouts, pullbacks)**
@@ -132,7 +132,7 @@ Remember: We want LARGE PROFITS, MINIMAL LOSSES. Quality over quantity!
     ) -> str:
         """Optimized prompt for bearish trending markets"""
         
-        prompt = f"""You are analyzing {symbol} in a BEARISH TRENDING market.
+        prompt = f"""You are analyzing {symbol} in a BEARISH TRENDING market. Return ONLY JSON.
 
 **MARKET REGIME: TRENDING DOWN ↘️**
 **STRATEGY: FUTURES SHORT (breakdowns, pullbacks)**
@@ -183,7 +183,7 @@ Remember: We want LARGE PROFITS, MINIMAL LOSSES. Quality over quantity!
     ) -> str:
         """Optimized prompt for sideways/ranging markets"""
         
-        prompt = f"""You are analyzing {symbol} in a SIDEWAYS/RANGING market.
+        prompt = f"""You are analyzing {symbol} in a SIDEWAYS/RANGING market. Return ONLY JSON.
 
 **MARKET REGIME: SIDEWAYS ↔️ (Perfect for GRID Trading)**
 **STRATEGY: FUTURES GRID (profit from range-bound movement)**
@@ -233,7 +233,7 @@ Remember: GRID works best in stable ranges. If market is choppy or about to brea
     ) -> str:
         """Ultra-conservative prompt for unclear/volatile markets"""
         
-        prompt = f"""You are analyzing {symbol} in a UNCERTAIN/VOLATILE market.
+        prompt = f"""You are analyzing {symbol} in a UNCERTAIN/VOLATILE market. Return ONLY JSON.
 
 **MARKET REGIME: {regime.upper()} ⚠️**
 **STRATEGY: ULTRA-SELECTIVE (wait for exceptional setups only)**
@@ -271,7 +271,7 @@ Better to wait than force trades in poor conditions!
     def _prompt_conservative(self, symbol: str, min_rr: float) -> str:
         """Fallback conservative prompt"""
         
-        prompt = f"""You are analyzing {symbol} with CONSERVATIVE parameters.
+        prompt = f"""You are analyzing {symbol} with CONSERVATIVE parameters. Return ONLY JSON.
 
 **MINIMUM RR REQUIRED: {min_rr:.2f}**
 **QUALITY FOCUS: Only high-probability setups**
