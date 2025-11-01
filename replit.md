@@ -112,6 +112,88 @@ The Self-Adaptive Engine enables AlgoGPT to:
 ✅ **Stay Disciplined**: Automated limits prevent emotional trading
 ✅ **Protect Capital**: Circuit breakers and drawdown protection
 
+### Phase 3: Ultra-Dynamic Capital Optimization (NEW - November 1, 2025)
+
+**💰 Dynamic Leverage & Position Sizing (`utils/dynamic_sizing.py`)**
+- **Quality-Based Leverage**: Automatically calculates leverage (2-10x) based on trade quality
+  - Exceptional trades (Q=9/10, RR=2.5, AI=85%) → 8-10x leverage + 50-60% equity
+  - Good trades (Q=6/10, RR=1.5, AI=65%) → 4-6x leverage + 25-35% equity
+  - Acceptable trades (Q=4/10, RR=1.3, AI=50%) → 2-3x leverage + 10-20% equity
+- **Multi-Factor Scoring**: Combines Quality (40%), Risk/Reward (30%), AI Confidence (30%)
+- **Market Adjustments**: Reduces leverage in high volatility, increases in strong trends
+- **Capital Efficiency**: Invests more in high-quality setups, less in marginal ones
+
+**🔄 Position Flip Intelligence (`utils/flip_intelligence.py`)**
+- **Automatic Position Reversal**: Closes LONG and opens SHORT (or vice versa) when market flips
+- **Multi-System Validation**: Requires approval from ALL systems before flipping:
+  - Market regime must have changed significantly (60%+ change score)
+  - New setup must be high quality (Q≥7.0, RR≥1.5, AI≥60%)
+  - Can only flip if current position is profitable or at breakeven
+  - Portfolio must have capacity for new position
+  - Direction must make sense for new market conditions
+- **Flip Cooldown**: Minimum 30 minutes between flips (prevents whipsaw)
+- **Smart Exit**: Only flips when it makes financial sense
+- **Flip History Tracking**: Records all flips for performance analysis
+
+**How Capital Optimization Works:**
+
+**Example 1: Exceptional Trade**
+```
+BTC LONG Setup:
+- Quality: 9.2/10
+- RR: 2.8
+- AI Confidence: 88%
+- Market: Trending Bullish, Low Volatility
+
+→ System Decision:
+- Leverage: 10x (maximum)
+- Equity: 58% of account
+- If account = $10,000 → Position = $58,000
+- Potential profit: $58,000 × 2.8 = $162,400
+```
+
+**Example 2: Acceptable Trade**
+```
+ETH SHORT Setup:
+- Quality: 5.5/10
+- RR: 1.4
+- AI Confidence: 52%
+- Market: Choppy, High Volatility
+
+→ System Decision:
+- Leverage: 3x (conservative)
+- Equity: 15% of account
+- If account = $10,000 → Position = $4,500
+- Potential profit: $4,500 × 1.4 = $6,300
+```
+
+**Example 3: Auto-Flip Scenario**
+```
+10:00 - BTC LONG opened @ $70,000 (Q=8.5, 8x, $50k position)
+10:30 - Market still bullish → Position managed (TP/SL/Trailing)
+11:00 - Market FLIPS to bearish (regime changed, strong conviction)
+
+→ Flip Intelligence Decision:
+✅ Regime changed: Bullish→Bearish (score 0.8)
+✅ New SHORT setup: Q=8.0, RR=2.2, AI=82%
+✅ Current position: +1.2% profit (can exit)
+✅ Portfolio: Has capacity
+✅ Direction: SHORT makes sense in bearish market
+
+→ Auto-Flip Executed:
+1. Close BTC LONG @ $70,840 (+$420 profit)
+2. Open BTC SHORT @ $70,800 (Q=8.0, 7x, $48k position)
+3. New management: TP/SL/Trailing for SHORT
+```
+
+### Benefits:
+✅ **Maximize Capital Efficiency**: High-quality trades get more capital
+✅ **Risk-Optimized**: Low-quality trades get less capital
+✅ **Auto-Adaptation**: System automatically reverses direction when market flips
+✅ **Smart Flip Logic**: Only flips when all systems agree AND it's profitable
+✅ **No Whipsaw**: Cooldown prevents excessive flipping
+✅ **Full Transparency**: Every decision reported to Telegram
+
 ## External Dependencies
 
 -   **Binance Futures API**: For real-time market data, order execution, and account management.
