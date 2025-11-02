@@ -1,0 +1,43 @@
+# === FINAL SHARE STEP: הדפס, שמור לקובץ, ותן הוראות ברורות ===
+
+# Resolve BASE_URL בבטחה (PUBLIC_HOST > RENDER_EXTERNAL_URL > localhost)
+: "${BASE_URL:=${PUBLIC_HOST:-${RENDER_EXTERNAL_URL:-http://localhost:8000}}}"
+# ודא שהטוקן מוגדר (אם אתה מריץ אחרי הסקריפט הקודם הוא כבר קיים)
+: "${API_BEARER_TOKEN_RO:=}"
+
+# הדפס כותרת בולטת
+echo
+echo "====================  ACTION REQUIRED  ===================="
+echo "➤ העתק/י והדבק/י לכאן בצ'אט את שני הערכים הבאים (קריאה בלבד):"
+echo
+echo "BASE_URL=$BASE_URL"
+echo "API_BEARER_TOKEN_RO=$API_BEARER_TOKEN_RO"
+echo
+echo "או הדבק/י את פלט בדיקות ה-curl הבאות (כבר עם ה-RO Bearer):"
+echo "curl -sS \"$BASE_URL/readyz\" -H \"Authorization: Bearer $API_BEARER_TOKEN_RO\" && echo"
+echo "curl -sS \"$BASE_URL/version\" -H \"Authorization: Bearer $API_BEARER_TOKEN_RO\" && echo"
+echo "curl -sS \"$BASE_URL/ops/summary\" -H \"Authorization: Bearer $API_BEARER_TOKEN_RO\" | head -c 1500; echo"
+echo "curl -sS \"$BASE_URL/supervisors/status\" -H \"Authorization: Bearer $API_BEARER_TOKEN_RO\" && echo"
+echo "curl -sS \"$BASE_URL/news/last\" -H \"Authorization: Bearer $API_BEARER_TOKEN_RO\" && echo"
+echo "curl -sS \"$BASE_URL/mesh/status\" -H \"Authorization: Bearer $API_BEARER_TOKEN_RO\" && echo"
+echo "==========================================================="
+echo
+
+# שמור לקובץ לשיתוף/עתיד
+OUT=SHARE_WITH_ANALYST.txt
+{
+  echo "=== READ-ONLY ACCESS DETAILS ==="
+  echo "BASE_URL=$BASE_URL"
+  echo "API_BEARER_TOKEN_RO=$API_BEARER_TOKEN_RO"
+  echo
+  echo "Quick checks:"
+  echo "curl -sS \"$BASE_URL/readyz\" -H \"Authorization: Bearer $API_BEARER_TOKEN_RO\" && echo"
+  echo "curl -sS \"$BASE_URL/version\" -H \"Authorization: Bearer $API_BEARER_TOKEN_RO\" && echo"
+  echo "curl -sS \"$BASE_URL/ops/summary\" -H \"Authorization: Bearer $API_BEARER_TOKEN_RO\" | head -c 1500; echo"
+  echo "curl -sS \"$BASE_URL/supervisors/status\" -H \"Authorization: Bearer $API_BEARER_TOKEN_RO\" && echo"
+  echo "curl -sS \"$BASE_URL/news/last\" -H \"Authorization: Bearer $API_BEARER_TOKEN_RO\" && echo"
+  echo "curl -sS \"$BASE_URL/mesh/status\" -H \"Authorization: Bearer $API_BEARER_TOKEN_RO\" && echo"
+} > "$OUT"
+
+echo "✓ נשמר גם לקובץ: $OUT"
+echo "המשך: העתק/י לכאן בצ'אט את ה-BASE_URL וה-API_BEARER_TOKEN_RO (או את פלט ה-curl) — ואני מנתח מייד."
