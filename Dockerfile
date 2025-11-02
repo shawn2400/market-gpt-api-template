@@ -29,7 +29,7 @@ RUN python -m pip install --upgrade pip setuptools wheel \
 # ================================
 FROM python:3.11-slim
 
-ARG APP_VERSION=2.18.0
+ARG APP_VERSION=3.6.0
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
