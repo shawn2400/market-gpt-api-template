@@ -121,6 +121,10 @@ localPort = 33117
 externalPort = 3001
 
 [[ports]]
+localPort = 39095
+externalPort = 4200
+
+[[ports]]
 localPort = 43085
 externalPort = 3000
 
@@ -132,10 +136,6 @@ externalPort = 3002
 localPort = 45313
 externalPort = 3003
 
-[[ports]]
-localPort = 46717
-externalPort = 4200
-
 # === Deployment (VM Target) ===
 [deployment]
 deploymentTarget = "vm"
@@ -144,7 +144,7 @@ run = ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
 [userenv]
 
 [userenv.shared]
-AI_MESH_PATH = "config/ai_mesh.json"
+AI_MESH_PATH = "ai_mesh.json"
 AI_SUP_INTERVAL_SEC = "300"
 SUPERVISOR_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT"
 OPENAI_SUP_MODEL = "gpt-4o"
@@ -172,3 +172,5 @@ PNL_HEARTBEAT_LOG_PATH = "static/cache/trades_log.json"
 OPENAI_BASE = "https://api.openai.com/v1"
 AIX_BASE = "https://api.x.ai/v1"
 DEEPSEEK_BASE = "https://api.deepseek.com/v1"
+NODE_ID = "core-api"
+APP_VERSION = "3.6.0"
