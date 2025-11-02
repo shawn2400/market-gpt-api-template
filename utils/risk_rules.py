@@ -160,8 +160,20 @@ def gate_trade(
             errors.append(f"rr too low: {rr:.2f} < {rr_min:.2f}")
 
     prefs = get_symbol_prefs(symbol) or {}
-    min_risk_bps   = float(prefs.get("min_abs_risk_bps",   MIN_ABS_RISK_BPS_DEF))
-    min_reward_bps = float(prefs.get("min_abs_reward_bps", MIN_ABS_REWARD_BPS_DEF))
+    
+    # Safely coerce min_abs_risk_bps and min_abs_reward_bps to float, handling None
+    try:
+        risk_val = prefs.get("min_abs_risk_bps", MIN_ABS_RISK_BPS_DEF)
+        min_risk_bps = float(risk_val) if risk_val is not None else 0.0
+    except (TypeError, ValueError):
+        min_risk_bps = 0.0
+    
+    try:
+        reward_val = prefs.get("min_abs_reward_bps", MIN_ABS_REWARD_BPS_DEF)
+        min_reward_bps = float(reward_val) if reward_val is not None else 0.0
+    except (TypeError, ValueError):
+        min_reward_bps = 0.0
+    
     if min_risk_bps > 0:
         risk_bps = _bps_from_entry(e, s)
         if risk_bps < min_risk_bps:
