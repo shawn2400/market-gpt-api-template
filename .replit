@@ -68,6 +68,10 @@ args = "Heartbeat Monitor"
 task = "workflow.run"
 args = "Daily Health Report"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "GPT-5 Central Brain"
+
 [[workflows.workflow]]
 name = "Position Monitor"
 author = "agent"
@@ -112,6 +116,17 @@ args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG BASE_UR
 [workflows.workflow.metadata]
 outputType = "console"
 
+[[workflows.workflow]]
+name = "GPT-5 Central Brain"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/gpt5_orchestrator.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[ports]]
 localPort = 5000
 externalPort = 80
@@ -119,6 +134,10 @@ externalPort = 80
 [[ports]]
 localPort = 33117
 externalPort = 3001
+
+[[ports]]
+localPort = 37687
+externalPort = 4200
 
 [[ports]]
 localPort = 43085
