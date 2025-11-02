@@ -9,13 +9,14 @@ Components:
 - Market Mood Analysis (Bullish/Bearish/Neutral)
 - Trend Strength Scoring
 - Liquidity Assessment
+- Multi-Timeframe Analysis (15M/1H/4H)
 
 Author: AlgoGPT Team
 Level: Hedge Fund Grade
 """
 
 import logging
-from typing import Dict, Literal, Optional, Tuple
+from typing import Dict, Literal, Optional, Tuple, List
 from dataclasses import dataclass
 import numpy as np
 
@@ -32,6 +33,8 @@ class MarketCondition:
     recommended_strategy: Literal["futures_long", "futures_short", "grid", "wait"]
     min_rr_threshold: float
     quality_threshold: float
+    tf_alignment: Optional[str] = None  # Multi-TF trend alignment
+    recommended_intervals: Optional[List[str]] = None  # Which TFs to fetch
 
 
 class MarketIntelligence:
@@ -79,6 +82,34 @@ class MarketIntelligence:
             f"Strategy:{recommended_strategy} | MinRR:{min_rr:.2f}"
         )
         
+        # Auto-save market state to database
+        try:
+            from utils.data_persistence import get_persistence
+            persistence = get_persistence()
+            
+            symbol = context.get("symbol", "UNKNOWN")
+            
+            persistence.save_market_state(
+                symbol=symbol,
+                regime=regime,
+                mood=mood,
+                volatility=volatility,
+                trend_strength=trend_strength,
+                strategy=recommended_strategy,
+                min_rr=min_rr,
+                min_quality=quality,
+                indicators={
+                    "adx": context.get("adx"),
+                    "atr_pct": context.get("atr_percent"),
+                    "macd": context.get("macd"),
+                    "rsi": context.get("rsi"),
+                    "ema_20": context.get("ema_20"),
+                    "ema_50": context.get("ema_50")
+                }
+            )
+        except Exception as e:
+            self.logger.warning(f"Failed to save market state to DB: {e}")
+        
         return condition
     
     def _detect_regime(self, ctx: Dict) -> str:
@@ -91,9 +122,15 @@ class MarketIntelligence:
         - Choppy: Moderate ADX (20-25), conflicting signals
         - Volatile: High ATR, rapid price swings
         """
-        adx = ctx.get("adx", 20.0)
-        atr_pct = ctx.get("atr_percent", 2.0)
-        bb_width = ctx.get("bb_width_pct", 5.0)
+        adx = ctx.get("adx")
+        if adx is None:
+            adx = 20.0
+        atr_pct = ctx.get("atr_percent")
+        if atr_pct is None:
+            atr_pct = 2.0
+        bb_width = ctx.get("bb_width_pct")
+        if bb_width is None:
+            bb_width = 5.0
         
         # High volatility regime
         if atr_pct > 5.0 or bb_width > 8.0:
@@ -104,7 +141,7 @@ class MarketIntelligence:
             return "trending"
         
         # Clear sideways/range
-        if adx < 20 and bb_width < 4.0:
+        if adx < 20 and bb_width is not None and bb_width < 4.0:
             return "sideways"
         
         # Mixed signals = choppy
@@ -119,11 +156,21 @@ class MarketIntelligence:
         - Bearish: Price < EMAs, negative MACD, weak momentum
         - Neutral: Mixed signals
         """
-        price = ctx.get("close", 100.0)
-        ema_20 = ctx.get("ema_20", price)
-        ema_50 = ctx.get("ema_50", price)
-        macd = ctx.get("macd", 0.0)
-        rsi = ctx.get("rsi", 50.0)
+        price = ctx.get("close")
+        if price is None:
+            price = 100.0
+        ema_20 = ctx.get("ema_20")
+        if ema_20 is None:
+            ema_20 = price
+        ema_50 = ctx.get("ema_50")
+        if ema_50 is None:
+            ema_50 = price
+        macd = ctx.get("macd")
+        if macd is None:
+            macd = 0.0
+        rsi = ctx.get("rsi")
+        if rsi is None:
+            rsi = 50.0
         
         bullish_score = 0
         bearish_score = 0
@@ -162,7 +209,9 @@ class MarketIntelligence:
         - Low: ATR < 2% (quiet markets)
         - Medium: 2-4% (normal conditions)
         """
-        atr_pct = ctx.get("atr_percent", 2.5)
+        atr_pct = ctx.get("atr_percent")
+        if atr_pct is None:
+            atr_pct = 2.5
         
         if atr_pct > 4.0:
             return "high"
@@ -178,7 +227,9 @@ class MarketIntelligence:
         Returns:
             0-100 score (0=no trend, 100=very strong trend)
         """
-        adx = ctx.get("adx", 20.0)
+        adx = ctx.get("adx")
+        if adx is None:
+            adx = 20.0
         
         # ADX is primary trend strength indicator
         # ADX > 50 = very strong trend (rare)
@@ -215,7 +266,9 @@ class MarketIntelligence:
             confidence -= 10.0
         
         # ADX strength (higher ADX = more confidence)
-        adx = ctx.get("adx", 20.0)
+        adx = ctx.get("adx")
+        if adx is None:
+            adx = 20.0
         if adx > 30:
             confidence += 15.0
         elif adx < 15:
@@ -247,11 +300,13 @@ class MarketIntelligence:
             return "grid"
         
         if regime == "choppy":
-            # In choppy markets, prefer GRID or wait
-            if trend_strength < 30:
+            # In choppy markets, ALWAYS prefer GRID trading!
+            # CHOPPY = Range-bound = Perfect for GRID
+            # Only wait if trend is very strong (about to break out)
+            if trend_strength < 60:  # Most choppy cases
                 return "grid"
             else:
-                return "wait"
+                return "wait"  # Very rare: choppy with strong trend = wait for breakout
         
         # Default: wait for clearer conditions
         return "wait"
@@ -281,8 +336,10 @@ class MarketIntelligence:
             base_rr -= 0.1  # Trends easier to trade
             base_quality -= 0.5
         elif regime == "choppy":
-            base_rr += 0.3  # Need better setups
-            base_quality += 1.0
+            # CHOPPY should use GRID, not high RR regular trades
+            # Keep RR low to allow GRID proposals
+            base_rr -= 0.1  # GRID trading has different RR logic
+            base_quality += 0.5  # Slightly higher quality needed
         elif regime == "sideways":
             base_rr -= 0.2  # GRID trades have different RR logic
             base_quality -= 0.3
@@ -304,6 +361,141 @@ class MarketIntelligence:
         quality = max(4.0, base_quality)
         
         return (min_rr, quality)
+    
+    def analyze_multi_tf(self, multi_tf_contexts: Dict[str, Dict]) -> MarketCondition:
+        """
+        Multi-timeframe analysis combining 15M, 1H, and 4H data.
+        
+        Strategy:
+        - 4H: Overall trend direction (primary bias)
+        - 1H: Intermediate trend confirmation
+        - 15M: Entry timing and execution
+        
+        Args:
+            multi_tf_contexts: Dict mapping interval -> context data
+            Example: {"15m": {...}, "1h": {...}, "4h": {...}}
+            
+        Returns:
+            Enhanced MarketCondition with TF alignment info
+        """
+        # Fallback to single-TF if multi-TF data not available
+        if "15m" not in multi_tf_contexts:
+            self.logger.warning("No 15m data in multi-TF analysis, using first available")
+            first_key = list(multi_tf_contexts.keys())[0] if multi_tf_contexts else "15m"
+            return self.analyze_market(multi_tf_contexts.get(first_key, {}))
+        
+        # Analyze each timeframe
+        tf_15m = multi_tf_contexts.get("15m", {})
+        tf_1h = multi_tf_contexts.get("1h", tf_15m)
+        tf_4h = multi_tf_contexts.get("4h", tf_15m)
+        
+        # Get individual analyses
+        regime_15m = self._detect_regime(tf_15m)
+        regime_1h = self._detect_regime(tf_1h)
+        regime_4h = self._detect_regime(tf_4h)
+        
+        mood_15m = self._classify_mood(tf_15m)
+        mood_1h = self._classify_mood(tf_1h)
+        mood_4h = self._classify_mood(tf_4h)
+        
+        # Multi-TF trend alignment (most powerful signal)
+        tf_alignment = self._check_tf_alignment(mood_15m, mood_1h, mood_4h)
+        
+        # Use weighted combination for final decision
+        # 4H carries most weight for trend, 15M for execution
+        final_regime = regime_4h if regime_4h in ["trending", "volatile"] else regime_15m
+        final_mood = mood_4h if tf_alignment in ["strong_bull", "strong_bear"] else mood_15m
+        
+        volatility = self._classify_volatility(tf_15m)
+        trend_strength = self._calculate_trend_strength(tf_4h)  # Use 4H for strength
+        
+        # Boost confidence when all TFs align
+        base_confidence = self._calculate_confidence(tf_15m, final_regime, final_mood)
+        if tf_alignment in ["strong_bull", "strong_bear"]:
+            confidence = min(100.0, base_confidence + 20.0)  # +20% for alignment
+        elif tf_alignment in ["weak_bull", "weak_bear"]:
+            confidence = min(100.0, base_confidence + 10.0)
+        else:
+            confidence = base_confidence
+        
+        recommended_strategy = self._select_strategy(final_regime, final_mood, trend_strength)
+        min_rr, quality = self._adaptive_thresholds(final_regime, final_mood, volatility)
+        
+        # Determine which intervals to fetch next time (dynamic)
+        recommended_intervals = self._recommend_intervals(final_regime, volatility)
+        
+        condition = MarketCondition(
+            regime=final_regime,  # type: ignore
+            mood=final_mood,  # type: ignore
+            volatility=volatility,  # type: ignore
+            trend_strength=trend_strength,
+            confidence=confidence,
+            recommended_strategy=recommended_strategy,  # type: ignore
+            min_rr_threshold=min_rr,
+            quality_threshold=quality,
+            tf_alignment=tf_alignment,
+            recommended_intervals=recommended_intervals
+        )
+        
+        self.logger.info(
+            f"Multi-TF Analysis: {final_regime.upper()} | {final_mood.upper()} | "
+            f"Vol:{volatility} | TF-Align:{tf_alignment} | "
+            f"Strategy:{recommended_strategy} | MinRR:{min_rr:.2f} | Confidence:{confidence:.1f}%"
+        )
+        
+        return condition
+    
+    def _check_tf_alignment(self, mood_15m: str, mood_1h: str, mood_4h: str) -> str:
+        """
+        Check multi-timeframe trend alignment.
+        
+        Returns:
+            - strong_bull: All TFs bullish
+            - strong_bear: All TFs bearish
+            - weak_bull: 1H+4H bullish, 15M mixed/bearish
+            - weak_bear: 1H+4H bearish, 15M mixed/bullish
+            - mixed: No clear alignment
+        """
+        # All aligned bullish
+        if mood_15m == "bullish" and mood_1h == "bullish" and mood_4h == "bullish":
+            return "strong_bull"
+        
+        # All aligned bearish
+        if mood_15m == "bearish" and mood_1h == "bearish" and mood_4h == "bearish":
+            return "strong_bear"
+        
+        # Higher TFs bullish (1H + 4H)
+        if mood_1h == "bullish" and mood_4h == "bullish":
+            return "weak_bull"
+        
+        # Higher TFs bearish (1H + 4H)
+        if mood_1h == "bearish" and mood_4h == "bearish":
+            return "weak_bear"
+        
+        # No clear alignment
+        return "mixed"
+    
+    def _recommend_intervals(self, regime: str, volatility: str) -> List[str]:
+        """
+        Dynamically recommend which timeframes to fetch based on conditions.
+        
+        Strategy:
+        - Trending markets: Need higher TFs for trend confirmation
+        - Choppy/Sideways: 15M sufficient (GRID trading)
+        - Volatile: All TFs to assess risk
+        """
+        # Always include 15M (execution timeframe)
+        intervals = ["15m"]
+        
+        # Add higher TFs based on regime
+        if regime in ["trending", "volatile"]:
+            # Need multi-TF confirmation for trends
+            intervals.extend(["1h", "4h"])
+        elif volatility == "high":
+            # High volatility = check higher TFs for stability
+            intervals.append("1h")
+        
+        return intervals
 
 
 # Global instance
