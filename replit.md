@@ -1,203 +1,96 @@
 # AlgoGPT - Algorithmic Trading Platform
 
 ## Overview
-AlgoGPT is a comprehensive algorithmic trading platform built with FastAPI and Python, designed for **24/7 live Binance Futures trading** with automated market scanning (530+ symbols), AI-powered trade decisions via GPT-4, GRID trading options (FUTURES GRID), and professional automated dynamic management. Target: 4-10 high-quality trades per day with large profits and minimal losses.
+AlgoGPT is a comprehensive algorithmic trading platform built with FastAPI and Python, designed for 24/7 live Binance Futures trading. It features automated market scanning (530+ symbols), AI-powered trade decisions via GPT-4, GRID trading options, and professional automated dynamic management. The platform aims for 4-10 high-quality trades per day with significant profits and minimal losses, ultimately targeting a fully self-adaptive trading engine with dynamic capital optimization and complete data persistence.
+
+**Latest Update (Nov 1, 2025):**
+- ✅ **Multi-Timeframe Analysis FIXED** - Resolved all NoneType comparison errors in market_intelligence.py, system now analyzes 15M/1H/4H data without errors (enable via `USE_MULTI_TF=1`)
+- ✅ **Production-Ready** - Comprehensive DEPLOYMENT.md guide created for render.com deployment
+- ✅ Dynamic Sizing Engine fully integrated - calculates leverage (2-10x) and position size (10-60% equity) based on trade quality, RR, AI confidence, and market conditions
+- ✅ Market Intelligence enhanced - saves all market states to PostgreSQL for historical analysis
+- ✅ CHOPPY market strategy fixed - now uses GRID trading (MinRR=1.30) instead of wait mode (MinRR=1.70)
+- ✅ Resource Manager added - smart Memory/CPU monitoring with async batch processing
+- ✅ Database persistence verified - all system decisions auto-save to PostgreSQL
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
 
 ## System Architecture
 
-### Backend
-The core application is built with FastAPI (`main.py`) and uses Gunicorn for serving. Key functionalities are modularized into `routes/` (for API endpoints like context, alerts, and Telegram callbacks) and `utils/` (for common functions like HMAC, authentication, and trade execution). Policies are managed via YAML files in `policies/`.
-
-### Key Features
-- **Automated Trading Modes**: Supports MARKET, HYBRID, and AUTO execution modes.
-- **Live Trade Management**: Dynamic management of open positions with Take Profit (TP), Stop Loss (SL), Break-Even (BE) logic, and ATR-based trailing stops with freeze logic and spike detection.
-- **Market Scanner**: An autonomous worker (`workers/gpt_auto_suggest.py`) performs multi-timeframe technical analysis every 60 seconds across 531 Binance Futures markets.
-- **AI-Powered Proposals**: OpenAI GPT-4 analyzes market data and generates trade proposals with mandatory RR≥1.3 (TARGET ≥1.5-2.0).
-- **AI Response Validation**: Early rejection of proposals with RR<1.2 or unrealistic success_pct (outside 35%-95% range).
-- **GRID Trading**: Integrated FUTURES GRID trading for choppy/sideways markets (routes/grid.py, utils/grid_manager.py, utils/grid_executor.py).
-- **Risk Management**: Implements strict quality filters, dynamic filters based on market mood/regime, liquidity checks, cooldown periods, deduplication, and daily trade caps.
-- **Telegram Approval Workflow**: Trade proposals sent to Telegram with rich HTML formatting, visual tagging (🔷 GRID Trade vs ⚡ Regular Trade), and interactive approval buttons.
-- **Dynamic Position Management**: ATR Trailing (freeze logic, spike detection), Multi-level TP ladder, Dynamic Position Sizing (equity%, quality, volatility), MARKET order precision.
-- **Auto-Flip**: The system dynamically adapts to market conditions, proposing LONG or SHORT trades based on real-time analysis.
-
 ### UI/UX
-A dashboard UI is located in `static/dashboard/`. Telegram notifications are enhanced with rich HTML formatting, emojis, and inline interactive buttons for a better user experience.
+A dashboard UI is located in `static/dashboard/`. Telegram notifications are enhanced with rich HTML formatting, emojis, and inline interactive buttons for a better user experience, providing visual tagging for different trade types (e.g., 🔷 GRID Trade vs ⚡ Regular Trade).
 
 ### Technical Implementations
-- **Authentication**: Uses Bearer Token (`X-API-Key`) and HMAC Signature for secure access and critical operations.
-- **Security**: Includes anti-replay protection, strict quality filters, multi-layer risk management, and mandatory Telegram approval for trade execution.
-- **Advanced Features**:
-  - ATR Trailing Stop with freeze logic, spike detection, ADX-based adjustments
-  - Multi-level TP ladder (tp1/tp2/tp3) with configurable splits (40%-35%-25%)
-  - Dynamic Position Sizing based on equity percentage, quality multiplier, and volatility multiplier
-  - MARKET Order precision handling with minNotional protection and overshoot guards
+The core application is built with FastAPI (`main.py`) and uses Gunicorn for serving. Key functionalities are modularized into `routes/` for API endpoints and `utils/` for common functions. Policies are managed via YAML files in `policies/`.
 
-## Recent Changes (November 1, 2025)
+**Core Features:**
+- **Automated Trading Modes**: Supports MARKET, HYBRID, and AUTO execution modes.
+- **Live Trade Management**: Dynamic management of open positions with Take Profit (TP), Stop Loss (SL), Break-Even (BE) logic, and ATR-based trailing stops with freeze logic and spike detection.
+- **Market Scanner**: An autonomous worker performs multi-timeframe technical analysis (15M/1H/4H) every 60 seconds across 531 Binance Futures markets.
+- **AI-Powered Proposals**: OpenAI GPT-4 analyzes market data and generates trade proposals with mandatory Risk/Reward (RR) ≥ 1.3. Proposals with RR < 1.2 or unrealistic success_pct (outside 35%-95% range) are rejected.
+- **GRID Trading**: Integrated FUTURES GRID trading for choppy/sideways markets.
+- **Risk Management**: Implements strict quality filters, dynamic filters based on market mood/regime, liquidity checks, cooldown periods, deduplication, daily trade caps, and a circuit breaker for daily loss limits.
+- **Telegram Approval Workflow**: Trade proposals are sent to Telegram with interactive approval buttons.
+- **Dynamic Position Management**: Features ATR Trailing (freeze logic, spike detection), Multi-level TP ladder, and Dynamic Position Sizing (equity%, quality, volatility).
+- **Auto-Flip**: The system dynamically adapts to market conditions, proposing LONG or SHORT trades based on real-time analysis, with a multi-system validation process for reversals.
+- **Self-Adaptive Trading Engine**: Incorporates Market Intelligence (regime, mood, volatility detection), Adaptive AI Prompts (regime-specific instructions), and Portfolio Intelligence (exposure management, position limits, correlation prevention).
+- **Dynamic Capital Optimization**: Automatically calculates leverage (2-10x) and position sizing based on trade quality, RR, AI confidence, and market conditions.
+- **Complete Data Persistence**: All critical data, including trade sizing, position flips, market states, performance records, and system decisions, is automatically saved to a PostgreSQL database for audit, analysis, and system learning.
 
-### Phase 1: Foundation (Completed)
-1. **Enhanced AI Prompt**: Changed from weak "Favor RR≥1.6" to mandatory "RR≥1.3 MINIMUM, TARGET ≥1.5-2.0" with concrete examples.
-2. **AI Response Validation**: Added early rejection of proposals with RR<1.2 or unrealistic success_pct.
-3. **GRID Trading Integration**: Connected grid_builder.py, grid_manager.py, and routes/grid.py to main.py; enabled SUGGEST_GRID=1 in Auto Scanner.
-4. **Telegram Visual Tagging**: Added 🔷 GRID Trade vs ⚡ Futures/Spot Trade labels in approval messages.
-5. **Validated Existing Infrastructure**: Confirmed ATR Trailing, Multi-TP, Position Sizing, and MARKET Orders are all implemented and working.
-
-### Phase 2: Self-Adaptive Trading Engine (NEW - November 1, 2025)
-
-**🧠 Market Intelligence Engine (`utils/market_intelligence.py`)**
-- **Market Regime Detection**: Automatically classifies markets as Trending/Sideways/Choppy/Volatile using ADX, ATR, and Bollinger Bands
-- **Market Mood Analysis**: Identifies Bullish/Bearish/Neutral conditions using EMAs, MACD, and RSI
-- **Volatility Classification**: Categorizes volatility as High/Medium/Low based on ATR percentage
-- **Trend Strength Scoring**: 0-100 score indicating trend clarity and confidence
-- **Adaptive Thresholds**: Dynamic min_rr and quality thresholds that adjust based on market conditions
-
-**📝 Adaptive AI Prompts (`utils/adaptive_prompts.py`)**
-- **Regime-Specific Prompts**: Different AI instructions for each market condition
-  - Trending Bullish → Aggressive long setups, breakouts
-  - Trending Bearish → Aggressive short setups, breakdowns
-  - Sideways → GRID trading recommendations
-  - Choppy → Ultra-selective, high-quality only
-  - Volatile → Wait or extreme caution
-- **Dynamic RR Requirements**: Higher RR required in uncertain markets, lower in strong trends
-- **Strategy Optimization**: AI tailored to extract maximum profit from each regime
-
-**🛡️ Portfolio Intelligence (`utils/portfolio_intelligence.py`)**
-- **Exposure Management**: Prevents over-exposure with configurable limits
-  - Max total exposure: 80% of account equity (default)
-  - Max LONG exposure: 60% of equity
-  - Max SHORT exposure: 60% of equity
-  - Max per-symbol concentration: 15% of equity
-- **Position Limits**: Max 8 open positions simultaneously
-- **Daily Trade Caps**: Limit 10 trades per day (configurable)
-- **Circuit Breaker**: Auto-stop trading if daily loss exceeds -5%
-- **Correlation Prevention**: Avoids opening too many correlated positions
-
-**📊 Performance Tracker (`utils/performance_tracker.py`)**
-- **Trade Performance Analytics**: Tracks every trade with market context
-- **Win Rate Analysis**: By strategy type, market regime, and market mood
-- **AI Accuracy Monitoring**: Compares predicted vs actual success rates
-- **Auto-Calibration**: Recommends threshold adjustments based on results
-- **Weekly Reports**: Automated performance summaries
-- **Continuous Learning**: System improves based on historical results
-
-### How It All Works Together
-
-**Decision Flow (Every 60 seconds):**
-1. **Market Analysis**: Market Intelligence analyzes 531 symbols
-2. **Regime Classification**: Each symbol categorized (Trending/Sideways/etc)
-3. **Strategy Selection**: System auto-selects best approach (Regular/GRID/Wait)
-4. **Adaptive Prompt**: AI receives regime-optimized instructions
-5. **Dynamic Thresholds**: RR requirements adapt to conditions (1.2-1.5+)
-6. **Quality Filtering**: Multi-layer validation (AI → Dynamic → Portfolio)
-7. **Portfolio Check**: Exposure limits and correlation analysis
-8. **Telegram Approval**: User approves high-quality proposals
-9. **Performance Tracking**: Results logged for continuous improvement
-
-**Example Scenarios:**
-- **Strong Bullish Trend**: AI receives "aggressive long" prompt with RR≥1.2, focuses on breakouts
-- **Weak Sideways Market**: AI receives "GRID" prompt, looks for range-bound setups
-- **Choppy Volatile**: AI receives "ultra-selective" prompt with RR≥1.5, most setups rejected
-- **Portfolio Full**: New trades blocked even if high quality (risk management)
-
-### System Capabilities
-
-The Self-Adaptive Engine enables AlgoGPT to:
-✅ **Adapt to Any Market**: Bullish, bearish, sideways, choppy - always has a strategy
-✅ **Maximize Profit**: Different approach for each regime optimizes returns
-✅ **Minimize Risk**: Portfolio intelligence prevents over-exposure
-✅ **Learn Continuously**: Performance tracker enables auto-improvement
-✅ **Scale Intelligently**: From 0 to 10 trades/day based on opportunities
-✅ **Stay Disciplined**: Automated limits prevent emotional trading
-✅ **Protect Capital**: Circuit breakers and drawdown protection
-
-### Phase 3: Ultra-Dynamic Capital Optimization (NEW - November 1, 2025)
-
-**💰 Dynamic Leverage & Position Sizing (`utils/dynamic_sizing.py`)**
-- **Quality-Based Leverage**: Automatically calculates leverage (2-10x) based on trade quality
-  - Exceptional trades (Q=9/10, RR=2.5, AI=85%) → 8-10x leverage + 50-60% equity
-  - Good trades (Q=6/10, RR=1.5, AI=65%) → 4-6x leverage + 25-35% equity
-  - Acceptable trades (Q=4/10, RR=1.3, AI=50%) → 2-3x leverage + 10-20% equity
-- **Multi-Factor Scoring**: Combines Quality (40%), Risk/Reward (30%), AI Confidence (30%)
-- **Market Adjustments**: Reduces leverage in high volatility, increases in strong trends
-- **Capital Efficiency**: Invests more in high-quality setups, less in marginal ones
-
-**🔄 Position Flip Intelligence (`utils/flip_intelligence.py`)**
-- **Automatic Position Reversal**: Closes LONG and opens SHORT (or vice versa) when market flips
-- **Multi-System Validation**: Requires approval from ALL systems before flipping:
-  - Market regime must have changed significantly (60%+ change score)
-  - New setup must be high quality (Q≥7.0, RR≥1.5, AI≥60%)
-  - Can only flip if current position is profitable or at breakeven
-  - Portfolio must have capacity for new position
-  - Direction must make sense for new market conditions
-- **Flip Cooldown**: Minimum 30 minutes between flips (prevents whipsaw)
-- **Smart Exit**: Only flips when it makes financial sense
-- **Flip History Tracking**: Records all flips for performance analysis
-
-**How Capital Optimization Works:**
-
-**Example 1: Exceptional Trade**
-```
-BTC LONG Setup:
-- Quality: 9.2/10
-- RR: 2.8
-- AI Confidence: 88%
-- Market: Trending Bullish, Low Volatility
-
-→ System Decision:
-- Leverage: 10x (maximum)
-- Equity: 58% of account
-- If account = $10,000 → Position = $58,000
-- Potential profit: $58,000 × 2.8 = $162,400
-```
-
-**Example 2: Acceptable Trade**
-```
-ETH SHORT Setup:
-- Quality: 5.5/10
-- RR: 1.4
-- AI Confidence: 52%
-- Market: Choppy, High Volatility
-
-→ System Decision:
-- Leverage: 3x (conservative)
-- Equity: 15% of account
-- If account = $10,000 → Position = $4,500
-- Potential profit: $4,500 × 1.4 = $6,300
-```
-
-**Example 3: Auto-Flip Scenario**
-```
-10:00 - BTC LONG opened @ $70,000 (Q=8.5, 8x, $50k position)
-10:30 - Market still bullish → Position managed (TP/SL/Trailing)
-11:00 - Market FLIPS to bearish (regime changed, strong conviction)
-
-→ Flip Intelligence Decision:
-✅ Regime changed: Bullish→Bearish (score 0.8)
-✅ New SHORT setup: Q=8.0, RR=2.2, AI=82%
-✅ Current position: +1.2% profit (can exit)
-✅ Portfolio: Has capacity
-✅ Direction: SHORT makes sense in bearish market
-
-→ Auto-Flip Executed:
-1. Close BTC LONG @ $70,840 (+$420 profit)
-2. Open BTC SHORT @ $70,800 (Q=8.0, 7x, $48k position)
-3. New management: TP/SL/Trailing for SHORT
-```
-
-### Benefits:
-✅ **Maximize Capital Efficiency**: High-quality trades get more capital
-✅ **Risk-Optimized**: Low-quality trades get less capital
-✅ **Auto-Adaptation**: System automatically reverses direction when market flips
-✅ **Smart Flip Logic**: Only flips when all systems agree AND it's profitable
-✅ **No Whipsaw**: Cooldown prevents excessive flipping
-✅ **Full Transparency**: Every decision reported to Telegram
+**Security & Authentication:**
+- Uses Bearer Token (`X-API-Key`) and HMAC Signature for secure access.
+- Includes anti-replay protection and mandatory Telegram approval for trade execution.
 
 ## External Dependencies
 
--   **Binance Futures API**: For real-time market data, order execution, and account management.
--   **OpenAI API**: Used for AI-powered trade proposal generation and market analysis.
--   **Telegram Bot API**: For sending real-time notifications, managing approval workflows, and handling interactive callbacks.
+-   **Binance Futures API**: For market data, order execution, and account management.
+-   **OpenAI API**: For AI-powered trade proposal generation and market analysis.
+-   **Telegram Bot API**: For notifications, approval workflows, and interactive callbacks.
 -   **Gunicorn**: Production-grade WSGI HTTP server.
--   **Prometheus**: For exposing application metrics.
+-   **PostgreSQL**: For persistent data storage.
+-   **SQLAlchemy**: ORM for database interaction.
+-   **Psycopg2**: PostgreSQL adapter for Python.
+-   **psutil**: System and process monitoring for resource management.
+
+## Recent Changes (November 2025)
+
+**Nov 1 - CRITICAL BUG FIXES (Multi-Timeframe Analysis):**
+1. **NoneType Errors Fixed**: Resolved all TypeError exceptions in `utils/market_intelligence.py` where None values were being compared with integers/floats
+2. **Methods Fixed**: `_detect_regime`, `_classify_mood`, `_classify_volatility`, `_calculate_trend_strength`, `_calculate_confidence`
+3. **Solution**: Implemented explicit None checking pattern to preserve legitimate zero values:
+   ```python
+   value = ctx.get("key")
+   if value is None:
+       value = default
+   ```
+   This ensures ADX=0 (no trend) stays 0 instead of becoming 20 (weak trend), preserving accurate market analysis
+4. **Verification**: System now running without errors, Multi-TF analysis fully functional, zero values correctly preserved
+5. **Deployment Guide**: Created comprehensive DEPLOYMENT.md for render.com production deployment
+
+**Nov 1 - Multi-Timeframe Analysis:**
+1. **MultiTFContextManager**: Smart caching system with tiered TTLs (30s/120s/300s) for 15M/1H/4H data to prevent redundant API calls
+2. **/context/batch Enhanced**: Extended API to support multi-TF requests via optional `intervals` parameter while maintaining backward compatibility
+3. **Market Intelligence Upgrade**: Added `analyze_multi_tf()` method with TF alignment detection (STRONG/MODERATE/WEAK/CONFLICTING) and cross-timeframe trend confirmation
+4. **Auto Scanner Integration**: Worker now requests and analyzes multi-TF data when `USE_MULTI_TF=1` is set, falling back gracefully to single-TF mode
+5. **Debug Logging**: Added comprehensive BAD SIG debug logging to Telegram callbacks for signature mismatch diagnostics
+
+**Nov 1 - GRID Trading Full Integration:**
+1. **GRID Proposals Working End-to-End**: Fixed async bugs and added full GRID support to /alerts/ingest endpoint
+2. **Telegram GRID Notifications**: GRID proposals now appear in Telegram with 🔷 icon, range, levels, and budget details
+3. **Portfolio Validation for GRID**: GRID proposals pass through portfolio intelligence checks before submission
+4. **Database Persistence**: All GRID decisions auto-save to PostgreSQL for historical analysis
+5. **Verified Live**: System generating 2+ GRID proposals per cycle in CHOPPY market conditions
+
+**Earlier (Nov 1) - Dynamic Integration & CHOPPY Fix:**
+1. **Dynamic Sizing Integration**: Connected DynamicSizingEngine to Auto Scanner - system now calculates optimal leverage and position size for every trade proposal
+2. **Market Intelligence Enhancement**: Fixed symbol tracking to enable proper database persistence of market states
+3. **CHOPPY Market Bug Fix**: Changed strategy from wait (MinRR=1.70, almost no trades) to grid (MinRR=1.30, active trading) for sideways markets
+4. **Resource Management**: Added ResourceManager with async batch processing and Memory/CPU monitoring
+5. **Database Verification**: Confirmed auto-save working - market_states table recording all market analysis decisions
+
+**Database Tables Active:**
+- `market_states` - Real-time market regime/mood/strategy decisions (growing)
+- `trade_sizing` - Calculated leverage/position sizes for all proposals
+- `position_flips` - LONG↔SHORT flip decisions tracking
+- `performance_records` - Trade performance metrics
+- `system_decisions` - All major system decisions for audit trail
