@@ -4,7 +4,7 @@ services:
     env: docker
     region: frankfurt
     plan: standard
-    autoDeploy: false        # <<< עצרנו דיפלוי אוטומטי. דיפלוי יהיה ידני בלבד
+    autoDeploy: true         # הופעל בחזרה דיפלוי אוטומטי
     rootDir: .
     dockerfilePath: ./Dockerfile
     healthCheckPath: /readyz
@@ -20,7 +20,7 @@ services:
       - key: APP_TITLE
         value: "AlgoGPT Service (production)"
       - key: ALGOGPT_VERSION
-        value: "2.18.0"
+        value: "3.6.0"       # עודכן
       - key: INSTANCE_ID
         value: "algogpt-prod"
       - key: INSTANCE
@@ -74,11 +74,11 @@ services:
 
       # === PUBLIC / CORS ===
       - key: PUBLIC_HOST
-        value: "https://algogpt-prod.onrender.com"
+        value: "https://algogpt-docker.onrender.com"   # יושר לדומיין הפעיל בלוגים
       - key: CONTEXT_URL
-        value: "https://algogpt-prod.onrender.com"
+        value: "https://algogpt-docker.onrender.com"
       - key: WEBHOOK_HOST
-        value: "https://algogpt-prod.onrender.com"
+        value: "https://algogpt-docker.onrender.com"
 
       - key: DOCS_URL
         value: "/docs"
@@ -96,9 +96,9 @@ services:
         value: "30"
 
       - key: CORS_ALLOW_ORIGINS
-        value: "https://algogpt-prod.onrender.com"
+        value: "https://algogpt-docker.onrender.com"   # יושר
       - key: CORS_ALLOW_ORIGINS_STRICT
-        value: "https://algogpt-prod.onrender.com"
+        value: "https://algogpt-docker.onrender.com"   # יושר
       - key: CORS_ALLOW_HEADERS
         value: "*"
       - key: CORS_ALLOW_METHODS
