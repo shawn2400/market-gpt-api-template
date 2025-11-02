@@ -158,9 +158,25 @@ async def _head_compat_and_soft_readyz(request: Request, call_next):
 async def readyz():
     return PlainTextResponse("ok", status_code=200)
 
-@app.get("/healthz")
-async def healthz():
-    return PlainTextResponse("ok", status_code=200)
+@app.api_route("/healthz", methods=["GET", "POST"])
+async def healthz(req: Request):
+    if req.method == "GET":
+        return {"ok": True}
+    raw = await req.body()
+    try:
+        body_json = await req.json()
+    except Exception:
+        body_json = {}
+    ts  = req.headers.get("X-Request-Timestamp")
+    nn  = req.headers.get("X-Request-Nonce")
+    sig = req.headers.get("X-Signature")
+    require = (os.getenv("REQUIRE_SIGNATURE","0") == "1")
+    
+    from utils.anti_replay import verify_request
+    ok, reason = verify_request(ts, nn, sig, "/healthz", raw, require_signature=require)
+    if not ok:
+        raise HTTPException(status_code=401, detail=reason)
+    return {"ok": True, "echo": body_json}
 
 @app.get("/version")
 async def version_public():
@@ -1456,6 +1472,12 @@ try:
     app.include_router(grid_router)
 except Exception as e:
     logger.warning("Failed to load grid routes: %s", e)
+
+try:
+    from routes.debug_sig import router as debug_router
+    app.include_router(debug_router)
+except Exception as e:
+    logger.warning("Failed to load debug_sig routes: %s", e)
 
 # ============= Root & health & AI test =============
 @app.get("/")
