@@ -1,0 +1,121 @@
+{
+  "orchestrator": "GPT-4",
+  "version": "1.0.0",
+  "mode": "production",
+  "network_mode": "interlinked",
+  "base_url": "https://algogpt-docker.onrender.com",
+  
+  "agents": {
+    "core": {
+      "role": "trading",
+      "status": "active",
+      "description": "Main trading engine with FUTURES + GRID support",
+      "endpoints": ["/readyz", "/version", "/alerts/ingest"],
+      "features": [
+        "Market Scanner (531 symbols)",
+        "Multi-TF Analysis (15M/1H/4H)",
+        "Dynamic Position Management",
+        "Risk Management Engine"
+      ]
+    },
+    
+    "gpt4": {
+      "role": "ai_analyst",
+      "status": "active",
+      "description": "OpenAI GPT-4 for trade analysis and proposals",
+      "provider": "OpenAI",
+      "model": "gpt-4-turbo-preview"
+    },
+    
+    "market_intelligence": {
+      "role": "market_analyzer",
+      "status": "active",
+      "description": "Multi-timeframe market regime detection",
+      "features": [
+        "Regime Detection (TRENDING/CHOPPY/VOLATILE)",
+        "Mood Classification (BULLISH/BEARISH/NEUTRAL)",
+        "Volatility Analysis",
+        "Strategy Selection (FUTURES/GRID)"
+      ]
+    },
+    
+    "portfolio_intelligence": {
+      "role": "risk_manager",
+      "status": "active",
+      "description": "Portfolio exposure and correlation management",
+      "features": [
+        "Position Limits",
+        "Exposure Management",
+        "Correlation Prevention",
+        "Daily Trade Caps"
+      ]
+    },
+    
+    "telegram": {
+      "role": "notifier",
+      "status": "connected",
+      "description": "Telegram bot for approvals and notifications",
+      "features": [
+        "Trade Approval Workflow",
+        "Rich HTML Notifications",
+        "Interactive Buttons",
+        "Daily Health Reports"
+      ]
+    },
+    
+    "database": {
+      "role": "persistence",
+      "status": "active",
+      "description": "PostgreSQL database for data persistence",
+      "provider": "Render PostgreSQL",
+      "tables": [
+        "market_states",
+        "trade_sizing",
+        "position_flips",
+        "performance_records",
+        "system_decisions"
+      ]
+    },
+    
+    "heartbeat_monitor": {
+      "role": "health_monitor",
+      "status": "active",
+      "description": "Continuous system health monitoring",
+      "check_interval": "10min",
+      "alert_on_failure": true
+    },
+    
+    "daily_reporter": {
+      "role": "health_reporter",
+      "status": "active",
+      "description": "Daily system health reports",
+      "schedule": "23:00",
+      "includes": ["CPU", "Memory", "Disk", "Uptime", "Service Status"]
+    }
+  },
+  
+  "resilience": {
+    "independent": true,
+    "auto_restart": true,
+    "health_checks": true,
+    "fallback_strategies": true,
+    "data_persistence": true
+  },
+  
+  "deployment": {
+    "platform": "Render.com",
+    "region": "Frankfurt (EU Central)",
+    "plan": "Standard ($25/month)",
+    "resources": {
+      "cpu": "1 vCPU",
+      "memory": "2GB RAM"
+    }
+  },
+  
+  "monitoring": {
+    "health_endpoint": "/readyz",
+    "version_endpoint": "/version",
+    "heartbeat_interval": 600,
+    "daily_report_time": "23:00"
+  }
+}
