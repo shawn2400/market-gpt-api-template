@@ -1,0 +1,756 @@
+מטרה: 
+- לחבר Brain Mesh: primary=GPT-5 Thinking, peers=[DeepSeek, AI X], אמון הדדי, חתימה אופציונלית, ראות הדדית.
+- להשלים 3.5 (Budget/Jitter/Circuit-Breakers/Reload/Status unify) + 3.6 (PnL Heartbeat).
+- /ops/summary מאוחד (app+urls+mesh+supervisors+news+pnl), /supervisors/safe-restart, /mesh/status.
+- Idempotent: אין שכפולי ראוטים/Startup, אין מחיקת קוד קיימת, רק הוספה/תיקון חסרים.
+
+========================================
+0) requirements.txt (הוסף אם חסר; אל תמחק תלות קיימת)
+========================================
+httpx>=0.27.2
+tenacity>=9.0.0
+
+========================================
+1) ENV (הוסף אם חסר; אל תמחק קיים)
+========================================
+# --- URLs ---
+PUBLIC_HOST=${PUBLIC_HOST:-}  # אם ריק, נשתמש ב-RENDER_EXTERNAL_URL בזמן ריצה
+
+# --- Brain Mesh ---
+AI_MESH_PATH=ai_mesh.json
+# AI_MESH_SECRET=<מחרוזת סודית ל-HMAC אופציונלי>
+
+# --- Supervisors (AI) ---
+AI_SUP_INTERVAL_SEC=300
+SUPERVISOR_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
+OPENAI_SUP_MODEL=gpt-5-reasoning
+AIX_SUP_MODEL=grok-beta
+SUP_AGREE_STRICT=1
+SUP_RESTART_GRACE_SEC=1
+
+# --- Providers keys (לשים בסודות השירות; לא להדפיס בלוגים) ---
+# OPENAI_API_KEY=...
+# OPENAI_BASE=https://api.openai.com/v1
+# AIX_SUPERVISOR_TOKEN=...
+# AIX_BASE=https://api.x.ai/v1
+# DEEPSEEK_API_KEY=...
+# DEEPSEEK_BASE=https://api.deepseek.com/v1
+
+# --- News / CryptoPanic v2 ---
+NEWS_ENABLE=1
+NEWS_MAX_POSTS=40
+NEWS_POLL_INTERVAL_SEC=28800
+NEWS_DELTA_NOTIFY_THRESHOLD=8
+NEWS_SOURCE_CRYPTOPANIC=1
+NEWS_SOURCE_FEARGREED=1
+FEARGREED_SOURCE=alternative
+CRYPTOPANIC_BASE=https://cryptopanic.com/api/developer/v2
+# CRYPTOPANIC_TOKEN=...
+
+# --- 3.5 Guards ---
+NEWS_REQ_BUDGET_MONTH=90
+NEWS_REQ_WINDOW_DAYS=30
+NEWS_POLL_JITTER_SEC=90
+NEWS_CB_FAIL_THRESHOLD=4
+NEWS_CB_COOLDOWN_SEC=900
+
+# --- 3.6 PnL Heartbeat ---
+PNL_HEARTBEAT_ENABLE=1
+PNL_HEARTBEAT_CACHE_SEC=60
+PNL_HEARTBEAT_WINDOW_TRADES=50
+PNL_HEARTBEAT_WINDOW_DAYS=7
+PNL_HEARTBEAT_LOG_PATH=static/cache/trades_log.json
+
+========================================
+2) קובץ חדש/עדכון: ai_mesh.json (Idempotent)
+========================================
+# אם קיים: עדכן רק מבנה חסר (primary/agents/roles). אם אין: צור.
+# הערכים api_key_env רק מצביעים לשם ה-ENV, אין טוקנים בפנים.
+{
+  "version": "1.0",
+  "primary": "gpt5-thinking",
+  "agents": [
+    {
+      "id": "gpt5-thinking",
+      "label": "GPT-5 Thinking",
+      "provider": "openai",
+      "model": "${OPENAI_SUP_MODEL}",
+      "api_key_env": "OPENAI_API_KEY",
+      "base_url_env": "OPENAI_BASE",
+      "roles": ["orchestrator","supervisor","validator"],
+      "capabilities": ["reasoning","code-review","risk-gates"],
+      "enabled": true
+    },
+    {
+      "id": "grok-aix",
+      "label": "AI X (Grok)",
+      "provider": "xai",
+      "model": "${AIX_SUP_MODEL}",
+      "api_key_env": "AIX_SUPERVISOR_TOKEN",
+      "base_url_env": "AIX_BASE",
+      "roles": ["co-supervisor","news-interpret"],
+      "capabilities": ["reasoning"],
+      "enabled": true
+    },
+    {
+      "id": "deepseek",
+      "label": "DeepSeek",
+      "provider": "deepseek",
+      "model": "deepseek-coder",
+      "api_key_env": "DEEPSEEK_API_KEY",
+      "base_url_env": "DEEPSEEK_BASE",
+      "roles": ["optimizer","refiner"],
+      "capabilities": ["code","refactor"],
+      "enabled": true
+    }
+  ],
+  "policies": {
+    "consensus": "strict_and",
+    "min_score": 8.5,
+    "max_leverage": 35,
+    "dry_run_fallback": true
+  }
+}
+
+========================================
+3) קובץ חדש/עדכון: utils/agents.py (עטיפת ספקים + CB) 
+========================================
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import os, json, time, logging, asyncio
+from typing import Any, Dict, Optional
+from contextlib import suppress
+import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter
+
+log = logging.getLogger("algogpt.agents")
+
+# Circuit breakers per provider
+_CB: Dict[str, Dict[str, float]] = {
+    "openai": {"fails": 0, "until": 0.0},
+    "xai": {"fails": 0, "until": 0.0},
+    "deepseek": {"fails": 0, "until": 0.0},
+}
+
+def _cb_blocked(name: str) -> bool:
+    return time.time() < _CB.get(name, {}).get("until", 0.0)
+
+def _cb_on_fail(name: str, thr: int = 3, cooldown: int = 600) -> None:
+    st = _CB.setdefault(name, {"fails": 0, "until": 0.0})
+    st["fails"] = st.get("fails", 0) + 1
+    if st["fails"] >= thr:
+        st["until"] = time.time() + cooldown
+        st["fails"] = 0
+
+def _cb_on_ok(name: str) -> None:
+    st = _CB.setdefault(name, {"fails": 0, "until": 0.0})
+    st["fails"] = 0
+    st["until"] = 0.0
+
+def _env(k: str, d: str = "") -> str:
+    return os.getenv(k, d)
+
+def _mk_payload(model: str, prompt: str) -> Dict[str, Any]:
+    return {"model": model, "messages": [{"role": "user", "content": prompt}], "temperature": 0.2}
+
+@retry(stop=stop_after_attempt(2), wait=wait_exponential_jitter(initial=1, max=6))
+async def ask_openai(prompt: str, model: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if _cb_blocked("openai"): return None
+    api_key = _env("OPENAI_API_KEY")
+    base = _env("OPENAI_BASE", "https://api.openai.com/v1")
+    mdl = model or _env("OPENAI_SUP_MODEL", "gpt-5-reasoning")
+    if not api_key: return None
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(18, connect=8)) as c:
+            r = await c.post(f"{base}/chat/completions", headers=headers, json=_mk_payload(mdl, prompt))
+            r.raise_for_status()
+            txt = r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        _cb_on_ok("openai")
+        return json.loads(txt)
+    except Exception:
+        _cb_on_fail("openai"); raise
+
+@retry(stop=stop_after_attempt(2), wait=wait_exponential_jitter(initial=1, max=6))
+async def ask_xai(prompt: str, model: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    if _cb_blocked("xai"): return None
+    api_key = _env("AIX_SUPERVISOR_TOKEN")
+    base = _env("AIX_BASE", "https://api.x.ai/v1")
+    mdl = model or _env("AIX_SUP_MODEL", "grok-beta")
+    if not api_key: return None
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(18, connect=8)) as c:
+            r = await c.post(f"{base}/chat/completions", headers=headers, json=_mk_payload(mdl, prompt))
+            r.raise_for_status()
+            txt = r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        _cb_on_ok("xai")
+        return json.loads(txt)
+    except Exception:
+        _cb_on_fail("xai"); raise
+
+@retry(stop=stop_after_attempt(2), wait=wait_exponential_jitter(initial=1, max=6))
+async def ask_deepseek(prompt: str, model: str = "deepseek-coder") -> Optional[Dict[str, Any]]:
+    if _cb_blocked("deepseek"): return None
+    api_key = _env("DEEPSEEK_API_KEY")
+    base = _env("DEEPSEEK_BASE", "https://api.deepseek.com/v1")
+    if not api_key: return None
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(18, connect=8)) as c:
+            r = await c.post(f"{base}/chat/completions", headers=headers, json=_mk_payload(model, prompt))
+            r.raise_for_status()
+            txt = r.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+        _cb_on_ok("deepseek")
+        return json.loads(txt)
+    except Exception:
+        _cb_on_fail("deepseek"); raise
+
+def mesh_info() -> Dict[str, Any]:
+    # יטען ע"י routes.mesh (אין תלות הדדית)
+    return {"cb": _CB}
+
+========================================
+4) workers/ai_supervisor.py (מלא, עם Brain Mesh + הסכמות)
+========================================
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import os, json, asyncio, logging
+from typing import Any, Dict, Optional, List
+from contextlib import suppress
+from utils import agents
+
+logger = logging.getLogger('algogpt.ai_supervisor')
+
+INTERVAL_SEC = int(os.getenv('AI_SUP_INTERVAL_SEC', '300'))
+QUALITY_MIN  = float(os.getenv('ENTRY_SCORE_MIN', '8.5'))
+DRY_RUN      = os.getenv('EXECUTE_TRADES', '1') not in ('1','true','TRUE','yes','YES') and os.getenv('DRY_RUN','0') in ('1','true','TRUE','yes','YES')
+SYMBOLS_WATCH = [s for s in os.getenv('SUPERVISOR_SYMBOLS','BTCUSDT,ETHUSDT,SOLUSDT').replace(' ','').split(',') if s]
+
+SUP_STRICT = os.getenv('SUP_AGREE_STRICT','1') == '1'
+
+def _mk_prompt(symbol: str) -> str:
+    return (
+        f'Role: Trade Supervisor (strict).\n'
+        f'Symbol: {symbol} (USDT perpetual).\n'
+        f'Output JSON ONLY: {{"approve":bool,"side":"BUY"|"SELL","score":0..10,"quantity":float,"leverage":int}}.\n'
+        f'Gate by A+ setups. Score reflects overall quality. Conservative sizing.'
+    )
+
+def _safe_f(x: Any, d: float=0.0) -> float:
+    try: return float(x)
+    except Exception: return d
+
+def _agree(p1: Optional[Dict[str,Any]], p2: Optional[Dict[str,Any]]) -> Optional[Dict[str,Any]]:
+    if not p1 or not p2: return None
+    if not (p1.get('approve') and p2.get('approve')): return None
+    if str(p1.get('side')).upper() != str(p2.get('side')).upper(): return None
+    score = min(_safe_f(p1.get('score')), _safe_f(p2.get('score')))
+    qty   = min(_safe_f(p1.get('quantity')), _safe_f(p2.get('quantity')))
+    lev   = int(min(_safe_f(p1.get('leverage'),10), _safe_f(p2.get('leverage'),10)) or 10)
+    return {'approve': True, 'side': str(p1.get('side')).upper(), 'score': score, 'quantity': qty, 'leverage': lev}
+
+async def _execute_trade(symbol:str, side:str, quantity:float, leverage:int=10, dry_run:bool=False) -> Dict[str,Any]:
+    with suppress(Exception):
+        from utils.trade_executor import execute_trade_live  # type: ignore
+        if asyncio.iscoroutinefunction(execute_trade_live):  # type: ignore
+            return await execute_trade_live(symbol=symbol, side=side, quantity=quantity, leverage=leverage, dry_run=dry_run)  # type: ignore
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, lambda: execute_trade_live(symbol=symbol, side=side, quantity=quantity, leverage=leverage, dry_run=dry_run))  # type: ignore
+    return {'ok': False, 'reason': 'execute_trade_live_not_found'}
+
+async def _notify_telegram(text: str) -> None:
+    with suppress(Exception):
+        from utils.telegram_notifier import send_text  # type: ignore
+        if asyncio.iscoroutinefunction(send_text):  # type: ignore
+            await send_text(text)
+        else:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: send_text(text))  # type: ignore
+
+async def supervisor_once() -> Dict[str,Any]:
+    results: List[Dict[str,Any]] = []
+    for sym in SYMBOLS_WATCH:
+        prompt = _mk_prompt(sym)
+        o1=o2=None
+        with suppress(Exception): o1 = await agents.ask_openai(prompt, os.getenv('OPENAI_SUP_MODEL'))
+        with suppress(Exception): o2 = await agents.ask_xai(prompt, os.getenv('AIX_SUP_MODEL'))
+        decision = _agree(o1, o2) if SUP_STRICT else (o1 if (o1 and o1.get('approve')) else o2)
+        if decision and decision.get('score',0) >= QUALITY_MIN and decision.get('quantity',0) > 0:
+            resp = await _execute_trade(symbol=sym, side=str(decision['side']), quantity=float(decision['quantity']), leverage=int(decision.get('leverage',10)), dry_run=DRY_RUN)
+            results.append({'symbol': sym, 'decision': decision, 'trade_resp': resp})
+            await _notify_telegram(f'✅ AI Supervisor approved trade {sym} | {decision} | dry_run={DRY_RUN}')
+            logger.info('✅ AI Supervisor approved trade: %s', results[-1])
+        else:
+            results.append({'symbol': sym, 'decision': decision, 'skipped': True})
+    return {'ok': True, 'results': results, 'cb': agents.mesh_info().get('cb')}
+
+async def supervisor_loop() -> None:
+    await _notify_telegram('🧠 AI Supervisor loop started (Brain Mesh active, primary=gpt5-thinking)')
+    while True:
+        try:
+            await supervisor_once()
+        except Exception as e:
+            logger.exception('Supervisor iteration error: %s', e)
+        await asyncio.sleep(INTERVAL_SEC)
+
+========================================
+5) utils/news_sentiment.py (מלא: v2 + Budget+Jitter+CB)
+========================================
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import os, time, json, hashlib, logging, asyncio, random, pathlib
+from typing import Any, Dict, List, Optional
+from contextlib import suppress
+import httpx
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter
+
+logger = logging.getLogger('algogpt.news')
+
+NEWS_ENABLE            = os.getenv('NEWS_ENABLE', '1') == '1'
+NEWS_MAX_POSTS         = int(os.getenv('NEWS_MAX_POSTS', '40'))
+POLL_INTERVAL_SEC      = int(os.getenv('NEWS_POLL_INTERVAL_SEC', '28800'))
+DELTA_NOTIFY_THRESHOLD = int(os.getenv('NEWS_DELTA_NOTIFY_THRESHOLD', '8'))
+SOURCE_CRYPTOPANIC     = os.getenv('NEWS_SOURCE_CRYPTOPANIC', '1') == '1'
+SOURCE_FEARGREED       = os.getenv('NEWS_SOURCE_FEARGREED', '1') == '1'
+
+CRYPTOPANIC_TOKEN      = os.getenv('CRYPTOPANIC_TOKEN', '')
+CRYPTOPANIC_BASE       = os.getenv('CRYPTOPANIC_BASE', 'https://cryptopanic.com/api/developer/v2')
+FEARGREED_SOURCE       = os.getenv('FEARGREED_SOURCE', 'alternative')
+
+BUDGET_FILE = os.getenv('NEWS_BUDGET_FILE', 'static/cache/news_req_budget.json')
+REQ_BUDGET  = int(os.getenv('NEWS_REQ_BUDGET_MONTH', '90'))
+WINDOW_DAYS = int(os.getenv('NEWS_REQ_WINDOW_DAYS', '30'))
+POLL_JITTER = int(os.getenv('NEWS_POLL_JITTER_SEC', '90'))
+CB_FAIL_TH  = int(os.getenv('NEWS_CB_FAIL_THRESHOLD', '4'))
+CB_COOLDOWN = int(os.getenv('NEWS_CB_COOLDOWN_SEC', '900'))
+_cb_fail    = 0
+_cb_until   = 0
+
+_state: Dict[str, Any] = {
+    'ts': 0, 'items': [], 'fg_index': None,
+    'sentiment': 50.0, 'prev_sentiment': 50.0,
+    'delta': 0.0, 'since': 0,
+}
+_lock = asyncio.Lock()
+
+def _sha(s: str) -> str:
+    return hashlib.sha256(s.encode('utf-8', 'ignore')).hexdigest()[:16]
+
+def get_state_snapshot() -> Dict[str,Any]:
+    return {
+        'ts': _state['ts'], 'items': _state['items'],
+        'fg_index': _state['fg_index'], 'sentiment': _state['sentiment'],
+        'prev_sentiment': _state['prev_sentiment'], 'delta': _state['delta'],
+        'since': _state['since'],
+    }
+
+def _score_item(title: str) -> int:
+    t = title.lower()
+    pos = any(w in t for w in ['surge','rally','breakout','partnership','approve','etf','record'])
+    neg = any(w in t for w in ['hack','ban','down','selloff','liquidation','reject','fear'])
+    if pos and not neg: return 65
+    if neg and not pos: return 35
+    return 50
+
+def _load_budget():
+    p = pathlib.Path(BUDGET_FILE)
+    if not p.exists(): return {'start': int(time.time()), 'used': 0}
+    return json.loads(p.read_text('utf-8') or '{"start":0,"used":0}')
+
+def _save_budget(b):
+    pathlib.Path(BUDGET_FILE).parent.mkdir(parents=True, exist_ok=True)
+    pathlib.Path(BUDGET_FILE).write_text(json.dumps(b), encoding='utf-8')
+
+def _budget_reset_if_needed(b):
+    if time.time() - b.get('start',0) > WINDOW_DAYS*86400:
+        b['start']=int(time.time()); b['used']=0
+    return b
+
+async def _guard_budget(need:int=1)->bool:
+    b=_budget_reset_if_needed(_load_budget())
+    if b['used']+need > REQ_BUDGET: return False
+    b['used']+=need; _save_budget(b); return True
+
+@retry(stop=stop_after_attempt(2), wait=wait_exponential_jitter(initial=1, max=6))
+async def _get_json(url: str, params: Optional[Dict[str,Any]]=None) -> Any:
+    async with httpx.AsyncClient(timeout=httpx.Timeout(12.0, connect=6.0)) as client:
+        r = await client.get(url, params=params)
+        r.raise_for_status()
+        return r.json()
+
+async def _fetch_cryptopanic(limit:int=40) -> List[Dict[str,Any]]:
+    if not SOURCE_CRYPTOPANIC or not CRYPTOPANIC_TOKEN:
+        return []
+    if not await _guard_budget(1):
+        logger.info('News budget exhausted, skipping poll'); return []
+    params = {'auth_token': CRYPTOPANIC_TOKEN, 'limit': min(limit, 50)}
+    data = await _get_json(f'{CRYPTOPANIC_BASE}/posts/', params=params)
+    out = []
+    for it in data.get('results', []):
+        title = (it.get('title') or '').strip()
+        url   = (it.get('url') or '').strip()
+        if not title: continue
+        out.append({'id': _sha(title+url), 'title': title, 'url': url, 'score': _score_item(title)})
+    return out[:limit]
+
+async def _fetch_feargreed() -> Optional[int]:
+    if not SOURCE_FEARGREED:
+        return None
+    if FEARGREED_SOURCE == 'alternative':
+        data = await _get_json('https://api.alternative.me/fng/')
+        v = (data.get('data',[{}])[0] or {}).get('value')
+        try: return int(v)
+        except Exception: return None
+    return None
+
+async def poll_once() -> Dict[str,Any]:
+    global _cb_fail, _cb_until
+    if time.time() < _cb_until:
+        return get_state_snapshot()
+    items: List[Dict[str,Any]] = []
+    fg: Optional[int] = None
+    try:
+        with suppress(Exception): items = await _fetch_cryptopanic(NEWS_MAX_POSTS)
+        with suppress(Exception): fg = await _fetch_feargreed()
+        avg_news = sum(x['score'] for x in items)/len(items) if items else 50.0
+        comp = avg_news if fg is None else (0.7*avg_news + 0.3*float(fg))
+        async with _lock:
+            _state['prev_sentiment'] = _state['sentiment']
+            _state['sentiment'] = float(comp)
+            _state['delta'] = float(_state['sentiment'] - _state['prev_sentiment'])
+            _state['fg_index'] = fg
+            _state['items'] = items
+            _state['ts'] = int(time.time())
+            if not _state['since']: _state['since'] = _state['ts']
+        _cb_fail = 0
+    except Exception as e:
+        _cb_fail += 1
+        if _cb_fail >= CB_FAIL_TH:
+            _cb_until = time.time() + CB_COOLDOWN
+            _cb_fail = 0
+        logger.exception('News poll error: %s', e)
+    return get_state_snapshot()
+
+async def _notify_telegram(text: str) -> None:
+    with suppress(Exception):
+        from utils.telegram_notifier import send_text  # type: ignore
+        if asyncio.iscoroutinefunction(send_text):  # type: ignore
+            await send_text(text)
+        else:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, lambda: send_text(text))  # type: ignore
+
+async def loop() -> None:
+    if not NEWS_ENABLE:
+        logger.info('News loop disabled by ENV'); return
+    await _notify_telegram('📰 News/Sentiment loop started')
+    while True:
+        try:
+            st = await poll_once()
+            if abs(st['delta']) >= DELTA_NOTIFY_THRESHOLD:
+                await _notify_telegram(f'📰 Sentiment change Δ={st["delta"]:+.1f} → {st["sentiment"]:.1f} (F&G={st["fg_index"]})')
+                logger.info('✅ News/Sentiment Δ=%.1f now=%.1f', st['delta'], st['sentiment'])
+        except Exception as e:
+            logger.exception('News loop error: %s', e)
+        await asyncio.sleep(POLL_INTERVAL_SEC + random.uniform(0, POLL_JITTER))
+
+========================================
+6) utils/pnl_heartbeat.py (מלא: on-demand + cache)
+========================================
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import os, time, json, pathlib
+from typing import Any, Dict, List
+from contextlib import suppress
+
+PNL_ENABLE   = os.getenv("PNL_HEARTBEAT_ENABLE", "1") == "1"
+CACHE_SEC    = int(os.getenv("PNL_HEARTBEAT_CACHE_SEC", "60"))
+WIN_TRADES   = int(os.getenv("PNL_HEARTBEAT_WINDOW_TRADES", "50"))
+WIN_DAYS     = int(os.getenv("PNL_HEARTBEAT_WINDOW_DAYS", "7"))
+LOG_PATH     = os.getenv("PNL_HEARTBEAT_LOG_PATH", "static/cache/trades_log.json")
+
+_cache: Dict[str, Any] = {"ts": 0, "data": {}}
+
+def _now() -> int: return int(time.time())
+def _f(x: Any, d: float=0.0) -> float:
+    try: return float(x)
+    except Exception: return d
+
+def _load_trades() -> List[Dict[str,Any]]:
+    with suppress(Exception):
+        from utils.pnl_summary import get_recent_trades  # type: ignore
+        tr = get_recent_trades(limit=WIN_TRADES, days=WIN_DAYS)
+        if isinstance(tr, list): return tr
+    with suppress(Exception):
+        from utils.pnl_tracker import load_trades_window  # type: ignore
+        tr = load_trades_window(limit=WIN_TRADES, days=WIN_DAYS)
+        if isinstance(tr, list): return tr
+    p = pathlib.Path(LOG_PATH)
+    if not p.exists(): return []
+    with suppress(Exception):
+        data = json.loads(p.read_text("utf-8") or "[]")
+        if isinstance(data, list): return data[-WIN_TRADES:]
+    return []
+
+def _is_closed(t: Dict[str,Any]) -> bool:
+    st = str(t.get("status","")).lower()
+    if st in ("closed","exit","done","filled_closed"): return True
+    if t.get("exit_price") is not None: return True
+    return False
+
+def _age_ok(t: Dict[str,Any]) -> bool:
+    ts = int(_f(t.get("closed_at") or t.get("exit_ts") or t.get("ts") or 0))
+    if ts <= 0: return True
+    return (_now() - ts) <= WIN_DAYS*86400
+
+def _compute(trades: List[Dict[str,Any]]) -> Dict[str,Any]:
+    realized_total = 0.0; realized_day = 0.0; unreal_total = 0.0
+    n_closed = n_win = 0; rr_sum = 0.0
+    day_start = _now() - 86400
+    for t in trades:
+        if not _age_ok(t): continue
+        r = _f(t.get("realized_usd") or t.get("realized") or t.get("pnl") or 0.0)
+        u = _f(t.get("unrealized_usd") or t.get("unrealized") or 0.0)
+        rr = _f(t.get("rr") or t.get("r_multiple") or 0.0)
+        realized_total += r; unreal_total += u; rr_sum += rr if rr==rr else 0.0
+        if _is_closed(t):
+            n_closed += 1
+            if r > 0: n_win += 1
+            ts_close = int(_f(t.get("closed_at") or t.get("exit_ts") or 0))
+            if ts_close and ts_close >= day_start: realized_day += r
+    avg_rr = rr_sum / max(1, n_closed)
+    winrate = 100.0 * n_win / max(1, n_closed)
+    return {
+        "realized_total_usd": round(realized_total,2),
+        "realized_day_usd": round(realized_day,2),
+        "unrealized_total_usd": round(unreal_total,2),
+        "winrate_pct_last_window": round(winrate,2),
+        "avg_rr_last_window": round(avg_rr,3),
+        "trades_count_window": n_closed,
+        "window_trades": WIN_TRADES,
+        "window_days": WIN_DAYS,
+    }
+
+def compute_snapshot() -> Dict[str,Any]:
+    if not PNL_ENABLE: return {"ok": False, "disabled": True}
+    return {"ok": True, "ts": _now(), "stats": _compute(_load_trades())}
+
+def get_cached_snapshot() -> Dict[str,Any]:
+    now = _now()
+    if now - _cache.get("ts",0) <= CACHE_SEC and _cache.get("data"): return _cache["data"]
+    snap = compute_snapshot()
+    _cache["data"] = snap; _cache["ts"] = now
+    return snap
+
+========================================
+7) routes/news.py / mesh.py / supervisors.py / ops.py (מלא + Idempotent)
+========================================
+# routes/news.py
+from __future__ import annotations
+from fastapi import APIRouter
+from typing import Any, Dict
+from contextlib import suppress
+
+router = APIRouter(tags=['News'])
+@router.get('/news/last')
+async def news_last() -> Dict[str,Any]:
+    with suppress(Exception):
+        from utils import news_sentiment as ns  # type: ignore
+        return ns.get_state_snapshot()  # type: ignore
+    return {"ok": True, "items": [], "sentiment": 50.0, "delta": 0.0}
+
+@router.post('/news/force-poll')
+async def news_force_poll() -> Dict[str,Any]:
+    with suppress(Exception):
+        from utils import news_sentiment as ns  # type: ignore
+        return await ns.poll_once()  # type: ignore
+    return {"ok": False, "reason": "news_worker_missing"}
+
+# routes/mesh.py
+from __future__ import annotations
+import os, json, time, hmac, hashlib
+from typing import Any, Dict
+from fastapi import APIRouter
+from contextlib import suppress
+
+router = APIRouter(tags=['Mesh'])
+_CACHE: Dict[str, Any] = {'ts': 0, 'data': {}}
+
+def _load_mesh() -> Dict[str, Any]:
+    path = os.getenv('AI_MESH_PATH', 'ai_mesh.json')
+    out: Dict[str, Any] = {'ok': False, 'reason': 'not_loaded'}
+    with suppress(Exception):
+        raw = ""
+        with open(path, 'r', encoding='utf-8') as f:
+            raw = f.read()
+        j = json.loads(raw)
+        sig = ''
+        secret = os.getenv('AI_MESH_SECRET', '')
+        if secret:
+            sig = hmac.new(secret.encode('utf-8'), raw.encode('utf-8'), hashlib.sha256).hexdigest()
+        out = {'ok': True, 'mesh': j, 'sig': sig, 'len': len(raw)}
+    return out
+
+@router.get('/mesh/status')
+def mesh_status() -> Dict[str, Any]:
+    now = int(time.time())
+    if now - _CACHE.get('ts', 0) > 30:
+        _CACHE['data'] = _load_mesh()
+        _CACHE['ts'] = now
+    return {
+        'ok': bool(_CACHE['data'].get('ok')),
+        'mesh': _CACHE['data'],
+        'env': {
+            'RENDER_EXTERNAL_URL': os.getenv('RENDER_EXTERNAL_URL', ''),
+            'PUBLIC_HOST': os.getenv('PUBLIC_HOST', ''),
+            'APP_VERSION': os.getenv('APP_VERSION', ''),
+        },
+        'ts': now,
+    }
+
+# routes/supervisors.py
+from __future__ import annotations
+import time, asyncio, os
+from typing import Any, Dict
+from fastapi import APIRouter
+from contextlib import suppress
+
+router = APIRouter(tags=['Supervisors'])
+def _now() -> int: return int(time.time())
+
+@router.get('/supervisors/status')
+async def supervisors_status() -> Dict[str, Any]:
+    sup = {'ai_supervisor': {'ok': False}, 'news_sentiment': {'ok': False}}
+    with suppress(Exception):
+        from workers import ai_supervisor as w  # type: ignore
+        sup['ai_supervisor'] = {'ok': True, 'interval': getattr(w, 'INTERVAL_SEC', None), 'strict': int(os.getenv('SUP_AGREE_STRICT','1')=='1')}
+    with suppress(Exception):
+        from utils import news_sentiment as n  # type: ignore
+        # תקציב: נחשב דרך קובץ אם זמין
+        used = None
+        try:
+            import json, pathlib
+            p = os.getenv('NEWS_BUDGET_FILE','static/cache/news_req_budget.json')
+            fp = pathlib.Path(p)
+            if fp.exists(): used = json.loads(fp.read_text('utf-8')).get('used')
+        except Exception:
+            pass
+        budget_left = None
+        try:
+            req = int(os.getenv('NEWS_REQ_BUDGET_MONTH','90'))
+            if used is not None: budget_left = max(0, req - int(used))
+        except Exception:
+            pass
+        sup['news_sentiment'] = {'ok': True, 'interval': getattr(n, 'POLL_INTERVAL_SEC', None), 'budget_left': budget_left}
+    return {'ts': _now(), 'supervisors': sup, 'ok': all(v.get('ok') for v in sup.values())}
+
+@router.post('/supervisors/reload')
+async def supervisors_reload() -> Dict[str, Any]:
+    launched = []
+    with suppress(Exception):
+        from workers import ai_supervisor as w  # type: ignore
+        asyncio.create_task(w.supervisor_loop()); launched.append('ai_supervisor')
+    with suppress(Exception):
+        from utils import news_sentiment as n  # type: ignore
+        asyncio.create_task(n.loop()); launched.append('news_sentiment')
+    return {'ts': _now(), 'reloaded': launched, 'ok': bool(launched)}
+
+@router.post('/supervisors/safe-restart')
+async def supervisors_safe_restart() -> Dict[str, Any]:
+    await asyncio.sleep(int(os.getenv('SUP_RESTART_GRACE_SEC','1')))
+    return await supervisors_reload()
+
+# routes/ops.py
+from __future__ import annotations
+import os, time
+from typing import Any, Dict
+from fastapi import APIRouter
+from contextlib import suppress
+
+router = APIRouter(tags=['Ops'])
+def _now() -> int: return int(time.time())
+
+@router.get('/ops/ping')
+def ops_ping() -> Dict[str, Any]:
+    return {'ok': True, 'ts': _now()}
+
+@router.get('/ops/summary')
+def ops_summary() -> Dict[str, Any]:
+    news = {}; mesh = {}; pnl = {}; sup = {}
+    with suppress(Exception):
+        from utils import news_sentiment as ns  # type: ignore
+        news = ns.get_state_snapshot()  # type: ignore
+    with suppress(Exception):
+        from utils import pnl_heartbeat as ph  # type: ignore
+        pnl = ph.get_cached_snapshot()  # type: ignore
+    with suppress(Exception):
+        from routes.mesh import _load_mesh  # type: ignore
+        _m = _load_mesh(); mesh = {'ok': bool(_m.get('ok')), 'sig': _m.get('sig'), 'len': _m.get('len')}
+    with suppress(Exception):
+        # לא מייבאים async כדי להימנע מהרצה; מציינים שסטטוס קיים
+        sup = {'hint': 'use /supervisors/status for live view'}
+    return {
+        'app': {'version': os.getenv('APP_VERSION',''), 'git': os.getenv('GIT_COMMIT_SHA','')},
+        'urls': {'base': os.getenv('PUBLIC_HOST') or os.getenv('RENDER_EXTERNAL_URL') or 'http://localhost:8000'},
+        'mesh': mesh, 'supervisors': sup, 'news': news, 'pnl': pnl, 'ok': True, 'ts': _now()
+    }
+
+========================================
+8) main.py — include + startup (Idempotent; אל תכפיל)
+========================================
+# אחרי app = FastAPI(...):
+try:
+    from routes import news as r_news  # type: ignore
+    app.include_router(r_news.router)
+except Exception: pass
+try:
+    from routes import mesh as r_mesh  # type: ignore
+    app.include_router(r_mesh.router)
+except Exception: pass
+try:
+    from routes import supervisors as r_sup  # type: ignore
+    app.include_router(r_sup.router)
+except Exception: pass
+try:
+    from routes import ops as r_ops  # type: ignore
+    app.include_router(r_ops.router)
+except Exception: pass
+
+# Startup: אם קיימת פונקציה אצלך — הוסף רק את create_task שחסר; אם אין — צור:
+@app.on_event('startup')
+async def _startup_bg_tasks() -> None:
+    import asyncio
+    try:
+        from workers import heartbeat_monitor as hb  # type: ignore
+        asyncio.create_task(hb.run())
+    except Exception: pass
+    try:
+        from workers import daily_health_report as dr  # type: ignore
+        asyncio.create_task(dr.run())
+    except Exception: pass
+    try:
+        from workers import ai_supervisor  # type: ignore
+        asyncio.create_task(ai_supervisor.supervisor_loop())
+    except Exception: pass
+    try:
+        from utils import news_sentiment  # type: ignore
+        asyncio.create_task(news_sentiment.loop())
+    except Exception: pass
+
+========================================
+9) בדיקות מהירות (ללא jq)
+========================================
+export BASE_URL="${PUBLIC_HOST:-${RENDER_EXTERNAL_URL:-http://localhost:8000}}"
+echo "BASE_URL=$BASE_URL"
+curl -sS "$BASE_URL/readyz" && echo
+curl -sS "$BASE_URL/version" && echo
+curl -sS "$BASE_URL/mesh/status" && echo
+curl -sS "$BASE_URL/news/last" && echo
+curl -sS "$BASE_URL/supervisors/status" && echo
+curl -sS "$BASE_URL/ops/summary" | head -c 1500; echo
+
+========================================
+10) קומיט
+========================================
+Phase 3.5+3.6 FULL: Brain Mesh (primary=gpt5-thinking) + AI Supervisor + News v2 (budget/jitter/cb) + PnL Heartbeat + unified ops
