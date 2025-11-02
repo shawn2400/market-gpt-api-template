@@ -1,11 +1,12 @@
-modules = ["c-clang14", "cpp-clang14", "bash", "python-3.11"]
+modules = ["c-clang14", "cpp-clang14", "bash", "python-3.11", "postgresql-16"]
 
 [agent]
 expertMode = true
+integrations = ["python_database:1.0.0", "github:1.0.0"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["cairo", "cargo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "lcms2", "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "libyaml", "openjpeg", "pkg-config", "qhull", "rustc", "tcl", "tk", "xsimd", "zlib", "nettools", "iproute2"]
+packages = ["cairo", "cargo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "iproute2", "lcms2", "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "libyaml", "nettools", "openjpeg", "pkg-config", "qhull", "rustc", "tcl", "tk", "xsimd", "zlib"]
 
 [workflows]
 runButton = "Project"
@@ -40,7 +41,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 SUGGEST_GRID=1 SUGGEST_INTERVAL_SEC=60 CONTEXT_URL=https://1f0c42a6-48ab-4140-b304-bba617ce2b45-00-2k2qds7gg7vaz.sisko.replit.dev ALERT_INGEST_URL=https://1f0c42a6-48ab-4140-b304-bba617ce2b45-00-2k2qds7gg7vaz.sisko.replit.dev/alerts/ingest WEBHOOK_HMAC_SECRET=demo_secret_change_in_production python workers/gpt_auto_suggest.py"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 SUGGEST_GRID=1 SUGGEST_INTERVAL_SEC=60 CONTEXT_URL=http://127.0.0.1:5000 ALERT_INGEST_URL=http://127.0.0.1:5000/alerts/ingest WEBHOOK_HMAC_SECRET=demo_secret_change_in_production python workers/gpt_auto_suggest.py"
 
 [[workflows.workflow]]
 name = "Project"
