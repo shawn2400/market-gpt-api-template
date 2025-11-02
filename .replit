@@ -129,6 +129,10 @@ localPort = 43433
 externalPort = 3002
 
 [[ports]]
+localPort = 44455
+externalPort = 4200
+
+[[ports]]
 localPort = 45313
 externalPort = 3003
 
@@ -136,3 +140,35 @@ externalPort = 3003
 [deployment]
 deploymentTarget = "vm"
 run = ["gunicorn", "-c", "gunicorn_conf.py", "main:app"]
+
+[userenv]
+
+[userenv.shared]
+AI_MESH_PATH = "config/ai_mesh.json"
+AI_SUP_INTERVAL_SEC = "300"
+SUPERVISOR_SYMBOLS = "BTCUSDT,ETHUSDT,SOLUSDT"
+OPENAI_SUP_MODEL = "gpt-4o"
+AIX_SUP_MODEL = "grok-beta"
+SUP_AGREE_STRICT = "1"
+SUP_RESTART_GRACE_SEC = "1"
+NEWS_ENABLE = "1"
+NEWS_MAX_POSTS = "40"
+NEWS_POLL_INTERVAL_SEC = "28800"
+NEWS_DELTA_NOTIFY_THRESHOLD = "8"
+NEWS_SOURCE_CRYPTOPANIC = "1"
+NEWS_SOURCE_FEARGREED = "1"
+FEARGREED_SOURCE = "alternative"
+CRYPTOPANIC_BASE = "https://cryptopanic.com/api/developer/v2"
+NEWS_REQ_BUDGET_MONTH = "90"
+NEWS_REQ_WINDOW_DAYS = "30"
+NEWS_POLL_JITTER_SEC = "90"
+NEWS_CB_FAIL_THRESHOLD = "4"
+NEWS_CB_COOLDOWN_SEC = "900"
+PNL_HEARTBEAT_ENABLE = "1"
+PNL_HEARTBEAT_CACHE_SEC = "60"
+PNL_HEARTBEAT_WINDOW_TRADES = "50"
+PNL_HEARTBEAT_WINDOW_DAYS = "7"
+PNL_HEARTBEAT_LOG_PATH = "static/cache/trades_log.json"
+OPENAI_BASE = "https://api.openai.com/v1"
+AIX_BASE = "https://api.x.ai/v1"
+DEEPSEEK_BASE = "https://api.deepseek.com/v1"
