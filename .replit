@@ -60,6 +60,14 @@ args = "Daily Digest"
 task = "workflow.run"
 args = "Auto Scanner"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Heartbeat Monitor"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Daily Health Report"
+
 [[workflows.workflow]]
 name = "Position Monitor"
 author = "agent"
@@ -78,6 +86,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/daily_digest.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Heartbeat Monitor"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG BASE_URL=http://127.0.0.1:5000 HEARTBEAT_INTERVAL=600 python workers/system_heartbeat.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Daily Health Report"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG BASE_URL=http://127.0.0.1:5000 python workers/daily_health_report.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
