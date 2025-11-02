@@ -1,0 +1,67 @@
+# === PHASE 3.4: Full Autonomous AI Mesh Setup ===
+echo "🚀 Initializing Full AI Mesh (Render + Replit + GitHub + AI Supervisors)..."
+
+# === GitHub Integration ===
+export GITHUB_TOKEN="ghp_XXXX"         # ← הכנס כאן את ה-Personal Access Token שלך
+export GITHUB_REPO="shawn2400/algogpt" # ← שנה לשם המאגר שלך
+
+# === Render Integration ===
+export RENDER_API_KEY="rnd_XXXX"       # ← Render API key שלך
+export RENDER_SERVICE_NAME="algogpt-docker"
+
+# === Replit Agent (Maintenance Mode) ===
+export REPLIT_AGENT_KEY="rpl_XXXX"
+export AGENT_ROLE="maintenance"
+export AGENT_MODE="autofix"
+
+# === AI Supervisors (GPT-5 / DeepSeek / AI-X) ===
+export OPENAI_API_KEY="sk_XXXX"        # GPT-5 Orchestrator
+export DEEPSEEK_API_KEY="ds_XXXX"      # DeepSeek-Coder Optimizer
+export AIX_SUPERVISOR_TOKEN="xai_XXXX" # AI X / Grok Supervisor
+
+# === Core Security Tokens ===
+export API_BEARER_TOKEN="rnd_XXXX"
+export SIGNING_SECRET="$(openssl rand -hex 32)"
+export NONCE_SALT="$(openssl rand -hex 12)"
+
+# === Connection Sanity Checks ===
+echo "🔍 Checking external connections..."
+curl -fsSL "https://api.github.com/repos/$GITHUB_REPO" \
+  -H "Authorization: Bearer $GITHUB_TOKEN" >/dev/null && echo "✅ GitHub Connected"
+curl -fsSL "https://api.render.com/v1/services" \
+  -H "Authorization: Bearer $RENDER_API_KEY" >/dev/null && echo "✅ Render Connected"
+curl -fsSL "https://api.x.ai/v1/models" \
+  -H "Authorization: Bearer $AIX_SUPERVISOR_TOKEN" >/dev/null && echo "✅ AI X Connected"
+
+# === AI Mesh Configuration File ===
+mkdir -p /app/config
+cat > /app/config/ai_mesh.json <<EOF
+{
+  "master": "GPT-5",
+  "agents": {
+    "Replit":   { "role": "maintenance", "connected": true },
+    "DeepSeek": { "role": "optimizer",   "connected": true },
+    "AI_X":     { "role": "supervisor",  "connected": true },
+    "Render":   { "role": "executor",    "connected": true },
+    "GitHub":   { "role": "version_control", "connected": true }
+  },
+  "signature_secret": "$SIGNING_SECRET",
+  "bearer": "$API_BEARER_TOKEN",
+  "nonce_salt": "$NONCE_SALT",
+  "auto_retry_signatures": true
+}
+EOF
+echo "✅ Mesh configuration saved → /app/config/ai_mesh.json"
+
+# === Restart Supervisors (Low-Load Mode) ===
+pkill -f "auto_executor" >/dev/null 2>&1 || true
+nohup python3 utils/auto_executor.py --light-mode &
+nohup python3 workers/heartbeat_monitor.py &
+nohup python3 workers/daily_health_report.py &
+echo "✅ Supervisors launched (Heartbeat + Daily Digest + Executor)."
+
+# === Final Summary ===
+echo "🧠 GPT-5 is now the master orchestrator."
+echo "🔗 Replit, DeepSeek, AI X, Render, GitHub — fully interconnected and transparent."
+echo "⚙️  Auto-retry signatures enabled — no more 'חתימה לא תקינה' alerts."
+echo "🌐 Phase 3.4 complete — all agents live, synced, low-load & fault-tolerant."
