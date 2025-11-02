@@ -1,0 +1,176 @@
+TASK: תקן BAD SIG ע"י זרימת HMAC דטרמיניסטית על RAW BODY, הוסף /debug/sig (מאובטח ב-ENV+Bearer), חבר ל-/healthz, וספק בדיקות curl. לגעת רק בקבצים: utils/anti_replay.py, main.py, routes/debug_sig.py. שמור תאימות, בלי לגעת בסודות/ENV מעבר לנדרש.
+
+=== 1) utils/anti_replay.py (צור/החלף) ===
+from __future__ import annotations
+import os, hmac, hashlib, time
+from typing import Tuple, Union
+
+_SIG_TOLERANCE_SEC = int(os.getenv("SIG_TOLERANCE_SEC", "120"))
+
+def _b(s: Union[str, bytes]) -> bytes:
+    return s if isinstance(s, (bytes, bytearray)) else str(s).encode("utf-8", "ignore")
+
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+def _canon(ts: str, nonce: str, route: str, body_bytes: bytes) -> str:
+    # Canon: ts \n nonce \n route \n sha256_hex(raw_body)
+    return "\n".join([str(ts or ""), str(nonce or ""), str(route or ""), _sha256_hex(body_bytes)])
+
+def _cteq(a: str, b: str) -> bool:
+    try:
+        return hmac.compare_digest((a or "").lower(), (b or "").lower())
+    except Exception:
+        return (a or "").lower() == (b or "").lower()
+
+def verify_request(
+    ts_header: str | None,
+    nonce_header: str | None,
+    signature_header: str | None,
+    route: str,
+    raw_body: Union[bytes, bytearray, str, None],
+    require_signature: bool = False
+) -> Tuple[bool, str]:
+    ts = str(ts_header or "")
+    nonce = str(nonce_header or "")
+    sig = str(signature_header or "")
+
+    # Allow if not required and headers missing
+    if not require_signature and not (ts and nonce and sig):
+        return True, "ok"
+
+    if not ts or not nonce or not sig:
+        return False, "missing_ts_nonce_or_sig"
+
+    try:
+        ts_int = int(ts)
+    except Exception:
+        return False, "bad_ts_format"
+
+    now = int(time.time())
+    if abs(now - ts_int) > _SIG_TOLERANCE_SEC:
+        return False, "ts_out_of_window"
+
+    body_bytes = _b(raw_body or b"")
+    canon = _canon(ts, nonce, route, body_bytes)
+
+    secret = os.getenv("SIG_SECRET") or os.getenv("API_BEARER_TOKEN") or ""
+    if not secret:
+        return False, "missing_secret"
+
+    expect = hmac.new(_b(secret), _b(canon), hashlib.sha256).hexdigest()
+    if not _cteq(sig, expect):
+        return False, "bad_signature"
+
+    return True, "ok"
+
+__all__ = ["verify_request", "_canon", "_sha256_hex", "_b"]
+
+=== 2) main.py – הוסף/עדכן healthz (אחרי /ping) וחיווט debug ===
+# הוספות נדרשות בראש הקובץ אם חסר:
+from fastapi import HTTPException, Request
+# (יש לך כבר shim ל-verify_request; כאן נייבא ישירות)
+from utils.anti_replay import verify_request
+
+# הוסף אחרי /ping:
+@app.api_route("/healthz", methods=["GET", "POST"])
+async def healthz(req: Request):
+    if req.method == "GET":
+        return {"ok": True}
+    raw = await req.body()  # RAW BODY לחתימה
+    try:
+        body_json = await req.json()
+    except Exception:
+        body_json = {}
+    ts  = req.headers.get("X-Request-Timestamp")
+    nn  = req.headers.get("X-Request-Nonce")
+    sig = req.headers.get("X-Signature")
+    require = (os.getenv("REQUIRE_SIGNATURE","0") == "1")
+    ok, reason = verify_request(ts, nn, sig, "/healthz", raw, require_signature=require)
+    if not ok:
+        raise HTTPException(status_code=401, detail=reason)
+    return {"ok": True, "echo": body_json}
+
+# חיווט debug router (בסוף ה-includes / אחרי יצירת app):
+from contextlib import suppress
+with suppress(Exception):
+    from routes.debug_sig import router as debug_router
+    app.include_router(debug_router)
+
+=== 3) routes/debug_sig.py (חדש) ===
+from fastapi import APIRouter, Request, HTTPException, Header, Depends
+import os, base64, hmac
+from utils.anti_replay import _canon, _sha256_hex, _b
+
+router = APIRouter(prefix="/debug", tags=["Debug"], include_in_schema=False)
+
+def _auth(authorization: str = Header("")):
+    token = os.getenv("API_BEARER_TOKEN","")
+    if not token or not authorization.startswith("Bearer "):
+        raise HTTPException(401, "unauthorized")
+    if not hmac.compare_digest(authorization.split(" ",1)[1], token):
+        raise HTTPException(401, "unauthorized")
+    if os.getenv("DEBUG_SIG","0") != "1":
+        raise HTTPException(403, "debug_disabled")
+    return True
+
+@router.post("/sig")
+async def sig_info(req: Request, _=Depends(_auth)):
+    raw = await req.body()
+    ts  = req.headers.get("X-Request-Timestamp") or ""
+    nn  = req.headers.get("X-Request-Nonce") or ""
+    route = req.query_params.get("route","/healthz")
+    canon = _canon(ts, nn, route, raw)
+    return {
+        "ok": True,
+        "ts": ts,
+        "nonce": nn,
+        "route": route,
+        "body_sha256": _sha256_hex(raw),
+        "canon_b64": base64.b64encode(_b(canon)).decode("utf-8"),
+        "note": "No secret or expected signature is returned."
+    }
+
+=== 4) ENV נדרש (Render/.env) ===
+# בסביבה (אל תשמור בקוד):
+SIG_SECRET=<secret>           # מועדף; אחרת השתמש ב-API_BEARER_TOKEN
+API_BEARER_TOKEN=<same_if_no_sig_secret>
+SIG_TOLERANCE_SEC=120
+REQUIRE_SIGNATURE=1           # לאכוף ב-/healthz POST (0 כדי להשבית)
+DEBUG_SIG=1                   # להדליק זמנית, לכבות אחרי בדיקות
+
+=== 5) בדיקות Shell (להדביק כפי שהוא, ללא jq) ===
+export BASE_URL="https://algogpt-docker.onrender.com"
+export API_BEARER_TOKEN="<< SAME AS SIG_SECRET/API_BEARER_TOKEN ON SERVER >>"
+export ROUTE="/healthz"
+TS=$(date +%s)
+NONCE="cli-$(openssl rand -hex 6)"
+BODY='{"ping":"pong"}'
+
+SHA=$(printf '%s' "$BODY" | openssl dgst -sha256 -binary | xxd -p -c256)
+CANON="$(printf '%s\n%s\n%s\n%s' "$TS" "$NONCE" "$ROUTE" "$SHA")"
+SIG=$(printf '%s' "$CANON" | openssl dgst -sha256 -hmac "$API_BEARER_TOKEN" -binary | xxd -p -c256)
+
+# 1) דיבוג: וידוא קנון/Hash בשרת (DEBUG_SIG=1)
+curl -sS -X POST "$BASE_URL/debug/sig?route=$ROUTE" \
+  -H "Authorization: Bearer $API_BEARER_TOKEN" \
+  -H "X-Request-Timestamp: $TS" -H "X-Request-Nonce: $NONCE" \
+  -H "Content-Type: application/json" -d "$BODY" \
+| sed -E 's/("canon_b64":")[^"]+/\1.../' ; echo
+
+# 2) קריאה חתומה אמיתית (צפוי 200 + echo)
+curl -sS -X POST "$BASE_URL$ROUTE" \
+  -H "Authorization: Bearer $API_BEARER_TOKEN" \
+  -H "X-Request-Timestamp: $TS" -H "X-Request-Nonce: $NONCE" -H "X-Signature: $SIG" \
+  -H "Content-Type: application/json" -d "$BODY" ; echo
+
+=== 6) כללי זהירות ותאימות ===
+- חתימה על RAW BODY זהה 1:1 (ללא פורמט מחדש). route חייב להיות "/healthz".
+- הפרש שעון ≤ SIG_TOLERANCE_SEC. אם צריך, הגדל זמנית ל-300.
+- לוגים: הדפס רק reason (bad_signature/ts_out_of_window/...), לא secret/expected.
+- אחרי בדיקות: DEBUG_SIG=0.
+
+=== 7) Cost Guard (דינמי) ===
+- אל תתקין Playwright/Chromium. Scope = שלושת הקבצים בלבד.
+- זמן עבודה ≤ 20 דק'. אם יש חריגה—עצור וסכם.
+- ללא שינויים בלתי-הפיכים (אין push/git remote/ENV writes). פאטצ'ים בלבד.
