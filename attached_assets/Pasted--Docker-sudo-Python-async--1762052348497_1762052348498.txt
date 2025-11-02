@@ -1,0 +1,275 @@
+בצע את השלבים בדיוק, אידמפוטנטי, ללא Docker/sudo. Python async בלבד. אם משהו כבר קיים – אל תכפיל.
+
+========================================
+1) צור/עדכן טוקן RO ונתיבי סטטוס
+========================================
+# קבע טוקן אקראי לקריאה-בלבד (RO) והגדר נתיבי סטטוס מותרים:
+export API_BEARER_TOKEN_RO="$(python - <<'PY'
+import secrets; print(secrets.token_hex(18))
+PY
+)"
+export STATUS_PUBLIC_PATHS="/readyz,/version,/ops/summary,/supervisors/status,/news/last,/mesh/status"
+
+# אם יש קובץ .env בפרויקט – עדכן/הוסף בו את שני המשתנים (ללא כפילות):
+python - <<'PY'
+import os, re, pathlib
+envp = pathlib.Path(".env")
+kv = {
+    "API_BEARER_TOKEN_RO": os.environ.get("API_BEARER_TOKEN_RO",""),
+    "STATUS_PUBLIC_PATHS": os.environ.get("STATUS_PUBLIC_PATHS",""),
+}
+if envp.exists():
+    s = envp.read_text(encoding="utf-8")
+    for k,v in kv.items():
+        if re.search(rf"^{k}=", s, flags=re.M):
+            s = re.sub(rf"^{k}=.*$", f"{k}={v}", s, flags=re.M)
+        else:
+            s += f"\n{k}={v}"
+    envp.write_text(s.strip()+"\n", encoding="utf-8")
+else:
+    envp.write_text("\n".join(f"{k}={v}" for k,v in kv.items())+"\n", encoding="utf-8")
+print("✅ .env updated with RO token and status paths")
+PY
+
+========================================
+2) הזרק Middleware לקריאה-בלבד ב-main.py (אם חסר)
+========================================
+python - <<'PY'
+import re, sys, io
+p = "main.py"
+s = open(p, encoding="utf-8").read()
+need = "class ReadOnlyAuthMW(BaseHTTPMiddleware)"
+snippet = '''
+import os, hmac
+from fastapi import Request, HTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
+
+def _ct_equal(a: str, b: str) -> bool:
+    try: return hmac.compare_digest(a or "", b or "")
+    except Exception: return (a or "") == (b or "")
+
+RO_TOKEN = os.getenv("API_BEARER_TOKEN_RO", "")
+PUBLIC_PATHS = {(p.strip() or "") for p in os.getenv("STATUS_PUBLIC_PATHS","").split(",")}
+
+class ReadOnlyAuthMW(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if path in PUBLIC_PATHS and RO_TOKEN:
+            auth = request.headers.get("authorization", "")
+            if not auth.startswith("Bearer "):
+                raise HTTPException(status_code=401, detail="Missing Bearer")
+            tok = auth.split(" ",1)[1].strip()
+            if not _ct_equal(tok, RO_TOKEN):
+                raise HTTPException(status_code=403, detail="Bad token")
+        return await call_next(request)
+
+try:
+    app.add_middleware(ReadOnlyAuthMW)
+except Exception:
+    pass
+'''
+if need not in s:
+    # הזרקה לפני יצירת האפליקציה (שמור על import מסודר)
+    s = s.replace("app = FastAPI", snippet + "\n\napp = FastAPI", 1)
+    open(p,"w",encoding="utf-8").write(s)
+    print("✅ Injected RO middleware into main.py")
+else:
+    print("ℹ️ RO middleware already present")
+PY
+
+========================================
+3) חבר ראוטים חסרים (לא להעתיק שוב אם קיימים)
+========================================
+python - <<'PY'
+import os, pathlib
+
+def ensure_file(path, content):
+    p = pathlib.Path(path)
+    if p.exists():
+        print(f"ℹ️ {path} exists")
+        return
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(content, encoding="utf-8")
+    print(f"✅ created {path}")
+
+ensure_file("routes/news.py", """from __future__ import annotations
+from fastapi import APIRouter
+from typing import Any, Dict
+from contextlib import suppress
+router = APIRouter(tags=['News'])
+@router.get('/news/last')
+async def news_last() -> Dict[str,Any]:
+    with suppress(Exception):
+        from utils import news_sentiment as ns  # type: ignore
+        return ns.get_state_snapshot()  # type: ignore
+    return {"ok": True, "items": [], "sentiment": 50.0, "delta": 0.0}
+@router.post('/news/force-poll')
+async def news_force_poll() -> Dict[str,Any]:
+    with suppress(Exception):
+        from utils import news_sentiment as ns  # type: ignore
+        return await ns.poll_once()  # type: ignore
+    return {"ok": False, "reason": "news_worker_missing"}
+""")
+
+ensure_file("routes/mesh.py", """from __future__ import annotations
+import os, json, time, hmac, hashlib
+from typing import Any, Dict
+from fastapi import APIRouter
+from contextlib import suppress
+router = APIRouter(tags=['Mesh'])
+_CACHE: Dict[str, Any] = {'ts': 0, 'data': {}}
+def _load_mesh() -> Dict[str, Any]:
+    path = os.getenv('AI_MESH_PATH', 'ai_mesh.json')
+    out: Dict[str, Any] = {'ok': False, 'reason': 'not_loaded'}
+    with suppress(Exception):
+        raw = ''
+        with open(path, 'r', encoding='utf-8') as f:
+            raw = f.read()
+        j = json.loads(raw)
+        sig = ''
+        secret = os.getenv('AI_MESH_SECRET', '')
+        if secret:
+            sig = hmac.new(secret.encode('utf-8'), raw.encode('utf-8'), hashlib.sha256).hexdigest()
+        out = {'ok': True, 'mesh': j, 'sig': sig, 'len': len(raw)}
+    return out
+@router.get('/mesh/status')
+def mesh_status() -> Dict[str, Any]:
+    now = int(time.time())
+    if now - _CACHE.get('ts', 0) > 30:
+        _CACHE['data'] = _load_mesh()
+        _CACHE['ts'] = now
+    return {'ok': bool(_CACHE['data'].get('ok')),
+            'mesh': _CACHE['data'],
+            'env': {'RENDER_EXTERNAL_URL': os.getenv('RENDER_EXTERNAL_URL',''),
+                    'PUBLIC_HOST': os.getenv('PUBLIC_HOST',''),
+                    'APP_VERSION': os.getenv('APP_VERSION','')},
+            'ts': now}
+""")
+
+ensure_file("routes/supervisors.py", """from __future__ import annotations
+import time, asyncio, os
+from typing import Any, Dict
+from fastapi import APIRouter
+from contextlib import suppress
+router = APIRouter(tags=['Supervisors'])
+def _now() -> int: return int(time.time())
+@router.get('/supervisors/status')
+async def supervisors_status() -> Dict[str, Any]:
+    sup = {'ai_supervisor': {'ok': False}, 'news_sentiment': {'ok': False}}
+    with suppress(Exception):
+        from workers import ai_supervisor as w  # type: ignore
+        sup['ai_supervisor'] = {'ok': True, 'interval': getattr(w, 'INTERVAL_SEC', None),
+                                'strict': int(os.getenv('SUP_AGREE_STRICT','1')=='1')}
+    with suppress(Exception):
+        from utils import news_sentiment as n  # type: ignore
+        sup['news_sentiment'] = {'ok': True, 'interval': getattr(n, 'POLL_INTERVAL_SEC', None)}
+    return {'ts': _now(), 'supervisors': sup, 'ok': all(v.get('ok') for v in sup.values())}
+@router.post('/supervisors/reload')
+async def supervisors_reload() -> Dict[str, Any]:
+    launched = []
+    with suppress(Exception):
+        from workers import ai_supervisor as w  # type: ignore
+        asyncio.create_task(w.supervisor_loop()); launched.append('ai_supervisor')
+    with suppress(Exception):
+        from utils import news_sentiment as n  # type: ignore
+        asyncio.create_task(n.loop()); launched.append('news_sentiment')
+    return {'ts': _now(), 'reloaded': launched, 'ok': bool(launched)}
+@router.post('/supervisors/safe-restart')
+async def supervisors_safe_restart() -> Dict[str, Any]:
+    await asyncio.sleep(int(os.getenv('SUP_RESTART_GRACE_SEC','1')))
+    return await supervisors_reload()
+""")
+
+ensure_file("routes/ops.py", """from __future__ import annotations
+import os, time
+from typing import Any, Dict
+from fastapi import APIRouter
+from contextlib import suppress
+router = APIRouter(tags=['Ops'])
+def _now() -> int: return int(time.time())
+@router.get('/ops/ping')
+def ops_ping() -> Dict[str, Any]:
+    return {'ok': True, 'ts': _now()}
+@router.get('/ops/summary')
+def ops_summary() -> Dict[str, Any]:
+    news = {}; mesh = {}; pnl = {}; sup = {}
+    with suppress(Exception):
+        from utils import news_sentiment as ns  # type: ignore
+        news = ns.get_state_snapshot()  # type: ignore
+    with suppress(Exception):
+        from utils import pnl_heartbeat as ph  # type: ignore
+        pnl = ph.get_cached_snapshot()  # type: ignore
+    with suppress(Exception):
+        from routes.mesh import _load_mesh  # type: ignore
+        _m = _load_mesh(); mesh = {'ok': bool(_m.get('ok')), 'sig': _m.get('sig'), 'len': _m.get('len')}
+    return {'app': {'version': os.getenv('APP_VERSION',''), 'git': os.getenv('GIT_COMMIT_SHA','')},
+            'urls': {'base': os.getenv('PUBLIC_HOST') or os.getenv('RENDER_EXTERNAL_URL') or 'http://localhost:8000'},
+            'mesh': mesh, 'supervisors': {'hint': 'use /supervisors/status'}, 'news': news, 'pnl': pnl,
+            'ok': True, 'ts': _now()}
+""")
+print("✅ ensured minimal routes")
+PY
+
+========================================
+4) ודא חיבור הראוטים וה-startup (אל תכפיל)
+========================================
+python - <<'PY'
+import re
+p="main.py"
+s=open(p,encoding="utf-8").read()
+def include(router, alias):
+    global s
+    if f"app.include_router({alias}.router)" in s: return
+    s = s.replace("app = FastAPI", f"app = FastAPI", 1)  # anchor
+    ins = f"""
+try:
+    from routes import {router} as {alias}  # type: ignore
+    app.include_router({alias}.router)
+except Exception:
+    pass
+"""
+    if ins not in s:
+        s += "\n"+ins
+for r,a in [("news","r_news"),("mesh","r_mesh"),("supervisors","r_sup"),("ops","r_ops")]:
+    include(r,a)
+if "@app.on_event(\"startup\")" not in s and "@app.on_event('startup')" not in s:
+    s += """
+@app.on_event('startup')
+async def _startup_bg_tasks() -> None:
+    import asyncio
+    try:
+        from workers import ai_supervisor  # type: ignore
+        asyncio.create_task(ai_supervisor.supervisor_loop())
+    except Exception: pass
+    try:
+        from utils import news_sentiment  # type: ignore
+        asyncio.create_task(news_sentiment.loop())
+    except Exception: pass
+"""
+open(p,"w",encoding="utf-8").write(s)
+print("✅ routers included & startup ensured")
+PY
+
+========================================
+5) בדיקות גישה (עם RO Bearer)
+========================================
+export BASE_URL="${PUBLIC_HOST:-${RENDER_EXTERNAL_URL:-http://localhost:8000}}"
+echo "BASE_URL=$BASE_URL"
+curl -sS "$BASE_URL/readyz" -H "Authorization: Bearer $API_BEARER_TOKEN_RO" && echo
+curl -sS "$BASE_URL/version" -H "Authorization: Bearer $API_BEARER_TOKEN_RO" && echo
+curl -sS "$BASE_URL/mesh/status" -H "Authorization: Bearer $API_BEARER_TOKEN_RO" && echo
+curl -sS "$BASE_URL/news/last" -H "Authorization: Bearer $API_BEARER_TOKEN_RO" && echo
+curl -sS "$BASE_URL/supervisors/status" -H "Authorization: Bearer $API_BEARER_TOKEN_RO" && echo
+curl -sS "$BASE_URL/ops/summary" -H "Authorization: Bearer $API_BEARER_TOKEN_RO" | head -c 1500; echo
+
+========================================
+6) הדפס לתצוגה (כדי שהלקוח יוכל לשתף את ה-URL+RO)
+========================================
+echo "=== SHARE THIS WITH ANALYST (read-only) ==="
+echo "BASE_URL=$BASE_URL"
+echo "API_BEARER_TOKEN_RO=$API_BEARER_TOKEN_RO"
+echo "=========================================="
+
+# (אופציונלי) קומיט
+git add -A || true
+git commit -m "Add RO bearer and status routes wiring (idempotent)" || true
