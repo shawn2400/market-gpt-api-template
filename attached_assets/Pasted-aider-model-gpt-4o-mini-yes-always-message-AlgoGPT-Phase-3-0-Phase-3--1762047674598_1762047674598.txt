@@ -1,0 +1,99 @@
+aider --model gpt-4o-mini --yes-always \
+  --message "עדכן את מערכת AlgoGPT מ-Phase-3.0 עד Phase-3.3 (Sentient Autonomous Intelligence):
+
+=============================
+PHASE 3.0 – AI SUPERVISOR
+=============================
+1️⃣ צור / עדכן את workers/ai_supervisor.py:
+   - לולאת בקרה כל 5 דקות (300s).
+   - מאחד החלטות בין OpenAI GPT-5 (Quality) ו-AI X (Grok).
+   - בודק גם נתוני Sentiment + FearGreed לפני טרייד.
+   - מאשר רק אם ציון משוקלל >= 8.5 ו-Sentiment > 40 ו-FearGreed > 30.
+   - משקלול: DecisionScore = (Quality*0.4 + Sentiment*0.3 + (100-FearGreed)*0.3).
+   - שומר cache בזיכרון ומונע קריאות כפולות.
+   - לוג: logs/ai_supervisor.log.
+   - דגל הפעלה: AI_SUPERVISOR_ENABLE=1.
+
+=============================
+PHASE 3.1 – NEWS & SENTIMENT
+=============================
+2️⃣ צור workers/news_sentiment.py:
+   - מושך חדשות מ-CryptoPanic ו-CoinDesk.
+   - מנתח כותרת ותוכן עם GPT-5 או DeepSeek (async + aiohttp).
+   - מחזיר ערך sentiment 0–100 ו-Label: Positive / Neutral / Negative.
+   - שומר תוצאות ב-cache + logs/news_sentiment.log.
+   - נשלחת הודעה לטלגרם רק אם sentiment <20 או >80.
+   - ריצה כל 600 שניות (10 דקות).
+
+=============================
+PHASE 3.2 – FEAR & GREED INDEX
+=============================
+3️⃣ צור workers/fear_greed.py:
+   - שליפה מ-Alternative.me API (https://api.alternative.me/fng/).
+   - ניסיון שני מאתר CNN (Scrape fallback אם API לא מגיב).
+   - חישוב ממוצע FearGreedIndex (0–100).
+   - שמירה ב-logs/fear_greed.log ו-cache memory.
+   - ריצה כל 900 שניות (15 דקות).
+
+=============================
+PHASE 3.3 – AUTO ADAPTIVE RISK MANAGER
+=============================
+4️⃣ צור workers/auto_risk_manager.py:
+   - ניתוח volatility מ-ATR, ADX, Sentiment ו-FearGreed.
+   - התאמת leverage, budget ו-TP/SL באופן דינמי:
+       • FearGreed <30 → הפחת מינוף ב-30%.
+       • Sentiment <40 → הפחת סיכון ב-25%.
+       • FearGreed >70 && Sentiment >70 → העלה מינוף עד פי 1.5.
+   - שליחת עדכון לטלגרם עם מצב רמת סיכון.
+   - שמור לוגים ב-logs/auto_risk_manager.log.
+
+=============================
+MAIN.PY INTEGRATION
+=============================
+5️⃣ עדכן main.py:
+   - באירוע startup, הפעל במקביל:
+       asyncio.create_task(ai_supervisor.supervisor_loop())
+       asyncio.create_task(news_sentiment.run())
+       asyncio.create_task(fear_greed.run())
+       asyncio.create_task(auto_risk_manager.run())
+   - ודא שאין תלות הדדית – כל worker עצמאי.
+   - חריגה באחד מהם לא תעצור אחרים.
+   - טיפול ב-async exceptions והחייאת תהליכים (restart on fail).
+
+=============================
+OPTIMIZATION & SAFETY
+=============================
+6️⃣ אופטימיזציה מלאה:
+   - אין שימוש ב-threading, subprocess או Docker.
+   - כל קריאות HTTP ב-aiohttp עם timeout 10s.
+   - צריכת RAM ≤ 200MB, CPU ≤ 0.3-core לכל worker.
+   - Cache TTL 15 דקות להפחתת API calls.
+   - תיאום טיימרים חכם (לא כולם באותו רגע).
+
+=============================
+TELEGRAM & ALERTS
+=============================
+7️⃣ הרחב telegram_notifier:
+   - פקודות חדשות:
+       /market → מציג Sentiment + FearGreed + מצב סיכון.
+       /risk → רמת סיכון נוכחית ומינוף פעיל.
+   - דיווח יומי אוטומטי:
+       '📊 Market: Sentiment 62 | FearGreed 48 | Risk: Neutral | Mode: Balanced'
+
+=============================
+HEALTH & LOG VALIDATION
+=============================
+8️⃣ לאחר יצירה:
+   - curl /readyz → 200
+   - curl /metrics → כולל sentiment_score, fear_greed_index, ai_decision_score, risk_level
+   - tail -f logs/*.log → לראות '✅ Sentient Market Loop Active'
+   - ודא בטלגרם דיווח יומי: 'Phase-3.3 Online ✅'
+
+=============================
+GITHUB COMMIT
+=============================
+9️⃣ בצע commit & push ל-GitHub:
+   Commit message: 'Upgrade to Phase-3.3 – Sentient Autonomous AlgoGPT (AI Supervisor + News + FearGreed + Risk Manager)'
+
+מטרה: מערכת עצמאית מלאה (Fully Autonomous), מחוברת ל-AI X, DeepSeek, GPT-5 ו-Telegram, עם ניתוח שוק חכם, ניהול סיכון אדפטיבי, והכול א-סינכרוני, ללא עומס על שרת Render/Replit.
+"
