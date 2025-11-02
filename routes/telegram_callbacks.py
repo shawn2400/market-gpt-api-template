@@ -149,7 +149,7 @@ async def _post_signed_approval(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
-@router.post("/callback")
+@router.post("/webhook")
 async def callback_handler(
     req: Request,
     x_telegram_bot_api_secret_token: str | None = Header(default=None)
@@ -209,7 +209,32 @@ async def callback_handler(
         logger.error(f"[callback] parse error: {e}")
         return {"ok": True}
 
-    rec = ConfirmStore.get(cid)
+    # Try to recover the original trade ID if it was shortened by SmartSignature
+    original_cid = cid
+    try:
+        from utils.smart_signature import smart_sig
+        recovered_id = smart_sig.recover_mapping(cid)
+        if recovered_id:
+            logger.info(f"[callback] Recovered original trade ID: {cid} -> {recovered_id}")
+            original_cid = recovered_id
+        else:
+            logger.debug(f"[callback] No mapping found for {cid}, using as-is")
+    except ImportError:
+        logger.debug(f"[callback] SmartSignature not available, using ID as-is: {cid}")
+    except Exception as e:
+        logger.warning(f"[callback] Error recovering mapping for {cid}: {e}")
+    
+    # Try to get the record with the original ID first, then fallback to the shortened ID
+    rec = ConfirmStore.get(original_cid)
+    if not rec and original_cid != cid:
+        logger.info(f"[callback] Original ID {original_cid} not found, trying shortened ID: {cid}")
+        rec = ConfirmStore.get(cid)
+    
+    # Additional fallback: for GRID trades, try with 'g' prefix if not found
+    if not rec and not cid.startswith('g') and cid.startswith('TKT-'):
+        grid_cid = f"g{cid[4:]}"  # Remove 'TKT-' and add 'g'
+        logger.info(f"[callback] Trying GRID format: {grid_cid}")
+        rec = ConfirmStore.get(grid_cid)
     if not rec or rec.get("status") != "pending":
         if chat_id and message_id:
             await _disable_kb(chat_id, message_id)
