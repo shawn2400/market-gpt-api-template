@@ -63,7 +63,7 @@ from starlette.responses import Response as StarletteResponse, PlainTextResponse
 
 # =============== App config ===============
 APP_TITLE   = os.getenv("APP_TITLE", "AlgoGPT Service")
-APP_VERSION = os.getenv("APP_VERSION", "2.0.0")
+APP_VERSION = os.getenv("APP_VERSION", "3.6.0")
 DOCS_URL    = os.getenv("DOCS_URL", "/docs")
 REDOC_URL   = os.getenv("REDOC_URL", "/redoc")
 OPENAPI_URL = os.getenv("OPENAPI_URL", "/openapi.json")
@@ -1479,6 +1479,36 @@ try:
 except Exception as e:
     logger.warning("Failed to load debug_sig routes: %s", e)
 
+try:
+    from routes.mesh import router as mesh_router
+    app.include_router(mesh_router)
+except Exception as e:
+    logger.warning("Failed to load mesh routes: %s", e)
+
+try:
+    from routes.pnl_heartbeat import router as pnl_heartbeat_router
+    app.include_router(pnl_heartbeat_router)
+except Exception as e:
+    logger.warning("Failed to load pnl_heartbeat routes: %s", e)
+
+try:
+    from routes.ops_summary import router as ops_summary_router
+    app.include_router(ops_summary_router)
+except Exception as e:
+    logger.warning("Failed to load ops_summary routes: %s", e)
+
+try:
+    from routes.public_endpoints import router as public_endpoints_router
+    app.include_router(public_endpoints_router)
+except Exception as e:
+    logger.warning("Failed to load public_endpoints routes: %s", e)
+
+try:
+    from routes.mesh_api import router as mesh_api_router
+    app.include_router(mesh_api_router)
+except Exception as e:
+    logger.warning("Failed to load mesh_api routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():
@@ -1556,6 +1586,44 @@ async def _on_startup():
         await _ensure_telegram_webhook()
     except Exception as e:
         logger.warning("startup.telegram_webhook: %s", e)
+    
+    # ==================== Phase 3 AI Workers ====================
+    try:
+        logger.info("🚀 Starting Phase 3 AI Workers...")
+        
+        # Import workers
+        from workers.ai_supervisor import ai_supervisor
+        from workers.news_sentiment import news_sentiment
+        from workers.fear_greed import fear_greed
+        from workers.auto_risk_manager import auto_risk_manager
+        
+        # Launch all workers in parallel
+        asyncio.create_task(ai_supervisor.supervisor_loop())
+        asyncio.create_task(news_sentiment.sentiment_loop())
+        asyncio.create_task(fear_greed.fear_greed_loop())
+        asyncio.create_task(auto_risk_manager.risk_manager_loop())
+        
+        logger.info("✅ Phase 3 AI Workers started successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to start Phase 3 workers: {e}", exc_info=True)
+    
+    # ==================== Mesh Bus Ping Loop ====================
+    try:
+        logger.info("🔗 Starting Mesh Bus ping loop...")
+        from utils import mesh_bus
+        asyncio.create_task(mesh_bus.ping_loop())
+        logger.info("✅ Mesh Bus ping loop started")
+    except Exception as e:
+        logger.warning("Failed to start mesh_bus.ping_loop: %s", e)
+
+# ============= Dashboard Route =============
+@app.get('/dashboard', response_class=HTMLResponse)
+def dashboard():
+    try:
+        with open('templates/dashboard.html','r',encoding='utf-8') as f:
+            return f.read()
+    except Exception:
+        return "<html><body><h1>Dashboard not found</h1></body></html>"
 
 # ==================== __main__ ====================
 if __name__ == "__main__":
