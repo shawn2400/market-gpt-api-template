@@ -11,6 +11,7 @@ from utils.auth import require_api_key
 from utils.watchlist_utils import is_top10
 from utils.hours_profile import hours_profile_now
 from utils.scanner_utils import fetch_ohlcv
+from utils.multi_tf_manager import get_manager
 
 try:
     # אופציונלי: אם קיים Mod funding – ניקח ממנו ביאס [-1..+1] (חיובי=תומך LONG)
@@ -39,10 +40,17 @@ class BatchIn(BaseModel):
     symbols: List[str] = Field(..., description="Symbols like BTCUSDT,ETHUSDT")
     interval: Interval = Field("15m")
     compact: bool = Field(True)
+    intervals: Optional[List[Interval]] = Field(None, description="Multi-timeframe support (e.g., ['15m', '1h', '4h'])")
+    use_cache: bool = Field(True, description="Use cached data if available")
+
+class MultiTFContextItem(BaseModel):
+    symbol: str
+    multi_tf: Dict[str, Dict[str, Any]] = {}  # interval -> {price, indicators, filters}
 
 class BatchOut(BaseModel):
     interval: str
     items: List[ContextItem]
+    multi_tf_items: Optional[List[MultiTFContextItem]] = None
 
 # ------------------------- Helpers -------------------------
 
@@ -95,9 +103,9 @@ def _rr_min_for_symbol(symbol: str) -> float:
 
 # ------------------------- Core -------------------------
 
-async def _compute_context_for_symbol(symbol: str, interval: str = "15m") -> ContextItem:
+def _compute_context_from_df(symbol: str, df, interval: str = "15m") -> ContextItem:
+    """Compute context from existing DataFrame (used by cache manager)."""
     s = symbol.upper().strip()
-    df = await fetch_ohlcv(s, interval=interval, limit=180)  # uses Binance futures endpoint
     if df is None or len(df) < 60:
         return ContextItem(symbol=s, price=None, indicators={}, filters={})
 
@@ -163,6 +171,11 @@ async def _compute_context_for_symbol(symbol: str, interval: str = "15m") -> Con
 
     return ContextItem(symbol=s, price=price, indicators=indicators, filters=filters)
 
+async def _compute_context_for_symbol(symbol: str, interval: str = "15m") -> ContextItem:
+    s = symbol.upper().strip()
+    df = await fetch_ohlcv(s, interval=interval, limit=180)
+    return _compute_context_from_df(s, df, interval)
+
 # ------------------------- Routes -------------------------
 
 @router.get("", response_model=ContextItem)
@@ -178,17 +191,102 @@ async def get_context(
 
 @router.post("/batch", response_model=BatchOut)
 async def get_context_batch(payload: BatchIn = Body(...)):
+    """
+    Batch context endpoint with multi-timeframe support.
+    
+    Backward compatible:
+    - Default behavior (single interval): Returns items list as before
+    - Multi-TF mode (intervals=[...]): Returns both items and multi_tf_items
+    
+    Uses MultiTFContextManager for smart caching and rate limit protection.
+    """
+    manager = get_manager()
+    
+    # Single-interval mode (backward compatible)
+    if not payload.intervals:
+        # Use cache manager for single interval
+        if payload.use_cache:
+            dfs = await manager.fetch_batch(
+                symbols=payload.symbols,
+                interval=payload.interval,
+                limit=180,
+                force_refresh=not payload.use_cache
+            )
+        else:
+            # Fallback to direct fetch
+            dfs = {}
+            for s in payload.symbols:
+                try:
+                    df = await fetch_ohlcv(s, interval=payload.interval, limit=180)
+                    dfs[s.upper()] = df
+                except Exception:
+                    dfs[s.upper()] = None
+        
+        out: List[ContextItem] = []
+        for s in payload.symbols:
+            try:
+                # Use cached DF if available
+                df = dfs.get(s.upper())
+                if df is not None and len(df) >= 60:
+                    item = _compute_context_from_df(s, df, payload.interval)
+                else:
+                    item = ContextItem(symbol=s.upper(), price=None, indicators={}, filters={})
+            except Exception:
+                item = ContextItem(symbol=s.upper(), price=None, indicators={}, filters={})
+            
+            if payload.compact:
+                item = ContextItem(symbol=item.symbol, price=item.price, filters=item.filters)
+            out.append(item)
+        
+        return BatchOut(interval=payload.interval, items=out)
+    
+    # Multi-timeframe mode
+    multi_tf_data = await manager.fetch_batch_multi_tf(
+        symbols=payload.symbols,
+        intervals=payload.intervals,
+        limit=180,
+        force_refresh=not payload.use_cache
+    )
+    
+    # Build multi_tf_items
+    multi_tf_items: List[MultiTFContextItem] = []
+    for symbol in payload.symbols:
+        symbol_data = multi_tf_data.get(symbol.upper(), {})
+        tf_contexts = {}
+        
+        for interval in payload.intervals:
+            df = symbol_data.get(interval)
+            if df is not None and len(df) >= 60:
+                try:
+                    ctx = _compute_context_from_df(symbol, df, interval)
+                    tf_contexts[interval] = {
+                        "price": ctx.price,
+                        "indicators": ctx.indicators if not payload.compact else {},
+                        "filters": ctx.filters,
+                    }
+                except Exception:
+                    tf_contexts[interval] = {"price": None, "indicators": {}, "filters": {}}
+            else:
+                tf_contexts[interval] = {"price": None, "indicators": {}, "filters": {}}
+        
+        multi_tf_items.append(MultiTFContextItem(symbol=symbol.upper(), multi_tf=tf_contexts))
+    
+    # Also provide legacy items for primary interval (backward compat)
+    primary_interval = payload.intervals[0] if payload.intervals else "15m"
     out: List[ContextItem] = []
-    # הרצה סדורה, אפשר גם להאיץ עם gather אם תרצה
-    for s in payload.symbols:
-        try:
-            item = await _compute_context_for_symbol(s, payload.interval)
-        except Exception:
-            item = ContextItem(symbol=s.upper(), price=None, indicators={}, filters={})
+    for mt_item in multi_tf_items:
+        primary_ctx = mt_item.multi_tf.get(primary_interval, {})
+        item = ContextItem(
+            symbol=mt_item.symbol,
+            price=primary_ctx.get("price"),
+            indicators=primary_ctx.get("indicators", {}),
+            filters=primary_ctx.get("filters", {})
+        )
         if payload.compact:
             item = ContextItem(symbol=item.symbol, price=item.price, filters=item.filters)
         out.append(item)
-    return BatchOut(interval=payload.interval, items=out)
+    
+    return BatchOut(interval=primary_interval, items=out, multi_tf_items=multi_tf_items)
 
 
 
