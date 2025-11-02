@@ -41,7 +41,7 @@ from prometheus_client import (
 
 APP_NAME = os.getenv("APP_NAME", "algogpt")
 APP_TITLE = os.getenv("APP_TITLE", "AlgoGPT Service")
-APP_VERSION = os.getenv("ALGOGPT_VERSION", "2.18.0")
+APP_VERSION = os.getenv("ALGOGPT_VERSION", "3.6.0")
 START_TS = time.time()
 
 # ---------- Logging ----------
