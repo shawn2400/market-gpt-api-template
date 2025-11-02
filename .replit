@@ -21,14 +21,7 @@ outputType = "webview"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = '''
-AUTO_RUN=1 EXECUTE_TRADES=1 TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 \
-ALLOW_MANAGE_OPEN_TRADES=1 PAUSE_AUTO_RUN=0 MANAGER_ENABLE=1 \
-TRADE_MANAGER_ENABLE=1 TELEGRAM_SEND_ENABLE=1 APPROVAL_ENABLED=1 \
-REQUIRE_TELEGRAM_APPROVAL=1 AUTO_OPEN_ON_APPROVE=1 SMART_MANAGE_ON_APPROVE=1 \
-TRAIL_ENABLE=1 BE_GUARD_ENABLE=1 PORT=5000 \
-gunicorn -c gunicorn_conf.py main:app
-'''
+args = "AUTO_RUN=1 EXECUTE_TRADES=1 TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 ALLOW_MANAGE_OPEN_TRADES=1 PAUSE_AUTO_RUN=0 MANAGER_ENABLE=1 TRADE_MANAGER_ENABLE=1 TELEGRAM_SEND_ENABLE=1 APPROVAL_ENABLED=1 REQUIRE_TELEGRAM_APPROVAL=1 AUTO_OPEN_ON_APPROVE=1 SMART_MANAGE_ON_APPROVE=1 TRAIL_ENABLE=1 BE_GUARD_ENABLE=1 DEBUG_SIGN=1 PORT=5000 gunicorn -c gunicorn_conf.py main:app"
 waitForPort = 5000
 
 [[workflows.workflow]]
@@ -79,6 +72,10 @@ args = "Replit Agent Bridge"
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "Sentinel Security"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "AlgoGPT Server"
 
 [[workflows.workflow]]
 name = "Position Monitor"
@@ -160,10 +157,6 @@ outputType = "console"
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 33117
-externalPort = 3001
 
 [[ports]]
 localPort = 43085
