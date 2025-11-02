@@ -67,6 +67,9 @@ async def _tg_send_plan(plan: Dict[str, Any]) -> None:
         tp_list = plan.get("tp", [])
         sl_dict = plan.get("sl", {})
         
+        # בדוק אם זה GRID proposal
+        is_grid = plan.get("is_grid", False)
+        
         # בנה הודעה עשירה בפרטים
         emoji_side = "🟢" if side == "BUY" else "🔴"
         
@@ -77,14 +80,30 @@ async def _tg_send_plan(plan: Dict[str, Any]) -> None:
         # קבל timestamp ישראלי
         israel_time = get_israel_time_str()
         
-        lines = [
-            f"{emoji_side} <b>NEW TRADE PROPOSAL</b>",
-            f"🕐 <b>שעון ישראל:</b> {israel_time}",
-            f"{expired_tag}",
-            f"💎 <b>{sym}</b>",
-            f"📊 Direction: <b>{side}</b> (Leverage: x{lev})",
-            f"💰 Quantity: <code>{qty:.6f}</code>",
-        ]
+        # GRID או Regular proposal
+        if is_grid:
+            grid_min = plan.get("grid_min", 0)
+            grid_max = plan.get("grid_max", 0)
+            grid_levels = plan.get("grid_levels", 0)
+            
+            lines = [
+                f"🔷 <b>NEW GRID TRADE PROPOSAL</b>",
+                f"🕐 <b>שעון ישראל:</b> {israel_time}",
+                f"{expired_tag}",
+                f"💎 <b>{sym}</b>",
+                f"📊 Direction: <b>{side}</b>",
+                f"📈 Grid Range: <code>{grid_min:.2f} - {grid_max:.2f}</code>",
+                f"🎯 Levels: <code>{grid_levels}</code>",
+            ]
+        else:
+            lines = [
+                f"{emoji_side} <b>NEW TRADE PROPOSAL</b>",
+                f"🕐 <b>שעון ישראל:</b> {israel_time}",
+                f"{expired_tag}",
+                f"💎 <b>{sym}</b>",
+                f"📊 Direction: <b>{side}</b> (Leverage: x{lev})",
+                f"💰 Quantity: <code>{qty:.6f}</code>",
+            ]
         
         if plan.get("budget_usd"):
             lines.append(f"💵 Budget: <code>${plan['budget_usd']:.2f}</code>")
@@ -185,6 +204,19 @@ class IngestReq(BaseModel):
     success_pct: Optional[float] = None
     current_price: Optional[float] = None
     note: Optional[str] = None
+    # GRID parameters (optional)
+    is_grid: Optional[bool] = False
+    grid_min: Optional[float] = None
+    grid_max: Optional[float] = None
+    grid_levels: Optional[int] = None
+    grid_side: Optional[str] = None
+    grid_step_pct: Optional[float] = None
+    grid_take_profit_pct: Optional[float] = None
+    trade_type: Optional[str] = None
+    # Extra fields (optional)
+    trade_id: Optional[str] = None
+    notional_usd: Optional[float] = None
+    chat_id: Optional[str] = None
 
 def _ticket_id_for(req: IngestReq) -> str:
     base = {
@@ -227,9 +259,13 @@ async def alerts_ingest(
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
-    # API key (רך): אם הוגדר, נדרוש אותו
-    if not _api_key_ok(x_api_key):
-        return {"ok": False, "error": "unauthorized"}
+    try:
+        # API key (רך): אם הוגדר, נדרוש אותו
+        if not _api_key_ok(x_api_key):
+            return {"ok": False, "error": "unauthorized"}
+    except Exception as e:
+        logger.error(f"alerts_ingest ERROR: {e}", exc_info=True)
+        return {"ok": False, "error": str(e)}
 
     # HMAC אופציונלי (לפי גוף המקורי)
     raw_body = b""
@@ -253,8 +289,9 @@ async def alerts_ingest(
     if sym == "":
         return {"ok": False, "error": "bad_symbol"}
 
+    # GRID proposals לא צריכים qty
     qty = req.qty
-    if qty is None:
+    if qty is None and not req.is_grid:
         bud = float(req.budget_usd or 0.0)
         lev = int(req.leverage or int(os.getenv("DEFAULT_LEVERAGE","5")))
         if bud <= 0:
@@ -264,6 +301,10 @@ async def alerts_ingest(
             return {"ok": False, "error": qerr}
         req.qty = qty
         req.leverage = lev
+    elif req.is_grid:
+        # GRID proposals: qty לא רלוונטי
+        req.qty = 0.0
+        req.leverage = 1  # GRID לא ממונף
 
     # המר TP/SL מ-float ל-dict אם צריך (תמיכה ב-Worker format)
     def _to_tp_dict(val, idx):
@@ -314,11 +355,20 @@ async def alerts_ingest(
         "why": req.reason or "",
         "tp": tp_list,
         "sl": sl_dict,
+        # GRID parameters (if present)
+        "is_grid": req.is_grid,
+        "grid_min": req.grid_min,
+        "grid_max": req.grid_max,
+        "grid_levels": req.grid_levels,
+        "grid_side": req.grid_side,
+        "grid_step_pct": req.grid_step_pct,
+        "grid_take_profit_pct": req.grid_take_profit_pct,
         "budget_usd": smart_budget,  # Smart budget allocation
         "order_type": "MARKET",
         "require_approval": bool(req.require_approval if req.require_approval is not None else True),
         "entry": _to_float(req.entry),
         "success_pct": _to_float(req.success_pct) if req.success_pct else score,
+        "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
     }
 
     tid = req.ticket_id or _ticket_id_for(req)
@@ -333,7 +383,10 @@ async def alerts_ingest(
                 "require_approval": bool(plan["require_approval"]), "ts": int(time.time()),
             })
 
-    await _tg_send_plan(plan)  # רך: אם נכשל לא מפיל
+    try:
+        await _tg_send_plan(plan)  # רך: אם נכשל לא מפיל
+    except Exception as e:
+        logger.error(f"_tg_send_plan ERROR: {e}", exc_info=True)
 
     return {"ok": True, "ticket_id": tid, "symbol": sym, "qty": float(req.qty or 0), "leverage": int(plan["leverage"])}
 
