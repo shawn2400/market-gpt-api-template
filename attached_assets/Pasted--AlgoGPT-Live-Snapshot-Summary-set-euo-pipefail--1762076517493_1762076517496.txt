@@ -1,0 +1,132 @@
+# === AlgoGPT Live Snapshot → Summary (קצר | ממצאים | חריגות | המלצות) ===
+set -euo pipefail
+
+# ---- הגדר BASE והנתיבים (מותאם למה שסיפקת) ----
+BASE="https://algogpt-prod.onrender.com"
+STATUS_URL="$BASE/status/public"
+MESH_URL="$BASE/mesh/public"
+GIT_URL="$BASE/git/public"
+RENDER_URL="$BASE/render/public"
+TRADES_URL="$BASE/trades/public"
+PNL_URL="$BASE/pnl/public"
+OPS_URL="$BASE/ops/summary/public"
+LOGS_URL="$BASE/logs/tail/public?name=main&lines=200"
+DASHBOARD_URL="$BASE/dashboard"
+
+# ---- עוזרים ----
+fetch_json() { curl -fsS "$1" 2>/dev/null || echo '{}'; }
+fetch_text() { curl -fsS "$1" 2>/dev/null || true; }
+
+# ---- משיכה ----
+STATUS="$(fetch_json "$STATUS_URL")"
+MESH="$(fetch_json "$MESH_URL")"
+GIT="$(fetch_json "$GIT_URL")"
+RENDER="$(fetch_json "$RENDER_URL")"
+TRADES="$(fetch_json "$TRADES_URL")"
+PNL="$(fetch_json "$PNL_URL")"
+OPS="$(fetch_json "$OPS_URL")"
+LOGS="$(fetch_json "$LOGS_URL")"
+
+# ---- ניתוח מהיר בפייתון והדפסה בעברית ----
+python - <<'PY'
+import json, sys, datetime
+load = lambda s: (json.loads(s) if s.strip().startswith(("{","[")) else {})
+d = {
+  "status": load("""$STATUS"""),
+  "mesh":   load("""$MESH"""),
+  "git":    load("""$GIT"""),
+  "render": load("""$RENDER"""),
+  "trades": load("""$TRADES"""),
+  "pnl":    load("""$PNL"""),
+  "ops":    load("""$OPS"""),
+  "logs":   load("""$LOGS"""),
+}
+now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+# --- סטטוס כללי ---
+ver   = ((d["status"].get("app") or {}).get("version") or "")
+ok_status = bool(d["status"].get("ok", True))
+peers = (d["mesh"].get("peers") or {})
+peer_count = len(peers)
+bad_peers = [u for u,m in peers.items() if not m.get("ok", True)]
+trades_cnt = len((d["trades"].get("items") or []))
+pnl_ok = bool(d["pnl"].get("ok", True)) if isinstance(d["pnl"], dict) else True
+
+ops_keys = list((d["ops"].get("ops") or {}).keys()) if isinstance(d["ops"], dict) else []
+ops_keys_view = ops_keys[:5]
+
+# --- רמזי חריגות ---
+issues = []
+if not ok_status: issues.append("Status not OK")
+if bad_peers: issues.append(f"Mesh peers down: {len(bad_peers)}")
+if not isinstance(d["git"], dict) or not d["git"].get("ok", True):
+    issues.append("Git status unavailable")
+if not isinstance(d["render"], dict) or not d["render"].get("ok", True):
+    issues.append("Render status unavailable")
+# אם אין טריידים כלל זה לא בהכרח תקלה, אז לא נסמן כחריגה
+if not pnl_ok: issues.append("PnL snapshot not OK")
+
+overall_ok = (len(issues) == 0)
+
+# --- לוגים: נסיק סימנים כלליים (ללא הדפסה ארוכה) ---
+log_lines = (d["logs"].get("lines") if isinstance(d["logs"], dict) else None) or 0
+
+# === הדפסה ===
+print(f"--- AlgoGPT Live Check @ {now} ---")
+# קצר (SOP-style)
+short = []
+short.append("הכול תקין" if overall_ok else "יש חריגות")
+short.append(f"גרסה {ver}" if ver else "גרסה לא ידועה")
+short.append(f"Peers:{peer_count}")
+short.append(f"Trades:{trades_cnt}")
+print("קצר | " + " | ".join(short))
+
+# ממצאים
+print("ממצאים:")
+print(f"- Status.ok={ok_status} | Version={ver}")
+print(f"- Mesh: peers={peer_count} | down={len(bad_peers)}")
+if bad_peers:
+    print(f"  down peers: {', '.join(bad_peers[:5])}{' ...' if len(bad_peers)>5 else ''}")
+git_ok = isinstance(d["git"], dict) and d["git"].get("ok", True)
+print(f"- Git.ok={git_ok}")
+render_ok = isinstance(d["render"], dict) and d["render"].get("ok", True)
+print(f"- Render.ok={render_ok}")
+print(f"- Trades.count={trades_cnt}")
+print(f"- PnL.ok={pnl_ok}")
+print(f"- Ops.keys={ops_keys_view} (סה\"כ {len(ops_keys)})")
+print(f"- Logs.lines={log_lines}")
+
+# חריגות
+print("חריגות:" + (" אין" if overall_ok else ""))
+for i in issues:
+    print(f"- {i}")
+
+# המלצות (3 נק׳)
+recs = []
+if not ok_status:
+    recs.append("בדיקת /status/public מקור — לאבחן רכיב שמפיל OK (Supervisor/Health).")
+if bad_peers:
+    recs.append("Mesh: לבדוק זמינות peers/latency ולסנכרן AI_MESH_SECRET בין הצמתים.")
+if not git_ok:
+    recs.append("Git: להגדיר API_BEARER_TOKEN_RO (RO) אם רוצים /git/refresh וסטטוס מלא.")
+if not render_ok:
+    recs.append("Render: לוודא RENDER_EXTERNAL_URL ושהשירות עובר /readyz /version.")
+if not recs:
+    recs = ["להשאיר Notifier פועל (09:00, 18:00) ולדווח דחוף בלבד.",
+            "לבצע בדיקת Mesh יומית (peer health, latency).",
+            "לשמור ENV מסונכרן (AI_MESH_SECRET/NOTIFY_HOURS/TELEGRAM*)."]
+print("המלצות (3 נק׳):")
+for r in recs[:3]:
+    print(f"- {r}")
+
+# בלוק URL להמשך
+print("\nלהעברה לאנליסט (אם נדרש עדכון):")
+print("STATUS_URL=" + """$STATUS_URL""")
+print("MESH_URL=" + """$MESH_URL""")
+print("GIT_URL=" + """$GIT_URL""")
+print("RENDER_URL=" + """$RENDER_URL""")
+print("TRADES_URL=" + """$TRADES_URL""")
+print("PNL_URL=" + """$PNL_URL""")
+print("LOGS_URL=" + """$LOGS_URL""")
+print("DASHBOARD_URL=" + """$DASHBOARD_URL""")
+PY
