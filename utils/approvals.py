@@ -326,7 +326,29 @@ class ConfirmStore:
     @classmethod
     def get(cls, idem: str) -> Optional[Dict[str, Any]]:
         # שליפת כרטיס לפי idem
-        return dict(cls._P.get(idem) or {}) if idem in cls._P else None
+        # Direct lookup
+        if idem in cls._P:
+            return dict(cls._P.get(idem))
+        
+        # Fallback: try pattern matching for shortened IDs
+        # This handles cases where we're looking for a shortened ID but stored the full ID
+        for key in cls._P.keys():
+            # Check if the provided ID is a shortened version of the stored key
+            if idem in key or key in idem:
+                log.debug(f"[ConfirmStore] Found match via pattern: {idem} -> {key}")
+                return dict(cls._P.get(key))
+            
+            # Check for GRID format variations (g prefix)
+            if idem.startswith('TKT-') and key.startswith('g'):
+                if idem[4:] in key or key in idem:
+                    log.debug(f"[ConfirmStore] Found GRID match: {idem} -> {key}")
+                    return dict(cls._P.get(key))
+            elif key.startswith('TKT-') and idem.startswith('g'):
+                if key[4:] in idem or idem in key:
+                    log.debug(f"[ConfirmStore] Found GRID match: {idem} -> {key}")
+                    return dict(cls._P.get(key))
+        
+        return None
 
     @classmethod
     def approve(cls, idem: str, approver: Optional[str] = None) -> Dict[str, Any]:
