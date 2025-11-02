@@ -1,0 +1,129 @@
+# === AlgoGPT Live Snapshot (docker env) → Summary ===
+set -euo pipefail
+
+# ---- URLs שסופקו ----
+STATUS_URL="https://algogpt-docker.onrender.com/status/public"
+MESH_URL="https://algogpt-docker.onrender.com/mesh/public"
+GIT_URL="https://algogpt-docker.onrender.com/git/public"
+RENDER_URL="https://algogpt-docker.onrender.com/render/public"
+TRADES_URL="https://algogpt-docker.onrender.com/trades/public"
+PNL_URL="https://algogpt-docker.onrender.com/pnl/public"
+LOGS_URL="https://algogpt-docker.onrender.com/logs/tail/public?name=main&lines=200"
+OPS_SUMMARY_URL="https://algogpt-docker.onrender.com/ops/summary/public"
+DASHBOARD_URL="https://algogpt-docker.onrender.com/dashboard"
+BASE="https://algogpt-docker.onrender.com"
+
+# ---- עוזרים ----
+jget(){ curl -fsS "$1" 2>/dev/null || echo '{}'; }
+
+# ---- משיכה ----
+STATUS="$(jget "$STATUS_URL")"
+MESH="$(jget "$MESH_URL")"
+GIT="$(jget "$GIT_URL")"
+RENDER="$(jget "$RENDER_URL")"
+TRADES="$(jget "$TRADES_URL")"
+PNL="$(jget "$PNL_URL")"
+OPS="$(jget "$OPS_SUMMARY_URL")"
+LOGS="$(jget "$LOGS_URL")"
+
+# ---- רענון Git אופציונלי (אם מוגדר API_BEARER_TOKEN_RO בסביבה) ----
+if [ -n "${API_BEARER_TOKEN_RO:-}" ]; then
+  curl -fsS -X POST "$BASE/git/refresh" -H "Authorization: Bearer $API_BEARER_TOKEN_RO" >/dev/null 2>&1 || true
+fi
+
+# ---- ניתוח ותצוגה קצרה ----
+python - <<'PY'
+import json, datetime
+
+def load(s):
+    s = s or ""
+    return json.loads(s) if s.strip().startswith(("{","[")) else {}
+
+d = {
+  "status": load("""$STATUS"""),
+  "mesh":   load("""$MESH"""),
+  "git":    load("""$GIT"""),
+  "render": load("""$RENDER"""),
+  "trades": load("""$TRADES"""),
+  "pnl":    load("""$PNL"""),
+  "ops":    load("""$OPS"""),
+  "logs":   load("""$LOGS"""),
+}
+
+now = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+
+ver   = ((d["status"].get("app") or {}).get("version") or "")
+ok_status = bool(d["status"].get("ok", True))
+peers = (d["mesh"].get("peers") or {})
+peer_count = len(peers)
+bad_peers = [u for u,m in peers.items() if not m.get("ok", True)]
+trades_cnt = len((d["trades"].get("items") or []))
+pnl_ok = bool(d["pnl"].get("ok", True)) if isinstance(d["pnl"], dict) else True
+
+ops_keys = list((d["ops"].get("ops") or {}).keys()) if isinstance(d["ops"], dict) else []
+ops_keys_view = ops_keys[:5]
+
+issues = []
+if not ok_status: issues.append("Status not OK")
+if bad_peers: issues.append(f"Mesh peers down: {len(bad_peers)}")
+if not isinstance(d["git"], dict) or not d["git"].get("ok", True): issues.append("Git status unavailable")
+if not isinstance(d["render"], dict) or not d["render"].get("ok", True): issues.append("Render status unavailable")
+if not pnl_ok: issues.append("PnL snapshot not OK")
+
+overall_ok = (len(issues)==0)
+log_lines = (d["logs"].get("lines") if isinstance(d["logs"], dict) else None) or 0
+
+print(f"--- AlgoGPT Live Check @ {now} ---")
+print("קצר | " + " | ".join([
+    "הכול תקין" if overall_ok else "יש חריגות",
+    f"גרסה {ver}" if ver else "גרסה לא ידועה",
+    f"Peers:{peer_count}",
+    f"Trades:{trades_cnt}",
+]))
+
+print("ממצאים:")
+print(f"- Status.ok={ok_status} | Version={ver}")
+print(f"- Mesh: peers={peer_count} | down={len(bad_peers)}")
+if bad_peers:
+    print("  down peers:", ", ".join(bad_peers[:5]) + (" ..." if len(bad_peers)>5 else ""))
+git_ok = isinstance(d["git"], dict) and d["git"].get("ok", True)
+print(f"- Git.ok={git_ok}")
+render_ok = isinstance(d["render"], dict) and d["render"].get("ok", True)
+print(f"- Render.ok={render_ok}")
+print(f"- Trades.count={trades_cnt}")
+print(f"- PnL.ok={pnl_ok}")
+print(f"- Ops.keys={ops_keys_view} (סה\"כ {len(ops_keys)})")
+print(f"- Logs.lines={log_lines}")
+
+print("חריגות:" + (" אין" if overall_ok else ""))
+for i in issues:
+    print(f"- {i}")
+
+recs = []
+if not ok_status:
+    recs.append("בדיקת /status/public: לזהות רכיב שמפיל OK (Supervisor/Health).")
+if bad_peers:
+    recs.append("Mesh: לבדוק peers/latency ולוודא AI_MESH_SECRET אחיד.")
+if not git_ok:
+    recs.append("Git: להגדיר API_BEARER_TOKEN_RO כדי לאפשר /git/refresh תקין.")
+if not render_ok:
+    recs.append("Render: לאמת RENDER_EXTERNAL_URL ו/readyz,/version.")
+if not recs:
+    recs = ["להשאיר Notifier 09:00/18:00 ודחוף בלבד.",
+            "בדיקת Mesh יומית (peer health, latency).",
+            "לשמור ENV מסונכרן (AI_MESH_SECRET/NOTIFY_HOURS/TELEGRAM*)."]
+print("המלצות (3 נק׳):")
+for r in recs[:3]:
+    print(f"- {r}")
+
+print("\nבלוק URLs לעדכון עתידי:")
+print("STATUS_URL=" + """$STATUS_URL""")
+print("MESH_URL=" + """$MESH_URL""")
+print("GIT_URL=" + """$GIT_URL""")
+print("RENDER_URL=" + """$RENDER_URL""")
+print("TRADES_URL=" + """$TRADES_URL""")
+print("PNL_URL=" + """$PNL_URL""")
+print("LOGS_URL=" + """$LOGS_URL""")
+print("OPS_SUMMARY_URL=" + """$OPS_SUMMARY_URL""")
+print("DASHBOARD_URL=" + """$DASHBOARD_URL""")
+PY
