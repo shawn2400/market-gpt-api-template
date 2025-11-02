@@ -67,12 +67,10 @@ COPY --from=builder /install /usr/local
 
 # הבטחת 'python' מפנה ל-python3 בלבד
 RUN set -eux; \
-    PY3="$(command -v python3 || true)"; \
-    if [ -z "$PY3" ]; then echo "ERROR: python3 not found in PATH" >&2; exit 1; fi; \
+    python3 --version; \
     rm -f /usr/local/bin/python; \
-    ln -s "$PY3" /usr/local/bin/python; \
-    /usr/bin/env python --version; \
-    /usr/bin/env python3 --version
+    ln -s "$(which python3)" /usr/local/bin/python; \
+    python --version
 
 # יצירת משתמש לא-רוט
 RUN useradd -ms /bin/bash appuser
