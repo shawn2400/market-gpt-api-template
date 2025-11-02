@@ -72,6 +72,14 @@ args = "Daily Health Report"
 task = "workflow.run"
 args = "GPT-5 Central Brain"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Replit Agent Bridge"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Sentinel Security"
+
 [[workflows.workflow]]
 name = "Position Monitor"
 author = "agent"
@@ -123,6 +131,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/gpt5_orchestrator.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Replit Agent Bridge"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG REPLIT_AGENT_ENABLED=1 python workers/replit_agent_bridge.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Sentinel Security"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG SENTINEL_ENABLED=1 python workers/sentinel_security.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
