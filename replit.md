@@ -3,7 +3,19 @@
 ## Overview
 AlgoGPT is a comprehensive algorithmic trading platform built with FastAPI and Python, designed for 24/7 live Binance Futures trading. It features automated market scanning (530+ symbols), AI-powered trade decisions via GPT-4, GRID trading options, and professional automated dynamic management. The platform aims for 4-10 high-quality trades per day with significant profits and minimal losses, ultimately targeting a fully self-adaptive trading engine with dynamic capital optimization and complete data persistence.
 
-**Latest Update (Nov 1, 2025):**
+**Latest Update (Nov 2, 2025) - COMPREHENSIVE SYSTEM UPGRADE:**
+- ✅ **Multi-Timeframe Weighted Intelligence** - Implemented 4H (50%) + 1H (30%) + 15M (20%) weighted analysis with dominant TF detection
+- ✅ **Auto-Flip Multi-TF Analysis** - Created utils/auto_flip.py with STRONG/MODERATE/WEAK/CONFLICTING alignment detection
+- ✅ **TF Snapshot Persistence** - Added tf_snapshots database table with historical TF indicator storage
+- ✅ **Adaptive Quality Scoring** - Per-symbol thresholds auto-adjust based on win rate and performance (utils/quality_score.py)
+- ✅ **Expectancy Tracking** - Added expectancy calculation, consecutive wins/losses, best-performing symbols (utils/performance_tracker.py)
+- ✅ **Monte Carlo SL/TP Manager** - Dynamic SL/TP with 10,000 simulations, probability-adjusted levels, regime-specific exits
+- ✅ **N8N Integration Bridge** - Full HMAC validation, fallback queue, heartbeat monitoring (workers/n8n_bridge.py)
+- ✅ **Code Cleanup** - Deleted 1,958+ files (227 __pycache__, 1,724 .pyc files, test files)
+- ✅ **Documentation** - Created N8N_WORKFLOWS.md, GITHUB_SYNC.md, CICD_SETUP.md, CLEANUP_REPORT.md, monitoring_dashboard.json
+- ✅ **System Health Endpoint** - Enhanced /health/detailed with comprehensive component status
+
+**Previous Update (Nov 1, 2025):**
 - ✅ **Multi-Timeframe Analysis FIXED** - Resolved all NoneType comparison errors in market_intelligence.py, system now analyzes 15M/1H/4H data without errors (enable via `USE_MULTI_TF=1`)
 - ✅ **Production-Ready** - Comprehensive DEPLOYMENT.md guide created for render.com deployment
 - ✅ Dynamic Sizing Engine fully integrated - calculates leverage (2-10x) and position size (10-60% equity) based on trade quality, RR, AI confidence, and market conditions
@@ -94,3 +106,19 @@ The core application is built with FastAPI (`main.py`) and uses Gunicorn for ser
 - `position_flips` - LONG↔SHORT flip decisions tracking
 - `performance_records` - Trade performance metrics
 - `system_decisions` - All major system decisions for audit trail
+- `tf_snapshots` - Multi-timeframe indicator snapshots with alignment status (15M/1H/4H)
+
+**New Utilities & Workers (Nov 2, 2025):**
+- `utils/auto_flip.py` - Weighted multi-TF flip analysis with 4H/1H/15M priority
+- `utils/dynamic_sltp_manager.py` - Monte Carlo SL/TP optimization (10,000 simulations)
+- `workers/n8n_bridge.py` - N8N workflow integration with HMAC security
+- Enhanced: `utils/quality_score.py` - Per-symbol adaptive thresholds
+- Enhanced: `utils/performance_tracker.py` - Expectancy tracking, consecutive stats, best symbols
+- Enhanced: `workers/gpt_auto_suggest.py` - Full multi-TF weighted integration with logging
+
+**Documentation (Nov 2, 2025):**
+- `docs/N8N_WORKFLOWS.md` - Complete N8N integration guide with 3 workflow examples
+- `docs/GITHUB_SYNC.md` - GitHub sync automation and best practices
+- `docs/CICD_SETUP.md` - GitHub Actions CI/CD pipeline setup
+- `docs/CLEANUP_REPORT.md` - Code cleanup report (1,958+ files deleted)
+- `docs/monitoring_dashboard.json` - Grafana/monitoring dashboard configuration

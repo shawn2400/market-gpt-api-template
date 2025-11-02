@@ -1,0 +1,278 @@
+{
+  "dashboard": {
+    "title": "AlgoGPT Trading System Monitor",
+    "version": "1.0.0",
+    "refresh_interval": 30,
+    "panels": [
+      {
+        "id": "system_health",
+        "title": "System Health",
+        "type": "status",
+        "metrics": [
+          {
+            "name": "uptime",
+            "query": "/health",
+            "display": "Uptime",
+            "format": "duration",
+            "alert_threshold": null
+          },
+          {
+            "name": "workflow_status",
+            "query": "/health/workflows",
+            "display": "Active Workflows",
+            "format": "count",
+            "alert_threshold": {"min": 5}
+          },
+          {
+            "name": "database_status",
+            "query": "/health/database",
+            "display": "Database",
+            "format": "status",
+            "alert_threshold": null
+          }
+        ]
+      },
+      {
+        "id": "trading_performance",
+        "title": "Trading Performance (24h)",
+        "type": "metrics",
+        "metrics": [
+          {
+            "name": "total_trades",
+            "query": "/metrics/trades/count?period=24h",
+            "display": "Total Trades",
+            "format": "number",
+            "alert_threshold": {"min": 5, "max": 100}
+          },
+          {
+            "name": "win_rate",
+            "query": "/metrics/performance/win_rate?period=24h",
+            "display": "Win Rate",
+            "format": "percentage",
+            "alert_threshold": {"min": 50.0}
+          },
+          {
+            "name": "total_pnl",
+            "query": "/metrics/performance/pnl?period=24h",
+            "display": "Total PnL",
+            "format": "currency_usd",
+            "alert_threshold": {"min": -500.0}
+          },
+          {
+            "name": "expectancy",
+            "query": "/metrics/performance/expectancy?period=24h",
+            "display": "Avg Expectancy",
+            "format": "currency_usd",
+            "alert_threshold": {"min": 5.0}
+          }
+        ]
+      },
+      {
+        "id": "multi_tf_intelligence",
+        "title": "Multi-Timeframe Intelligence",
+        "type": "gauge",
+        "metrics": [
+          {
+            "name": "tf_alignment",
+            "query": "/metrics/multi_tf/alignment",
+            "display": "TF Alignment",
+            "format": "category",
+            "categories": ["STRONG", "MODERATE", "WEAK", "CONFLICTING"],
+            "alert_threshold": null
+          },
+          {
+            "name": "4h_confidence",
+            "query": "/metrics/multi_tf/confidence?interval=4h",
+            "display": "4H Confidence (50% weight)",
+            "format": "percentage",
+            "alert_threshold": {"min": 60.0}
+          },
+          {
+            "name": "1h_confidence",
+            "query": "/metrics/multi_tf/confidence?interval=1h",
+            "display": "1H Confidence (30% weight)",
+            "format": "percentage",
+            "alert_threshold": {"min": 55.0}
+          },
+          {
+            "name": "15m_confidence",
+            "query": "/metrics/multi_tf/confidence?interval=15m",
+            "display": "15M Confidence (20% weight)",
+            "format": "percentage",
+            "alert_threshold": null
+          }
+        ]
+      },
+      {
+        "id": "market_intelligence",
+        "title": "Market Intelligence",
+        "type": "info",
+        "metrics": [
+          {
+            "name": "market_regime",
+            "query": "/metrics/market/regime",
+            "display": "Current Regime",
+            "format": "category",
+            "categories": ["trending", "sideways", "choppy", "volatile"],
+            "alert_threshold": null
+          },
+          {
+            "name": "market_mood",
+            "query": "/metrics/market/mood",
+            "display": "Market Mood",
+            "format": "category",
+            "categories": ["bullish", "bearish", "neutral"],
+            "alert_threshold": null
+          },
+          {
+            "name": "volatility",
+            "query": "/metrics/market/volatility",
+            "display": "Volatility",
+            "format": "category",
+            "categories": ["high", "medium", "low"],
+            "alert_threshold": null
+          }
+        ]
+      },
+      {
+        "id": "quality_metrics",
+        "title": "Quality & Risk Metrics",
+        "type": "metrics",
+        "metrics": [
+          {
+            "name": "avg_quality_score",
+            "query": "/metrics/quality/average?period=24h",
+            "display": "Avg Quality Score",
+            "format": "decimal",
+            "alert_threshold": {"min": 5.0}
+          },
+          {
+            "name": "avg_rr",
+            "query": "/metrics/quality/avg_rr?period=24h",
+            "display": "Avg Risk/Reward",
+            "format": "decimal",
+            "alert_threshold": {"min": 1.5}
+          },
+          {
+            "name": "consecutive_losses",
+            "query": "/metrics/performance/consecutive_losses",
+            "display": "Consecutive Losses",
+            "format": "number",
+            "alert_threshold": {"max": 3}
+          },
+          {
+            "name": "portfolio_exposure",
+            "query": "/metrics/portfolio/exposure",
+            "display": "Portfolio Exposure",
+            "format": "percentage",
+            "alert_threshold": {"max": 80.0}
+          }
+        ]
+      },
+      {
+        "id": "worker_performance",
+        "title": "Worker Performance",
+        "type": "table",
+        "metrics": [
+          {
+            "name": "auto_scanner",
+            "query": "/metrics/workers/auto_scanner",
+            "display": "Auto Scanner",
+            "columns": ["proposals", "accepted", "rejected", "cycle_time_ms"],
+            "alert_threshold": {"cycle_time_ms": {"max": 10000}}
+          },
+          {
+            "name": "n8n_bridge",
+            "query": "/metrics/workers/n8n_bridge",
+            "display": "N8N Bridge",
+            "columns": ["webhooks_received", "errors", "queue_depth"],
+            "alert_threshold": {"queue_depth": {"max": 50}}
+          },
+          {
+            "name": "position_monitor",
+            "query": "/metrics/workers/position_monitor",
+            "display": "Position Monitor",
+            "columns": ["positions_tracked", "alerts_sent", "last_run"],
+            "alert_threshold": null
+          }
+        ]
+      },
+      {
+        "id": "top_symbols",
+        "title": "Best Performing Symbols (30d)",
+        "type": "table",
+        "metrics": [
+          {
+            "name": "top_symbols",
+            "query": "/metrics/performance/top_symbols?period=30d&limit=5",
+            "display": "Top 5 Symbols",
+            "columns": ["symbol", "trades", "win_rate", "expectancy_usd", "total_pnl"],
+            "sort_by": "expectancy_usd",
+            "alert_threshold": null
+          }
+        ]
+      },
+      {
+        "id": "alerts",
+        "title": "Active Alerts",
+        "type": "alerts",
+        "metrics": [
+          {
+            "name": "critical_alerts",
+            "query": "/alerts?severity=critical&status=active",
+            "display": "Critical",
+            "format": "count",
+            "alert_threshold": {"max": 0}
+          },
+          {
+            "name": "warning_alerts",
+            "query": "/alerts?severity=warning&status=active",
+            "display": "Warnings",
+            "format": "count",
+            "alert_threshold": {"max": 5}
+          }
+        ]
+      }
+    ],
+    "layouts": {
+      "desktop": {
+        "columns": 3,
+        "rows": [
+          ["system_health", "trading_performance", "multi_tf_intelligence"],
+          ["market_intelligence", "quality_metrics", "worker_performance"],
+          ["top_symbols", "alerts"]
+        ]
+      },
+      "mobile": {
+        "columns": 1,
+        "rows": [
+          ["system_health"],
+          ["trading_performance"],
+          ["multi_tf_intelligence"],
+          ["alerts"]
+        ]
+      }
+    },
+    "alert_config": {
+      "check_interval": 60,
+      "notification_channels": ["telegram", "email"],
+      "escalation_rules": [
+        {
+          "condition": "consecutive_losses >= 3",
+          "action": "pause_trading",
+          "notify": ["telegram", "sms"]
+        },
+        {
+          "condition": "total_pnl_24h < -500",
+          "action": "reduce_position_size",
+          "notify": ["telegram", "email"]
+        },
+        {
+          "condition": "win_rate_24h < 40",
+          "action": "increase_quality_threshold",
+          "notify": ["telegram"]
+        }
+      ]
+    }
+  }
+}

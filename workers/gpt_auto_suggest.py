@@ -20,6 +20,9 @@ from utils.performance_tracker import get_performance_tracker  # ← Performance
 from utils.dynamic_sizing import get_dynamic_sizing_engine  # ← Dynamic Leverage & Position Sizing
 from utils.flip_intelligence import get_flip_intelligence  # ← Position Flip Intelligence
 from utils.resource_manager import get_resource_manager  # ← Smart Resource Management
+from utils.multi_tf_manager import MultiTFContextManager  # ← Multi-Timeframe Context Manager
+from utils.auto_flip import analyze_multi_tf_weighted  # ← Weighted Multi-TF Analysis
+from utils.db import insert_tf_snapshot  # ← TF Snapshot Persistence
 
 # Grid helper
 try:
@@ -358,7 +361,7 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
     
     mi_engine = get_market_intelligence()
     
-    # Use multi-TF analysis if available
+    # 📊 Enhanced Multi-TF Analysis with Weighted Priority (4H=50%, 1H=30%, 15M=20%)
     if "multi_tf" in ctx and ctx["multi_tf"]:
         # Build multi-TF contexts for market intelligence
         multi_tf_contexts = {}
@@ -381,9 +384,55 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
                 "macd": filters.get("macd", 0.0),
                 "bb_width_pct": filters.get("bb_width", 5.0),
             }
+            
+            # 💾 Save TF snapshot to database for historical analysis
+            try:
+                insert_tf_snapshot({
+                    "symbol": symbol,
+                    "interval": interval,
+                    "timestamp": time.time(),
+                    "indicators": indicators,
+                    "alignment_status": "PENDING"  # Will be updated below
+                })
+            except Exception as e:
+                LOGGER.debug(f"Failed to save TF snapshot: {e}")
         
+        # 🎯 Weighted Multi-TF Analysis (Sniper-Grade)
+        # 4H = 50% (Trend Direction), 1H = 30% (Confirmation), 15M = 20% (Entry Timing)
+        weighted_analysis = analyze_multi_tf_weighted(multi_tf_contexts)
+        
+        # Log weighted analysis with all details
+        LOGGER.info(
+            f"🎯 Weighted Multi-TF [{symbol}]: "
+            f"Dominant={weighted_analysis.dominant_timeframe.upper()}, "
+            f"Trend={weighted_analysis.trend_direction}, "
+            f"Confidence={weighted_analysis.weighted_confidence:.1f}%, "
+            f"Alignment={weighted_analysis.alignment_status}, "
+            f"TF Scores: 4H={weighted_analysis.tf_scores.get('4h', 0):.0f}% (50% weight), "
+            f"1H={weighted_analysis.tf_scores.get('1h', 0):.0f}% (30%), "
+            f"15M={weighted_analysis.tf_scores.get('15m', 0):.0f}% (20%)"
+        )
+        
+        # Update TF snapshots with alignment status
+        try:
+            for interval in multi_tf_contexts.keys():
+                insert_tf_snapshot({
+                    "symbol": symbol,
+                    "interval": interval,
+                    "timestamp": time.time(),
+                    "indicators": multi_tf_contexts[interval],
+                    "alignment_status": weighted_analysis.alignment_status
+                })
+        except Exception as e:
+            LOGGER.debug(f"Failed to update TF alignment: {e}")
+        
+        # Use market intelligence for final decision
         market_condition = mi_engine.analyze_multi_tf(multi_tf_contexts)
-        LOGGER.info(f"Multi-TF Analysis for {symbol}: TF-Alignment={market_condition.tf_alignment}, Strategy={market_condition.recommended_strategy}")
+        LOGGER.info(
+            f"Market Intel [{symbol}]: "
+            f"TF-Alignment={market_condition.tf_alignment}, "
+            f"Strategy={market_condition.recommended_strategy}"
+        )
     else:
         # Fallback to single-TF analysis
         market_condition = mi_engine.analyze_market(ctx)

@@ -190,13 +190,16 @@ class PerformanceTracker:
         wins = [t for t in filtered_trades if t.win]
         losses = [t for t in filtered_trades if not t.win]
         
+        win_pnls = [t.actual_pnl_usd for t in wins if t.actual_pnl_usd is not None]
+        loss_pnls = [t.actual_pnl_usd for t in losses if t.actual_pnl_usd is not None]
+        
         return {
             "win_rate": len(wins) / len(filtered_trades) * 100,
             "total_trades": len(filtered_trades),
             "wins": len(wins),
             "losses": len(losses),
-            "avg_win_usd": sum(t.actual_pnl_usd for t in wins) / len(wins) if wins else 0.0,
-            "avg_loss_usd": sum(t.actual_pnl_usd for t in losses) / len(losses) if losses else 0.0
+            "avg_win_usd": sum(win_pnls) / len(win_pnls) if win_pnls else 0.0,
+            "avg_loss_usd": sum(loss_pnls) / len(loss_pnls) if loss_pnls else 0.0
         }
     
     def get_strategy_performance(self, days: int = 7) -> Dict[str, Dict]:
@@ -247,6 +250,167 @@ class PerformanceTracker:
             "total_trades": len(closed_trades)
         }
     
+    def get_expectancy_per_symbol(self, symbol: Optional[str] = None, days: int = 30) -> Dict:
+        """
+        Calculate expectancy (average $ won/lost per trade) per symbol.
+        
+        Expectancy = (Win% × Avg Win) - (Loss% × Avg Loss)
+        
+        Args:
+            symbol: Specific symbol or None for all
+            days: Lookback period
+            
+        Returns:
+            Dict with expectancy, win_rate, avg_win, avg_loss per symbol
+        """
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        
+        closed_trades = [
+            t for t in self.trades
+            if t.closed_at is not None
+            and t.actual_pnl_usd is not None
+            and datetime.fromisoformat(t.opened_at) >= cutoff
+        ]
+        
+        if symbol:
+            closed_trades = [t for t in closed_trades if t.symbol == symbol]
+        
+        # Group by symbol
+        symbols = set(t.symbol for t in closed_trades)
+        results = {}
+        
+        for sym in symbols:
+            sym_trades = [t for t in closed_trades if t.symbol == sym]
+            
+            if not sym_trades:
+                continue
+            
+            wins = [t for t in sym_trades if t.win]
+            losses = [t for t in sym_trades if not t.win]
+            
+            win_pnls = [t.actual_pnl_usd for t in wins if t.actual_pnl_usd is not None]
+            loss_pnls = [abs(t.actual_pnl_usd) for t in losses if t.actual_pnl_usd is not None]
+            
+            win_rate = len(wins) / len(sym_trades) if sym_trades else 0.0
+            loss_rate = len(losses) / len(sym_trades) if sym_trades else 0.0
+            
+            avg_win = sum(win_pnls) / len(win_pnls) if win_pnls else 0.0
+            avg_loss = sum(loss_pnls) / len(loss_pnls) if loss_pnls else 0.0
+            
+            expectancy = (win_rate * avg_win) - (loss_rate * avg_loss)
+            
+            results[sym] = {
+                "expectancy_usd": round(expectancy, 2),
+                "win_rate": round(win_rate * 100, 1),
+                "avg_win_usd": round(avg_win, 2),
+                "avg_loss_usd": round(avg_loss, 2),
+                "total_trades": len(sym_trades),
+                "total_pnl_usd": round(sum(t.actual_pnl_usd for t in sym_trades), 2)
+            }
+        
+        return results
+    
+    def get_consecutive_stats(self, symbol: Optional[str] = None) -> Dict:
+        """
+        Track consecutive wins/losses for psychological insights.
+        
+        Args:
+            symbol: Specific symbol or None for all
+            
+        Returns:
+            Dict with current_streak, max_win_streak, max_loss_streak
+        """
+        closed_trades = [
+            t for t in self.trades
+            if t.closed_at is not None
+            and t.win is not None
+        ]
+        
+        if symbol:
+            closed_trades = [t for t in closed_trades if t.symbol == symbol]
+        
+        if not closed_trades:
+            return {
+                "current_streak": 0,
+                "current_streak_type": "none",
+                "max_win_streak": 0,
+                "max_loss_streak": 0,
+                "avg_win_streak": 0.0,
+                "avg_loss_streak": 0.0
+            }
+        
+        # Calculate streaks
+        current_streak = 0
+        current_streak_type = "none"
+        max_win_streak = 0
+        max_loss_streak = 0
+        current_win_streak = 0
+        current_loss_streak = 0
+        
+        win_streaks = []
+        loss_streaks = []
+        
+        for trade in sorted(closed_trades, key=lambda t: t.opened_at):
+            if trade.win:
+                current_win_streak += 1
+                if current_loss_streak > 0:
+                    loss_streaks.append(current_loss_streak)
+                    current_loss_streak = 0
+            else:
+                current_loss_streak += 1
+                if current_win_streak > 0:
+                    win_streaks.append(current_win_streak)
+                    current_win_streak = 0
+        
+        # Add final streaks
+        if current_win_streak > 0:
+            win_streaks.append(current_win_streak)
+            current_streak = current_win_streak
+            current_streak_type = "wins"
+        if current_loss_streak > 0:
+            loss_streaks.append(current_loss_streak)
+            current_streak = current_loss_streak
+            current_streak_type = "losses"
+        
+        max_win_streak = max(win_streaks) if win_streaks else 0
+        max_loss_streak = max(loss_streaks) if loss_streaks else 0
+        
+        return {
+            "current_streak": current_streak,
+            "current_streak_type": current_streak_type,
+            "max_win_streak": max_win_streak,
+            "max_loss_streak": max_loss_streak,
+            "avg_win_streak": sum(win_streaks) / len(win_streaks) if win_streaks else 0.0,
+            "avg_loss_streak": sum(loss_streaks) / len(loss_streaks) if loss_streaks else 0.0,
+            "total_win_streaks": len(win_streaks),
+            "total_loss_streaks": len(loss_streaks)
+        }
+    
+    def get_best_performing_symbols(self, days: int = 30, min_trades: int = 3) -> List[Dict]:
+        """
+        Identify best-performing symbols by expectancy.
+        
+        Args:
+            days: Lookback period
+            min_trades: Minimum trades for statistical significance
+            
+        Returns:
+            List of symbols sorted by expectancy (best first)
+        """
+        expectancy_data = self.get_expectancy_per_symbol(days=days)
+        
+        # Filter by minimum trades and sort by expectancy
+        valid_symbols = [
+            {
+                "symbol": symbol,
+                **data
+            }
+            for symbol, data in expectancy_data.items()
+            if data["total_trades"] >= min_trades
+        ]
+        
+        return sorted(valid_symbols, key=lambda x: x["expectancy_usd"], reverse=True)
+    
     def get_calibration_recommendations(self) -> Dict:
         """
         Analyze performance and recommend threshold adjustments.
@@ -257,11 +421,15 @@ class PerformanceTracker:
         overall_perf = self.get_win_rate(days=14)
         regime_perf = self.get_regime_performance(days=14)
         ai_accuracy = self.get_ai_accuracy(days=14)
+        expectancy_data = self.get_expectancy_per_symbol(days=14)
+        consecutive = self.get_consecutive_stats()
         
         recommendations = {
             "overall_win_rate": overall_perf["win_rate"],
             "total_trades_14d": overall_perf["total_trades"],
             "ai_prediction_error": ai_accuracy["prediction_error"],
+            "avg_expectancy_usd": sum(d["expectancy_usd"] for d in expectancy_data.values()) / len(expectancy_data) if expectancy_data else 0.0,
+            "current_streak": f"{consecutive['current_streak']} {consecutive['current_streak_type']}",
             "adjustments": []
         }
         
@@ -281,6 +449,15 @@ class PerformanceTracker:
                 "current": "adaptive",
                 "suggestion": "increase by 0.2",
                 "reason": f"Win rate {overall_perf['win_rate']:.1f}% is low, need better quality"
+            })
+        
+        # Check consecutive losses - if in a losing streak, pause or tighten
+        if consecutive["current_streak"] >= 3 and consecutive["current_streak_type"] == "losses":
+            recommendations["adjustments"].append({
+                "parameter": "trading_pause",
+                "current": "active",
+                "suggestion": "pause for 1 hour",
+                "reason": f"In {consecutive['current_streak']} loss streak, take a break"
             })
         
         # Check which regimes perform best

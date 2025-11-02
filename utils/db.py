@@ -66,6 +66,18 @@ def init():
           pnl REAL,
           status TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS tf_snapshots (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          symbol TEXT NOT NULL,
+          interval TEXT NOT NULL,
+          timestamp REAL NOT NULL,
+          indicators TEXT NOT NULL,
+          alignment_status TEXT,
+          created_at REAL DEFAULT (strftime('%s', 'now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_tf_snapshots_symbol_interval ON tf_snapshots(symbol, interval);
+        CREATE INDEX IF NOT EXISTS idx_tf_snapshots_timestamp ON tf_snapshots(timestamp);
         """)
         con.commit()
 
@@ -115,5 +127,26 @@ def insert_position(row: Dict[str, Any]):
             row["symbol"], row["side"], float(row["qty"]),
             row.get("entry"), row.get("exit"), row.get("pnl"),
             row.get("status","OPEN")
+        ))
+        con.commit()
+
+def insert_tf_snapshot(row: Dict[str, Any]):
+    """
+    Insert multi-timeframe snapshot into database.
+    
+    Args:
+        row: Dict with symbol, interval, timestamp, indicators, alignment_status
+    """
+    if not USE_DB: return
+    with _conn() as con:
+        cur = con.cursor()
+        cur.execute("""INSERT INTO tf_snapshots
+          (symbol, interval, timestamp, indicators, alignment_status)
+          VALUES (?, ?, ?, ?, ?)""", (
+            row["symbol"],
+            row["interval"],
+            row.get("timestamp", time.time()),
+            json.dumps(row.get("indicators", {})),
+            row.get("alignment_status", "UNKNOWN")
         ))
         con.commit()

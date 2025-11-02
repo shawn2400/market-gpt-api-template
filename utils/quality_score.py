@@ -39,6 +39,77 @@ def _empirical_win_rate(history: list[dict], symbol: str, side: Side, limit: int
 def _sigmoid(x: float) -> float:
     return 1.0/(1.0+math.exp(-x))
 
+def _load_symbol_thresholds(symbol: str) -> Dict[str, float]:
+    """
+    Load per-symbol adaptive thresholds based on historical performance.
+    Returns default thresholds if no history exists.
+    """
+    try:
+        thresh_path = os.getenv("SYMBOL_THRESHOLDS_PATH", "/tmp/symbol_thresholds.json")
+        if not os.path.isfile(thresh_path):
+            return {"min_quality": 5.0, "min_rr": 1.3, "leverage_cap": 10}
+        
+        with open(thresh_path, "r", encoding="utf-8") as f:
+            all_thresholds = json.load(f)
+        
+        return all_thresholds.get(symbol.upper(), {
+            "min_quality": 5.0,
+            "min_rr": 1.3,
+            "leverage_cap": 10
+        })
+    except Exception:
+        return {"min_quality": 5.0, "min_rr": 1.3, "leverage_cap": 10}
+
+def _save_symbol_thresholds(symbol: str, thresholds: Dict[str, float]):
+    """Save updated thresholds for a symbol"""
+    try:
+        thresh_path = os.getenv("SYMBOL_THRESHOLDS_PATH", "/tmp/symbol_thresholds.json")
+        
+        all_thresholds = {}
+        if os.path.isfile(thresh_path):
+            with open(thresh_path, "r", encoding="utf-8") as f:
+                all_thresholds = json.load(f)
+        
+        all_thresholds[symbol.upper()] = thresholds
+        
+        with open(thresh_path, "w", encoding="utf-8") as f:
+            json.dump(all_thresholds, f, indent=2)
+    except Exception:
+        pass
+
+def update_symbol_thresholds(symbol: str, win_rate: float, avg_quality: float, total_trades: int):
+    """
+    Auto-adjust thresholds based on symbol performance.
+    
+    Args:
+        symbol: Trading symbol
+        win_rate: Win rate (0-1)
+        avg_quality: Average quality score
+        total_trades: Number of trades for statistical significance
+    """
+    if total_trades < 5:
+        return  # Need minimum sample size
+    
+    current = _load_symbol_thresholds(symbol)
+    
+    # If win rate is high (>70%), lower thresholds to allow more trades
+    if win_rate > 0.70:
+        current["min_quality"] = max(4.0, current["min_quality"] - 0.2)
+        current["min_rr"] = max(1.2, current["min_rr"] - 0.05)
+    
+    # If win rate is low (<50%), raise thresholds for better quality
+    elif win_rate < 0.50:
+        current["min_quality"] = min(7.0, current["min_quality"] + 0.3)
+        current["min_rr"] = min(2.0, current["min_rr"] + 0.1)
+    
+    # Adjust leverage cap based on consistency
+    if win_rate > 0.65 and avg_quality > 6.5:
+        current["leverage_cap"] = min(15, current["leverage_cap"] + 1)
+    elif win_rate < 0.45:
+        current["leverage_cap"] = max(5, current["leverage_cap"] - 1)
+    
+    _save_symbol_thresholds(symbol, current)
+
 def compute_quality(
     *,
     symbol: str,
@@ -50,7 +121,7 @@ def compute_quality(
     budget: float,
     anchor: AnchorDecision,
     atr: Optional[float] = None,
-    trades_log_path: str = None,
+    trades_log_path: Optional[str] = None,
 ) -> Dict[str, Any]:
     components: Dict[str, Any] = {}
     score = 5.0

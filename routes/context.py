@@ -15,8 +15,24 @@ from utils.multi_tf_manager import get_manager
 
 try:
     # אופציונלי: אם קיים Mod funding – ניקח ממנו ביאס [-1..+1] (חיובי=תומך LONG)
-    from utils.funding_bias import funding_bias_for_symbol  # should return float in [-1, 1]
+    from utils.funding_bias import funding_bias_factor, get_funding_rate
+    
+    async def funding_bias_for_symbol_async(symbol: str) -> float:
+        """Async wrapper for funding bias - proper for FastAPI"""
+        try:
+            rate = await get_funding_rate(symbol)
+            return funding_bias_factor(rate)
+        except:
+            return 0.0
+    
+    # Sync fallback for legacy code
+    def funding_bias_for_symbol(symbol: str) -> float:
+        """Sync fallback - returns 0.0"""
+        return 0.0
 except Exception:  # soft fallback
+    async def funding_bias_for_symbol_async(symbol: str) -> float:
+        return 0.0
+    
     def funding_bias_for_symbol(symbol: str) -> float:
         return 0.0
 
@@ -40,7 +56,7 @@ class BatchIn(BaseModel):
     symbols: List[str] = Field(..., description="Symbols like BTCUSDT,ETHUSDT")
     interval: Interval = Field("15m")
     compact: bool = Field(True)
-    intervals: Optional[List[Interval]] = Field(None, description="Multi-timeframe support (e.g., ['15m', '1h', '4h'])")
+    intervals: Optional[List[str]] = Field(None, description="Multi-timeframe support (e.g., ['15m', '1h', '4h'])")
     use_cache: bool = Field(True, description="Use cached data if available")
 
 class MultiTFContextItem(BaseModel):

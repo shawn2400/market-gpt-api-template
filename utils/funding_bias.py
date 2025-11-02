@@ -60,7 +60,7 @@ async def get_funding_rate(symbol: str) -> float:
 
     try:
         data = await _fetch_premium_index(symbol)
-        rate = float(data.get("lastFundingRate") or 0.0)
+        rate = float((data or {}).get("lastFundingRate") or 0.0)
     except Exception:
         # במקרה כשל — נשתמש במטמון קודם אם היה, אחרת 0
         rate = float((cached or {}).get("rate") or 0.0)
