@@ -1,0 +1,422 @@
+מטרה: Public RO Observability — “הכול הכול” לקריאה-בלבד:
+- /status/public, /ops/summary/public
+- /mesh/public + /mesh/register (חתום), /mesh/peers
+- /git/public (+ /git/refresh אופציונלי)
+- /render/public (ללא Token; אופציונלי עם RENDER_API_TOKEN)
+- /trades/public (ללא סודות), /pnl/public (ללא סודות)
+- /logs/tail/public?name=...&lines=... (סינון סודות, חיתוך שורות)
+- דשבורד /dashboard
+- חיווט ל-startup ללולאות Mesh Ping קיימות (אם יש), לא יוכפל
+- אידמפוטנטי: אם קיים — לא משכפל; אם חסר — יוצר
+
+# =================== 0) ENV בסיס ===================
+export TZ="Asia/Jerusalem"
+export BASE_URL="${PUBLIC_HOST:-${RENDER_EXTERNAL_URL:-http://localhost:8000}}"
+
+# Mesh
+[ -z "$AI_MESH_SECRET" ] && export AI_MESH_SECRET="$(openssl rand -hex 32)"
+export AI_MESH_PATH="${AI_MESH_PATH:-ai_mesh.json}"
+export NODE_ID="${NODE_ID:-core-api}"
+
+# GitHub (אופציונלי; RO בלבד)
+# export GITHUB_OWNER="shawn2400"
+# export GITHUB_REPO="algogpt"
+# export GITHUB_TOKEN_RO="ghp_xxx"   # לא להדפיס ליומן
+
+# Render API (אופציונלי; RO בלבד)
+# export RENDER_API_TOKEN="rnd_xxx"
+# export RENDER_SERVICE_ID="srv-xxxx"
+
+# טוקן RO פנימי ל-/git/refresh (אופציונלי, אם תרצה)
+# export API_BEARER_TOKEN_RO="rnd_xxx"
+
+# =================== 1) utils/public_snapshots.py ===================
+python - <<'PY'
+from __future__ import annotations
+import os, re, time, json, pathlib
+from contextlib import suppress
+from typing import Any, Dict, List
+
+p = pathlib.Path("utils/public_snapshots.py")
+p.parent.mkdir(parents=True, exist_ok=True)
+
+code = r'''
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import os, re, time, json, pathlib, aiohttp, asyncio
+from contextlib import suppress
+from typing import Any, Dict, List, Optional
+
+def _now() -> int: return int(time.time())
+
+# -------- Status / Supervisors / News / Mesh --------
+def status_core() -> Dict[str,Any]:
+    app = {"name": os.getenv("APP_TITLE","AlgoGPT Service"),
+           "version": os.getenv("APP_VERSION",""),
+           "ts": _now()}
+    sup = {"ok": False, "interval_sec": None}
+    with suppress(Exception):
+        from workers import ai_supervisor as w  # type: ignore
+        sup["ok"] = True
+        sup["interval_sec"] = getattr(w, "INTERVAL_SEC", None)
+    news = {}
+    with suppress(Exception):
+        from utils import news_sentiment as ns  # type: ignore
+        s = ns.get_state_snapshot()
+        news = {"sentiment": s.get("sentiment", 50.0),
+                "delta": s.get("delta", 0.0),
+                "ok": s.get("ok", False),
+                "last_ts": s.get("last_ts", 0)}
+    mesh_ok = True
+    with suppress(Exception):
+        from utils import mesh_bus as mb  # type: ignore
+        mesh_ok = bool(mb.snapshot().get("ok", True))
+    return {"ok": True, "app": app, "supervisors": sup, "news": news, "mesh_ok": mesh_ok, "ts": _now()}
+
+# -------- Trades (RO) --------
+def trades_public(limit: int = 50) -> Dict[str,Any]:
+    items: List[Dict[str,Any]] = []
+    with suppress(Exception):
+        from utils import trade_storage as ts  # type: ignore
+        # צפה בטריידים מהמחסן אם יש API כזה:
+        with suppress(Exception):
+            items = ts.list_recent_trades(limit=limit)  # type: ignore
+        if not items:
+            # fallback: קובץ סטנדרטי אם קיים
+            import json, pathlib
+            f = pathlib.Path("static/cache/trades_log.json")
+            if f.exists():
+                data = json.loads(f.read_text(encoding="utf-8"))
+                items = data[-limit:]
+    # הסתר שדות רגישים
+    safe=[]
+    for t in (items or []):
+        safe.append({
+            "id": t.get("id"),
+            "symbol": t.get("symbol"),
+            "side": t.get("side"),
+            "qty": t.get("qty") or t.get("quantity"),
+            "entry": t.get("entry") or t.get("price"),
+            "sl": t.get("sl"),
+            "tp": t.get("tp") or t.get("tps"),
+            "status": t.get("status"),
+            "ts": t.get("ts") or t.get("created_at")
+        })
+    return {"ok": True, "items": safe}
+
+# -------- PnL (RO) --------
+def pnl_public() -> Dict[str,Any]:
+    snap={}
+    with suppress(Exception):
+        from utils import pnl_summary as ps  # type: ignore
+        snap = ps.get_summary_snapshot()    # type: ignore
+    if not snap:
+        with suppress(Exception):
+            from utils import pnl_heartbeat as ph  # type: ignore
+            snap = ph.get_cached_snapshot()       # type: ignore
+    # מסיר שדות רגישים
+    for k in ("api_keys","account_id","positions_raw","orders_raw"):
+        snap.pop(k, None)
+    return {"ok": True, "pnl": snap, "ts": _now()}
+
+# -------- Logs (sanitized) --------
+_SECRET_PAT = re.compile(r'(api[_-]?key|secret|token|bearer|password)\s*[:=]\s*["\']?([A-Za-z0-9\-\._]{6,})', re.I)
+def _sanitize_line(s: str) -> str:
+    return _SECRET_PAT.sub(r'\1: ***', s)
+
+def logs_tail_public(name: str = "main", lines: int = 200) -> Dict[str,Any]:
+    paths = [
+        f"logs/{name}.log",
+        f"/var/log/{name}.log",
+        f"./{name}.log",
+    ]
+    content=[]
+    for p in paths:
+        try:
+            with open(p,"r",encoding="utf-8", errors="ignore") as f:
+                content = f.readlines()[-max(1,min(lines,2000)):]
+                break
+        except Exception:
+            continue
+    safe = [_sanitize_line(x.rstrip()) for x in content]
+    return {"ok": True, "name": name, "lines": len(safe), "content": safe}
+
+# -------- GitHub (RO via utils/gh_status אם קיים) --------
+async def github_public(force: bool=False) -> Dict[str,Any]:
+    with suppress(Exception):
+        from utils.gh_status import get_status  # type: ignore
+        st = await get_status(force=force)
+        return st
+    return {"ok": False, "reason": "gh_status_not_available"}
+
+# -------- Render (רק מטא/בריאות; אופציונלי Token) --------
+async def render_public() -> Dict[str,Any]:
+    base = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("PUBLIC_HOST") or "http://localhost:8000"
+    out = {"ok": True, "external_url": base, "ts": _now()}
+    # נסה למשוך readyz/version
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{base}/readyz", timeout=6) as r:
+                out["readyz"] = await r.text()
+            async with s.get(f"{base}/version", timeout=6) as r:
+                with suppress(Exception):
+                    out["version"] = await r.json()
+    except Exception as e:
+        out["ok"] = False
+        out["error"] = str(e)
+    # אופציונלי: Render API (אם יש טוקן/Service ID)
+    tok = os.getenv("RENDER_API_TOKEN","").strip()
+    sid = os.getenv("RENDER_SERVICE_ID","").strip()
+    if tok and sid:
+        try:
+            hdr = {"Authorization": f"Bearer {tok}", "Accept":"application/json"}
+            async with aiohttp.ClientSession() as s:
+                async with s.get(f"https://api.render.com/v1/services/{sid}/deploys?limit=5", headers=hdr, timeout=10) as r:
+                    if r.status==200:
+                        out["deploys"] = await r.json()
+        except Exception:
+            pass
+    return out
+
+# -------- Ops Summary (מרוכך לציבורי) --------
+def ops_summary_public() -> Dict[str,Any]:
+    j={}
+    with suppress(Exception):
+        from utils import metrics_tracker as mt  # type: ignore
+        j["metrics"] = mt.safe_snapshot()       # type: ignore
+    with suppress(Exception):
+        from utils import trade_manager as tm   # type: ignore
+        j["manager"] = {"running": getattr(tm,"RUNNING", None)}  # type: ignore
+    # לא לחשוף קונפיג/סודות
+    return {"ok": True, "ops": j, "ts": _now()}
+'''
+p.write_text(code, encoding="utf-8")
+print("✅ utils/public_snapshots.py ready")
+PY
+
+# =================== 2) routes/public_endpoints.py ===================
+python - <<'PY'
+from __future__ import annotations
+from pathlib import Path
+Path("routes").mkdir(exist_ok=True)
+rp = Path("routes/public_endpoints.py")
+rp.write_text(r"""
+from __future__ import annotations
+import os, time, hmac, hashlib, asyncio
+from typing import Any, Dict
+from fastapi import APIRouter, HTTPException, Request, Query, Header
+from utils import public_snapshots as ps
+
+router = APIRouter(tags=["Public"])
+
+# ---- Core status ----
+@router.get("/status/public")
+def status_public():
+    return ps.status_core()
+
+# ---- Ops summary (public-friendly) ----
+@router.get("/ops/summary/public")
+def ops_summary_public():
+    return ps.ops_summary_public()
+
+# ---- Trades / PnL ----
+@router.get("/trades/public")
+def trades_public(limit: int = Query(50, ge=1, le=200)):
+    return ps.trades_public(limit=limit)
+
+@router.get("/pnl/public")
+def pnl_public():
+    return ps.pnl_public()
+
+# ---- Logs tail (sanitized) ----
+@router.get("/logs/tail/public")
+def logs_tail_public(name: str = Query("main"), lines: int = Query(200, ge=1, le=2000)):
+    return ps.logs_tail_public(name=name, lines=lines)
+
+# ---- GitHub ----
+@router.get("/git/public")
+async def git_public():
+    return await ps.github_public(force=False)
+
+@router.post("/git/refresh")
+async def git_refresh(authorization: str = Header(default="")):
+    token=os.getenv("API_BEARER_TOKEN_RO","").strip()
+    if token and authorization != f"Bearer {token}":
+        raise HTTPException(403, "bad_bearer")
+    return await ps.github_public(force=True)
+
+# ---- Render ----
+@router.get("/render/public")
+async def render_public():
+    return await ps.render_public()
+
+# ---- Mesh (public + register חתום) ----
+def _sig(msg: str) -> str:
+    sec = os.getenv("AI_MESH_SECRET","")
+    return hmac.new(sec.encode(), msg.encode(), hashlib.sha256).hexdigest() if sec else ""
+
+@router.get("/mesh/public")
+def mesh_public():
+    # אם קיימת תשתית mesh_bus — נחשוף דרכה; אחרת רק מינימום מזהה/גרסה
+    try:
+        from utils import mesh_bus as mb  # type: ignore
+        s = mb.snapshot()
+        app = {"version": os.getenv("APP_VERSION","")}
+        # נקה שדות רגישים
+        peers = s.get("peers", {})
+        pub = {}
+        for url, meta in (peers or {}).items():
+            pub[url] = {k: meta.get(k) for k in ("id","role","scopes","weight","ok","latency_ms","last_ts","enabled","version")}
+        return {"ok": True, "node": s.get("node"), "peers": pub, "app": app, "ts": int(time.time())}
+    except Exception:
+        return {"ok": True, "node": {"id": os.getenv("NODE_ID","core-api")}, "peers": {}, "app": {"version": os.getenv("APP_VERSION","")}, "ts": int(time.time())}
+
+@router.post("/mesh/register")
+async def mesh_register(req: Request):
+    body = await req.json()
+    need = ["id","url","role","scopes","ts","sig"]
+    if any(k not in body for k in need):
+        raise HTTPException(400, "bad_payload")
+    msg = f"{body['id']}:{body['ts']}:{body['url']}"
+    expect = _sig(msg)
+    if not expect or expect != body.get("sig",""):
+        raise HTTPException(403, "bad_sig")
+    try:
+        from utils import mesh_bus as mb  # type: ignore
+        mb.ensure_peer({
+            "id": body["id"],
+            "url": body["url"].rstrip("/"),
+            "role": body["role"],
+            "scopes": body.get("scopes", []),
+            "weight": int(body.get("weight", 1)),
+            "enabled": bool(body.get("enabled", True))
+        })
+        return {"ok": True, "registered": body["id"]}
+    except Exception:
+        return {"ok": False, "reason": "mesh_bus_not_available"}
+
+@router.get("/mesh/peers")
+def mesh_peers():
+    try:
+        from utils.mesh_bus import _load_mesh as lm  # type: ignore
+        j=lm()
+        return {"ok": True, "peers": j.get("peers", [])}
+    except Exception:
+        return {"ok": True, "peers": []}
+""", encoding="utf-8")
+print("✅ routes/public_endpoints.py ready")
+PY
+
+# =================== 3) חיווט ל-main.py + startup ===================
+python - <<'PY'
+from pathlib import Path
+mp = Path("main.py"); s = mp.read_text(encoding="utf-8")
+changed=False
+if "from routes import public_endpoints as r_public" not in s:
+    s += """
+
+try:
+    from routes import public_endpoints as r_public  # type: ignore
+    app.include_router(r_public.router)
+except Exception:
+    pass
+"""
+    changed=True
+
+# לולאת mesh_bus.ping_loop אם קיימת תשתית — הוסף רק אם חסר
+if "mesh_bus.ping_loop()" not in s:
+    s += """
+@app.on_event('startup')
+async def _startup_mesh_ping_ro() -> None:
+    import asyncio
+    try:
+        from utils import mesh_bus  # type: ignore
+        asyncio.create_task(mesh_bus.ping_loop())
+    except Exception:
+        pass
+"""
+    changed=True
+
+if changed:
+    Path("main.py").write_text(s, encoding="utf-8")
+    print("✅ wired public routes + mesh ping")
+else:
+    print("ℹ️ public routes already wired")
+PY
+
+# =================== 4) Dashboard (Mesh + Status + Git/Render/Trades) ===================
+python - <<'PY'
+from pathlib import Path
+Path("templates").mkdir(exist_ok=True)
+Path("templates/dashboard.html").write_text("""<!doctype html>
+<html><head><meta charset="utf-8"><title>AlgoGPT Dashboard</title></head>
+<body style="font-family:system-ui;max-width:1000px;margin:40px auto">
+<h1>AlgoGPT — Public Live Dashboard</h1>
+<p>
+  <a href="/status/public">/status/public</a> ·
+  <a href="/ops/summary/public">/ops/summary/public</a> ·
+  <a href="/mesh/public">/mesh/public</a> ·
+  <a href="/mesh/peers">/mesh/peers</a> ·
+  <a href="/git/public">/git/public</a> ·
+  <a href="/render/public">/render/public</a> ·
+  <a href="/trades/public">/trades/public</a> ·
+  <a href="/pnl/public">/pnl/public</a> ·
+  <a href="/logs/tail/public?name=main&lines=200">/logs/tail/public?name=main</a>
+</p>
+<pre id="out" style="background:#111;color:#0f0;padding:12px;border-radius:8px;white-space:pre-wrap"></pre>
+<script>
+async function g(u){try{return await fetch(u).then(r=>r.json())}catch(e){return {ok:false,error:String(e)}}}
+async function load(){
+  const data = {
+    status: await g('/status/public'),
+    ops:    await g('/ops/summary/public'),
+    mesh:   await g('/mesh/public'),
+    git:    await g('/git/public'),
+    render: await g('/render/public'),
+    trades: await g('/trades/public'),
+    pnl:    await g('/pnl/public')
+  };
+  document.getElementById('out').textContent = JSON.stringify(data, null, 2);
+}
+load(); setInterval(load, 15000);
+</script>
+</body></html>""", encoding="utf-8")
+
+mp=Path("main.py"); s=mp.read_text(encoding="utf-8"); changed=False
+if "from fastapi.responses import HTMLResponse" not in s:
+    s += "\nfrom fastapi.responses import HTMLResponse\n"; changed=True
+if "@app.get('/dashboard')" not in s:
+    s += """
+@app.get('/dashboard', response_class=HTMLResponse)
+def dashboard():
+    return open('templates/dashboard.html','r',encoding='utf-8').read()
+"""
+    changed=True
+if changed: mp.write_text(s, encoding="utf-8"); print("✅ dashboard wired")
+else: print("ℹ️ dashboard already wired")
+PY
+
+# =================== 5) בדיקות מהירות ===================
+echo "== /status/public ==";         curl -sS "$BASE_URL/status/public" && echo
+echo "== /ops/summary/public ==";   curl -sS "$BASE_URL/ops/summary/public" && echo
+echo "== /mesh/public ==";          curl -sS "$BASE_URL/mesh/public" && echo
+echo "== /git/public ==";           curl -sS "$BASE_URL/git/public" && echo
+echo "== /render/public ==";        curl -sS "$BASE_URL/render/public" && echo
+echo "== /trades/public ==";        curl -sS "$BASE_URL/trades/public" && echo
+echo "== /pnl/public ==";           curl -sS "$BASE_URL/pnl/public" && echo
+echo "== /logs/tail/public ==";     curl -sS "$BASE_URL/logs/tail/public?name=main&lines=50" && echo
+
+# =================== 6) Commit אופציונלי ===================
+git add -A || true
+git commit -m "Public RO Observability: status/ops/mesh/git/render/trades/pnl/logs + dashboard" || true
+
+echo "==================== SHARE WITH ANALYST ===================="
+echo "PUBLIC_STATUS_URL=$BASE_URL/status/public"
+echo "PUBLIC_OPS_URL=$BASE_URL/ops/summary/public"
+echo "MESH_PUBLIC_URL=$BASE_URL/mesh/public"
+echo "GIT_PUBLIC_URL=$BASE_URL/git/public"
+echo "RENDER_PUBLIC_URL=$BASE_URL/render/public"
+echo "TRADES_PUBLIC_URL=$BASE_URL/trades/public"
+echo "PNL_PUBLIC_URL=$BASE_URL/pnl/public"
+echo "LOGS_PUBLIC_URL=$BASE_URL/logs/tail/public?name=main&lines=200"
+echo "============================================================"
