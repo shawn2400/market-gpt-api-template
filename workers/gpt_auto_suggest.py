@@ -17,6 +17,9 @@ from utils.market_intelligence import get_market_intelligence  # ← Market Inte
 from utils.adaptive_prompts import get_adaptive_prompt_engine  # ← Adaptive AI Prompts
 from utils.portfolio_intelligence import get_portfolio_intelligence  # ← Portfolio Intelligence
 from utils.performance_tracker import get_performance_tracker  # ← Performance Tracker
+from utils.dynamic_sizing import get_dynamic_sizing_engine  # ← Dynamic Leverage & Position Sizing
+from utils.flip_intelligence import get_flip_intelligence  # ← Position Flip Intelligence
+from utils.resource_manager import get_resource_manager  # ← Smart Resource Management
 
 # Grid helper
 try:
@@ -86,9 +89,9 @@ SUCCESS_PCT_MIN   = float(os.getenv("SUCCESS_PCT_MIN","70"))
 BUDGET_USD_FALLBK = float(os.getenv("MAX_TRADE_BUDGET","100"))
 
 # סוגי הצעות להפעלה
-SUGGEST_FUTURES   = os.getenv("SUGGEST_FUTURES","1").lower() in ("1","true","yes")
-SUGGEST_SPOT      = os.getenv("SUGGEST_SPOT","0").lower() in ("1","true","yes")
-SUGGEST_GRID      = os.getenv("SUGGEST_GRID","0").lower() in ("1","true","yes")
+SUGGEST_FUTURES   = os.getenv("SUGGEST_FUTURES","1").strip().lower() in ("1","true","yes")
+SUGGEST_SPOT      = os.getenv("SUGGEST_SPOT","0").strip().lower() in ("1","true","yes")
+SUGGEST_GRID      = os.getenv("SUGGEST_GRID","0").strip().lower() in ("1","true","yes")
 
 DEFAULT_INTERVAL  = os.getenv("DEFAULT_INTERVAL","15m")
 
@@ -105,11 +108,35 @@ def _hash_proposal(key_fields: Dict[str, Any]) -> str:
           f"{key_fields.get('entry')}|{key_fields.get('sl')}|{key_fields.get('tp1')}|{key_fields.get('tp2')}|{key_fields.get('tp3')}"
     return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
-async def _fetch_context_batch(symbols: List[str], interval: str = DEFAULT_INTERVAL) -> Dict[str, Dict[str, Any]]:
+async def _fetch_context_batch(
+    symbols: List[str], 
+    interval: str = DEFAULT_INTERVAL,
+    intervals: Optional[List[str]] = None,
+    use_multi_tf: bool = False
+) -> Dict[str, Dict[str, Any]]:
+    """
+    Fetch context data for symbols.
+    
+    Args:
+        symbols: List of symbols
+        interval: Single interval (backward compatible)
+        intervals: Multi-timeframe intervals (e.g., ["15m", "1h", "4h"])
+        use_multi_tf: Enable multi-timeframe mode
+        
+    Returns:
+        Dict mapping symbol -> context data
+        If use_multi_tf=True, context includes "multi_tf" field with all timeframes
+    """
     if not CONTEXT_URL:
         LOGGER.warning("CONTEXT_URL not set – worker running without context (reduced gating).")
         return {}
+    
     payload = {"symbols": symbols, "interval": interval, "compact": True}
+    
+    # Add multi-TF support if enabled
+    if use_multi_tf and intervals:
+        payload["intervals"] = intervals
+    
     # Get API key from environment for authentication
     api_key = os.getenv("API_BEARER_TOKEN") or os.getenv("PRIMARY_API_TOKEN") or os.getenv("API_TOKEN") or ""
     headers = {}
@@ -119,9 +146,26 @@ async def _fetch_context_batch(symbols: List[str], interval: str = DEFAULT_INTER
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(CONTEXT_URL.rstrip("/") + "/context/batch", json=payload, headers=headers)
             r.raise_for_status()
+            resp_data = r.json()
+            
             out = {}
-            for it in r.json().get("items", []):
+            
+            # Single-TF mode (backward compatible)
+            if not use_multi_tf or "multi_tf_items" not in resp_data:
+                for it in resp_data.get("items", []):
+                    out[it["symbol"]] = it
+                return out
+            
+            # Multi-TF mode - combine multi_tf data with primary context
+            for it in resp_data.get("items", []):
                 out[it["symbol"]] = it
+            
+            # Add multi_tf data to each symbol's context
+            for mt_item in resp_data.get("multi_tf_items", []):
+                symbol = mt_item["symbol"]
+                if symbol in out:
+                    out[symbol]["multi_tf"] = mt_item.get("multi_tf", {})
+            
             return out
     except Exception as e:
         LOGGER.warning("context batch failed: %s", e)
@@ -307,8 +351,45 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
         return None
     
     # 🧠 SELF-ADAPTIVE ENGINE: Analyze market conditions
+    # Ensure symbol is in ctx for database persistence
+    if ctx is None:
+        ctx = {}
+    ctx["symbol"] = symbol
+    
     mi_engine = get_market_intelligence()
-    market_condition = mi_engine.analyze_market(ctx or {})
+    
+    # Use multi-TF analysis if available
+    if "multi_tf" in ctx and ctx["multi_tf"]:
+        # Build multi-TF contexts for market intelligence
+        multi_tf_contexts = {}
+        for interval, tf_data in ctx["multi_tf"].items():
+            # Extract indicators from each timeframe
+            # NOTE: Data is in 'indicators' not 'filters'!
+            indicators = tf_data.get("indicators", {})
+            filters = tf_data.get("filters", {})
+            
+            multi_tf_contexts[interval] = {
+                "symbol": symbol,
+                "close": tf_data.get("price"),
+                # Indicators are the numeric values
+                "adx": indicators.get("adx"),
+                "atr_percent": indicators.get("atr_pct"),
+                "rsi": indicators.get("rsi"),
+                "ema_20": indicators.get("ema21"),
+                "ema_50": indicators.get("ema50"),
+                # Filters contain derived flags
+                "macd": filters.get("macd", 0.0),
+                "bb_width_pct": filters.get("bb_width", 5.0),
+            }
+        
+        market_condition = mi_engine.analyze_multi_tf(multi_tf_contexts)
+        LOGGER.info(f"Multi-TF Analysis for {symbol}: TF-Alignment={market_condition.tf_alignment}, Strategy={market_condition.recommended_strategy}")
+    else:
+        # Fallback to single-TF analysis
+        market_condition = mi_engine.analyze_market(ctx)
+    
+    # Store market_condition in ctx for later use (Dynamic Sizing, Flip Intelligence)
+    ctx["_market_condition"] = market_condition
     
     # 📝 Generate adaptive prompt based on market regime
     prompt_engine = get_adaptive_prompt_engine()
@@ -425,21 +506,65 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
 
     # גייטינג כללי
     vol_reg = ((ctx.get("filters") or {}).get("vol_regime","mid")) if ctx else "mid"
+    
+    # Ensure success_pct is a valid number (fallback to success_req if None/missing)
+    success_pct = prop.get("success_pct")
+    if success_pct is None or not isinstance(success_pct, (int, float)):
+        success_pct = success_req or SUCCESS_PCT_MIN
+        LOGGER.debug(f"{symbol}: GPT didn't provide success_pct, using fallback={success_pct}")
+    
+    # Debug: Log all parameters before calling gate_trade
+    LOGGER.debug(
+        f"🔍 {symbol} gate_trade params: side={prop['side']}, price={price}, "
+        f"entry={prop['entry']}, sl={prop['sl']}, tp1={prop['tp1']}, "
+        f"vol_regime={vol_reg}, success_pct={success_pct}, leverage={prop.get('leverage')}"
+    )
+    
     g = gate_trade(symbol, prop["side"], price, prop["entry"], prop["sl"], prop["tp1"],
-                   vol_regime=vol_reg, success_pct=prop.get("success_pct"), leverage=prop.get("leverage"))
+                   vol_regime=vol_reg, success_pct=success_pct, leverage=prop.get("leverage"))
     if not g["ok"]:
         reason = ", ".join(g.get("errors", ["unknown"]))
         LOGGER.info(f"REJECTED {symbol}: gate_trade failed - {reason}")
         return None
 
-    if (prop.get("success_pct") or 0) < success_req:  # סף הצלחה דינמי
-        LOGGER.info(f"REJECTED {symbol}: success_pct={prop.get('success_pct')} < {success_req}")
+    if success_pct < success_req:  # סף הצלחה דינמי
+        LOGGER.info(f"REJECTED {symbol}: success_pct={success_pct} < {success_req}")
         return None
 
-    # תקציב דינמי → נוטיונל ≈ budget*lev
-    budget = _calc_dynamic_budget(symbol, ctx)
-    leverage = int(prop.get("leverage") or 10)
-    notional = float(budget) * float(leverage)
+    # 🚀 DYNAMIC LEVERAGE & POSITION SIZING
+    # Calculate optimal leverage and position size based on trade quality
+    try:
+        from utils.binance import get_equity_bal  # Get account equity
+        account_equity = float(get_equity_bal()) or 10000.0  # Fallback to 10k
+    except Exception:
+        account_equity = 10000.0  # Safe fallback
+    
+    quality_score = _quality_from_ctx(ctx) or 5.0  # Default medium quality
+    volatility = (ctx.get("filters") or {}).get("vol_regime", "medium") or "medium"
+    market_condition = ctx.get("_market_condition")  # Stored earlier by _gpt_suggest
+    
+    dynamic_sizing_engine = get_dynamic_sizing_engine()
+    sizing = dynamic_sizing_engine.calculate_position(
+        symbol=symbol,
+        side=prop["side"],
+        quality_score=quality_score,
+        risk_reward=rr,
+        ai_confidence=prop.get("success_pct") or 70.0,
+        volatility=volatility,
+        account_equity=account_equity,
+        market_regime=market_condition.regime if market_condition else "unknown",
+        market_mood=market_condition.mood if market_condition else "neutral"
+    )
+    
+    # Use dynamic sizing instead of GPT's leverage
+    leverage = sizing.leverage
+    budget = sizing.size_usd / leverage  # Budget from dynamic sizing
+    notional = sizing.size_usd
+    
+    LOGGER.info(
+        f"💰 Dynamic Sizing: {symbol} {prop['side']} → "
+        f"Leverage={leverage}x, Budget=${budget:.2f}, Position=${notional:.2f}"
+    )
 
     # נזילות (סליפג')
     lg = await liquidity_gate_safe(symbol, prop["side"], notional_usd=notional)
@@ -512,24 +637,33 @@ async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -
 
 async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     if build_grid_plan is None:
+        LOGGER.info(f"propose_grid SKIPPED {symbol}: build_grid_plan not available")
         return None
     price = ctx.get("price") if ctx else None
     flags = (ctx.get("filters") or {}) if ctx else {}
     plan = build_grid_plan(symbol=symbol, price=price, flags=flags, budget_usd=_calc_dynamic_budget(symbol, ctx))
     if not plan:
+        LOGGER.info(f"propose_grid REJECTED {symbol}: build_grid_plan returned None (no range)")
         return None
 
     # נזילות לנוטיונל ≈ budget (גריד לא ממונף כאן)
     budget = float(plan.get("budget_usd") or _calc_dynamic_budget(symbol, ctx))
-    lg = await liquidity_gate_safe(symbol, plan["grid_side"], notional_usd=budget)
+    lg = liquidity_gate_safe(symbol, plan["grid_side"], notional_usd=budget)
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
+        LOGGER.info(f"propose_grid REJECTED {symbol}: liquidity_gate failed (budget={budget})")
         return None
+    
+    LOGGER.info(f"✅ GRID PROPOSAL {symbol}: range {plan['grid_min']:.2f}-{plan['grid_max']:.2f}, levels={plan['grid_levels']}")
 
+    import json
     payload = {
         "trade_id": f"g{int(time.time())}{random.randint(100,999)}",
         "trade_type": "GRID",
         "symbol": symbol,
+        "side": plan["grid_side"],  # תואם ל-/alerts/ingest
+        "market": "futures",
         "current_price": float(price or 0.0),
+        "is_grid": True,
         "grid_min": float(plan["grid_min"]),
         "grid_max": float(plan["grid_max"]),
         "grid_levels": int(plan["grid_levels"]),
@@ -541,6 +675,7 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
         "notional_usd": float(budget),
         "chat_id": TELEGRAM_CHAT_ID or None,
     }
+    LOGGER.info(f"GRID PAYLOAD for {symbol}: {json.dumps(payload, default=str)}")
     return payload
 
 # ---------------- Cycle ----------------
@@ -568,8 +703,17 @@ async def process_cycle():
     random.shuffle(pool_syms)
     symbols = pool_syms[:max(1, min(POOL_PER_CYCLE, len(pool_syms)))]
 
-    # Context batch
-    ctx_map = await _fetch_context_batch(symbols, interval=DEFAULT_INTERVAL)
+    # Context batch with multi-timeframe support
+    # Enable multi-TF for better analysis
+    use_multi_tf = os.getenv("USE_MULTI_TF", "1").lower() in ("1", "true", "yes")
+    multi_tf_intervals = ["15m", "1h", "4h"] if use_multi_tf else None
+    
+    ctx_map = await _fetch_context_batch(
+        symbols, 
+        interval=DEFAULT_INTERVAL,
+        intervals=multi_tf_intervals,
+        use_multi_tf=use_multi_tf
+    )
 
     sem = asyncio.Semaphore(MAX_CONCURRENCY)
     accepted = 0
@@ -645,7 +789,7 @@ async def process_cycle():
                 p = await propose_futures(sym, ctx, success_floor)
                 await maybe_emit("FUTURES", p)
             except Exception as e:
-                LOGGER.debug("propose_futures error %s: %s", sym, e)
+                LOGGER.exception(f"propose_futures error {sym}: {e}")
 
         # SPOT
         if SUGGEST_SPOT:
@@ -661,7 +805,7 @@ async def process_cycle():
                 p = await propose_grid(sym, ctx)
                 await maybe_emit("GRID", p)
             except Exception as e:
-                LOGGER.debug("propose_grid error %s: %s", sym, e)
+                LOGGER.info(f"propose_grid ERROR {sym}: {e}")
 
     async def worker(sym: str):
         async with sem:
@@ -671,6 +815,8 @@ async def process_cycle():
     LOGGER.info("cycle finished: symbols=%d accepted=%d cap=%d", len(symbols), accepted, cap_per_cycle)
 
 async def main():
+    # Log feature toggles at startup
+    LOGGER.info(f"🚀 Auto-suggest started: FUTURES={SUGGEST_FUTURES}, SPOT={SUGGEST_SPOT}, GRID={SUGGEST_GRID}")
     if not SUGGEST_ENABLED:
         LOGGER.warning("Auto-suggest disabled (TRADE_AUTO_SUGGEST=0)")
     interval_sec = int(float(os.getenv("SUGGEST_INTERVAL_SEC","600")))   # 10m דיפולט
