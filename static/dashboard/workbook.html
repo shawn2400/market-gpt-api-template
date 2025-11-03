@@ -1,0 +1,901 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>בס"ד - AlgoGPT Ultimate Workbook</title>
+    
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&family=Rubik:wght@300;400;500;600;700&display=swap');
+        
+        :root {
+            --primary-gradient-start: #667eea;
+            --primary-gradient-mid: #764ba2;
+            --primary-gradient-end: #f093fb;
+            --glass-bg: rgba(31, 41, 55, 0.6);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --bg-dark: #0a0a1a;
+            --bg-card: rgba(17, 24, 39, 0.8);
+            --accent-blue: #667eea;
+            --accent-purple: #764ba2;
+            --accent-pink: #f093fb;
+            --shadow-sm: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            --shadow-md: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+            --shadow-lg: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+            --shadow-xl: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Heebo', 'Rubik', -apple-system, sans-serif;
+            background: linear-gradient(135deg, #0a0a1a 0%, #1a1a2e 50%, #16213e 100%);
+            color: var(--text-primary);
+            overflow-x: hidden;
+            min-height: 100vh;
+        }
+        
+        .gradient-text {
+            background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 50%, var(--accent-pink) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .gradient-bg {
+            background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 50%, var(--accent-pink) 100%);
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .gradient-bg::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(45deg, transparent 30%, rgba(255,255,255,0.1) 50%, transparent 70%);
+            animation: shimmer 3s infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.6s ease-out forwards;
+        }
+        
+        .glass-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            box-shadow: var(--shadow-xl);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .glass-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 30px 60px -12px rgba(139, 92, 246, 0.3);
+            border-color: rgba(139, 92, 246, 0.3);
+        }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        
+        .status-active {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+            box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+        }
+        
+        .status-planned {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+        }
+        
+        .status-partial {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+            box-shadow: 0 0 12px rgba(59, 130, 246, 0.4);
+        }
+        
+        .ai-card {
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .ai-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 4px;
+            height: 100%;
+            background: linear-gradient(180deg, var(--accent-blue), var(--accent-purple), var(--accent-pink));
+        }
+        
+        .layer-card {
+            border-left: 4px solid var(--accent-blue);
+            padding-left: 16px;
+        }
+        
+        .progress-container {
+            width: 100%;
+            height: 8px;
+            background: rgba(107, 114, 128, 0.3);
+            border-radius: 999px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, var(--accent-blue) 0%, var(--accent-purple) 50%, var(--accent-pink) 100%);
+            border-radius: 999px;
+            transition: width 1s ease-out;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .progress-bar::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: shimmer-progress 2s infinite;
+        }
+        
+        @keyframes shimmer-progress {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        .logo-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
+            border-radius: 16px;
+            margin-bottom: 24px;
+        }
+        
+        .section-header {
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .icon-box {
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%);
+            border-radius: 12px;
+            font-size: 24px;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .metric-value {
+            font-size: 32px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-pink) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .tab-button {
+            padding: 12px 24px;
+            background: transparent;
+            border: 1px solid var(--glass-border);
+            border-radius: 8px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        .tab-button:hover {
+            background: rgba(102, 126, 234, 0.1);
+            border-color: var(--accent-blue);
+            color: var(--text-primary);
+        }
+        
+        .tab-button.active {
+            background: linear-gradient(135deg, var(--accent-blue) 0%, var(--accent-purple) 100%);
+            border-color: transparent;
+            color: white;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .task-row {
+            display: grid;
+            grid-template-columns: auto 1fr auto auto;
+            gap: 12px;
+            align-items: center;
+            padding: 12px;
+            background: rgba(17, 24, 39, 0.5);
+            border-radius: 8px;
+            margin-bottom: 8px;
+            border-right: 3px solid transparent;
+            transition: all 0.2s;
+        }
+        
+        .task-row.in_progress {
+            border-right-color: var(--accent-blue);
+            background: rgba(59, 130, 246, 0.1);
+        }
+        
+        .task-row.completed {
+            border-right-color: #10b981;
+            background: rgba(16, 185, 129, 0.1);
+        }
+        
+        .task-row:hover {
+            background: rgba(102, 126, 234, 0.15);
+            transform: translateX(-4px);
+        }
+        
+        .priority-high {
+            color: #ef4444;
+        }
+        
+        .priority-medium {
+            color: #f59e0b;
+        }
+        
+        .priority-low {
+            color: #6b7280;
+        }
+        
+        .flow-stage {
+            position: relative;
+            padding: 16px;
+            background: var(--bg-card);
+            border-radius: 12px;
+            border: 1px solid var(--glass-border);
+            transition: all 0.3s;
+        }
+        
+        .flow-stage:hover {
+            border-color: var(--accent-blue);
+            box-shadow: 0 0 20px rgba(102, 126, 234, 0.3);
+        }
+        
+        .flow-stage::after {
+            content: '→';
+            position: absolute;
+            left: 50%;
+            bottom: -24px;
+            transform: translateX(-50%) rotate(90deg);
+            font-size: 24px;
+            color: var(--accent-purple);
+        }
+        
+        .flow-stage:last-child::after {
+            display: none;
+        }
+        
+        .news-source-card {
+            display: grid;
+            grid-template-columns: auto 1fr auto;
+            gap: 12px;
+            align-items: center;
+            padding: 12px;
+            background: var(--bg-card);
+            border-radius: 8px;
+            border: 1px solid var(--glass-border);
+            transition: all 0.3s;
+        }
+        
+        .news-source-card:hover {
+            border-color: var(--accent-blue);
+            transform: translateX(-4px);
+        }
+        
+        [dir="ltr"] .flow-stage::after {
+            transform: translateX(-50%) rotate(-90deg);
+        }
+        
+        [dir="ltr"] .task-row {
+            border-right: none;
+            border-left: 3px solid transparent;
+        }
+        
+        [dir="ltr"] .task-row.in_progress {
+            border-left-color: var(--accent-blue);
+        }
+        
+        [dir="ltr"] .task-row.completed {
+            border-left-color: #10b981;
+        }
+        
+        [dir="ltr"] .task-row:hover {
+            transform: translateX(4px);
+        }
+        
+        [dir="ltr"] .news-source-card:hover {
+            transform: translateX(4px);
+        }
+        
+        .skeleton {
+            background: linear-gradient(90deg, 
+                rgba(255, 255, 255, 0.05) 25%, 
+                rgba(255, 255, 255, 0.1) 50%, 
+                rgba(255, 255, 255, 0.05) 75%
+            );
+            background-size: 200% 100%;
+            animation: loading 1.5s infinite;
+        }
+        
+        @keyframes loading {
+            0% { background-position: 200% 0; }
+            100% { background-position: -200% 0; }
+        }
+        
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const designTokens = {
+            colors: {
+                primary: '#667eea',
+                secondary: '#764ba2',
+                accent: '#f093fb',
+                success: '#10b981',
+                warning: '#f59e0b',
+                error: '#ef4444',
+                info: '#3b82f6'
+            },
+            spacing: {
+                xs: '4px',
+                sm: '8px',
+                md: '16px',
+                lg: '24px',
+                xl: '32px'
+            },
+            borderRadius: {
+                sm: '8px',
+                md: '12px',
+                lg: '16px',
+                full: '999px'
+            }
+        };
+
+        const translations = {
+            he: {
+                title: 'בס"ד - AlgoGPT Ultimate Workbook',
+                subtitle: 'ספר עבודה מקצועי - Phase 1: Foundation & Logo',
+                tabs: {
+                    overview: '📋 סקירה',
+                    ai_mesh: '🤖 8-AI Mesh',
+                    architecture: '🏗️ ארכיטקטורה',
+                    roadmap: '🗺️ ROADMAP',
+                    strategy: '⚡ אסטרטגיה',
+                    news: '📰 חדשות'
+                },
+                loading: 'טוען נתונים...',
+                error: 'שגיאה בטעינת נתונים',
+                status: {
+                    active: 'פעיל',
+                    planned: 'מתוכנן',
+                    partial: 'חלקי',
+                    completed: 'הושלם',
+                    in_progress: 'בביצוע'
+                }
+            },
+            en: {
+                title: 'B"H - AlgoGPT Ultimate Workbook',
+                subtitle: 'Professional Workbook - Phase 1: Foundation & Logo',
+                tabs: {
+                    overview: '📋 Overview',
+                    ai_mesh: '🤖 8-AI Mesh',
+                    architecture: '🏗️ Architecture',
+                    roadmap: '🗺️ ROADMAP',
+                    strategy: '⚡ Strategy',
+                    news: '📰 News'
+                },
+                loading: 'Loading data...',
+                error: 'Error loading data',
+                status: {
+                    active: 'Active',
+                    planned: 'Planned',
+                    partial: 'Partial',
+                    completed: 'Completed',
+                    in_progress: 'In Progress'
+                }
+            }
+        };
+
+        function LogoSection({ logoPath }) {
+            return (
+                <div className="logo-container glass-card fade-in">
+                    <img src={logoPath} alt="AlgoGPT Logo" style={{ maxWidth: '400px', width: '100%', height: 'auto' }} />
+                </div>
+            );
+        }
+
+        function AIMeshCard({ ai, language }) {
+            const t = translations[language].status;
+            
+            return (
+                <div className="glass-card ai-card p-6 fade-in">
+                    <div className="flex items-center gap-4 mb-4">
+                        <div className="text-5xl">{ai.icon}</div>
+                        <div className="flex-1">
+                            <h3 className="text-xl font-bold gradient-text">{ai.name}</h3>
+                            <p className="text-sm text-gray-400">{ai.provider} · {ai.model}</p>
+                        </div>
+                        <div className={`status-badge status-${ai.status}`}>
+                            {t[ai.status]}
+                        </div>
+                    </div>
+                    
+                    <div className="mb-4">
+                        <div className="text-sm text-gray-400 mb-1">משקל: {ai.weight}%</div>
+                        <div className="progress-container">
+                            <div className="progress-bar" style={{ width: `${ai.weight}%` }}></div>
+                        </div>
+                    </div>
+                    
+                    <div className="mb-3">
+                        <div className="text-sm font-semibold text-gray-300 mb-2">תפקיד:</div>
+                        <div className="text-sm text-gray-400">{ai.role}</div>
+                    </div>
+                    
+                    <div className="mb-3">
+                        <div className="text-sm font-semibold text-gray-300 mb-2">חוזקות:</div>
+                        <div className="flex flex-wrap gap-2">
+                            {ai.strengths.map((s, i) => (
+                                <span key={i} className="px-2 py-1 bg-blue-500 bg-opacity-20 text-blue-300 rounded text-xs">
+                                    {s}
+                                </span>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <div className="text-sm font-semibold text-gray-300 mb-2">מקרי שימוש:</div>
+                        <ul className="text-xs text-gray-400 space-y-1">
+                            {ai.use_cases.map((uc, i) => (
+                                <li key={i}>• {uc}</li>
+                            ))}
+                        </ul>
+                    </div>
+                </div>
+            );
+        }
+
+        function ArchitectureLayer({ layer }) {
+            return (
+                <div className="glass-card layer-card p-6 mb-4 fade-in">
+                    <div className="flex items-center gap-3 mb-4">
+                        <div className="icon-box text-2xl">
+                            {layer.id}
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-bold gradient-text">{layer.name}</h3>
+                            <p className="text-sm text-gray-400">{layer.description}</p>
+                        </div>
+                    </div>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                        {layer.components.map((comp, i) => (
+                            <div key={i} className="flex items-center gap-2 p-2 bg-gray-800 bg-opacity-50 rounded">
+                                <div className={`w-2 h-2 rounded-full ${
+                                    comp.status === 'active' ? 'bg-green-500' :
+                                    comp.status === 'partial' ? 'bg-blue-500' : 'bg-yellow-500'
+                                }`}></div>
+                                <span className="text-sm">{comp.name}</span>
+                                <span className="text-xs text-gray-500 mr-auto">{comp.type}</span>
+                            </div>
+                        ))}
+                    </div>
+                    
+                    {layer.throughput && (
+                        <div className="flex gap-4 text-xs text-gray-400">
+                            <div>⚡ {layer.throughput}</div>
+                            {layer.latency && <div>⏱️ {layer.latency}</div>}
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        function RoadmapPhase({ phase }) {
+            const progress = phase.progress || 0;
+            
+            return (
+                <div className="glass-card p-6 mb-6 fade-in">
+                    <div className="flex items-center justify-between mb-4">
+                        <div>
+                            <h3 className="text-xl font-bold gradient-text">
+                                Phase {phase.id}: {phase.name}
+                            </h3>
+                            <p className="text-sm text-gray-400">
+                                {phase.start_date} → {phase.end_date} ({phase.weeks} שבועות)
+                            </p>
+                        </div>
+                        <div className={`status-badge status-${phase.status}`}>
+                            {phase.status}
+                        </div>
+                    </div>
+                    
+                    <div className="mb-4">
+                        <div className="flex justify-between text-sm mb-2">
+                            <span>התקדמות</span>
+                            <span className="font-bold">{progress}%</span>
+                        </div>
+                        <div className="progress-container">
+                            <div className="progress-bar" style={{ width: `${progress}%` }}></div>
+                        </div>
+                    </div>
+                    
+                    <div className="space-y-2">
+                        {phase.tasks.map((task) => (
+                            <div key={task.id} className={`task-row ${task.status}`}>
+                                <span className="text-sm font-mono text-gray-500">{task.id}</span>
+                                <span className="text-sm">{task.name}</span>
+                                <span className={`text-xs priority-${task.priority}`}>
+                                    {task.priority}
+                                </span>
+                                <span className="text-xs text-gray-500">
+                                    {task.duration}d
+                                </span>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        function TradingStrategyFlow({ flow }) {
+            return (
+                <div className="space-y-8">
+                    {flow.stages.map((stage, i) => (
+                        <div key={stage.id} className="flow-stage fade-in" style={{ animationDelay: `${i * 0.1}s` }}>
+                            <div className="flex items-center gap-4 mb-3">
+                                <div className="icon-box text-lg">
+                                    {stage.id}
+                                </div>
+                                <div className="flex-1">
+                                    <h4 className="font-bold text-lg gradient-text">{stage.name}</h4>
+                                    <p className="text-sm text-gray-400">{stage.description}</p>
+                                </div>
+                            </div>
+                            
+                            <div className="grid grid-cols-2 gap-4 text-sm mb-3">
+                                <div>
+                                    <span className="text-gray-400">משך: </span>
+                                    <span className="font-semibold">{stage.duration}</span>
+                                </div>
+                                <div>
+                                    <span className="text-gray-400">פלט: </span>
+                                    <span className="font-semibold">{stage.output}</span>
+                                </div>
+                            </div>
+                            
+                            <div className="flex flex-wrap gap-2">
+                                {stage.technologies.map((tech, i) => (
+                                    <span key={i} className="px-2 py-1 bg-purple-500 bg-opacity-20 text-purple-300 rounded text-xs">
+                                        {tech}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+
+        function NewsPipeline({ sources }) {
+            return (
+                <div className="space-y-3">
+                    {sources.map((source) => (
+                        <div key={source.id} className="news-source-card fade-in">
+                            <div className="text-2xl">
+                                {source.priority === 'high' ? '🔥' : source.priority === 'medium' ? '📊' : '📝'}
+                            </div>
+                            <div className="flex-1">
+                                <div className="font-semibold">{source.source}</div>
+                                <div className="text-xs text-gray-400">{source.category} · {source.processing}</div>
+                            </div>
+                            <div className={`status-badge status-${source.status}`}>
+                                {source.status}
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+
+        function App() {
+            const [data, setData] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [activeTab, setActiveTab] = useState('overview');
+            const [language, setLanguage] = useState('he');
+
+            const t = translations[language];
+
+            useEffect(() => {
+                document.documentElement.lang = language;
+                document.documentElement.dir = language === 'he' ? 'rtl' : 'ltr';
+            }, [language]);
+
+            useEffect(() => {
+                fetchData();
+            }, []);
+
+            const fetchData = async () => {
+                try {
+                    setLoading(true);
+                    const response = await fetch('/dashboard/workbook');
+                    if (!response.ok) throw new Error('Failed to fetch');
+                    const json = await response.json();
+                    setData(json);
+                    setError(null);
+                } catch (err) {
+                    console.error('Error fetching data:', err);
+                    setError(err.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            if (loading) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center">
+                        <div className="text-center">
+                            <div className="w-16 h-16 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                            <p className="text-xl text-gray-300">{t.loading}</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            if (error) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center">
+                        <div className="glass-card p-8 text-center max-w-md">
+                            <div className="text-6xl mb-4">⚠️</div>
+                            <h2 className="text-2xl font-bold mb-2">{t.error}</h2>
+                            <p className="text-gray-400 mb-4">{error}</p>
+                            <button onClick={fetchData} className="tab-button active">
+                                נסה שוב
+                            </button>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen p-4 md:p-8">
+                    <div className="max-w-7xl mx-auto">
+                        <header className="gradient-bg rounded-2xl shadow-2xl p-6 mb-8 relative z-10 fade-in">
+                            <div className="flex justify-between items-center flex-wrap gap-4">
+                                <div>
+                                    <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">{t.title}</h1>
+                                    <p className="text-purple-100">{t.subtitle}</p>
+                                </div>
+                                <button
+                                    onClick={() => setLanguage(prev => prev === 'he' ? 'en' : 'he')}
+                                    className="px-4 py-2 bg-white bg-opacity-20 hover:bg-opacity-30 text-white rounded-lg transition-all"
+                                >
+                                    {language === 'he' ? 'EN' : 'עב'}
+                                </button>
+                            </div>
+                        </header>
+
+                        <div className="glass-card rounded-xl p-2 mb-8 fade-in">
+                            <div className="flex gap-2 overflow-x-auto scrollbar-hide">
+                                {Object.entries(t.tabs).map(([key, label]) => (
+                                    <button
+                                        key={key}
+                                        onClick={() => setActiveTab(key)}
+                                        className={`tab-button whitespace-nowrap ${activeTab === key ? 'active' : ''}`}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="fade-in">
+                            {activeTab === 'overview' && (
+                                <div className="space-y-6">
+                                    <LogoSection logoPath={data.logo_path} />
+                                    
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                                        <div className="glass-card p-6">
+                                            <div className="metric-value mb-2">8</div>
+                                            <div className="text-gray-400">AI Models</div>
+                                        </div>
+                                        <div className="glass-card p-6">
+                                            <div className="metric-value mb-2">5</div>
+                                            <div className="text-gray-400">Architecture Layers</div>
+                                        </div>
+                                        <div className="glass-card p-6">
+                                            <div className="metric-value mb-2">{data.roadmap_gantt.total_tasks}</div>
+                                            <div className="text-gray-400">Total Tasks</div>
+                                        </div>
+                                    </div>
+
+                                    <div className="glass-card p-6">
+                                        <h2 className="section-header">
+                                            <div className="icon-box">📊</div>
+                                            <span>Metadata</span>
+                                        </h2>
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                                            <div>
+                                                <div className="text-gray-400 mb-1">Version</div>
+                                                <div className="font-semibold">{data.metadata.version}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-400 mb-1">Phase</div>
+                                                <div className="font-semibold">{data.metadata.phase}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-400 mb-1">Completion</div>
+                                                <div className="font-semibold">{data.metadata.completion}</div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-400 mb-1">Next Milestone</div>
+                                                <div className="font-semibold">{data.metadata.next_milestone}</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'ai_mesh' && (
+                                <div>
+                                    <h2 className="section-header mb-6">
+                                        <div className="icon-box">🤖</div>
+                                        <span>8-AI Mesh Network</span>
+                                    </h2>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                        {data.ai_mesh_detailed.map((ai, i) => (
+                                            <AIMeshCard key={i} ai={ai} language={language} />
+                                        ))}
+                                    </div>
+                                </div>
+                            )}
+
+                            {activeTab === 'architecture' && (
+                                <div>
+                                    <h2 className="section-header mb-6">
+                                        <div className="icon-box">🏗️</div>
+                                        <span>5-Layer Architecture</span>
+                                    </h2>
+                                    {data.architecture_flow.layers.map((layer, i) => (
+                                        <ArchitectureLayer key={i} layer={layer} />
+                                    ))}
+                                </div>
+                            )}
+
+                            {activeTab === 'roadmap' && (
+                                <div>
+                                    <h2 className="section-header mb-6">
+                                        <div className="icon-box">🗺️</div>
+                                        <span>4-Phase Roadmap</span>
+                                    </h2>
+                                    <div className="glass-card p-6 mb-6">
+                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
+                                            <div>
+                                                <div className="metric-value">{data.roadmap_gantt.total_tasks}</div>
+                                                <div className="text-sm text-gray-400">Total Tasks</div>
+                                            </div>
+                                            <div>
+                                                <div className="metric-value">{data.roadmap_gantt.completed_tasks}</div>
+                                                <div className="text-sm text-gray-400">Completed</div>
+                                            </div>
+                                            <div>
+                                                <div className="metric-value">{data.roadmap_gantt.in_progress_tasks}</div>
+                                                <div className="text-sm text-gray-400">In Progress</div>
+                                            </div>
+                                            <div>
+                                                <div className="metric-value">{data.roadmap_gantt.overall_progress}%</div>
+                                                <div className="text-sm text-gray-400">Overall</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    {data.roadmap_gantt.phases.map((phase, i) => (
+                                        <RoadmapPhase key={i} phase={phase} />
+                                    ))}
+                                </div>
+                            )}
+
+                            {activeTab === 'strategy' && (
+                                <div>
+                                    <h2 className="section-header mb-6">
+                                        <div className="icon-box">⚡</div>
+                                        <span>7-Stage Trading Flow</span>
+                                    </h2>
+                                    <TradingStrategyFlow flow={data.trading_strategy_flow} />
+                                </div>
+                            )}
+
+                            {activeTab === 'news' && (
+                                <div>
+                                    <h2 className="section-header mb-6">
+                                        <div className="icon-box">📰</div>
+                                        <span>10-Source News Pipeline</span>
+                                    </h2>
+                                    <NewsPipeline sources={data.news_pipeline} />
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>

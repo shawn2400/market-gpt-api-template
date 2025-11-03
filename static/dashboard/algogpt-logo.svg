@@ -1,0 +1,142 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 120" width="400" height="120">
+  <defs>
+    <linearGradient id="techGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#764ba2;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#f093fb;stop-opacity:1" />
+    </linearGradient>
+    
+    <linearGradient id="glowGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#667eea;stop-opacity:0.6" />
+      <stop offset="50%" style="stop-color:#f093fb;stop-opacity:0.8" />
+      <stop offset="100%" style="stop-color:#667eea;stop-opacity:0.6" />
+    </linearGradient>
+    
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    
+    <filter id="shimmer">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur"/>
+      <feColorMatrix in="blur" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 18 -7" result="glow"/>
+      <feBlend in="SourceGraphic" in2="glow" mode="screen"/>
+    </filter>
+    
+    <radialGradient id="brainGlow">
+      <stop offset="0%" style="stop-color:#f093fb;stop-opacity:1" />
+      <stop offset="70%" style="stop-color:#764ba2;stop-opacity:0.5" />
+      <stop offset="100%" style="stop-color:#667eea;stop-opacity:0" />
+    </radialGradient>
+    
+    <clipPath id="hexClip">
+      <polygon points="30,15 45,7.5 60,15 60,30 45,37.5 30,30"/>
+    </clipPath>
+    
+    <style>
+      @keyframes shimmerAnim {
+        0% { opacity: 0.6; }
+        50% { opacity: 1; }
+        100% { opacity: 0.6; }
+      }
+      @keyframes pulseCircuit {
+        0%, 100% { stroke-dashoffset: 100; }
+        50% { stroke-dashoffset: 0; }
+      }
+      @keyframes rotate {
+        from { transform: rotate(0deg); }
+        to { transform: rotate(360deg); }
+      }
+      .shimmer { animation: shimmerAnim 3s ease-in-out infinite; }
+      .circuit-pulse { 
+        stroke-dasharray: 100;
+        animation: pulseCircuit 3s linear infinite;
+      }
+      .rotating-hex {
+        transform-origin: center;
+        animation: rotate 20s linear infinite;
+      }
+      .text-main {
+        font-family: 'Arial', 'Helvetica', sans-serif;
+        font-weight: 800;
+        letter-spacing: -1px;
+      }
+      .text-sub {
+        font-family: 'Arial', 'Helvetica', sans-serif;
+        font-weight: 300;
+        letter-spacing: 2px;
+      }
+    </style>
+  </defs>
+  
+  <rect width="400" height="120" fill="#0a0a1a" opacity="0"/>
+  
+  <g transform="translate(20, 60)">
+    <circle cx="40" cy="0" r="35" fill="url(#brainGlow)" opacity="0.3"/>
+    
+    <g class="rotating-hex" transform="translate(40, 0)">
+      <polygon points="0,-20 17.32,-10 17.32,10 0,20 -17.32,10 -17.32,-10" 
+               fill="none" stroke="url(#techGradient)" stroke-width="2" opacity="0.6"/>
+      <polygon points="0,-15 12.99,-7.5 12.99,7.5 0,15 -12.99,7.5 -12.99,-7.5" 
+               fill="none" stroke="url(#techGradient)" stroke-width="1.5" opacity="0.4"/>
+    </g>
+    
+    <g filter="url(#glow)">
+      <polygon points="40,-18 54,-10 54,2 40,10 26,2 26,-10" 
+               fill="url(#techGradient)" opacity="0.8"/>
+      <polygon points="40,-12 50,-6 50,0 40,6 30,0 30,-6" 
+               fill="#f093fb" opacity="0.6" class="shimmer"/>
+    </g>
+    
+    <circle cx="40" cy="-8" r="8" fill="url(#techGradient)" filter="url(#shimmer)"/>
+    <circle cx="40" cy="-8" r="4" fill="#ffffff" opacity="0.9" class="shimmer"/>
+    
+    <g opacity="0.7">
+      <path d="M 25 -15 Q 20 -10 25 -5" stroke="url(#glowGradient)" stroke-width="1.5" 
+            fill="none" class="circuit-pulse"/>
+      <path d="M 55 -15 Q 60 -10 55 -5" stroke="url(#glowGradient)" stroke-width="1.5" 
+            fill="none" class="circuit-pulse" style="animation-delay: 0.5s"/>
+      <path d="M 40 10 L 40 15" stroke="url(#glowGradient)" stroke-width="2" 
+            fill="none" class="circuit-pulse" style="animation-delay: 1s"/>
+      <circle cx="25" cy="-15" r="2" fill="#667eea" class="shimmer"/>
+      <circle cx="55" cy="-15" r="2" fill="#f093fb" class="shimmer" style="animation-delay: 0.3s"/>
+      <circle cx="40" cy="15" r="2" fill="#764ba2" class="shimmer" style="animation-delay: 0.6s"/>
+    </g>
+    
+    <g transform="translate(30, -8)">
+      <circle cx="0" cy="0" r="1" fill="#667eea" opacity="0.8"/>
+      <circle cx="20" cy="0" r="1" fill="#f093fb" opacity="0.8"/>
+      <circle cx="5" cy="-4" r="1" fill="#764ba2" opacity="0.8"/>
+      <circle cx="15" cy="-4" r="1" fill="#667eea" opacity="0.8"/>
+      <circle cx="10" cy="4" r="1" fill="#f093fb" opacity="0.8"/>
+    </g>
+  </g>
+  
+  <g transform="translate(100, 70)">
+    <text x="0" y="0" class="text-main" font-size="48" fill="url(#techGradient)" 
+          filter="url(#glow)">AlgoGPT</text>
+    <text x="0" y="0" class="text-main" font-size="48" fill="#ffffff" opacity="0.95">AlgoGPT</text>
+    
+    <text x="2" y="-25" class="text-sub" font-size="9" fill="#667eea" opacity="0.7">AUTONOMOUS</text>
+    <text x="2" y="18" class="text-sub" font-size="9" fill="#f093fb" opacity="0.7">TRADING AI</text>
+    
+    <line x1="0" y1="-18" x2="50" y2="-18" stroke="url(#techGradient)" stroke-width="1" opacity="0.5"/>
+    <line x1="0" y1="24" x2="50" y2="24" stroke="url(#techGradient)" stroke-width="1" opacity="0.5"/>
+  </g>
+  
+  <g transform="translate(350, 60)" opacity="0.4">
+    <polygon points="0,-8 6.93,-4 6.93,4 0,8 -6.93,4 -6.93,-4" 
+             fill="none" stroke="url(#techGradient)" stroke-width="1"/>
+    <polygon points="0,-12 10.39,-6 10.39,6 0,12 -10.39,6 -10.39,-6" 
+             fill="none" stroke="url(#techGradient)" stroke-width="0.5" class="shimmer"/>
+  </g>
+  
+  <g opacity="0.2">
+    <circle cx="370" cy="20" r="2" fill="#667eea" class="shimmer"/>
+    <circle cx="380" cy="100" r="2" fill="#f093fb" class="shimmer" style="animation-delay: 0.5s"/>
+    <circle cx="10" cy="30" r="1.5" fill="#764ba2" class="shimmer" style="animation-delay: 1s"/>
+  </g>
+</svg>
