@@ -1,0 +1,62 @@
+🔷 שדרוג 1 — אתר פרטי (דשבורד + דוחות בלבד)
+מה עושים (קצר ותכל'ס)
+
+תשתית: React+TS+Vite, ESLint/Prettier/Husky, .env מאומת (zod), Feature Flags.
+
+ניווט: Header עם “בס״ד + ברכה” + באנר “What’s new”, 8 לשוניות: Markets / Trades / Positions / News / Health / FinOps / Reports / Settings.
+
+טבלאות חיות: Live Price Table ל-531 סמלים עם Virtualization, חיפוש/סינון <100ms, skeleton loaders.
+
+News Feed: “Fresh & Clean” (allowlist, cross-verify≥2) + Time Machine.
+
+Health+FinOps: p95/p99, CPU/MEM, SSE status; Token Burn, Cache-Hit, Burn-Forecast 24h.
+
+דוחות: רק לאתר — 09:00/21:00 + “Generate Now”; היסטוריה, הורדות PDF/CSV, Audit Trail חתום.
+
+SSE Real-Time: חיבור יציב עם backoff+jitter וחיווי מצב.
+
+אבטחה+מובייל: Replit Auth (RBAC Admin/Viewer), PWA (iOS/Android), CSP/HSTS, SameSite=Strict.
+
+KPIs/SLOs (מופיעים באתר)
+
+LCP < 2.0s, TTI < 3.0s, bundle ≤ 250KB gzip.
+
+SSE uptime ≥ 99%, reconnect backoff תקין.
+
+חיפוש/סינון < 100ms (10k שורות מדומות).
+
+p95 LOW/MID < 1.6s, p99 < 2.8s (מדדי בריאות).
+
+Acceptance (האתר)
+
+כל 8 הלשוניות פעילות; מדדים חיים מתעדכנים.
+
+דוחות נוצרים ב-09:00/21:00, נשמרים, ניתנים להורדה; “Generate Now” עובד.
+
+אין שליחת דוחות/התראות לטלגרם (Approve/Reject בלבד מחוץ לשדרוג זה).
+
+PWA/Lighthouse ירוקים; RBAC עובד (Admin/Viewer).
+
+Go-Live Checklist (האתר)
+
+ Feature Flags לכל ווידג’ט.
+
+ Virtualized table + חיפוש מהיר.
+
+ SSE backoff+jitter + חיווי.
+
+ Reports באתר בלבד + Audit Trail.
+
+ RBAC + PWA + CSP/HSTS.
+
+ באנר “What’s new” מוצג.
+
+ Smoke e2e (ניווט→SSE→Report) ירוק.
+
+📋 הודעה לסוכן AI — אתר בלבד (הדבק כמו שהוא)
+
+TASK NAME: AlgoGPT — Private Site Upgrade (Dashboard + Reports only)
+מטרה: לבנות/לשדרג אתר פרטי מלא עם דשבורד חי, דוחות 2×יום רק לאתר, SSE יציב, נגישות וביצועים. אין שום דוחות/התראות לטלגרם.
+Deliverables: React+TS+Vite, 8 לשוניות, Virtualized 531 symbols, Smart News Feed (allowlist+cross-verify≥2), Health+FinOps KPIs, Reports 09:00/21:00 + “Generate Now”, SSE backoff+jitter, RBAC (Admin/Viewer), PWA, CSP/HSTS, Audit Trail.
+SLOs: LCP<2s, TTI<3s, bundle≤250KB, SSE uptime≥99%, p95<1.6s.
+Acceptance: דוחות באתר בלבד; RBAC/PWA/KPIs חיים; אין שום שליחה לטלגרם.
