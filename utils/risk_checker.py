@@ -52,15 +52,32 @@ def _atr_pct_from_df(df) -> float:
     return _safe_pct(atr, last)
 
 def _mark_last_spread_bps(symbol: str) -> float:
+    """
+    HARDENED: Returns spread in basis points OR raises on missing data.
+    No permissive 0.0 fallback - trades MUST have valid price data.
+    """
     try:
-        mark = float(futures_mark_price(symbol) or 0.0)
-        last = float(get_price(symbol) or 0.0)
+        mark_raw = futures_mark_price(symbol)
+        last_raw = get_price(symbol)
+        
+        # FAIL-HARD: No permissive 0.0 if prices unavailable
+        if mark_raw is None:
+            raise ValueError(f"FAIL-HARD: Mark price unavailable for {symbol}")
+        if last_raw is None:
+            raise ValueError(f"FAIL-HARD: Last price unavailable for {symbol}")
+        
+        mark: float = float(mark_raw)  # type: ignore
+        last: float = float(last_raw)  # type: ignore
+        
         if mark <= 0 or last <= 0:
-            return 0.0
+            raise ValueError(f"FAIL-HARD: Invalid prices {symbol} mark={mark} last={last}")
+        
         bps = abs(last - mark) / mark * 10000.0
         return float(bps)
-    except Exception:
-        return 0.0
+    except Exception as e:
+        # HARDENED: Return extreme value to reject trade (no silent 0.0)
+        logger.error(f"Spread check FAILED for {symbol}: {e}")
+        return 999999.0  # Extreme spread → trade will be rejected
 
 def _btc_pump_nuke_pct() -> float:
     try:
