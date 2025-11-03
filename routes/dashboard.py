@@ -3138,69 +3138,119 @@ async def get_flow_interactive_data():
 
 @router.get("/roadmap/data", summary="ROADMAP Data with Timeline")
 async def get_roadmap_data():
-    """Dynamic ROADMAP with real progress tracking"""
+    """Dynamic ROADMAP with real progress tracking from ROADMAP_PHASED.md"""
     try:
+        today = datetime.now().date()
+        
+        phases = [
+            {
+                "id": 0,
+                "name": "Phase 0: Validation & Safety ✅",
+                "start_date": "2025-10-28",
+                "end_date": "2025-11-03",
+                "status": "completed",
+                "progress": 100,
+                "tasks_completed": 20,
+                "tasks_total": 20,
+                "tasks": [
+                    {"name": "Validation Pipeline", "status": "completed"},
+                    {"name": "Fail-Closed Decision Gates", "status": "completed"},
+                    {"name": "Live Monitoring & Circuit Breakers", "status": "completed"},
+                    {"name": "Database Schema (4 tables)", "status": "completed"},
+                    {"name": "Student-t Monte Carlo", "status": "completed"}
+                ],
+                "description": "Production-ready validation infrastructure with fail-closed architecture"
+            },
+            {
+                "id": 1,
+                "name": "Phase 1: 2GB RAM - Production Polish 🔥",
+                "start_date": "2025-11-04",
+                "end_date": "2025-11-10",
+                "status": "in_progress",
+                "progress": 0,
+                "tasks_completed": 0,
+                "tasks_total": 38,
+                "tasks": [
+                    {"name": "Code Quality & Cleanup", "status": "planned"},
+                    {"name": "Database Hardening (slippage, breaker state)", "status": "planned"},
+                    {"name": "AI Performance Tracking", "status": "planned"},
+                    {"name": "Feedback Loop Dataset", "status": "planned"},
+                    {"name": "Dynamic Model Weighting", "status": "planned"},
+                    {"name": "Enhanced Monitoring", "status": "planned"},
+                    {"name": "Security & Audit Trail", "status": "planned"},
+                    {"name": "Rate Limiting", "status": "planned"}
+                ],
+                "description": "Production-ready system with AI learning, tracking, and performance optimization"
+            },
+            {
+                "id": 2,
+                "name": "Phase 2: 4GB RAM - AI Brain 🧠",
+                "start_date": "2025-11-11",
+                "end_date": "2025-11-25",
+                "status": "planned",
+                "progress": 0,
+                "tasks_completed": 0,
+                "tasks_total": 60,
+                "tasks": [
+                    {"name": "Multi-Symbol Backtesting (50+ symbols)", "status": "planned"},
+                    {"name": "Custom Transformer Model (40M params)", "status": "planned"},
+                    {"name": "Feature Engineering (50+ indicators)", "status": "planned"},
+                    {"name": "Ensemble Stacking (4 AI models)", "status": "planned"},
+                    {"name": "ML Regime Detection (HMM)", "status": "planned"},
+                    {"name": "Real-time Sentiment Analysis", "status": "planned"},
+                    {"name": "Redis Caching", "status": "planned"},
+                    {"name": "Async Optimization", "status": "planned"}
+                ],
+                "description": "Advanced backtesting, ML models, market intelligence, and infrastructure scaling"
+            },
+            {
+                "id": 3,
+                "name": "Phase 3: 8GB RAM - Full Autonomy 🚀",
+                "start_date": "2025-11-26",
+                "end_date": "2026-01-15",
+                "status": "planned",
+                "progress": 0,
+                "tasks_completed": 0,
+                "tasks_total": 92,
+                "tasks": [
+                    {"name": "Reinforcement Learning (PPO)", "status": "planned"},
+                    {"name": "LSTM Price Prediction", "status": "planned"},
+                    {"name": "CNN Pattern Recognition", "status": "planned"},
+                    {"name": "AutoML Pipeline (Optuna)", "status": "planned"},
+                    {"name": "Multi-Exchange (Bybit, Kraken, OKX)", "status": "planned"},
+                    {"name": "Cross-Exchange Arbitrage", "status": "planned"},
+                    {"name": "HFT Module (Ultra-Low Latency)", "status": "planned"},
+                    {"name": "Market Making", "status": "planned"},
+                    {"name": "Multi-User & White-Label", "status": "planned"},
+                    {"name": "SOC 2 Compliance", "status": "planned"},
+                    {"name": "Self-Healing Systems", "status": "planned"},
+                    {"name": "AI Strategy Generation", "status": "planned"}
+                ],
+                "description": "Full autonomy: RL, multi-exchange, HFT, enterprise features, self-optimization"
+            }
+        ]
+        
+        total_tasks = sum(p["tasks_total"] for p in phases)
+        completed_tasks = sum(p["tasks_completed"] for p in phases)
+        in_progress_tasks = sum(1 for p in phases if p["status"] == "in_progress") * 5
+        planned_tasks = total_tasks - completed_tasks - in_progress_tasks
+        overall_progress = round((completed_tasks / total_tasks * 100), 1) if total_tasks > 0 else 0
+        
         return {
-            "phases": [
-                {
-                    "id": 1,
-                    "name": "Foundation & Core",
-                    "start_date": "2025-10-01",
-                    "end_date": "2025-10-21",
-                    "status": "in_progress",
-                    "completion": 62,
-                    "tasks": [
-                        {"id": "F1", "name": "FastAPI Server Setup", "status": "completed", "completion": 100, "start_date": "2025-10-01", "end_date": "2025-10-03", "actual_end": "2025-10-03", "assignee": "System", "pr_link": "#123", "notes": "Gunicorn + FastAPI running on port 5000"},
-                        {"id": "F2", "name": "PostgreSQL Integration", "status": "completed", "completion": 100, "start_date": "2025-10-04", "end_date": "2025-10-06", "actual_end": "2025-10-06", "assignee": "System"},
-                        {"id": "F3", "name": "Binance API Connection", "status": "completed", "completion": 100, "start_date": "2025-10-07", "end_date": "2025-10-09", "actual_end": "2025-10-08", "assignee": "System"},
-                        {"id": "F4", "name": "Web Dashboard v1", "status": "in_progress", "completion": 75, "start_date": "2025-10-10", "end_date": "2025-10-21", "assignee": "Agent"},
-                        {"id": "F5", "name": "Authentication System", "status": "planned", "completion": 0, "start_date": "2025-10-15", "end_date": "2025-10-18"}
-                    ]
-                },
-                {
-                    "id": 2,
-                    "name": "8-AI Mesh Integration",
-                    "start_date": "2025-10-22",
-                    "end_date": "2025-11-15",
-                    "status": "planned",
-                    "completion": 15,
-                    "tasks": [
-                        {"id": "AI1", "name": "Claude Sonnet 4.5 Integration", "status": "completed", "completion": 100, "start_date": "2025-10-22", "end_date": "2025-10-25", "actual_end": "2025-10-24"},
-                        {"id": "AI2", "name": "Perplexity Integration", "status": "completed", "completion": 100, "start_date": "2025-10-26", "end_date": "2025-10-28", "actual_end": "2025-10-27"},
-                        {"id": "AI3", "name": "Cohere Setup", "status": "in_progress", "completion": 40, "start_date": "2025-10-29", "end_date": "2025-11-02"},
-                        {"id": "AI4", "name": "Consensus Engine", "status": "planned", "completion": 0, "start_date": "2025-11-03", "end_date": "2025-11-08"}
-                    ]
-                },
-                {
-                    "id": 3,
-                    "name": "News & Multi-Tenant",
-                    "start_date": "2025-11-16",
-                    "end_date": "2025-12-10",
-                    "status": "planned",
-                    "completion": 0,
-                    "tasks": [
-                        {"id": "N1", "name": "10 News Sources Integration", "status": "planned", "completion": 0, "start_date": "2025-11-16", "end_date": "2025-11-25"},
-                        {"id": "MT1", "name": "Multi-Tenant Architecture", "status": "planned", "completion": 0, "start_date": "2025-11-26", "end_date": "2025-12-10"}
-                    ]
-                },
-                {
-                    "id": 4,
-                    "name": "PWA & Benchmarking",
-                    "start_date": "2025-12-11",
-                    "end_date": "2026-01-05",
-                    "status": "planned",
-                    "completion": 0,
-                    "tasks": [
-                        {"id": "P1", "name": "PWA Development", "status": "planned", "completion": 0, "start_date": "2025-12-11", "end_date": "2025-12-20"},
-                        {"id": "B1", "name": "8 Benchmarking Engines", "status": "planned", "completion": 0, "start_date": "2025-12-21", "end_date": "2026-01-05"}
-                    ]
-                }
-            ],
-            "overall_progress": 12.4,
-            "total_tasks": 113,
-            "completed_tasks": 14,
-            "in_progress_tasks": 4,
-            "planned_tasks": 95
+            "phases": phases,
+            "total_progress": overall_progress,
+            "total_tasks": total_tasks,
+            "completed_tasks": completed_tasks,
+            "in_progress_tasks": in_progress_tasks,
+            "planned_tasks": planned_tasks,
+            "metadata": {
+                "last_updated": datetime.now().isoformat(),
+                "source": "ROADMAP_PHASED.md",
+                "ram_constraint": "2GB → 4GB → 8GB phased approach",
+                "total_hours": "56-72 hours",
+                "current_phase": "Phase 1 (2GB RAM)",
+                "peak_ram_usage": "1.5GB / 2GB"
+            }
         }
     except Exception as e:
         logger.error(f"Error in get_roadmap_data: {e}", exc_info=True)
