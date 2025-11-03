@@ -146,7 +146,7 @@ def _fut_http() -> str:
 @app.middleware("http")
 async def _head_compat_and_soft_readyz(request: Request, call_next):
     if request.url.path == "/readyz":
-        return PlainTextResponse("ok", status_code=200)
+        return JSONResponse({"ok": True, "timestamp": int(time.time())}, status_code=200)
     if request.method == "HEAD":
         scope_copy = dict(request.scope); scope_copy["method"] = "GET"
         new_req = Request(scope_copy, receive=request.receive)
@@ -156,7 +156,16 @@ async def _head_compat_and_soft_readyz(request: Request, call_next):
 
 @app.get("/readyz")
 async def readyz():
-    return PlainTextResponse("ok", status_code=200)
+    return {"ok": True, "timestamp": int(time.time())}
+
+@app.get("/api/health")
+async def api_health():
+    return {
+        "ok": True,
+        "service": "algogpt",
+        "status": "operational",
+        "timestamp": int(time.time())
+    }
 
 @app.api_route("/healthz", methods=["GET", "POST"])
 async def healthz(req: Request):
