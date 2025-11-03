@@ -51,10 +51,6 @@ args = "Auto Scanner"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Daily Health Report"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "GPT-5 Central Brain"
 
 [[workflows.workflow.tasks]]
@@ -79,7 +75,7 @@ args = "Sentinel Security"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Replit Agent Bridge"
+args = "GitHub Auto-Commit"
 
 [[workflows.workflow]]
 name = "Daily Digest"
@@ -88,17 +84,6 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/daily_digest.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
-name = "Daily Health Report"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG BASE_URL=http://127.0.0.1:5000 python workers/daily_health_report.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
@@ -159,12 +144,12 @@ args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG SENTINE
 outputType = "console"
 
 [[workflows.workflow]]
-name = "Replit Agent Bridge"
+name = "GitHub Auto-Commit"
 author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG REPLIT_AGENT_ENABLED=1 REPLIT_BRIDGE_NOTIFICATIONS=0 python workers/replit_agent_bridge.py"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG GITHUB_AUTO_COMMIT_ENABLED=1 GITHUB_AUTO_COMMIT_INTERVAL=3600 GITHUB_REPO_PATH=/home/runner/$REPL_SLUG GITHUB_COMMIT_AUTHOR=\"AlgoGPT System\" GITHUB_COMMIT_EMAIL=\"algogpt@system.local\" GITHUB_COMMIT_TELEGRAM_NOTIFY=1 python workers/github_auto_commit.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
