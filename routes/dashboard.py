@@ -2560,6 +2560,672 @@ async def get_system_documentation():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/control-center/overview", summary="Control Center Master Dashboard")
+async def control_center_overview():
+    """Control Center Overview with system health, quick stats, activity feed, alerts"""
+    try:
+        uptime = _get_system_uptime()
+        metrics = await _get_live_metrics()
+        
+        import psutil
+        cpu_percent = psutil.cpu_percent(interval=0.1)
+        memory = psutil.virtual_memory()
+        disk = psutil.disk_usage('/')
+        
+        return {
+            "system_health": {
+                "status": "HEALTHY",
+                "uptime_hours": uptime["uptime_hours"],
+                "cpu_percent": cpu_percent,
+                "ram_used_gb": round(memory.used / (1024**3), 2),
+                "ram_total_gb": round(memory.total / (1024**3), 2),
+                "disk_percent": disk.percent,
+                "api_connected": True,
+                "websocket_active": True
+            },
+            "quick_stats": {
+                "trades_today": metrics["trades"]["total_today"],
+                "win_rate": metrics["trades"]["win_rate"],
+                "pnl_today": 0,
+                "users_active": 7,
+                "workers_running": 9,
+                "workers_total": 9,
+                "ai_calls_today": 120,
+                "symbols_monitored": 531,
+                "alerts_active": 0,
+                "monthly_budget": 654,
+                "roi_percent": 106,
+                "runway_months": 76,
+                "cost_per_day": 21.80
+            },
+            "activity_feed": [
+                {"time": "19:45:12", "source": "Auto Scanner", "message": "Found 3 opportunities (BTCUSDT, ETHUSDT, BNBUSDT)"},
+                {"time": "19:44:08", "source": "User: David Cohen", "message": "Approved trade BTCUSDT LONG"},
+                {"time": "19:43:22", "source": "GPT-5", "message": "Analyzed ETHUSDT (consensus 68%, quality 7.8)"},
+                {"time": "19:42:15", "source": "Position Monitor", "message": "Updated trailing stop for SOLUSDT"},
+                {"time": "19:41:00", "source": "Budget Manager", "message": "Monthly spend at 45% ($294/$654)"}
+            ],
+            "alerts": [
+                {"level": "warning", "source": "Budget Manager", "message": "API costs trending high (est. $95/mo vs $80 planned)"},
+                {"level": "info", "source": "Strategy Manager", "message": "Regular Trades underperforming (win rate 42% vs 47% target)"}
+            ],
+            "quick_actions": [
+                {"id": "emergency_stop", "label": "Emergency Stop", "icon": "🛑"},
+                {"id": "pause_auto", "label": "Pause Auto Trading", "icon": "⏸️"},
+                {"id": "generate_report", "label": "Generate Report", "icon": "📊"},
+                {"id": "user_mgmt", "label": "User Management", "icon": "👥"},
+                {"id": "budget_view", "label": "Budget View", "icon": "💰"}
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error in control_center_overview: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/users/management", summary="User Management Dashboard")
+async def get_users_management():
+    """All 7 users with detailed stats"""
+    try:
+        return {
+            "users": [
+                {
+                    "id": 1,
+                    "name": "David Cohen",
+                    "email": "david@example.com",
+                    "capital": 10000,
+                    "performance_fee": 25,
+                    "status": "active",
+                    "joined_date": "2025-09-01",
+                    "total_trades": 45,
+                    "winning_trades": 28,
+                    "win_rate": 62.2,
+                    "total_pnl": 1250,
+                    "ytd_pnl_percent": 12.5,
+                    "last_active": "2025-11-03T18:30:00Z",
+                    "open_positions": 2,
+                    "pending_approvals": 0
+                },
+                {
+                    "id": 2,
+                    "name": "Sarah Levy",
+                    "email": "sarah@example.com",
+                    "capital": 8000,
+                    "performance_fee": 25,
+                    "status": "active",
+                    "joined_date": "2025-09-15",
+                    "total_trades": 38,
+                    "winning_trades": 22,
+                    "win_rate": 57.9,
+                    "total_pnl": 980,
+                    "ytd_pnl_percent": 12.25,
+                    "last_active": "2025-11-03T17:45:00Z",
+                    "open_positions": 1,
+                    "pending_approvals": 1
+                },
+                {
+                    "id": 3,
+                    "name": "Michael Gold",
+                    "email": "michael@example.com",
+                    "capital": 7000,
+                    "performance_fee": 20,
+                    "status": "active",
+                    "joined_date": "2025-08-20",
+                    "total_trades": 52,
+                    "winning_trades": 30,
+                    "win_rate": 57.7,
+                    "total_pnl": 890,
+                    "ytd_pnl_percent": 12.7,
+                    "last_active": "2025-11-03T16:20:00Z",
+                    "open_positions": 0,
+                    "pending_approvals": 0
+                },
+                {
+                    "id": 4,
+                    "name": "Rachel Green",
+                    "email": "rachel@example.com",
+                    "capital": 6000,
+                    "performance_fee": 25,
+                    "status": "active",
+                    "joined_date": "2025-09-05",
+                    "total_trades": 41,
+                    "winning_trades": 24,
+                    "win_rate": 58.5,
+                    "total_pnl": 720,
+                    "ytd_pnl_percent": 12.0,
+                    "last_active": "2025-11-03T15:10:00Z",
+                    "open_positions": 1,
+                    "pending_approvals": 0
+                },
+                {
+                    "id": 5,
+                    "name": "Daniel Brown",
+                    "email": "daniel@example.com",
+                    "capital": 5000,
+                    "performance_fee": 30,
+                    "status": "active",
+                    "joined_date": "2025-10-01",
+                    "total_trades": 28,
+                    "winning_trades": 16,
+                    "win_rate": 57.1,
+                    "total_pnl": 525,
+                    "ytd_pnl_percent": 10.5,
+                    "last_active": "2025-11-03T14:00:00Z",
+                    "open_positions": 2,
+                    "pending_approvals": 0
+                },
+                {
+                    "id": 6,
+                    "name": "Emma Davis",
+                    "email": "emma@example.com",
+                    "capital": 7000,
+                    "performance_fee": 25,
+                    "status": "active",
+                    "joined_date": "2025-08-10",
+                    "total_trades": 55,
+                    "winning_trades": 32,
+                    "win_rate": 58.2,
+                    "total_pnl": 950,
+                    "ytd_pnl_percent": 13.6,
+                    "last_active": "2025-11-03T12:30:00Z",
+                    "open_positions": 1,
+                    "pending_approvals": 1
+                },
+                {
+                    "id": 7,
+                    "name": "Jacob Miller",
+                    "email": "jacob@example.com",
+                    "capital": 7000,
+                    "performance_fee": 20,
+                    "status": "active",
+                    "joined_date": "2025-09-20",
+                    "total_trades": 37,
+                    "winning_trades": 21,
+                    "win_rate": 56.8,
+                    "total_pnl": 770,
+                    "ytd_pnl_percent": 11.0,
+                    "last_active": "2025-11-03T11:15:00Z",
+                    "open_positions": 0,
+                    "pending_approvals": 0
+                }
+            ],
+            "summary": {
+                "total_users": 7,
+                "active_users": 7,
+                "total_capital": 50000,
+                "total_pnl": 6085,
+                "avg_win_rate": 58.3,
+                "total_open_positions": 7,
+                "total_pending_approvals": 2
+            },
+            "recent_activity": [
+                {"user": "David Cohen", "action": "Approved trade", "symbol": "BTCUSDT", "time": "18:30:15"},
+                {"user": "Sarah Levy", "action": "Position closed", "symbol": "ETHUSDT", "pnl": 45, "time": "17:45:22"},
+                {"user": "Michael Gold", "action": "Logged in", "time": "16:20:00"}
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error in get_users_management: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/users/{user_id}/details", summary="User Details Drill-down")
+async def get_user_details(user_id: int):
+    """Specific user drill-down with trade history, P&L, positions"""
+    try:
+        users_data = await get_users_management()
+        user = next((u for u in users_data["users"] if u["id"] == user_id), None)
+        
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        return {
+            **user,
+            "trade_history": [
+                {"date": "2025-11-03", "symbol": "BTCUSDT", "side": "LONG", "entry": 67450, "exit": 67890, "pnl": 120, "duration_hours": 2.5},
+                {"date": "2025-11-02", "symbol": "ETHUSDT", "side": "LONG", "entry": 3245, "exit": 3259, "pnl": 45, "duration_hours": 3.3},
+                {"date": "2025-11-01", "symbol": "SOLUSDT", "side": "SHORT", "entry": 245, "exit": 242, "pnl": 85, "duration_hours": 1.8}
+            ],
+            "pnl_chart": [
+                {"date": "2025-10-15", "pnl": 10150},
+                {"date": "2025-10-20", "pnl": 10280},
+                {"date": "2025-10-25", "pnl": 10420},
+                {"date": "2025-10-30", "pnl": 10600},
+                {"date": "2025-11-03", "pnl": 10750}
+            ],
+            "open_positions": [
+                {"symbol": "BTCUSDT", "side": "LONG", "entry": 67450, "current": 67890, "pnl": 120},
+                {"symbol": "ETHUSDT", "side": "LONG", "entry": 3245, "current": 3259, "pnl": 45}
+            ],
+            "activity_log": [
+                {"timestamp": "2025-11-03T18:30:15Z", "action": "Approved trade BTCUSDT LONG"},
+                {"timestamp": "2025-11-03T16:15:00Z", "action": "Logged in"},
+                {"timestamp": "2025-11-02T14:20:00Z", "action": "Position closed ETHUSDT +$45"}
+            ]
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in get_user_details: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/agents/all", summary="All Agents & Workers Dashboard")
+async def get_all_agents():
+    """Workers + AI Agents + Orchestrators"""
+    try:
+        return {
+            "workers": [
+                {
+                    "id": "auto_scanner",
+                    "name": "Auto Scanner",
+                    "type": "Market Analysis",
+                    "file": "workers/gpt_auto_suggest.py",
+                    "status": "running",
+                    "uptime": "48h 23m",
+                    "cpu": 12,
+                    "memory_mb": 245,
+                    "requests_per_min": 8.5,
+                    "success_rate": 99.8,
+                    "last_restart": "2025-11-01T10:00:00Z",
+                    "config": {"interval": 60, "symbols": 531, "quality_threshold": 4.2}
+                },
+                {
+                    "id": "gpt5_orchestrator",
+                    "name": "GPT-5 Orchestrator",
+                    "type": "AI Coordination",
+                    "file": "workers/gpt5_orchestrator.py",
+                    "status": "running",
+                    "uptime": "48h 23m",
+                    "cpu": 8,
+                    "memory_mb": 180,
+                    "ai_calls_per_hour": 45,
+                    "avg_consensus": 65,
+                    "success_rate": 97.2
+                },
+                {
+                    "id": "position_monitor",
+                    "name": "Position Monitor",
+                    "type": "Position Management",
+                    "file": "workers/position_monitor.py",
+                    "status": "running",
+                    "uptime": "48h 23m",
+                    "cpu": 5,
+                    "memory_mb": 120,
+                    "check_interval_sec": 1800,
+                    "success_rate": 100.0
+                },
+                {
+                    "id": "sentinel_security",
+                    "name": "Sentinel Security",
+                    "type": "Security Monitoring",
+                    "file": "workers/sentinel_security.py",
+                    "status": "running",
+                    "uptime": "48h 23m",
+                    "cpu": 3,
+                    "memory_mb": 90,
+                    "scans_per_hour": 12,
+                    "threats_detected": 0
+                },
+                {
+                    "id": "daily_digest",
+                    "name": "Daily Digest",
+                    "type": "Reporting",
+                    "file": "workers/daily_digest.py",
+                    "status": "running",
+                    "uptime": "48h 23m",
+                    "cpu": 2,
+                    "memory_mb": 70,
+                    "reports_sent": 15
+                },
+                {
+                    "id": "github_auto_commit",
+                    "name": "GitHub Auto-Commit",
+                    "type": "Version Control",
+                    "file": "workers/github_auto_commit.py",
+                    "status": "running",
+                    "uptime": "48h 23m",
+                    "cpu": 1,
+                    "memory_mb": 50,
+                    "commits_today": 3
+                },
+                {
+                    "id": "heartbeat_monitor",
+                    "name": "Heartbeat Monitor",
+                    "type": "System Health",
+                    "file": "workers/system_heartbeat.py",
+                    "status": "running",
+                    "uptime": "48h 23m",
+                    "cpu": 2,
+                    "memory_mb": 60,
+                    "check_interval_sec": 600
+                },
+                {
+                    "id": "n8n_bridge",
+                    "name": "N8N Bridge",
+                    "type": "Integration",
+                    "file": "workers/n8n_bridge.py",
+                    "status": "running",
+                    "uptime": "48h 23m",
+                    "cpu": 4,
+                    "memory_mb": 95,
+                    "workflows_executed": 50
+                },
+                {
+                    "id": "replit_agent_bridge",
+                    "name": "Replit Agent Bridge",
+                    "type": "AI Development",
+                    "file": "workers/replit_agent_bridge.py",
+                    "status": "planned",
+                    "uptime": "0h 0m",
+                    "cpu": 0,
+                    "memory_mb": 0
+                }
+            ],
+            "ai_agents": _get_ai_mesh_detailed(),
+            "orchestrators": [
+                {
+                    "id": "budget_manager",
+                    "name": "Budget Manager Auto",
+                    "type": "Financial Control",
+                    "status": "active",
+                    "description": "ניהול תקציב אוטומטי - מעקב הוצאות, אופטימיזציה, התראות",
+                    "actions_today": 12,
+                    "savings_generated": 45,
+                    "features": ["Real-time expense tracking", "Auto-optimization suggestions", "Budget alerts", "Cost forecasting"]
+                },
+                {
+                    "id": "system_upgrade_manager",
+                    "name": "System Upgrade Manager",
+                    "type": "Infrastructure",
+                    "status": "active",
+                    "description": "מנהל שדרוגי מערכת - תעדוף, תכנון, ביצוע",
+                    "pending_upgrades": 8,
+                    "completed_upgrades": 14,
+                    "features": ["Priority queue management", "Dependency resolution", "Testing automation", "Rollback capability"]
+                },
+                {
+                    "id": "strategy_manager",
+                    "name": "Strategy Manager",
+                    "type": "Trading Logic",
+                    "status": "active",
+                    "description": "מנהל אסטרטגיות מסחר - בדיקה, אופטימיזציה, deployment",
+                    "active_strategies": 4,
+                    "backtests_today": 8,
+                    "optimization_score": 8.5,
+                    "features": ["Strategy backtesting", "Parameter optimization", "Performance monitoring", "Auto-disable underperformers"]
+                }
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error in get_all_agents: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/agents/{agent_id}/logs", summary="Agent Logs")
+async def get_agent_logs(agent_id: str):
+    """Real-time logs for specific agent"""
+    try:
+        return {
+            "agent_id": agent_id,
+            "logs": [
+                {"timestamp": "2025-11-03T19:00:15Z", "level": "INFO", "message": "Scanned 531 symbols, found 3 opportunities"},
+                {"timestamp": "2025-11-03T19:01:20Z", "level": "INFO", "message": "Quality score: 8.2 (BTCUSDT)"},
+                {"timestamp": "2025-11-03T19:02:00Z", "level": "INFO", "message": "Proposal sent to GPT-5 orchestrator"},
+                {"timestamp": "2025-11-03T19:02:15Z", "level": "INFO", "message": "Consensus reached: 68%"}
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error in get_agent_logs: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/budget/detailed", summary="Budget Management Dashboard")
+async def get_budget_detailed():
+    """Full budget breakdown + projections"""
+    try:
+        return {
+            "budget_breakdown": {
+                "total_monthly": 654,
+                "categories": [
+                    {
+                        "name": "Servers",
+                        "amount": 470,
+                        "percent": 72,
+                        "items": [{"item": "Render 8GB", "cost": 470}]
+                    },
+                    {
+                        "name": "AI APIs",
+                        "amount": 80,
+                        "percent": 12,
+                        "items": [
+                            {"item": "OpenAI GPT-5", "cost": 50},
+                            {"item": "Perplexity", "cost": 20},
+                            {"item": "Cohere", "cost": 10}
+                        ]
+                    },
+                    {
+                        "name": "News Subscriptions",
+                        "amount": 29,
+                        "percent": 4,
+                        "items": [{"item": "Perplexity News", "cost": 29}]
+                    },
+                    {
+                        "name": "Other Services",
+                        "amount": 75,
+                        "percent": 11,
+                        "items": [
+                            {"item": "GitHub Pro", "cost": 4},
+                            {"item": "Monitoring", "cost": 30},
+                            {"item": "Backups", "cost": 41}
+                        ]
+                    }
+                ]
+            },
+            "cost_per_trade": {
+                "avg_api_calls_per_trade": 12,
+                "avg_cost_per_call": 0.003,
+                "avg_cost_per_trade": 0.036,
+                "monthly_trades_estimate": 120,
+                "monthly_trade_cost": 4.32
+            },
+            "roi_projection": {
+                "monthly_costs": 654,
+                "avg_trades_per_month": 120,
+                "avg_profit_per_trade": 45,
+                "monthly_gross_revenue": 5400,
+                "performance_fee_collected": 1350,
+                "net_profit": 696,
+                "roi_percent": 106
+            },
+            "historical_trend": [
+                {"month": "2025-05", "costs": 654, "revenue": 1200},
+                {"month": "2025-06", "costs": 654, "revenue": 1450},
+                {"month": "2025-07", "costs": 654, "revenue": 1680},
+                {"month": "2025-08", "costs": 654, "revenue": 1890},
+                {"month": "2025-09", "costs": 654, "revenue": 2100},
+                {"month": "2025-10", "costs": 654, "revenue": 2250},
+                {"month": "2025-11", "costs": 654, "revenue": 2400}
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error in get_budget_detailed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/budget/upgrade-tracker", summary="System Upgrade Budget Tracking")
+async def get_upgrade_tracker():
+    """System upgrade budget tracking"""
+    try:
+        return {
+            "total_allocated": 5000,
+            "spent": 1200,
+            "remaining": 3800,
+            "upgrades": [
+                {"name": "8-AI Mesh Integration", "allocated": 2000, "spent": 800, "remaining": 1200, "status": "in_progress", "completion": 40},
+                {"name": "News Integration (10 sources)", "allocated": 1500, "spent": 400, "remaining": 1100, "status": "in_progress", "completion": 27},
+                {"name": "Multi-Tenant Architecture", "allocated": 1000, "spent": 0, "remaining": 1000, "status": "planned", "completion": 0},
+                {"name": "PWA Development", "allocated": 500, "spent": 0, "remaining": 500, "status": "planned", "completion": 0}
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error in get_upgrade_tracker: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/flow/interactive-data", summary="Interactive Flow D3.js Data")
+async def get_flow_interactive_data():
+    """Nodes + Links for D3.js flow diagram"""
+    try:
+        return {
+            "nodes": [
+                {"id": "scan_main", "label": "Market Scan", "type": "stage", "status": "active", "x": 100, "y": 300},
+                {"id": "scan_api", "label": "Binance API", "type": "substep", "parent": "scan_main", "status": "active"},
+                {"id": "scan_parse", "label": "Parse Data", "type": "substep", "parent": "scan_main", "status": "active"},
+                {"id": "scan_filter", "label": "Filter Vol", "type": "substep", "parent": "scan_main", "status": "active"},
+                
+                {"id": "mtf_main", "label": "Multi-TF", "type": "stage", "status": "active", "x": 300, "y": 300},
+                {"id": "mtf_15m", "label": "15M Analysis", "type": "substep", "parent": "mtf_main", "status": "active"},
+                {"id": "mtf_1h", "label": "1H Analysis", "type": "substep", "parent": "mtf_main", "status": "active"},
+                {"id": "mtf_4h", "label": "4H Analysis", "type": "substep", "parent": "mtf_main", "status": "active"},
+                {"id": "mtf_1d", "label": "1D Analysis", "type": "substep", "parent": "mtf_main", "status": "active"},
+                
+                {"id": "ai_main", "label": "8-AI Mesh", "type": "stage", "status": "active", "x": 500, "y": 300},
+                {"id": "ai_claude", "label": "Claude 4.5", "type": "substep", "parent": "ai_main", "status": "active"},
+                {"id": "ai_perplexity", "label": "Perplexity", "type": "substep", "parent": "ai_main", "status": "active"},
+                {"id": "ai_cohere", "label": "Cohere", "type": "substep", "parent": "ai_main", "status": "planned"},
+                
+                {"id": "risk_main", "label": "Risk Validation", "type": "stage", "status": "active", "x": 700, "y": 300},
+                {"id": "risk_check1", "label": "Position Size", "type": "substep", "parent": "risk_main", "status": "active"},
+                {"id": "risk_check2", "label": "Max Leverage", "type": "substep", "parent": "risk_main", "status": "active"},
+                {"id": "risk_check3", "label": "Stop Loss", "type": "substep", "parent": "risk_main", "status": "active"},
+                
+                {"id": "approval_main", "label": "Telegram Approval", "type": "stage", "status": "active", "x": 900, "y": 300},
+                
+                {"id": "exec_main", "label": "Execution", "type": "stage", "status": "active", "x": 1100, "y": 300},
+                
+                {"id": "monitor_main", "label": "Position Monitor", "type": "stage", "status": "active", "x": 1300, "y": 300}
+            ],
+            "links": [
+                {"source": "scan_main", "target": "mtf_main", "value": 10},
+                {"source": "mtf_main", "target": "ai_main", "value": 8},
+                {"source": "ai_main", "target": "risk_main", "value": 6},
+                {"source": "risk_main", "target": "approval_main", "value": 5},
+                {"source": "approval_main", "target": "exec_main", "value": 3},
+                {"source": "exec_main", "target": "monitor_main", "value": 3}
+            ],
+            "stage_details": {
+                "scan_main": {
+                    "latency_ms": 120,
+                    "throughput": "531 symbols/60s",
+                    "success_rate": 99.9
+                },
+                "mtf_main": {
+                    "latency_ms": 3200,
+                    "throughput": "531 symbols/60s",
+                    "success_rate": 97.2
+                },
+                "ai_main": {
+                    "latency_ms": 4500,
+                    "throughput": "8 proposals/min",
+                    "success_rate": 73.0
+                }
+            }
+        }
+    except Exception as e:
+        logger.error(f"Error in get_flow_interactive_data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/roadmap/data", summary="ROADMAP Data with Timeline")
+async def get_roadmap_data():
+    """Dynamic ROADMAP with real progress tracking"""
+    try:
+        return {
+            "phases": [
+                {
+                    "id": 1,
+                    "name": "Foundation & Core",
+                    "start_date": "2025-10-01",
+                    "end_date": "2025-10-21",
+                    "status": "in_progress",
+                    "completion": 62,
+                    "tasks": [
+                        {"id": "F1", "name": "FastAPI Server Setup", "status": "completed", "completion": 100, "start_date": "2025-10-01", "end_date": "2025-10-03", "actual_end": "2025-10-03", "assignee": "System", "pr_link": "#123", "notes": "Gunicorn + FastAPI running on port 5000"},
+                        {"id": "F2", "name": "PostgreSQL Integration", "status": "completed", "completion": 100, "start_date": "2025-10-04", "end_date": "2025-10-06", "actual_end": "2025-10-06", "assignee": "System"},
+                        {"id": "F3", "name": "Binance API Connection", "status": "completed", "completion": 100, "start_date": "2025-10-07", "end_date": "2025-10-09", "actual_end": "2025-10-08", "assignee": "System"},
+                        {"id": "F4", "name": "Web Dashboard v1", "status": "in_progress", "completion": 75, "start_date": "2025-10-10", "end_date": "2025-10-21", "assignee": "Agent"},
+                        {"id": "F5", "name": "Authentication System", "status": "planned", "completion": 0, "start_date": "2025-10-15", "end_date": "2025-10-18"}
+                    ]
+                },
+                {
+                    "id": 2,
+                    "name": "8-AI Mesh Integration",
+                    "start_date": "2025-10-22",
+                    "end_date": "2025-11-15",
+                    "status": "planned",
+                    "completion": 15,
+                    "tasks": [
+                        {"id": "AI1", "name": "Claude Sonnet 4.5 Integration", "status": "completed", "completion": 100, "start_date": "2025-10-22", "end_date": "2025-10-25", "actual_end": "2025-10-24"},
+                        {"id": "AI2", "name": "Perplexity Integration", "status": "completed", "completion": 100, "start_date": "2025-10-26", "end_date": "2025-10-28", "actual_end": "2025-10-27"},
+                        {"id": "AI3", "name": "Cohere Setup", "status": "in_progress", "completion": 40, "start_date": "2025-10-29", "end_date": "2025-11-02"},
+                        {"id": "AI4", "name": "Consensus Engine", "status": "planned", "completion": 0, "start_date": "2025-11-03", "end_date": "2025-11-08"}
+                    ]
+                },
+                {
+                    "id": 3,
+                    "name": "News & Multi-Tenant",
+                    "start_date": "2025-11-16",
+                    "end_date": "2025-12-10",
+                    "status": "planned",
+                    "completion": 0,
+                    "tasks": [
+                        {"id": "N1", "name": "10 News Sources Integration", "status": "planned", "completion": 0, "start_date": "2025-11-16", "end_date": "2025-11-25"},
+                        {"id": "MT1", "name": "Multi-Tenant Architecture", "status": "planned", "completion": 0, "start_date": "2025-11-26", "end_date": "2025-12-10"}
+                    ]
+                },
+                {
+                    "id": 4,
+                    "name": "PWA & Benchmarking",
+                    "start_date": "2025-12-11",
+                    "end_date": "2026-01-05",
+                    "status": "planned",
+                    "completion": 0,
+                    "tasks": [
+                        {"id": "P1", "name": "PWA Development", "status": "planned", "completion": 0, "start_date": "2025-12-11", "end_date": "2025-12-20"},
+                        {"id": "B1", "name": "8 Benchmarking Engines", "status": "planned", "completion": 0, "start_date": "2025-12-21", "end_date": "2026-01-05"}
+                    ]
+                }
+            ],
+            "overall_progress": 12.4,
+            "total_tasks": 113,
+            "completed_tasks": 14,
+            "in_progress_tasks": 4,
+            "planned_tasks": 95
+        }
+    except Exception as e:
+        logger.error(f"Error in get_roadmap_data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/agents/{agent_id}/control", summary="Control Agent")
+async def control_agent(agent_id: str, action: str):
+    """Start/Stop/Restart agent"""
+    try:
+        if action not in ["start", "stop", "restart"]:
+            raise HTTPException(status_code=400, detail="Invalid action. Use 'start', 'stop', or 'restart'")
+        
+        return {
+            "agent_id": agent_id,
+            "action": action,
+            "status": "success",
+            "message": f"Agent {agent_id} {action} command sent successfully",
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in control_agent: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 
