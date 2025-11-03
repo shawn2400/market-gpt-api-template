@@ -1619,6 +1619,11 @@ except Exception as e:
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():
+    from fastapi.responses import RedirectResponse
+    return RedirectResponse(url="/static/dashboard/ultimate-workbook.html", status_code=302)
+
+@app.get("/api/info")
+async def api_info():
     return {
         "ok": True,
         "service": APP_TITLE,
