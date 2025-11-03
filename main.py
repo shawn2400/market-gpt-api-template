@@ -576,7 +576,8 @@ async def _execute_trade_armed(ticket: Dict[str, Any]) -> Dict[str, Any]:
     pos_side = raw_ps if raw_ps in ("LONG", "SHORT") else ("LONG" if side == "BUY" else "SHORT")
     tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
     tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0", "0.0") and float(x) > 0]
-    sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
+    sl_val = ticket.get("sl")
+    sl_targets = [float(sl_val)] if (sl_val not in (None, 0, "0", "0.0")) else None
 
     if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
         return {"ok": False, "entered": False, "error": "bad_ticket_params"}
@@ -805,6 +806,13 @@ def _verify_signed_params(ticket_id: str, exp: str, sig: str, path: str) -> bool
 def _md_html(s: str) -> str:
     return (s or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;")
 
+def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) -> Dict[str, Any]:
+    try:
+        sig = inspect.signature(fn)
+        return {k: v for k, v in kwargs.items() if k in sig.parameters}
+    except Exception:
+        return kwargs
+
 def _rows_kv_html(t: Dict[str, Any]) -> str:
     def cv(k, default="—"):
         v = t.get(k, default)
@@ -951,7 +959,7 @@ def _verify_http_signature(request: Request, raw: bytes, route_path: str = "") -
 
 # ==================== Ticket/UI/Approve/Reject ====================
 @router.post("/ops/ticket")
-async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = None):
+async def create_ticket(request: Request, payload: Dict[str, Any] = Body(...)):
     symbol = (payload.get("symbol") or "").upper().strip()
     side = (payload.get("side") or "").upper().strip()
     qty = float(payload.get("qty") or payload.get("quantity") or 0)
@@ -1095,7 +1103,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
     lines = [
         "⚠️ <b>Approval Needed</b>",
         f"• Ticket: <code>{_md_html(tid)}</code>",
-        f"• {_md_html(symbol)} {_md_html(side)} qty=<code>{_md_html(qty)}</code> lev=<code>{_md_html(lev)}</code>",
+        f"• {_md_html(symbol)} {_md_html(side)} qty=<code>{_md_html(str(qty))}</code> lev=<code>{_md_html(str(lev))}</code>",
     ]
     for i in (1, 2, 3):
         if req_body.get(f"tp{i}") is not None:
@@ -1133,7 +1141,7 @@ async def create_ticket(payload: Dict[str, Any] = Body(...), request: Request = 
             "preview_url": preview_url, "manage_url": manage_url, "telegram_result": tg_resp}
 
 @router.get("/ops/ui/ticket")
-async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
+async def ui_ticket(request: Request, ticket_id: str = Query(...)):
     if not API_BEARER_TOKEN:
         raise HTTPException(status_code=503, detail="Route protection enabled but API_BEARER_TOKEN missing")
     auth = request.headers.get("Authorization", "") if request else ""
@@ -1160,7 +1168,7 @@ async def ui_ticket(ticket_id: str = Query(...), request: Request = None):
     return HTMLResponse(body)
 
 @router.get("/ops/ui/ticket/signed")
-async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), request: Request = None):
+async def ui_ticket_signed(request: Request, ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...)):
     if not _verify_signed_params(ticket_id, exp, sig, "/ops/ui/ticket/signed"):
         raise HTTPException(status_code=401, detail="Bad or expired signature")
     rec, _ = await _load_ticket(ticket_id)
@@ -1184,12 +1192,12 @@ async def ui_ticket_signed(ticket_id: str = Query(...), exp: str = Query(...), s
     return HTMLResponse(body)
 
 @router.get("/ops/approve")
-async def approve(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
+async def approve(request: Request, ticket_id: str = Query(..., description="ticket_id")):
     _maybe_protect_routes(request)
     return await _approve_core(ticket_id)
 
 @router.get("/ops/reject")
-async def reject(ticket_id: str = Query(..., description="ticket_id"), request: Request = None):
+async def reject(request: Request, ticket_id: str = Query(..., description="ticket_id")):
     _maybe_protect_routes(request)
     return await _reject_core(ticket_id)
 
@@ -1388,6 +1396,75 @@ async def _reject_core(ticket_id: str) -> JSONResponse:
     await _delete_ticket(ticket_id, src, final_status=False)
     return JSONResponse({"ok": True, "approved": False, "ticket_id": ticket_id})
 
+# ============= Helper functions for native position management =============
+def _fetch_single_position(client: Any, symbol: str) -> Optional[Dict[str, Any]]:
+    try:
+        positions = client.futures_position_information(symbol=symbol)
+        if positions and isinstance(positions, list):
+            for p in positions:
+                amt = float(p.get("positionAmt", 0))
+                if amt != 0:
+                    return p
+    except Exception:
+        pass
+    return None
+
+def _get_klines_via_sdk(client: Any, symbol: str, interval: str = "5m", limit: int = 60) -> List[List[Any]]:
+    try:
+        klines = client.futures_klines(symbol=symbol, interval=interval, limit=limit)
+        return klines if isinstance(klines, list) else []
+    except Exception:
+        return []
+
+def _calc_atr_from_klines(klines: List[List[Any]], period: int = 14) -> Optional[float]:
+    if not klines or len(klines) < period + 1:
+        return None
+    highs = [float(k[2]) for k in klines]
+    lows = [float(k[3]) for k in klines]
+    closes = [float(k[4]) for k in klines]
+    trs = []
+    for i in range(1, len(klines)):
+        tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+        trs.append(tr)
+    if len(trs) >= period:
+        return sum(trs[-period:]) / float(period)
+    return None
+
+def _compute_be_price(side: str, entry: float, offset_bps: float) -> float:
+    if side.upper() == "BUY":
+        return entry * (1.0 + offset_bps / 10000.0)
+    else:
+        return entry * (1.0 - offset_bps / 10000.0)
+
+def _trail_stop_from_mark(side: str, mark: float, atr: float, mult: float) -> float:
+    if side.upper() == "BUY":
+        return mark - (atr * mult)
+    else:
+        return mark + (atr * mult)
+
+def _combine_be_trail(side: str, be_price: float, trail_price: float) -> float:
+    if side.upper() == "BUY":
+        return max(be_price, trail_price)
+    else:
+        return min(be_price, trail_price)
+
+def _place_or_replace_close_stop(client: Any, symbol: str, side: str, stop_price: float) -> Dict[str, Any]:
+    try:
+        close_side = "SELL" if side.upper() == "BUY" else "BUY"
+        stop_price_rounded = _round_to_tick(client, symbol, stop_price)
+        order = client.futures_create_order(
+            symbol=symbol,
+            side=close_side,
+            type="STOP_MARKET",
+            stopPrice=stop_price_rounded,
+            closePosition=True,
+            workingType=_get_working_type(),
+            newClientOrderId=build_client_order_id(symbol, close_side, role="MANAGE_STOP"),
+        )
+        return order
+    except Exception as e:
+        return {"error": str(e)}
+
 # ============= manage-once signed helper =============
 @app.get("/manage-once/signed")
 async def manage_once_signed(ticket_id: str = Query(...), exp: str = Query(...), sig: str = Query(...), symbol: str = Query(...)):
@@ -1480,34 +1557,40 @@ except Exception as e:
     logger.warning("Failed to load debug_sig routes: %s", e)
 
 try:
-    from routes.mesh import router as mesh_router
+    from routes.mesh import router as mesh_router  # type: ignore
     app.include_router(mesh_router)
 except Exception as e:
     logger.warning("Failed to load mesh routes: %s", e)
 
 try:
-    from routes.pnl_heartbeat import router as pnl_heartbeat_router
+    from routes.pnl_heartbeat import router as pnl_heartbeat_router  # type: ignore
     app.include_router(pnl_heartbeat_router)
 except Exception as e:
     logger.warning("Failed to load pnl_heartbeat routes: %s", e)
 
 try:
-    from routes.ops_summary import router as ops_summary_router
+    from routes.ops_summary import router as ops_summary_router  # type: ignore
     app.include_router(ops_summary_router)
 except Exception as e:
     logger.warning("Failed to load ops_summary routes: %s", e)
 
 try:
-    from routes.public_endpoints import router as public_endpoints_router
+    from routes.public_endpoints import router as public_endpoints_router  # type: ignore
     app.include_router(public_endpoints_router)
 except Exception as e:
     logger.warning("Failed to load public_endpoints routes: %s", e)
 
 try:
-    from routes.mesh_api import router as mesh_api_router
+    from routes.mesh_api import router as mesh_api_router  # type: ignore
     app.include_router(mesh_api_router)
 except Exception as e:
     logger.warning("Failed to load mesh_api routes: %s", e)
+
+try:
+    from routes.n8n import router as n8n_router
+    app.include_router(n8n_router)
+except Exception as e:
+    logger.warning("Failed to load n8n routes: %s", e)
 
 # ============= Root & health & AI test =============
 @app.get("/")
@@ -1592,10 +1675,10 @@ async def _on_startup():
         logger.info("🚀 Starting Phase 3 AI Workers...")
         
         # Import workers
-        from workers.ai_supervisor import ai_supervisor
-        from workers.news_sentiment import news_sentiment
-        from workers.fear_greed import fear_greed
-        from workers.auto_risk_manager import auto_risk_manager
+        from workers.ai_supervisor import ai_supervisor  # type: ignore
+        from workers.news_sentiment import news_sentiment  # type: ignore
+        from workers.fear_greed import fear_greed  # type: ignore
+        from workers.auto_risk_manager import auto_risk_manager  # type: ignore
         
         # Launch all workers in parallel
         asyncio.create_task(ai_supervisor.supervisor_loop())
@@ -1610,7 +1693,7 @@ async def _on_startup():
     # ==================== Mesh Bus Ping Loop ====================
     try:
         logger.info("🔗 Starting Mesh Bus ping loop...")
-        from utils import mesh_bus
+        from utils import mesh_bus  # type: ignore
         asyncio.create_task(mesh_bus.ping_loop())
         logger.info("✅ Mesh Bus ping loop started")
     except Exception as e:
