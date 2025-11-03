@@ -65,9 +65,9 @@ def _validate_hmac_signature(
         (is_valid, reason)
     """
     if not N8N_WEBHOOK_SECRET:
-        # If no secret configured, allow all (development mode)
-        logger.warning("⚠️ N8N webhook validation skipped - no secret configured")
-        return True, "no_secret_configured"
+        # SECURITY: Fail closed - reject all requests if no secret configured
+        logger.error("❌ N8N_WEBHOOK_SECRET not configured - BLOCKING all webhook requests")
+        return False, "webhook_secret_required"
     
     if not signature:
         return False, "missing_signature"

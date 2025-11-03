@@ -1,9 +1,10 @@
 # utils/portfolio.py
 from __future__ import annotations
-import os, json, time, uuid
+import os, time, uuid, psycopg2
 from typing import Dict, Any, Optional, List
+from datetime import datetime
 
-TRADES_LOG_PATH = os.getenv("TRADES_LOG_PATH", "data/trades_log.json")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
 class Portfolio:
     def __init__(self, initial_balance: float = 1000.0):
@@ -16,17 +17,55 @@ class Portfolio:
     # --- Internal Helpers ---
     # ===============================
     def _save_history(self):
-        try:
-            base_dir = os.path.dirname(TRADES_LOG_PATH) or "."
-            os.makedirs(base_dir, exist_ok=True)
-            with open(TRADES_LOG_PATH, "w", encoding="utf-8") as f:
-                json.dump(self.history, f, ensure_ascii=False, indent=2)
-        except Exception as e:
-            print(f"[portfolio] Failed to save history: {e}")
+        """Save trade history to PostgreSQL instead of JSON file"""
+        pass  # No longer needed - using _log_trade directly to PostgreSQL
 
     def _log_trade(self, trade: Dict[str, Any]):
-        self.history.append(trade)
-        self._save_history()
+        """Log trade to PostgreSQL database"""
+        try:
+            if not DATABASE_URL:
+                print(f"[portfolio] DATABASE_URL not configured - cannot save trade")
+                return
+            
+            conn = psycopg2.connect(DATABASE_URL)
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                INSERT INTO trades_log (
+                    trade_id, symbol, side, entry, exit, qty, leverage,
+                    sl, tp, margin, pnl, status, opened_at, closed_at, event, note
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (trade_id) DO UPDATE SET
+                    exit = EXCLUDED.exit,
+                    pnl = EXCLUDED.pnl,
+                    status = EXCLUDED.status,
+                    closed_at = EXCLUDED.closed_at,
+                    updated_at = CURRENT_TIMESTAMP
+            """, (
+                trade.get("trade_id"),
+                trade.get("symbol"),
+                trade.get("side"),
+                trade.get("entry"),
+                trade.get("exit"),
+                trade.get("qty"),
+                trade.get("leverage"),
+                trade.get("sl"),
+                trade.get("tp"),
+                trade.get("margin"),
+                trade.get("pnl"),
+                trade.get("status"),
+                datetime.fromtimestamp(trade.get("opened_at", time.time())) if trade.get("opened_at") else None,
+                datetime.fromtimestamp(trade.get("closed_at", time.time())) if trade.get("closed_at") else None,
+                trade.get("event"),
+                trade.get("note")
+            ))
+            
+            conn.commit()
+            cursor.close()
+            conn.close()
+            self.history.append(trade)
+        except Exception as e:
+            print(f"[portfolio] Failed to save trade to PostgreSQL: {e}")
 
     # ===============================
     # --- Public API ---

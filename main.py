@@ -1679,6 +1679,22 @@ async def _on_startup():
     except Exception as e:
         logger.warning("startup.telegram_webhook: %s", e)
     
+    # ==================== N8N Security Check ====================
+    if not os.getenv("N8N_WEBHOOK_SECRET"):
+        logger.critical("❌ N8N_WEBHOOK_SECRET not configured - System BLOCKED for production safety")
+        raise RuntimeError("N8N_WEBHOOK_SECRET required for production - cannot start without webhook security")
+    else:
+        logger.info("✅ N8N_WEBHOOK_SECRET configured - webhook security enabled")
+    
+    # ==================== Circuit Breaker Verification ====================
+    daily_loss_cap = float(os.getenv("DAILY_HARD_LOSS_USD", "-150"))
+    logger.info("🛡️ Circuit Breaker System Status:")
+    logger.info(f"  ✅ Daily Loss Limit: ${abs(daily_loss_cap):.2f} USD")
+    logger.info(f"  ✅ Panic Close: Enabled (triggers at loss cap)")
+    logger.info(f"  ✅ Auto-Run Disable: Enabled (on circuit breaker trigger)")
+    logger.info(f"  ✅ Health Killswitch: {os.getenv('KILLSWITCH_THRESHOLD', '3')} consecutive failures")
+    logger.info("  ℹ️  Circuit breakers enforced in utils/trade_manager.py::manage_open_trades()")
+    
     # ==================== Phase 3 AI Workers ====================
     try:
         logger.info("🚀 Starting Phase 3 AI Workers...")

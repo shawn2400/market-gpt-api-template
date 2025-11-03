@@ -6,13 +6,12 @@ Morning Trading Summary (08:00) + Evening Daily Digest (22:00)
 """
 import os
 import sys
-import json
 import time
 import logging
 import asyncio
+import psycopg2
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from pathlib import Path
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -29,30 +28,59 @@ try:
 except Exception:
     ISRAEL_TZ = ZoneInfo("UTC")
 
-TRADES_LOG_PATH = os.getenv("TRADES_LOG_PATH", "data/trades_log.json")
+DATABASE_URL = os.getenv("DATABASE_URL")
 MORNING_HOUR = int(os.getenv("DIGEST_MORNING_HOUR", "8"))
 EVENING_HOUR = int(os.getenv("DIGEST_EVENING_HOUR", "22"))
 
 def load_trades_for_date(date: datetime) -> list:
-    """Load trades closed on a specific date"""
+    """Load trades closed on a specific date from PostgreSQL"""
     try:
-        if not Path(TRADES_LOG_PATH).exists():
+        if not DATABASE_URL:
+            logger.error("DATABASE_URL not configured - cannot load trades")
             return []
         
-        with open(TRADES_LOG_PATH, 'r') as f:
-            all_trades = json.load(f)
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
         
         date_str = date.strftime("%Y-%m-%d")
-        day_trades = []
+        start_date = f"{date_str} 00:00:00"
+        end_date = f"{date_str} 23:59:59"
         
-        for trade in all_trades:
-            closed_at = trade.get("closed_at") or trade.get("updated_at")
-            if closed_at and date_str in closed_at:
-                day_trades.append(trade)
+        cursor.execute("""
+            SELECT trade_id, symbol, side, entry, exit, qty, leverage, 
+                   sl, tp, margin, pnl, status, closed_at, opened_at, note
+            FROM trades_log
+            WHERE closed_at >= %s AND closed_at <= %s
+            ORDER BY closed_at DESC
+        """, (start_date, end_date))
         
-        return day_trades
+        rows = cursor.fetchall()
+        cursor.close()
+        conn.close()
+        
+        trades = []
+        for row in rows:
+            trades.append({
+                "trade_id": row[0],
+                "symbol": row[1],
+                "side": row[2],
+                "entry": float(row[3]) if row[3] else None,
+                "exit": float(row[4]) if row[4] else None,
+                "qty": float(row[5]) if row[5] else None,
+                "leverage": row[6],
+                "sl": float(row[7]) if row[7] else None,
+                "tp": float(row[8]) if row[8] else None,
+                "margin": float(row[9]) if row[9] else None,
+                "pnl": float(row[10]) if row[10] else 0.0,
+                "status": row[11],
+                "closed_at": row[12].isoformat() if row[12] else None,
+                "opened_at": row[13].isoformat() if row[13] else None,
+                "note": row[14]
+            })
+        
+        return trades
     except Exception as e:
-        logger.error(f"Failed to load trades: {e}")
+        logger.error(f"Failed to load trades from PostgreSQL: {e}")
         return []
 
 def format_morning_summary() -> str:
