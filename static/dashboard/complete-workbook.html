@@ -1,0 +1,1224 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>בס"ד - AlgoGPT Ultimate - Complete Professional Workbook</title>
+    
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800&family=Rubik:wght@300;400;500;600;700&display=swap');
+        
+        :root {
+            --primary: #667eea;
+            --secondary: #764ba2;
+            --accent: #f093fb;
+            --glass-bg: rgba(31, 41, 55, 0.6);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --bg-dark: #0a0a1a;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Heebo', 'Rubik', sans-serif;
+            background: linear-gradient(135deg, #0a0a1a 0%, #1a1a2e 50%, #16213e 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        
+        .gradient-text {
+            background: linear-gradient(135deg, var(--primary), var(--secondary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+        
+        .glass-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .glass-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 30px 60px -12px rgba(139, 92, 246, 0.3);
+            border-color: rgba(139, 92, 246, 0.3);
+        }
+        
+        .tab-button {
+            padding: 14px 24px;
+            background: transparent;
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 14px;
+        }
+        
+        .tab-button:hover {
+            background: rgba(102, 126, 234, 0.1);
+            border-color: var(--primary);
+            color: var(--text-primary);
+            transform: translateY(-2px);
+        }
+        
+        .tab-button.active {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-color: transparent;
+            color: white;
+            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+        }
+        
+        .progress-bar {
+            height: 8px;
+            background: rgba(107, 114, 128, 0.3);
+            border-radius: 999px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--secondary), var(--accent));
+            border-radius: 999px;
+            transition: width 1s ease-out;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .progress-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: shimmer 2s infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.6s ease-out forwards;
+        }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        
+        .status-active {
+            background: linear-gradient(135deg, #10b981, #059669);
+            box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+        }
+        
+        .status-planned {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+        }
+        
+        .metric-card {
+            background: rgba(17, 24, 39, 0.8);
+            padding: 24px;
+            border-radius: 12px;
+            border: 1px solid var(--glass-border);
+        }
+        
+        .metric-value {
+            font-size: 32px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .ai-card {
+            position: relative;
+            padding: 20px;
+            margin-bottom: 16px;
+            background: rgba(17, 24, 39, 0.6);
+            border-radius: 12px;
+            border-right: 4px solid var(--primary);
+        }
+        
+        .layer-card {
+            position: relative;
+            padding: 24px;
+            margin-bottom: 20px;
+            background: rgba(17, 24, 39, 0.7);
+            border-radius: 12px;
+            border-right: 4px solid var(--secondary);
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: right;
+            border-bottom: 1px solid var(--glass-border);
+        }
+        
+        th {
+            background: rgba(102, 126, 234, 0.1);
+            font-weight: 700;
+            color: var(--primary);
+        }
+        
+        tr:hover {
+            background: rgba(102, 126, 234, 0.05);
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin: 20px 0;
+        }
+        
+        .icon-box {
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-radius: 12px;
+            font-size: 24px;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 60px;
+            font-size: 18px;
+            color: var(--text-secondary);
+        }
+        
+        .error {
+            text-align: center;
+            padding: 60px;
+            font-size: 18px;
+            color: var(--error);
+        }
+        
+        .feature-list {
+            list-style: none;
+            padding: 0;
+        }
+        
+        .feature-list li {
+            padding: 12px;
+            margin-bottom: 8px;
+            background: rgba(102, 126, 234, 0.05);
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .feature-list li::before {
+            content: '✅';
+            font-size: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        
+        const CompleteWorkbook = () => {
+            const [activeTab, setActiveTab] = useState(1);
+            const [data, setData] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            
+            useEffect(() => {
+                fetchData();
+                const interval = setInterval(fetchData, 30000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            const fetchData = async () => {
+                try {
+                    const response = await fetch('/dashboard/complete-workbook-data');
+                    if (!response.ok) throw new Error('Failed to fetch data');
+                    const json = await response.json();
+                    setData(json);
+                    setLoading(false);
+                } catch (err) {
+                    setError(err.message);
+                    setLoading(false);
+                }
+            };
+            
+            const tabs = [
+                { id: 1, name: 'סיכום מנהלים', icon: '📋' },
+                { id: 2, name: 'מודל עסקי', icon: '💼' },
+                { id: 3, name: '8-AI Mesh', icon: '🤖' },
+                { id: 4, name: 'אינדיקטורים', icon: '📊' },
+                { id: 5, name: 'ארכיטקטורה', icon: '🏗️' },
+                { id: 6, name: 'גרסאות', icon: '📚' },
+                { id: 7, name: 'מדדים חיים', icon: '📈' },
+                { id: 8, name: 'התקדמות', icon: '🎯' },
+                { id: 9, name: 'יתרונות', icon: '🏆' },
+                { id: 10, name: 'Multi-Tenant', icon: '👥' },
+                { id: 11, name: 'מדריך משתמש', icon: '📖' },
+                { id: 12, name: 'רכיבי מערכת', icon: '🔧' }
+            ];
+            
+            if (loading) return <div className="loading">⏳ טוען נתונים...</div>;
+            if (error) return <div className="error">❌ שגיאה: {error}</div>;
+            if (!data) return <div className="error">❌ אין נתונים</div>;
+            
+            return (
+                <div className="p-4 md:p-8 max-w-7xl mx-auto">
+                    <header className="glass-card p-6 mb-6 fade-in">
+                        <div className="flex items-center justify-between flex-wrap gap-4">
+                            <div>
+                                <h1 className="text-4xl font-bold gradient-text mb-2">
+                                    בס"ד - AlgoGPT Ultimate Edition
+                                </h1>
+                                <p className="text-xl text-gray-300">
+                                    Complete Professional Workbook - ספר עבודה מקצועי מלא
+                                </p>
+                            </div>
+                            <div className="text-left">
+                                <div className="text-sm text-gray-400">Generated</div>
+                                <div className="text-lg font-semibold text-blue-300">
+                                    {new Date(data.metadata.generated_at).toLocaleString('he-IL')}
+                                </div>
+                            </div>
+                        </div>
+                    </header>
+                    
+                    <div className="glass-card p-4 mb-6 fade-in">
+                        <div className="flex flex-wrap gap-2">
+                            {tabs.map(tab => (
+                                <button
+                                    key={tab.id}
+                                    className={`tab-button ${activeTab === tab.id ? 'active' : ''}`}
+                                    onClick={() => setActiveTab(tab.id)}
+                                >
+                                    <span>{tab.icon}</span>
+                                    <span>{tab.name}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    <div className="fade-in">
+                        {activeTab === 1 && <Tab1ExecutiveSummary data={data.tabs.tab1_executive_summary} />}
+                        {activeTab === 2 && <Tab2BusinessModel data={data.tabs.tab2_business_model} />}
+                        {activeTab === 3 && <Tab3AIMesh data={data.tabs.tab3_ai_mesh_details} />}
+                        {activeTab === 4 && <Tab4Indicators data={data.tabs.tab4_technical_indicators} />}
+                        {activeTab === 5 && <Tab5Architecture data={data.tabs.tab5_architecture_layers} />}
+                        {activeTab === 6 && <Tab6Versions data={data.tabs.tab6_version_history} />}
+                        {activeTab === 7 && <Tab7LiveMetrics data={data.tabs.tab7_live_metrics} />}
+                        {activeTab === 8 && <Tab8Progress data={data.tabs.tab8_progress_tracking} />}
+                        {activeTab === 9 && <Tab9Advantages data={data.tabs.tab9_competitive_advantages} />}
+                        {activeTab === 10 && <Tab10MultiTenant data={data.tabs.tab10_multi_tenant} />}
+                        {activeTab === 11 && <Tab11UserGuide data={data.tabs.tab11_user_guide} />}
+                        {activeTab === 12 && <Tab12Components data={data.tabs.tab12_system_components} />}
+                    </div>
+                </div>
+            );
+        };
+        
+        const Tab1ExecutiveSummary = ({ data }) => (
+            <div className="glass-card p-6">
+                <div className="flex items-center gap-4 mb-6">
+                    <div className="icon-box">📋</div>
+                    <h2 className="text-3xl font-bold gradient-text">Executive Summary - סיכום מנהלים</h2>
+                </div>
+                
+                <div className="grid md:grid-cols-2 gap-6">
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-blue-300">מהות המערכת</h3>
+                        <p className="text-2xl font-bold mb-2">{data.system_name}</p>
+                        <p className="text-lg text-gray-300 mb-4">{data.tagline}</p>
+                        <p className="text-gray-400">{data.purpose}</p>
+                    </div>
+                    
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-purple-300">יעדים</h3>
+                        <div className="space-y-3">
+                            <div>
+                                <div className="text-sm text-gray-400">Trades/Day</div>
+                                <div className="metric-value">{data.targets.trades_per_day}</div>
+                            </div>
+                            <div>
+                                <div className="text-sm text-gray-400">Win Rate</div>
+                                <div className="metric-value">{data.targets.win_rate}</div>
+                            </div>
+                            <div>
+                                <div className="text-sm text-gray-400">Daily Profit</div>
+                                <div className="metric-value">{data.targets.daily_profit_range}</div>
+                            </div>
+                            <div>
+                                <div className="text-sm text-gray-400">Min RR</div>
+                                <div className="metric-value">{data.targets.min_rr}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div className="metric-card mt-6">
+                    <h3 className="text-xl font-bold mb-4 text-green-300">תכונות מפתח</h3>
+                    <ul className="feature-list">
+                        {data.key_features.map((feature, idx) => (
+                            <li key={idx}>{feature}</li>
+                        ))}
+                    </ul>
+                </div>
+                
+                <div className="metric-card mt-6">
+                    <h3 className="text-xl font-bold mb-4 text-pink-300">למה המערכת הכי טובה?</h3>
+                    <p className="text-lg text-gray-300">{data.why_best}</p>
+                </div>
+            </div>
+        );
+        
+        const Tab2BusinessModel = ({ data }) => (
+            <div className="glass-card p-6">
+                <div className="flex items-center gap-4 mb-6">
+                    <div className="icon-box">💼</div>
+                    <h2 className="text-3xl font-bold gradient-text">Business Model - מודל עסקי</h2>
+                </div>
+                
+                <div className="grid md:grid-cols-3 gap-6">
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-blue-300">Multi-Tenant</h3>
+                        <div className="metric-value mb-2">{data.multi_tenant.max_users}</div>
+                        <div className="text-sm text-gray-400 mb-2">משתמשים מקסימלי</div>
+                        <div className="text-sm text-gray-400">📅 {data.multi_tenant.phase}</div>
+                    </div>
+                    
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-purple-300">הון לכל משתמש</h3>
+                        <div className="text-2xl font-bold mb-2">
+                            ${data.capital_structure.per_user_min.toLocaleString()} - ${data.capital_structure.per_user_max.toLocaleString()}
+                        </div>
+                        <div className="text-sm text-gray-400">Total AUM:</div>
+                        <div className="text-xl font-bold text-green-400">
+                            ${data.capital_structure.total_aum_min.toLocaleString()} - ${data.capital_structure.total_aum_max.toLocaleString()}
+                        </div>
+                    </div>
+                    
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-green-300">דמי ביצוע</h3>
+                        <div className="metric-value mb-2">{data.fee_structure.performance_fee}</div>
+                        <div className="text-sm text-gray-400 mb-2">{data.fee_structure.fee_type}</div>
+                        <div className="text-sm text-gray-400">דמי ניהול: {data.fee_structure.management_fee}</div>
+                    </div>
+                </div>
+                
+                <div className="grid md:grid-cols-2 gap-6 mt-6">
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-yellow-300">תחזית הכנסות - שמרני</h3>
+                        <div className="space-y-3">
+                            <div>
+                                <div className="text-sm text-gray-400">לכל משתמש/חודש</div>
+                                <div className="text-2xl font-bold text-green-400">
+                                    ${data.revenue_projections.conservative.per_user_month}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-sm text-gray-400">הכנסה חודשית</div>
+                                <div className="metric-value">
+                                    ${data.revenue_projections.conservative.monthly_revenue.toLocaleString()}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-sm text-gray-400">הכנסה שנתית</div>
+                                <div className="text-3xl font-bold text-green-400">
+                                    ${data.revenue_projections.conservative.annual_revenue.toLocaleString()}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-pink-300">תחזית הכנסות - אופטימי</h3>
+                        <div className="space-y-3">
+                            <div>
+                                <div className="text-sm text-gray-400">לכל משתמש/חודש</div>
+                                <div className="text-2xl font-bold text-green-400">
+                                    ${data.revenue_projections.optimistic.per_user_month}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-sm text-gray-400">הכנסה חודשית</div>
+                                <div className="metric-value">
+                                    ${data.revenue_projections.optimistic.monthly_revenue.toLocaleString()}
+                                </div>
+                            </div>
+                            <div>
+                                <div className="text-sm text-gray-400">הכנסה שנתית</div>
+                                <div className="text-3xl font-bold text-green-400">
+                                    ${data.revenue_projections.optimistic.annual_revenue.toLocaleString()}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div className="metric-card mt-6">
+                    <h3 className="text-xl font-bold mb-4 text-blue-300">רמות תמחור</h3>
+                    <div className="grid md:grid-cols-3 gap-4">
+                        {data.pricing_tiers.map((tier, idx) => (
+                            <div key={idx} className="p-4 rounded-lg bg-gray-800 border border-gray-700">
+                                <h4 className="text-lg font-bold mb-2">{tier.name}</h4>
+                                <div className="text-2xl font-bold text-green-400 mb-3">
+                                    {typeof tier.price === 'number' ? `$${tier.price}/mo` : tier.price}
+                                </div>
+                                <ul className="space-y-1 text-sm text-gray-400">
+                                    {tier.features.map((feature, fidx) => (
+                                        <li key={fidx}>• {feature}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab3AIMesh = ({ data }) => (
+            <div className="glass-card p-6">
+                <div className="flex items-center gap-4 mb-6">
+                    <div className="icon-box">🤖</div>
+                    <h2 className="text-3xl font-bold gradient-text">8-AI Mesh - רשת 8 מודלי AI</h2>
+                </div>
+                
+                <div className="space-y-4">
+                    {data.map((ai, idx) => (
+                        <div key={idx} className="ai-card">
+                            <div className="flex justify-between items-start mb-4">
+                                <div>
+                                    <h3 className="text-2xl font-bold text-blue-300">{ai.name}</h3>
+                                    <div className="text-sm text-gray-400">{ai.provider} - {ai.model}</div>
+                                </div>
+                                <div className="text-left">
+                                    <div className="text-3xl font-bold gradient-text">{ai.weight}%</div>
+                                    <span className={`status-badge ${ai.status === 'active' ? 'status-active' : 'status-planned'}`}>
+                                        {ai.status === 'active' ? '✓ פעיל' : '○ מתוכנן'}
+                                    </span>
+                                </div>
+                            </div>
+                            
+                            <div className="grid md:grid-cols-2 gap-4 mb-4">
+                                <div>
+                                    <h4 className="font-bold text-purple-300 mb-2">מה עושה:</h4>
+                                    <p className="text-gray-300">{ai.what_it_does}</p>
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-green-300 mb-2">למה בחרנו בו:</h4>
+                                    <p className="text-gray-300">{ai.why_chosen}</p>
+                                </div>
+                            </div>
+                            
+                            <div className="grid md:grid-cols-2 gap-4 mb-4">
+                                <div>
+                                    <h4 className="font-bold text-yellow-300 mb-2">Use Cases:</h4>
+                                    <ul className="text-sm text-gray-400 space-y-1">
+                                        {ai.use_cases.map((uc, uidx) => (
+                                            <li key={uidx}>• {uc}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-pink-300 mb-2">Strengths:</h4>
+                                    <ul className="text-sm text-gray-400 space-y-1">
+                                        {ai.strengths.map((s, sidx) => (
+                                            <li key={sidx}>• {s}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            </div>
+                            
+                            <div className="flex justify-between text-sm text-gray-400">
+                                <div>💰 <span className="font-semibold">Cost:</span> {ai.cost}</div>
+                                <div>⚡ <span className="font-semibold">Latency:</span> {ai.latency}</div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+        
+        const Tab4Indicators = ({ data }) => (
+            <div className="glass-card p-6">
+                <div className="flex items-center gap-4 mb-6">
+                    <div className="icon-box">📊</div>
+                    <h2 className="text-3xl font-bold gradient-text">Technical Indicators - אינדיקטורים טכניים</h2>
+                </div>
+                
+                <div className="metric-card mb-6">
+                    <div className="text-center">
+                        <div className="metric-value text-5xl mb-2">{data.total_count}</div>
+                        <div className="text-xl text-gray-300">אינדיקטורים טכניים</div>
+                        <div className="text-sm text-gray-400 mt-2">{data.usage}</div>
+                    </div>
+                </div>
+                
+                {Object.entries(data.categories).map(([category, catData]) => (
+                    <div key={category} className="metric-card mb-4">
+                        <h3 className="text-2xl font-bold mb-4 capitalize gradient-text">{category}</h3>
+                        <div className="space-y-3">
+                            {catData.indicators.map((ind, idx) => (
+                                <div key={idx} className="p-3 rounded-lg bg-gray-800 border border-gray-700">
+                                    <div className="flex justify-between items-start mb-2">
+                                        <div>
+                                            <span className="text-xl font-bold text-blue-300">{ind.name}</span>
+                                            <span className="text-sm text-gray-400 mr-2">({ind.full_name})</span>
+                                        </div>
+                                    </div>
+                                    <div className="grid md:grid-cols-2 gap-2 text-sm">
+                                        <div>
+                                            <span className="text-gray-400">למה:</span>
+                                            <span className="text-gray-300 mr-2">{ind.why}</span>
+                                        </div>
+                                        <div>
+                                            <span className="text-gray-400">איך:</span>
+                                            <span className="text-gray-300 mr-2">{ind.how}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        );
+        
+        const Tab5Architecture = ({ data }) => (
+            <div className="glass-card p-6">
+                <div className="flex items-center gap-4 mb-6">
+                    <div className="icon-box">🏗️</div>
+                    <h2 className="text-3xl font-bold gradient-text">Architecture Layers - שכבות ארכיטקטורה</h2>
+                </div>
+                
+                <div className="space-y-6">
+                    {data.map((layer) => (
+                        <div key={layer.layer_number} className="layer-card">
+                            <div className="flex items-center gap-4 mb-4">
+                                <div className="text-4xl font-bold gradient-text">
+                                    {layer.layer_number}
+                                </div>
+                                <div>
+                                    <h3 className="text-2xl font-bold text-blue-300">{layer.name}</h3>
+                                    <p className="text-gray-400">{layer.what_it_does}</p>
+                                </div>
+                            </div>
+                            
+                            <div className="grid md:grid-cols-2 gap-4 mb-4">
+                                <div>
+                                    <h4 className="font-bold text-purple-300 mb-2">Components:</h4>
+                                    <ul className="text-sm text-gray-400 space-y-1">
+                                        {layer.components.map((comp, cidx) => (
+                                            <li key={cidx}>• {comp}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-green-300 mb-2">Technologies:</h4>
+                                    <ul className="text-sm text-gray-400 space-y-1">
+                                        {layer.technologies.map((tech, tidx) => (
+                                            <li key={tidx}>• {tech}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            </div>
+                            
+                            <div className="grid md:grid-cols-2 gap-4">
+                                <div>
+                                    <h4 className="font-bold text-yellow-300 mb-2">למה זה טוב:</h4>
+                                    <p className="text-gray-300">{layer.why_good}</p>
+                                </div>
+                                <div>
+                                    <h4 className="font-bold text-pink-300 mb-2">Throughput:</h4>
+                                    <p className="text-gray-300">{layer.throughput}</p>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+        
+        const Tab6Versions = ({ data }) => (
+            <div className="glass-card p-6">
+                <div className="flex items-center gap-4 mb-6">
+                    <div className="icon-box">📚</div>
+                    <h2 className="text-3xl font-bold gradient-text">Version History - היסטוריית גרסאות</h2>
+                </div>
+                
+                <div className="grid md:grid-cols-2 gap-6 mb-6">
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-blue-300">גרסה נוכחית</h3>
+                        <div className="metric-value mb-2">{data.current_version}</div>
+                        <div className="text-gray-400">{data.release_date}</div>
+                    </div>
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-green-300">גרסה הבאה</h3>
+                        <div className="metric-value mb-2">{data.next_version}</div>
+                        <div className="text-gray-400">{data.next_release_date}</div>
+                    </div>
+                </div>
+                
+                <div className="metric-card mb-6">
+                    <h3 className="text-xl font-bold mb-4 text-purple-300">תכונות מתוכננות</h3>
+                    <ul className="feature-list">
+                        {data.planned_features.map((feature, idx) => (
+                            <li key={idx}>{feature}</li>
+                        ))}
+                    </ul>
+                </div>
+                
+                <div className="metric-card">
+                    <h3 className="text-2xl font-bold mb-4 gradient-text">Changelog</h3>
+                    <div className="space-y-3">
+                        {data.changelog.map((entry, idx) => (
+                            <div key={idx} className="p-4 rounded-lg bg-gray-800 border border-gray-700">
+                                <div className="flex justify-between items-start mb-2">
+                                    <span className="text-xl font-bold text-blue-300">v{entry.version}</span>
+                                    <span className="text-sm text-gray-400">{entry.date}</span>
+                                </div>
+                                <ul className="space-y-1 text-sm text-gray-300">
+                                    {entry.changes.map((change, cidx) => (
+                                        <li key={cidx}>• {change}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab7LiveMetrics = ({ data }) => {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+            
+            useEffect(() => {
+                if (!chartRef.current || !data) return;
+                
+                if (chartInstance.current) {
+                    chartInstance.current.destroy();
+                }
+                
+                const ctx = chartRef.current.getContext('2d');
+                chartInstance.current = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+                        datasets: [{
+                            label: 'P&L',
+                            data: [120, 190, 150, 250, 280, 220, 300],
+                            borderColor: 'rgb(102, 126, 234)',
+                            backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                            tension: 0.4,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                labels: {
+                                    color: '#f3f4f6'
+                                }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                grid: {
+                                    color: 'rgba(255, 255, 255, 0.1)'
+                                },
+                                ticks: {
+                                    color: '#9ca3af'
+                                }
+                            },
+                            x: {
+                                grid: {
+                                    color: 'rgba(255, 255, 255, 0.1)'
+                                },
+                                ticks: {
+                                    color: '#9ca3af'
+                                }
+                            }
+                        }
+                    }
+                });
+                
+                return () => {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+                };
+            }, [data]);
+            
+            return (
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">📈</div>
+                        <h2 className="text-3xl font-bold gradient-text">Live Metrics - מדדים חיים</h2>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-4 gap-4 mb-6">
+                        <div className="metric-card">
+                            <div className="text-sm text-gray-400">P&L Today</div>
+                            <div className="metric-value">${data.trades.total_pnl.toFixed(2)}</div>
+                        </div>
+                        <div className="metric-card">
+                            <div className="text-sm text-gray-400">Trades Today</div>
+                            <div className="metric-value">{data.trades.total_today}</div>
+                        </div>
+                        <div className="metric-card">
+                            <div className="text-sm text-gray-400">Win Rate</div>
+                            <div className="metric-value">{data.trades.win_rate}%</div>
+                        </div>
+                        <div className="metric-card">
+                            <div className="text-sm text-gray-400">System Uptime</div>
+                            <div className="metric-value">{data.system.uptime_days.toFixed(1)}d</div>
+                        </div>
+                    </div>
+                    
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4">P&L Chart</h3>
+                        <div className="chart-container">
+                            <canvas ref={chartRef}></canvas>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const Tab8Progress = ({ data }) => (
+            <div className="glass-card p-6">
+                <div className="flex items-center gap-4 mb-6">
+                    <div className="icon-box">🎯</div>
+                    <h2 className="text-3xl font-bold gradient-text">Progress Tracking - התקדמות</h2>
+                </div>
+                
+                <div className="grid md:grid-cols-3 gap-4 mb-6">
+                    <div className="metric-card">
+                        <div className="text-sm text-gray-400">Total Tasks</div>
+                        <div className="metric-value">{data.total_tasks}</div>
+                    </div>
+                    <div className="metric-card">
+                        <div className="text-sm text-gray-400">Completed</div>
+                        <div className="metric-value text-green-400">{data.tasks_by_status.completed}</div>
+                    </div>
+                    <div className="metric-card">
+                        <div className="text-sm text-gray-400">Overall Progress</div>
+                        <div className="metric-value">{data.overall_completion}%</div>
+                    </div>
+                </div>
+                
+                <div className="metric-card mb-6">
+                    <h3 className="text-xl font-bold mb-4">Overall Progress</h3>
+                    <div className="progress-bar">
+                        <div className="progress-fill" style={{ width: `${data.overall_completion}%` }}></div>
+                    </div>
+                </div>
+                
+                <div className="space-y-4">
+                    {data.phases.map((phase) => (
+                        <div key={phase.phase} className="metric-card">
+                            <div className="flex justify-between items-start mb-3">
+                                <div>
+                                    <h3 className="text-xl font-bold text-blue-300">
+                                        Phase {phase.phase}: {phase.name}
+                                    </h3>
+                                    <div className="text-sm text-gray-400">Weeks {phase.weeks}</div>
+                                </div>
+                                <span className={`status-badge ${phase.status === 'in_progress' ? 'status-active' : 'status-planned'}`}>
+                                    {phase.status === 'in_progress' ? '⚡ בתהליך' : '○ מתוכנן'}
+                                </span>
+                            </div>
+                            
+                            <div className="grid grid-cols-3 gap-4 mb-3 text-sm">
+                                <div>
+                                    <div className="text-gray-400">Tasks</div>
+                                    <div className="text-xl font-bold">{phase.tasks_total}</div>
+                                </div>
+                                <div>
+                                    <div className="text-gray-400">Completed</div>
+                                    <div className="text-xl font-bold text-green-400">{phase.tasks_completed}</div>
+                                </div>
+                                <div>
+                                    <div className="text-gray-400">Progress</div>
+                                    <div className="text-xl font-bold text-blue-400">{phase.completion_percentage}%</div>
+                                </div>
+                            </div>
+                            
+                            <div className="progress-bar mb-3">
+                                <div className="progress-fill" style={{ width: `${phase.completion_percentage}%` }}></div>
+                            </div>
+                            
+                            <div>
+                                <h4 className="text-sm font-bold text-gray-400 mb-2">Key Deliverables:</h4>
+                                <ul className="text-sm text-gray-300 space-y-1">
+                                    {phase.key_deliverables.map((deliverable, idx) => (
+                                        <li key={idx}>• {deliverable}</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+        
+        const Tab9Advantages = ({ data }) => (
+            <div className="glass-card p-6">
+                <div className="flex items-center gap-4 mb-6">
+                    <div className="icon-box">🏆</div>
+                    <h2 className="text-3xl font-bold gradient-text">Competitive Advantages - יתרונות תחרותיים</h2>
+                </div>
+                
+                <div className="metric-card mb-6">
+                    <h3 className="text-2xl font-bold mb-4 gradient-text">Unique Features</h3>
+                    <div className="space-y-3">
+                        {data.unique_features.map((item, idx) => (
+                            <div key={idx} className="p-4 rounded-lg bg-gray-800 border border-gray-700">
+                                <div className="flex justify-between items-start mb-2">
+                                    <h4 className="text-xl font-bold text-blue-300">{item.feature}</h4>
+                                    <span className="text-sm text-gray-400 bg-red-900/30 px-3 py-1 rounded-full">
+                                        vs: {item.vs_competition}
+                                    </span>
+                                </div>
+                                <p className="text-gray-300">{item.advantage}</p>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                
+                <div className="grid md:grid-cols-2 gap-6">
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-purple-300">מה מבדיל אותנו</h3>
+                        <ul className="feature-list">
+                            {data.differentiators.map((diff, idx) => (
+                                <li key={idx}>{diff}</li>
+                            ))}
+                        </ul>
+                    </div>
+                    
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-green-300">Target Market</h3>
+                        <p className="text-lg text-gray-300 mb-4">{data.target_market}</p>
+                        <h4 className="text-lg font-bold text-pink-300 mb-2">Competitive Edge</h4>
+                        <p className="text-lg text-gray-300">{data.competitive_edge}</p>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab10MultiTenant = ({ data }) => (
+            <div className="glass-card p-6">
+                <div className="flex items-center gap-4 mb-6">
+                    <div className="icon-box">👥</div>
+                    <h2 className="text-3xl font-bold gradient-text">Multi-Tenant Details</h2>
+                </div>
+                
+                <div className="grid md:grid-cols-3 gap-4 mb-6">
+                    <div className="metric-card">
+                        <div className="text-sm text-gray-400">Max Users</div>
+                        <div className="metric-value">{data.max_users}</div>
+                        <div className="text-sm text-gray-400 mt-2">{data.phase}</div>
+                    </div>
+                    <div className="metric-card">
+                        <div className="text-sm text-gray-400">Status</div>
+                        <span className="status-badge status-planned mt-2">{data.status}</span>
+                    </div>
+                    <div className="metric-card">
+                        <div className="text-sm text-gray-400">Future Capacity</div>
+                        <div className="text-2xl font-bold text-green-400">{data.scalability.future_expansion}</div>
+                    </div>
+                </div>
+                
+                <div className="grid md:grid-cols-2 gap-6">
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-blue-300">Isolation</h3>
+                        <div className="space-y-2 text-sm">
+                            <div><span className="font-bold">Accounts:</span> {data.isolation.accounts}</div>
+                            <div><span className="font-bold">API Keys:</span> {data.isolation.api_keys}</div>
+                            <div><span className="font-bold">Database:</span> {data.isolation.database}</div>
+                            <div><span className="font-bold">Portfolios:</span> {data.isolation.portfolios}</div>
+                        </div>
+                    </div>
+                    
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-purple-300">Fees</h3>
+                        <div className="space-y-2 text-sm">
+                            <div><span className="font-bold">Model:</span> {data.fees.model}</div>
+                            <div><span className="font-bold">Percentage:</span> {data.fees.percentage}</div>
+                            <div><span className="font-bold">Calculation:</span> {data.fees.calculation}</div>
+                            <div><span className="font-bold">Billing:</span> {data.fees.billing_cycle}</div>
+                        </div>
+                    </div>
+                    
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-green-300">Security</h3>
+                        <div className="space-y-2 text-sm">
+                            <div><span className="font-bold">Auth:</span> {data.security.authentication}</div>
+                            <div><span className="font-bold">Encryption:</span> {data.security.encryption}</div>
+                            <div><span className="font-bold">Rate Limit:</span> {data.security.rate_limiting}</div>
+                            <div><span className="font-bold">Audit Log:</span> {data.security.audit_log}</div>
+                        </div>
+                    </div>
+                    
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-yellow-300">Permissions</h3>
+                        <div className="space-y-2 text-sm">
+                            <div><span className="font-bold">Role-based:</span> {data.permissions.role_based ? 'Yes' : 'No'}</div>
+                            <div><span className="font-bold">Roles:</span> {data.permissions.roles.join(', ')}</div>
+                            <div><span className="font-bold">Access Control:</span> {data.permissions.access_control}</div>
+                            <div><span className="font-bold">2FA:</span> {data.permissions['2fa']}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab11UserGuide = ({ data }) => (
+            <div className="glass-card p-6">
+                <div className="flex items-center gap-4 mb-6">
+                    <div className="icon-box">📖</div>
+                    <h2 className="text-3xl font-bold gradient-text">User Guide - מדריך משתמש</h2>
+                </div>
+                
+                <div className="metric-card mb-6">
+                    <h3 className="text-2xl font-bold mb-4 text-blue-300">Getting Started</h3>
+                    <ol className="space-y-3">
+                        {data.getting_started.steps.map((step, idx) => (
+                            <li key={idx} className="flex gap-3">
+                                <span className="flex-shrink-0 w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center font-bold">
+                                    {idx + 1}
+                                </span>
+                                <span className="text-gray-300 pt-1">{step}</span>
+                            </li>
+                        ))}
+                    </ol>
+                    <div className="mt-4 p-3 bg-yellow-900/20 rounded-lg border border-yellow-700/30">
+                        <h4 className="font-bold text-yellow-300 mb-2">Requirements:</h4>
+                        <ul className="text-sm text-gray-300 space-y-1">
+                            {data.getting_started.requirements.map((req, idx) => (
+                                <li key={idx}>• {req}</li>
+                            ))}
+                        </ul>
+                    </div>
+                </div>
+                
+                <div className="metric-card mb-6">
+                    <h3 className="text-2xl font-bold mb-4 text-purple-300">Approving Trades</h3>
+                    <div className="mb-4">
+                        <h4 className="text-lg font-bold mb-2 text-gray-300">Telegram Workflow:</h4>
+                        <ol className="space-y-2">
+                            {data.approving_trades.telegram_workflow.map((step, idx) => (
+                                <li key={idx} className="flex gap-2">
+                                    <span className="text-purple-400">→</span>
+                                    <span className="text-gray-300">{step}</span>
+                                </li>
+                            ))}
+                        </ol>
+                    </div>
+                    <div className="p-3 bg-green-900/20 rounded-lg border border-green-700/30">
+                        <h4 className="font-bold text-green-300 mb-2">Best Practices:</h4>
+                        <ul className="text-sm text-gray-300 space-y-1">
+                            {data.approving_trades.best_practices.map((practice, idx) => (
+                                <li key={idx}>✓ {practice}</li>
+                            ))}
+                        </ul>
+                    </div>
+                </div>
+                
+                <div className="grid md:grid-cols-2 gap-6 mb-6">
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-red-300">Stopping System</h3>
+                        <ul className="space-y-2">
+                            {data.stopping_system.methods.map((method, idx) => (
+                                <li key={idx} className="text-gray-300">• {method}</li>
+                            ))}
+                        </ul>
+                        <div className="mt-3 p-2 bg-red-900/20 rounded border border-red-700/30 text-sm text-gray-300">
+                            <strong>What happens:</strong> {data.stopping_system.what_happens}
+                        </div>
+                    </div>
+                    
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-blue-300">Monitoring</h3>
+                        <div className="space-y-2 text-sm text-gray-300">
+                            <div><strong>Dashboard:</strong> {data.monitoring.dashboard}</div>
+                            <div><strong>Telegram:</strong> {data.monitoring.telegram}</div>
+                            <div><strong>Alerts:</strong> {data.monitoring.alerts}</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div className="grid md:grid-cols-2 gap-6">
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-yellow-300">FAQ</h3>
+                        <div className="space-y-3">
+                            {data.faq.map((item, idx) => (
+                                <div key={idx} className="pb-3 border-b border-gray-700">
+                                    <div className="font-bold text-blue-300 mb-1">Q: {item.q}</div>
+                                    <div className="text-sm text-gray-300">A: {item.a}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-pink-300">Troubleshooting</h3>
+                        <div className="space-y-3">
+                            {data.troubleshooting.map((item, idx) => (
+                                <div key={idx} className="pb-3 border-b border-gray-700">
+                                    <div className="font-bold text-red-300 mb-1">⚠️ {item.issue}</div>
+                                    <div className="text-sm text-gray-300">✓ {item.solution}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab12Components = ({ data }) => (
+            <div className="glass-card p-6">
+                <div className="flex items-center gap-4 mb-6">
+                    <div className="icon-box">🔧</div>
+                    <h2 className="text-3xl font-bold gradient-text">System Components - רכיבי מערכת</h2>
+                </div>
+                
+                <div className="metric-card mb-6">
+                    <h3 className="text-2xl font-bold mb-4 gradient-text">8 Workers</h3>
+                    <div className="grid md:grid-cols-2 gap-4">
+                        {data.workers.map((worker, idx) => (
+                            <div key={idx} className="p-4 rounded-lg bg-gray-800 border border-gray-700">
+                                <div className="flex justify-between items-start mb-2">
+                                    <h4 className="text-lg font-bold text-blue-300">{worker.name}</h4>
+                                    <span className={`status-badge ${worker.status === 'running' ? 'status-active' : 'status-planned'}`}>
+                                        {worker.status}
+                                    </span>
+                                </div>
+                                <p className="text-sm text-gray-300 mb-2">{worker.what_it_does}</p>
+                                <div className="text-xs text-gray-400 space-y-1">
+                                    <div><strong>Tech:</strong> {worker.technologies.join(', ')}</div>
+                                    <div><strong>Cycle:</strong> {worker.cycle_time}</div>
+                                    <div><strong>Output:</strong> {worker.output}</div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+                
+                <div className="metric-card mb-6">
+                    <h3 className="text-2xl font-bold mb-4 text-purple-300">Database</h3>
+                    <div className="mb-4">
+                        <div className="text-lg font-bold text-gray-300 mb-2">{data.database.type}</div>
+                        <div className="text-sm text-gray-400 mb-4">{data.database.schema}</div>
+                    </div>
+                    <div className="grid md:grid-cols-2 gap-4">
+                        {data.database.key_tables.map((table, idx) => (
+                            <div key={idx} className="p-3 rounded-lg bg-gray-800 border border-gray-700">
+                                <div className="font-bold text-blue-300">{table.name}</div>
+                                <div className="text-sm text-gray-400">{table.purpose}</div>
+                            </div>
+                        ))}
+                    </div>
+                    <div className="mt-4 text-sm text-gray-400">
+                        <strong>Backup:</strong> {data.database.backup}
+                    </div>
+                </div>
+                
+                <div className="grid md:grid-cols-2 gap-6">
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold mb-4 text-green-300">APIs</h3>
+                        <div className="space-y-2">
+                            {data.apis.map((api, idx) => (
+                                <div key={idx} className="p-3 rounded-lg bg-gray-800 border border-gray-700 text-sm">
+                                    <div className="font-bold text-blue-300">{api.name}</div>
+                                    <div className="text-gray-400">{api.purpose}</div>
+                                    <div className="text-xs text-gray-500">Auth: {api.auth}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <div className="metric-card mb-4">
+                            <h3 className="text-xl font-bold mb-4 text-yellow-300">Security</h3>
+                            <div className="space-y-2 text-sm">
+                                <div><strong>Authentication:</strong> {data.security.authentication.join(', ')}</div>
+                                <div><strong>Encryption:</strong> {data.security.encryption}</div>
+                                <div><strong>Rate Limiting:</strong> {data.security.rate_limiting}</div>
+                                <div><strong>Anti-Replay:</strong> {data.security.anti_replay}</div>
+                            </div>
+                        </div>
+                        
+                        <div className="metric-card">
+                            <h3 className="text-xl font-bold mb-4 text-pink-300">Monitoring</h3>
+                            <div className="space-y-2 text-sm">
+                                <div><strong>Health Checks:</strong> {data.monitoring.health_checks.join(', ')}</div>
+                                <div><strong>Metrics:</strong> {data.monitoring.metrics}</div>
+                                <div><strong>Alerting:</strong> {data.monitoring.alerting}</div>
+                                <div><strong>Logging:</strong> {data.monitoring.logging}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        ReactDOM.render(<CompleteWorkbook />, document.getElementById('root'));
+    </script>
+</body>
+</html>
