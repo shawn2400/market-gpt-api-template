@@ -273,6 +273,110 @@ async def suggest_and_queue(req: SuggestQueueRequest):
 
     return {"ok": True, "mode": req.mode, "queued": len([q for q in queued if "error" not in q]), "details": queued}
 
+@router.get("/leaderboard")
+async def ai_leaderboard(timeframe_days: int = Query(7, ge=1, le=90)):
+    """
+    Get AI model leaderboard sorted by Win Rate.
+    Returns performance metrics for all AI models.
+    """
+    try:
+        from utils.ai_tracker import get_model_leaderboard
+        from dataclasses import asdict
+        
+        leaderboard = get_model_leaderboard(timeframe_days=timeframe_days)
+        
+        if not leaderboard:
+            return {
+                "ok": True,
+                "timeframe_days": timeframe_days,
+                "models": [],
+                "message": "No AI model data available for the specified timeframe"
+            }
+        
+        models_data = []
+        for idx, perf in enumerate(leaderboard, 1):
+            model_dict = asdict(perf)
+            model_dict["rank"] = idx
+            models_data.append(model_dict)
+        
+        return {
+            "ok": True,
+            "timeframe_days": timeframe_days,
+            "models": models_data,
+            "count": len(models_data)
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e),
+            "timeframe_days": timeframe_days,
+            "models": []
+        }
+
+@router.get("/performance")
+async def ai_performance(
+    model: str = Query(..., description="AI model name: gpt5, deepseek, grok, or consensus"),
+    regime: Optional[str] = Query(None, description="Market regime: TRENDING, RANGING, or VOLATILE"),
+    timeframe_days: int = Query(7, ge=1, le=90)
+):
+    """
+    Get detailed performance metrics for a specific AI model.
+    Optionally filter by market regime.
+    """
+    try:
+        from utils.ai_tracker import calculate_model_accuracy
+        from dataclasses import asdict
+        
+        model = model.lower().strip()
+        valid_models = ["gpt5", "deepseek", "grok", "consensus"]
+        if model not in valid_models:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid model. Must be one of: {', '.join(valid_models)}"
+            )
+        
+        regime_param = regime.upper() if regime else None
+        valid_regimes = ["TRENDING", "RANGING", "VOLATILE", None]
+        if regime_param and regime_param not in ["TRENDING", "RANGING", "VOLATILE"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid regime. Must be one of: TRENDING, RANGING, VOLATILE"
+            )
+        
+        perf = calculate_model_accuracy(
+            ai_model=model,
+            regime=regime_param,
+            timeframe_days=timeframe_days
+        )
+        
+        if not perf:
+            return {
+                "ok": True,
+                "model": model,
+                "regime": regime_param,
+                "timeframe_days": timeframe_days,
+                "data": None,
+                "message": "No performance data available for the specified parameters"
+            }
+        
+        return {
+            "ok": True,
+            "model": model,
+            "regime": regime_param,
+            "timeframe_days": timeframe_days,
+            "data": asdict(perf)
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e),
+            "model": model if 'model' in locals() else None,
+            "regime": regime,
+            "timeframe_days": timeframe_days
+        }
+
 
 
 

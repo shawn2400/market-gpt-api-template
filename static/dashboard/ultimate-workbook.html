@@ -576,7 +576,7 @@
                 { id: 17, name: 'Tech Indicators', icon: '📊' },
                 { id: 18, name: 'System Docs', icon: '📚' },
                 { id: 19, name: 'Control Center', icon: '🎛️' },
-                { id: 20, name: 'Users', icon: '👥' },
+                { id: 20, name: 'AI Leaderboard', icon: '🏆' },
                 { id: 21, name: 'Agents', icon: '🤖' },
                 { id: 22, name: 'Budget', icon: '💰' },
                 { id: 23, name: 'Telegram Approvals', icon: '✅' }
@@ -679,7 +679,7 @@
                         {activeTab === 17 && <Tab17TechnicalIndicators />}
                         {activeTab === 18 && <Tab18SystemDocs />}
                         {activeTab === 19 && <Tab19ControlCenter />}
-                        {activeTab === 20 && <Tab20Users />}
+                        {activeTab === 20 && <Tab20AILeaderboard />}
                         {activeTab === 21 && <Tab21Agents />}
                         {activeTab === 22 && <Tab22Budget />}
                         {activeTab === 23 && <Tab23TelegramApprovals />}
@@ -2713,143 +2713,351 @@
             );
         };
         
-        const Tab20Users = () => {
-            const [users, setUsers] = useState(null);
-            const [selectedUser, setSelectedUser] = useState(null);
+        const Tab20AILeaderboard = () => {
+            const [leaderboard, setLeaderboard] = useState(null);
+            const [regimePerf, setRegimePerf] = useState({ trending: null, ranging: null, volatile: null });
+            const [lastUpdated, setLastUpdated] = useState(null);
+            const [loading, setLoading] = useState(true);
             
-            useEffect(() => {
-                const fetchUsers = async () => {
-                    try {
-                        const res = await fetch('/dashboard/users/management');
-                        const data = await res.json();
-                        setUsers(data.users);
-                    } catch (err) {
-                        console.error(err);
-                    }
-                };
-                fetchUsers();
-                const interval = setInterval(fetchUsers, 10000);
-                return () => clearInterval(interval);
-            }, []);
-            
-            const viewUserDetails = async (userId) => {
+            const fetchLeaderboard = async () => {
                 try {
-                    const res = await fetch(`/dashboard/users/${userId}/details`);
+                    const res = await fetch('/ai/leaderboard?timeframe_days=7');
                     const data = await res.json();
-                    setSelectedUser(data);
+                    if (data.ok) {
+                        setLeaderboard(data.models);
+                        setLastUpdated(new Date());
+                    }
                 } catch (err) {
-                    console.error(err);
+                    console.error('Failed to fetch leaderboard:', err);
                 }
             };
             
-            if (!users) return <div className="loading">⏳ Loading Users...</div>;
+            const fetchRegimePerformance = async () => {
+                try {
+                    const regimes = ['TRENDING', 'RANGING', 'VOLATILE'];
+                    const models = ['gpt5', 'deepseek', 'grok', 'consensus'];
+                    const results = { trending: null, ranging: null, volatile: null };
+                    
+                    for (const regime of regimes) {
+                        let topModel = null;
+                        let topWinRate = -1;
+                        
+                        for (const model of models) {
+                            try {
+                                const res = await fetch(`/ai/performance?model=${model}&regime=${regime}&timeframe_days=7`);
+                                const data = await res.json();
+                                if (data.ok && data.data && data.data.win_rate > topWinRate) {
+                                    topWinRate = data.data.win_rate;
+                                    topModel = { model, ...data.data };
+                                }
+                            } catch (err) {
+                                console.error(`Failed to fetch ${model} ${regime}:`, err);
+                            }
+                        }
+                        
+                        const regimeKey = regime.toLowerCase();
+                        results[regimeKey] = topModel;
+                    }
+                    
+                    setRegimePerf(results);
+                } catch (err) {
+                    console.error('Failed to fetch regime performance:', err);
+                }
+            };
+            
+            useEffect(() => {
+                const fetchAll = async () => {
+                    setLoading(true);
+                    await Promise.all([fetchLeaderboard(), fetchRegimePerformance()]);
+                    setLoading(false);
+                };
+                
+                fetchAll();
+                const interval = setInterval(fetchAll, 60000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            const getWinRateColor = (winRate) => {
+                if (winRate > 60) return 'text-success';
+                if (winRate >= 45) return 'text-warning';
+                return 'text-error';
+            };
+            
+            const getWinRateBgColor = (winRate) => {
+                if (winRate > 60) return 'bg-success/10 border-success/30';
+                if (winRate >= 45) return 'bg-warning/10 border-warning/30';
+                return 'bg-error/10 border-error/30';
+            };
+            
+            const getRankEmoji = (rank) => {
+                if (rank === 1) return '🥇';
+                if (rank === 2) return '🥈';
+                if (rank === 3) return '🥉';
+                return `#${rank}`;
+            };
+            
+            const getTimeSinceUpdate = () => {
+                if (!lastUpdated) return '';
+                const seconds = Math.floor((new Date() - lastUpdated) / 1000);
+                if (seconds < 60) return `${seconds}s ago`;
+                const minutes = Math.floor(seconds / 60);
+                return `${minutes}m ago`;
+            };
+            
+            if (loading) return <div className="loading">⏳ Loading AI Leaderboard...</div>;
             
             return (
                 <div className="space-y-6">
                     <div className="glass-card p-6">
-                        <div className="flex items-center gap-4 mb-4">
-                            <div className="icon-box">👥</div>
-                            <h2 className="text-3xl font-bold gradient-text">Users & Activity Control</h2>
-                        </div>
-                        <p className="text-gray-300">7 Active Users - Multi-Tenant Trading Platform</p>
-                    </div>
-                    
-                    <div className="grid md:grid-cols-2 gap-4">
-                        {users.map(user => (
-                            <div key={user.id} className="glass-card p-6 hover:scale-105 transition-transform cursor-pointer"
-                                 onClick={() => viewUserDetails(user.id)}>
-                                <div className="flex justify-between items-start mb-4">
-                                    <div>
-                                        <h3 className="text-xl font-bold">{user.name}</h3>
-                                        <p className="text-sm text-gray-400">{user.email}</p>
-                                    </div>
-                                    <div className={`px-3 py-1 rounded-full text-sm ${user.status === 'active' ? 'bg-success' : 'bg-gray-500'}`}>
-                                        {user.status}
-                                    </div>
-                                </div>
-                                
-                                <div className="grid grid-cols-2 gap-3 text-sm">
-                                    <div>
-                                        <div className="text-gray-400">Capital</div>
-                                        <div className="font-bold text-lg">${user.capital.toLocaleString()}</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-gray-400">Performance Fee</div>
-                                        <div className="font-bold text-lg">{user.performance_fee}%</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-gray-400">Win Rate</div>
-                                        <div className="font-bold">{user.win_rate.toFixed(1)}%</div>
-                                    </div>
-                                    <div>
-                                        <div className="text-gray-400">Total P&L</div>
-                                        <div className={`font-bold ${user.total_pnl >= 0 ? 'text-success' : 'text-error'}`}>
-                                            ${user.total_pnl.toLocaleString()}
-                                        </div>
-                                    </div>
-                                </div>
+                        <div className="flex items-center justify-between mb-4">
+                            <div className="flex items-center gap-4">
+                                <div className="icon-box">🏆</div>
+                                <h2 className="text-3xl font-bold gradient-text">AI Model Performance Leaderboard</h2>
                             </div>
-                        ))}
-                    </div>
-                    
-                    {selectedUser && (
-                        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setSelectedUser(null)}>
-                            <div className="glass-card p-8 max-w-4xl w-full max-h-screen overflow-y-auto" onClick={e => e.stopPropagation()}>
-                                <h2 className="text-3xl font-bold mb-6">{selectedUser.user.name} - Detailed View</h2>
-                                
-                                <div className="grid md:grid-cols-4 gap-4 mb-6">
-                                    <div className="glass-card p-4">
-                                        <div className="text-sm text-gray-400">Capital</div>
-                                        <div className="text-2xl font-bold">${selectedUser.user.capital.toLocaleString()}</div>
-                                    </div>
-                                    <div className="glass-card p-4">
-                                        <div className="text-sm text-gray-400">P&L</div>
-                                        <div className={`text-2xl font-bold ${selectedUser.user.total_pnl >= 0 ? 'text-success' : 'text-error'}`}>
-                                            ${selectedUser.user.total_pnl.toLocaleString()}
-                                        </div>
-                                    </div>
-                                    <div className="glass-card p-4">
-                                        <div className="text-sm text-gray-400">Win Rate</div>
-                                        <div className="text-2xl font-bold">{selectedUser.user.win_rate.toFixed(1)}%</div>
-                                    </div>
-                                    <div className="glass-card p-4">
-                                        <div className="text-sm text-gray-400">ROI</div>
-                                        <div className="text-2xl font-bold">{selectedUser.user.ytd_roi}%</div>
-                                    </div>
-                                </div>
-                                
-                                <div className="mb-6">
-                                    <h3 className="text-xl font-bold mb-3">Recent Trades</h3>
-                                    <div className="overflow-x-auto">
-                                        <table className="w-full text-sm">
-                                            <thead className="border-b border-gray-700">
-                                                <tr className="text-right">
-                                                    <th className="pb-2">Time</th>
-                                                    <th className="pb-2">Symbol</th>
-                                                    <th className="pb-2">Side</th>
-                                                    <th className="pb-2">P&L</th>
-                                                </tr>
-                                            </thead>
-                                            <tbody>
-                                                {selectedUser.trade_history.map((trade, i) => (
-                                                    <tr key={i} className="border-b border-gray-800">
-                                                        <td className="py-2">{trade.time}</td>
-                                                        <td className="py-2">{trade.symbol}</td>
-                                                        <td className="py-2">{trade.side}</td>
-                                                        <td className={`py-2 ${trade.pnl >= 0 ? 'text-success' : 'text-error'}`}>
-                                                            ${trade.pnl}
-                                                        </td>
-                                                    </tr>
-                                                ))}
-                                            </tbody>
-                                        </table>
-                                    </div>
-                                </div>
-                                
-                                <button onClick={() => setSelectedUser(null)} className="px-6 py-3 bg-primary rounded-lg hover:opacity-80">סגור</button>
+                            <div className="text-sm text-gray-400">
+                                Last updated: {getTimeSinceUpdate()}
                             </div>
                         </div>
-                    )}
+                        <p className="text-gray-300">7-Day Performance Comparison - All AI Models</p>
+                    </div>
+                    
+                    <div className="glass-card p-6">
+                        <h3 className="text-2xl font-bold mb-6">📊 Overall Leaderboard (7 Days)</h3>
+                        
+                        {leaderboard && leaderboard.length > 0 ? (
+                            <div className="overflow-x-auto">
+                                <table className="w-full">
+                                    <thead>
+                                        <tr>
+                                            <th className="text-center">Rank</th>
+                                            <th>AI Model</th>
+                                            <th className="text-center">Win Rate</th>
+                                            <th className="text-center">Avg RR</th>
+                                            <th className="text-center">Total P&L</th>
+                                            <th className="text-center">Predictions</th>
+                                            <th className="text-center">Outcomes</th>
+                                            <th className="text-center">Consistency</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {leaderboard.map((model, idx) => (
+                                            <tr key={model.model} className={`border ${getWinRateBgColor(model.win_rate)}`}>
+                                                <td className="text-center text-2xl py-4">
+                                                    {getRankEmoji(model.rank)}
+                                                </td>
+                                                <td className="font-bold text-lg">
+                                                    {model.model.toUpperCase()}
+                                                </td>
+                                                <td className={`text-center font-bold text-xl ${getWinRateColor(model.win_rate)}`}>
+                                                    {model.win_rate.toFixed(1)}%
+                                                </td>
+                                                <td className="text-center font-semibold">
+                                                    {model.avg_rr_achieved.toFixed(2)}
+                                                </td>
+                                                <td className={`text-center font-semibold ${model.total_pnl_usd >= 0 ? 'text-success' : 'text-error'}`}>
+                                                    ${model.total_pnl_usd.toFixed(2)}
+                                                </td>
+                                                <td className="text-center">
+                                                    {model.total_predictions}
+                                                </td>
+                                                <td className="text-center">
+                                                    {model.total_outcomes}
+                                                </td>
+                                                <td className="text-center">
+                                                    {model.consistency_score.toFixed(2)}
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        ) : (
+                            <div className="text-center text-gray-400 py-8">
+                                No leaderboard data available for the last 7 days
+                            </div>
+                        )}
+                    </div>
+                    
+                    <div className="glass-card p-6">
+                        <h3 className="text-2xl font-bold mb-6">📈 Model Performance by Market Regime</h3>
+                        
+                        <div className="grid md:grid-cols-3 gap-6">
+                            <div className="metric-card border-2 border-success/30">
+                                <div className="flex items-center gap-3 mb-4">
+                                    <span className="text-3xl">📈</span>
+                                    <h4 className="text-xl font-bold text-success">TRENDING</h4>
+                                </div>
+                                {regimePerf.trending ? (
+                                    <div>
+                                        <div className="text-sm text-gray-400 mb-2">Top Performer</div>
+                                        <div className="text-2xl font-bold gradient-text mb-3">
+                                            {regimePerf.trending.model.toUpperCase()}
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3 text-sm">
+                                            <div>
+                                                <div className="text-gray-400">Win Rate</div>
+                                                <div className={`font-bold text-lg ${getWinRateColor(regimePerf.trending.win_rate)}`}>
+                                                    {regimePerf.trending.win_rate.toFixed(1)}%
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-400">Avg RR</div>
+                                                <div className="font-bold text-lg">
+                                                    {regimePerf.trending.avg_rr_achieved.toFixed(2)}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-400">Outcomes</div>
+                                                <div className="font-bold">
+                                                    {regimePerf.trending.total_outcomes}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-400">P&L</div>
+                                                <div className={`font-bold ${regimePerf.trending.total_pnl_usd >= 0 ? 'text-success' : 'text-error'}`}>
+                                                    ${regimePerf.trending.total_pnl_usd.toFixed(2)}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="text-gray-400 text-sm">No data available</div>
+                                )}
+                            </div>
+                            
+                            <div className="metric-card border-2 border-warning/30">
+                                <div className="flex items-center gap-3 mb-4">
+                                    <span className="text-3xl">↔️</span>
+                                    <h4 className="text-xl font-bold text-warning">RANGING</h4>
+                                </div>
+                                {regimePerf.ranging ? (
+                                    <div>
+                                        <div className="text-sm text-gray-400 mb-2">Top Performer</div>
+                                        <div className="text-2xl font-bold gradient-text mb-3">
+                                            {regimePerf.ranging.model.toUpperCase()}
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3 text-sm">
+                                            <div>
+                                                <div className="text-gray-400">Win Rate</div>
+                                                <div className={`font-bold text-lg ${getWinRateColor(regimePerf.ranging.win_rate)}`}>
+                                                    {regimePerf.ranging.win_rate.toFixed(1)}%
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-400">Avg RR</div>
+                                                <div className="font-bold text-lg">
+                                                    {regimePerf.ranging.avg_rr_achieved.toFixed(2)}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-400">Outcomes</div>
+                                                <div className="font-bold">
+                                                    {regimePerf.ranging.total_outcomes}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-400">P&L</div>
+                                                <div className={`font-bold ${regimePerf.ranging.total_pnl_usd >= 0 ? 'text-success' : 'text-error'}`}>
+                                                    ${regimePerf.ranging.total_pnl_usd.toFixed(2)}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="text-gray-400 text-sm">No data available</div>
+                                )}
+                            </div>
+                            
+                            <div className="metric-card border-2 border-error/30">
+                                <div className="flex items-center gap-3 mb-4">
+                                    <span className="text-3xl">⚡</span>
+                                    <h4 className="text-xl font-bold text-error">VOLATILE</h4>
+                                </div>
+                                {regimePerf.volatile ? (
+                                    <div>
+                                        <div className="text-sm text-gray-400 mb-2">Top Performer</div>
+                                        <div className="text-2xl font-bold gradient-text mb-3">
+                                            {regimePerf.volatile.model.toUpperCase()}
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-3 text-sm">
+                                            <div>
+                                                <div className="text-gray-400">Win Rate</div>
+                                                <div className={`font-bold text-lg ${getWinRateColor(regimePerf.volatile.win_rate)}`}>
+                                                    {regimePerf.volatile.win_rate.toFixed(1)}%
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-400">Avg RR</div>
+                                                <div className="font-bold text-lg">
+                                                    {regimePerf.volatile.avg_rr_achieved.toFixed(2)}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-400">Outcomes</div>
+                                                <div className="font-bold">
+                                                    {regimePerf.volatile.total_outcomes}
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <div className="text-gray-400">P&L</div>
+                                                <div className={`font-bold ${regimePerf.volatile.total_pnl_usd >= 0 ? 'text-success' : 'text-error'}`}>
+                                                    ${regimePerf.volatile.total_pnl_usd.toFixed(2)}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ) : (
+                                    <div className="text-gray-400 text-sm">No data available</div>
+                                )}
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="glass-card p-6">
+                        <h3 className="text-2xl font-bold mb-4">ℹ️ Performance Metrics Explanation</h3>
+                        <div className="grid md:grid-cols-2 gap-4 text-sm">
+                            <div className="space-y-2">
+                                <div>
+                                    <span className="font-bold text-primary">Win Rate:</span>
+                                    <span className="text-gray-300"> Percentage of successful predictions</span>
+                                </div>
+                                <div>
+                                    <span className="font-bold text-primary">Avg RR:</span>
+                                    <span className="text-gray-300"> Average Risk-Reward ratio achieved</span>
+                                </div>
+                                <div>
+                                    <span className="font-bold text-primary">Total P&L:</span>
+                                    <span className="text-gray-300"> Cumulative profit/loss in USD</span>
+                                </div>
+                                <div>
+                                    <span className="font-bold text-primary">Predictions:</span>
+                                    <span className="text-gray-300"> Total number of AI predictions made</span>
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <div>
+                                    <span className="font-bold text-primary">Outcomes:</span>
+                                    <span className="text-gray-300"> Number of predictions with confirmed results</span>
+                                </div>
+                                <div>
+                                    <span className="font-bold text-primary">Consistency:</span>
+                                    <span className="text-gray-300"> Standard deviation of returns (lower is better)</span>
+                                </div>
+                                <div>
+                                    <span className="font-bold text-success">Green (>60%):</span>
+                                    <span className="text-gray-300"> Excellent performance</span>
+                                </div>
+                                <div>
+                                    <span className="font-bold text-warning">Yellow (45-60%):</span>
+                                    <span className="text-gray-300"> Good performance</span>
+                                </div>
+                                <div>
+                                    <span className="font-bold text-error">Red (<45%):</span>
+                                    <span className="text-gray-300"> Needs improvement</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
             );
         };
