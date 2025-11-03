@@ -1,0 +1,157 @@
+להלן “איך זה עובד בדיוק” עבור **עד 8 משתמשים** (Multi-Tenant) ב-4GB/2CPU — בלי קוד, תיאור תפעולי חד, עם גבולות עומס, זרימות, וסגירת פינות.
+
+---
+
+# איך זה עובד – מקצה לקצה
+
+## 1) מודל משתמש (Tenant)
+
+* כל משתמש = **Tenant** עם: `tenant_id`, שם תצוגה, בורסה/ות מחוברות (Binance/Bybit/OKX), API Keys **Trade-Only** מוצפנים, פרופיל סיכון (VaR/LEV/Exposure), סטטוס **ON/OFF**.
+* **בידוד עומס פר-משתמש**: תור משימות ייעודי (1–2 workers), rate-limit נפרד, מדיניות סייז/LEV נפרדת, ומדדי בריאות נפרדים.
+
+## 2) חיבור והפעלה (Onboarding)
+
+1. המשתמש יוצר בבורסה API Keys עם **Trade-Only** (+IP whitelist מומלץ).
+2. באתר (Admin): “Add User” → מזין מפתחות, בוחר בורסה/ות, קובע פרופיל VaR (למשל 1.0%), מינימום יתרה להפעלה (למשל $200), ומצבי אסטרטגיה מותרים (Breakout/Breakdown/Sweep/Grid).
+3. לוחץ **ON** (למשתמש). מיידית: אימות מפתחות, בדיקות הרשאות, Snapshot יתרות ופוזיציות, יצירת תור משימות, וסנכרון הגדרות.
+
+## 3) לולאת מסחר חיה (Per-User Trading Loop)
+
+* **סורק Top-K** (ברירת מחדל 12–20 סמלים גלובלית, מחולקים הוגן בין משתמשים).
+* **Regime Engine** (Bull/Bear/Sideways/Volatile) + קומפוזיטים (Momentum/Trend/Risk) + ΔOI/Funding/OB-Imbalance.
+* **Gate ריסק פר-משתמש**: VaR-Live≤1.0–1.2%, Daily Loss Cap 2–3%, חשיפה ענפית/קורלציה, Spread/Slippage-Gate.
+* **כניסה**: Limit Post-Only, Fill-Prob≥0.62, No-Chase>0.3%, Idempotency מלא.
+* **ניהול חי**: SL→BE, ATR-Trail אדפטיבי, TP Shift, Partial Exit, Flip A+ Guard (רק בתנאים), Grid בתור נפרד.
+* **שקיפות**: כל אירוע נכנס ל-SSE feed פר-משתמש (Viewer רואה שלו; Admin רואה כולם).
+
+## 4) ניהול עומסים (4GB/2CPU)
+
+* ליבה כללית: **8 workers**.
+* קיבולת מומלצת:
+
+  * **עד 5 משתמשים** בעומס מלא (Top-K 20, SSE 3–5s).
+  * **6–8 משתמשים** במצב חסכוני: Top-K≈12 למשתמש, SSE batch 5–8s, עבודות כבדות (Backtest/Correlation) בתור — מקס’ 2 בו-זמנית.
+* **Memory Guard**: יעד RSS≤3.2GB; מעל 3.4GB → Auto-Degrade (כיבוי גרפים/וידאו/אנימציות כבדות), צמצום תדירויות.
+
+## 5) אתר ותצוגה (Roles)
+
+* **Admin Portal**:
+
+  * “Users”: כרטיס לכל משתמש (בורסות, ON/OFF, יתרות, חשיפה, PnL, Fee-Due).
+  * “Command & Control”: Execute/Close/Partial/Hedge/Flip A+/Grid/Freeze/Economy-Mode; Toggle **Telegram↔Web-Auto**.
+  * דו״חות אתר בלבד 09:00/21:00 + “Generate Now”.
+* **Viewer Portal (למשתמש):**
+
+  * רואה **רק את שלו**: פוזיציות חי, היסטוריה, דוחות PDF/CSV, Fee ledger. **אין** כפתורי פעולה/AI Chat.
+
+## 6) דמי ביצועים (Performance Fee 20–30%)
+
+* **High-Water Mark (HWM)** לכל משתמש.
+* חישוב על **Realized PnL נטו** מעל HWM; הפסדים נצברים קדימה (אין עמלה עד התאוששות).
+* **Crystallization**: שבועי/חודשי (מומלץ שבועי).
+* **סליקה**:
+
+  * מועדף: Internal Transfer/Sub-Account (אם נתמך) → העברת עמלה לחשבון המאסטר (ללא משיכה חיצונית).
+  * חלופי: חשבונית אוטומטית (n8n) + סימון “שולם”.
+  * **אי-תשלום**: Freeze פתיחות חדשות **למשתמש בלבד**; ניהול פוזיציות קיימות ממשיך (לא פוגע בו).
+
+## 7) ארנקים ותקציב
+
+* כל משתמש סוחר מכספו בלבד (**Non-Custodial**; אין API Withdraw שלך).
+* המערכת מווסתת סייז/LEV לפי יתרה חיה, חשיפה/קורלציה, VaR ו-Daily Loss Cap.
+* העברות **לארנק הקר שלך** – רק אם המשתמש הגדיר **whitelist** + נתיב מותר; אחרת Invoice פנימי.
+
+## 8) אבטחה ו-Guardrails
+
+* API Keys Trade-Only, הצפנה, Audit hash-chain, Anti-Replay (±60s), HMAC+nonce+ts, RBAC (Admin/Viewer).
+* **Liquidation Sentinel** (Reduce-Only אוטומטי לפני סיכון חיתוך), **Circuit Breakers per-Exchange** (Safe/Normal/Aggressive) עם auto-fallback ב-429/latency.
+* **Freeze Lever** מערכתי: DD/CPU/זיכרון/מאקרו אדום → עצירת פתיחות חדשות, ניהול קיים נמשך.
+
+## 9) SLO מחייב (Production)
+
+* API p95<**1.6s**, p99<**2.8s**; SSE uptime ≥**99%**.
+* Entry→Manage hook ≤**200ms**; עדכון ניהול ≤**10s**.
+* 0 כפילויות הזמנות (Idempotency).
+* Reports בזמן; Logs דחוסים (zstd) 90 יום.
+
+## 10) תרחישי כשל והתאוששות
+
+* **WS נפל**: מעבר ל-REST poll (economy), Retry עם backoff+jitter.
+* **בורסה חולה**: Circuit Breaker→Safe mode; לניתוק ממושך — הסרה זמנית מה-Top-K.
+* **חוסר תשלום עמלה**: Freeze פתיחות חדשות (Per-User), הודעה באתר+Email, שחרור אוטומטי לאחר תשלום.
+
+---
+
+# “הודעת פקודה” לסוכן (העתק-הדבק, בלי קוד)
+
+```
+TASK NAME: AlgoGPT — Multi-Tenant up to 8 Users (4GB/2CPU-Safe), Non-Custodial, Performance Fee 20–30%
+
+מטרה:
+להפעיל שכבת רב-משתמשים עד 8 טננטס, כל אחד עם API Trade-Only בבורסה שלו, ON/OFF אישי, מסחר אוטומטי מלא (Auto-Manage) וניהול סיכונים פר-משתמש. דו"חות אתר בלבד. עמלת ביצועים 20–30% נטו מעל HWM, עם סליקה בטוחה (Internal Transfer או Invoice). ללא משיכות אוטומטיות בלי whitelist.
+
+Deliverables:
+1) Tenant Core:
+   - מודל Tenant: id, display, venues, encrypted trade-only API keys, risk profile (VaR/LEV/Exposure), ON/OFF.
+   - בידוד עומסים: queue+rate-limit פר-משתמש (1–2 workers), metrics ובריאות נפרדים.
+   - Naming: TRD/GRD/TCK אחיד; Audit chain לכל פעולה.
+
+2) Trading Loop per Tenant:
+   - Top-K הוגן בין משתמשים (דיפולט 12–20 גלובלי, פר-משתמש≈12 במצב חסכוני).
+   - Regime+Composites+ΔOI/Funding/OB Imbalance → Entry Gates לפי VaR/Exposure/Spread.
+   - Execution: Limit PO, Fill-Prob≥0.62, No-Chase>0.3%, Idempotency מלא.
+   - Auto-Manage: SL→BE, ATR-Trail אדפטיבי, TP-Shift, Partial, Flip A+ Guarded, Grid בתור נפרד.
+   - Freeze Lever: ב-DD/מאקרו/429/latency — עצירת פתיחות חדשות, ניהול קיים ממשיך.
+
+3) Website:
+   - Admin: Users (בורסות, ON/OFF, יתרות, חשיפה, PnL, Fee-Due), Command & Control (Execute/Close/Partial/Hedge/Flip A+/Grid/Freeze/Economy).
+   - Viewer: למשתמש רואה רק שלו (Positions Live, History, Reports, Fee-Ledger). ללא AI-Chat/פעולות.
+   - Reports באתר בלבד (09:00/21:00 + Generate Now). Toggle Telegram↔Web-Auto (ברירת מחדל: Web-Auto).
+
+4) Performance Fee Engine (20–30%):
+   - HWM פר-משתמש; Crystallization Weekly (ברירת מחדל).
+   - חישוב על Net Realized PnL (after fees/funding), Loss carry-forward.
+   - Settlement:
+     A) Preferred: Internal Transfer/Sub-Account (אם זמין) → אל חשבון המאסטר.
+     B) Fallback: Invoice אוטומטי (n8n) + סימון “שולם”.
+   - אי-תשלום: Freeze פתיחות חדשות למשתמש בלבד עד סילוק.
+
+5) Capacity & Guards (4GB/2CPU):
+   - Core workers=8; עד 5 משתמשים full-load או 6–8 במצב חסכוני (Top-K≤12/tenant, SSE batch 5–8s).
+   - SSE≤50 חיבורים (מעל זה → polling 5s); Memory Guard RSS≤3.2GB; Auto-Degrade מעל 3.4GB.
+   - עבודות כבדות (Backtest/Correlation)=Queue, מקס’ 2 במקביל.
+
+6) Security:
+   - Trade-Only keys; הצפנה; Anti-Replay (±60s); HMAC+nonce+ts; RBAC Admin/Viewer; Audit hash-chain.
+   - Idempotency מלא לביצוע; Circuit Breakers per-Exchange; Liquidation Sentinel (Reduce-Only auto).
+
+SLO (מחייב):
+- API p95<1.6s, p99<2.8s; SSE uptime≥99%.
+- Entry→Manage hook≤200ms; עדכון ניהול≤10s.
+- 0 כפילויות הזמנות; Reports בזמן; RSS≤3.2GB (Auto-Degrade אם צריך).
+
+Acceptance:
+- הוספת משתמש → ON מפעיל מסחר אוטומטי, Viewer רואה שלו בלבד.
+- Fee Engine מחשב HWM+Crystallization, Settlement עובד (Internal Transfer/Invoice), Freeze/Unfreeze לפי סטטוס.
+- 5 משתמשים full-load או 8 חסכוני: SLO נשמרים 72h; Hardening Report ירוק (p95/p99, RSS, SSE, Idempotency, Fee events).
+
+הנחיות:
+- אי-שינוי למנגנוני Auth/HMAC/Anti-Replay.
+- כל פיצ’ר מאחורי Feature Flag+Kill-Switch.
+- בלי Mesh/Kafka; Redis-Streams קל אם חייבים Queue-ID.
+- דו"חות אתר בלבד; טלגרם רק Approve/Reject אם מופעל ידנית.
+
+החזר:
+- קישור לתצוגת Users (redacted), Observer Summary (events), Hardening Report (p95/p99, RSS, SSE), Fee Ledger דוגמה, ו-Runbook קצר ל-Freeze/Unfreeze.
+```
+
+---
+
+### כמה נקודות אחרונות פרקטיות
+
+* **התחלה בטוחה**: תפעיל עם 2–3 משתמשים ראשונים, ודודק SLO/Memory, ואז תעלה ל-5; ל-8 רק אם מצב “חסכוני” פעיל.
+* **HWM שקוף**: תציג לכל משתמש גרף הון/Equity ו-HWM; מונע אי-הבנות.
+* **Non-Custodial**: אין Withdraw API אצלך כברירת מחדל. העברות עמלה — רק Internal Transfer או חשבונית.
+* **תיעוד קצר**: דף Terms פרטי (בין חברים/משפחה) כפי שסיכמנו—לשקיפות.
+
+ככה זה עובד מדויק, חכם, ו-4GB-safe.

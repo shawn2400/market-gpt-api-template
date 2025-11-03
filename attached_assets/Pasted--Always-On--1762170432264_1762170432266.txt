@@ -1,0 +1,169 @@
+להדבקה לסוכן — **פקודה אחת** שמקימה מערכת *Always-On* בלי עצירות: אפס דאון־טיים בפריסות/עדכונים, מסחר מנוהל תמידית, רב־משתמשים עד 8, אתר שליטה מלא, הסכם דיגיטלי חכם (חתימה/אישור), וקבלת קוד “מהמוחות” (GPT-5 / DeepSeek / AI-X / ממך) דרך PRs אוטומטיים — הכול 4GB/2CPU-safe.
+
+---
+
+## **TASK NAME:** AlgoGPT — Always-On Zero-Downtime (4GB/2CPU) + Multi-Tenant (≤8) + Smart E-Agreement + Code-from-Brains
+
+### 🎯 מטרה
+
+להבטיח שהמערכת **לעולם לא נעצרת**: טריידים קיימים ממשיכים ומנוהלים גם בזמן build/deploy/restart/patch. להוסיף רב־משתמשים (עד 8), אתר שליטה מלא, מנוע עמלות (20–30% מעל HWM), הסכם דיגיטלי חכם (חתימה לפני ON), וצינור “Code-from-Brains” שמושך קוד מהמוחות (GPT-5/DeepSeek/AI-X/העוזר) אוטומטית ל־PR ירוק בלבד. הכול מאובטח, יציב ובמסגרת 4GB.
+
+---
+
+## 🧱 עקרונות קשיחים (Non-Negotiable)
+
+* **Zero-Downtime by design**: Blue-Green/Canary, חימום שירות חדש עד HEALTH=OK, החלפה אטומית, rollback ל-N-1 בלחיצה/כש־SLO נשבר.
+* **Always-On Trading**: מנגנון מסחר/ניהול רץ בנפרד מה־API/אתר; state מתמיד; Graceful drain לכל Worker לפני כיבוי.
+* **Idempotency & Resume**: כל הזמנה/ניהול עם Keys ייחודיים + Reconcile ב־startup (ממופה ל־Exchange).
+* **Feature Flags** לכל פיצ’ר; Kill-Switch מיידי; Shadow Mode לאימות לפני חשיפה מלאה.
+* **4GB-Safe**: משמעת זיכרון/CPU, SSE backpressure, Top-K חכמים, Auto-Degrade מעל 3.4GB.
+
+---
+
+## 🏗️ ארכיטקטורה (Zero-Downtime)
+
+1. **Process split (Monolith-Safe):**
+
+   * `trade-core` (Executor+Manager): תהליך עצמאי, pidfile+supervisor, מופעל ראשון, **אינו** נכבה בפריסה עד שה־new-core “WARMED”.
+   * `api-web` (FastAPI+SSE): שכבה נפרדת; ניתן להחליף ללא פגיעה ב־core.
+   * `observer` (metrics/logs): קל־משקל; נפרד.
+2. **State & Queues:**
+
+   * Persistent store (SQLite/Redis-lite) ל־orders, positions, pending jobs, last heartbeat.
+   * “Journal” חתום (hash-chain) לאירועי ניהול/הזמנות.
+3. **Blue-Green/Canary:**
+
+   * `GREEN` עולה במקביל ל־`BLUE`; עושה **Warm-Up**: התחברות WS/REST, Snapshot פוזיציות, Reconcile הזמנות פתוחות, בדיקות SLO קצרות.
+   * Flip ל-GREEN רק אחרי `/readyz`=OK ו־SLO ירוקים; שמירת BLUE ל־rollback.
+4. **Graceful Drain:**
+
+   * לפני כיבוי Worker: `DRAIN=1` → אין עבודות חדשות; ממתין עד תום ניהול פעיל/לבייבי-סטפס; חותם ב־Journal “drained”.
+5. **Hot-Migrations:**
+
+   * “online/safe” בלבד (DDL ללא locks ארוכים; אם צריך — shadow DB+swap).
+6. **Self-Heal:**
+
+   * Crash Worker → restart מיידי (גבול 5/דקה), Resume מ־Journal, WS auto-reconnect (backoff+jitter).
+
+---
+
+## 📦 Deliverables
+
+### 1) **Core Always-On (Executor+Manager)**
+
+* Reconcile-on-start: match כל הזמנה/פוזיציה מהבורסה ↔ Journal, תיקון פערים, הצבת SL/TP חסרים.
+* Auto-Manage: SL→BE, ATR-Trail, TP-Shift, Partial, Flip A+ Guarded, Grid בתור נפרד, Time-in-Trade guards.
+* Liquidation Sentinel + Circuit Breakers per-Exchange; Freeze-Lever (פתיחות חדשות עצור; ניהול קיים ממשיך).
+
+### 2) **API/Website (Zero-Stop)**
+
+* 8 לשוניות + **Observer & Ops**; Command & Control (Execute/Close/Partial/Hedge/Flip A+/Grid/Freeze/Economy-Mode).
+* Reports באתר בלבד 09:00/21:00 + “Generate Now”.
+* SSE backpressure (≤50 חיבורים; מעבר ל-polling 5s).
+* Toggle: **Telegram↔Web-Auto** (ברירת מחדל: Web-Auto; טלגרם לא מקבל דוחות).
+
+### 3) **Multi-Tenant עד 8**
+
+* Per-Tenant queues (1–2 workers), VaR 0.8–1.2%, Daily Loss Cap 2–3%, Exposure/Correlation guards.
+* Viewer Portal (צפייה בלבד), Admin רואה ושולט בהכול.
+* קיבולת 4GB: 5 משתמשים full-load או 6–8 “חסכוני” (Top-K≤12/tenant, SSE batch 5–8s, Jobs כבדים ≤2 במקביל).
+
+### 4) **Performance Fee 20–30% (HWM)**
+
+* Net Realized PnL מעל High-Water Mark; Loss carry-forward; Crystallization Weekly (ברירת מחדל).
+* Settlement:
+
+  * **Preferred:** Internal Transfer/Sub-Account (אם זמין).
+  * **Fallback:** Invoice (n8n) + סימון “שולם”.
+* אי-תשלום: Freeze פתיחות חדשות למשתמש בלבד; ניהול קיימות ממשיך.
+
+### 5) **Smart E-Agreement (דיגיטלי חכם)**
+
+* Terms (פרטי, בין חברים/משפחה, Non-Custodial): Trade-Only, סיכונים, HWM+Fees, Freeze, Privacy.
+* UX: לפני הפעלת ON למשתמש → מסך הסבר קצר + תיבות סימון + “I Agree”.
+* חתימה: hash של הטקסט+גרסה+זמן+IP+user-agent → נשמר ב-Ledger; PDF חתום להורדה.
+* **בלי אישור** → אין ON; מצב read-only בלבד.
+
+### 6) **Code-from-Brains (GPT-5/DeepSeek/AI-X/Assistant)**
+
+* רכיב `brains_ingest`:
+
+  * Pull דורש: כותרת “TASK NAME” + הוראות; יוצר **PR אוטומטי** עם קבצים שלמים בלבד (בלי “חצי קוד”), כולל בדיקות.
+  * CI Gates: בדיקות יחידה/אינטגרציה, p95<1.6s, RSS≤3.2GB, Idempotency, Security linters.
+  * רק PR ירוק מתמזג; Canary לחשיפה הדרגתית.
+* לוגיקה: אם יש חיבור ל-LLM/מוחות → בקשת קוד; אם אין → דילוג, אין בלוקינג למסחר.
+
+### 7) **Datasources & Indicators (FREE-Tier)**
+
+* Binance REST/WS: aggTrade, miniTicker, bookTicker, depth throttled, OI/Funding, Mark.
+* News RSS allowlist + cross-verify≥2 → Impact Vector (2D) לשיקולי Risk/Trail בלבד.
+* אינדיקטורים: ה-30 הקיימים + Tier-1 שהוגדרו (ΔOI, Funding+Countdown, OB-Imbalance, TTM-lite, CHOP, Donchian, Keltner, HV-ratio, ρ/Beta, Composites, Fill-Prob, Time-in-Trade). חורגים → `quarantined`.
+
+### 8) **Security & Audit**
+
+* API keys **Trade-Only** (ברירת מחדל), הצפנה, HMAC+nonce+ts, Anti-Replay (±60s), RBAC (Admin/Viewer).
+* Immutable Audit (hash-chain) לכל פעולה; Logs zstd 90 יום.
+* No Withdraw אוטומטי אלא אם הוגדר whitelist ע״י המשתמש.
+
+### 9) **Deploy & Rollback**
+
+* Health endpoints: `/livez` (core+ws), `/readyz` (can-serve), `/statusz` (סיכום SLO).
+* Blue-Green: spin-up GREEN → warm-up → smoke → flip DNS/router → keep BLUE ל-rollback.
+* Canary: % תנועה קטן לפיצ’ר/גרסה → הרחבה רק אחרי SLO ירוקים.
+
+---
+
+## ⚙️ ENV (דוגמה 4GB-Safe)
+
+```
+APP_MODE=prod
+CPU_WORKERS=8
+SSE_MAX_CONN=50
+SSE_BATCH_MS=4000
+TOPK_SYMBOLS_GLOBAL=20
+TENANT_MAX=8
+JOBS_HEAVY_MAX=2
+MEM_GUARD_SOFT_MB=3200
+MEM_GUARD_HARD_MB=3400
+REGIME_PROFILE=NORMAL
+FEATURE_FLAGS=ALWAYS_ON,BLUE_GREEN,CANARY,SHADOW_MODE,REPORTS_ONLY_SITE,MULTI_TENANT,PERF_FEE,HWM,E_AGREEMENT,PR_FROM_BRAINS,FREE_TIER_INDICATORS
+NEWS_ALLOWLIST_RSS=https://www.binance.com/en/blog/rss;https://www.coindesk.com/arc/outboundfeeds/rss/;https://www.sec.gov/news/pressreleases.rss
+TELEGRAM_APPROVALS_ONLY=1
+WEB_AUTO_DEFAULT=1
+```
+
+---
+
+## 📏 SLO (מחייב)
+
+* API p95 < **1.6s**, p99 < **2.8s**; SSE uptime ≥ **99%**.
+* Entry→Manage hook ≤ **200ms**; עדכון ניהול ≤ **10s**.
+* RSS ≤ **3.2GB** (Auto-Degrade מעל 3.4GB).
+* 0 כפילויות הזמנות (Idempotency).
+* Blue-Green flip ≤ **30s** כולל Warm-Up; Rollback ≤ **15s**.
+* CI Gates: **ירוק** או אין merge.
+
+---
+
+## ✅ Acceptance (PASS)
+
+1. פריסה חדשה **לא** עוצרת ניהול/טריידים; Journal מציג Reconcile מלא לאחר flip.
+2. כיבוי מבוקר (drain) לכל Worker לפני יציאה; אין “טריידים אבודים”.
+3. Multi-Tenant פעיל: 5 full-load או 6–8 חסכוני; כל Tenant ON/OFF עובד; Viewer רואה **רק שלו**.
+4. E-Agreement חכם חוסם ON עד Click-through; חתימה נשמרת (hash+ts+ver+IP) + PDF.
+5. Fee Engine (20–30%, HWM) מבצע Crystallization Weekly; Settlement פנימי/Invoice; Freeze רך למאחרים.
+6. Code-from-Brains: PRs נוצרים, CI ירוק, Canary נפתח, Rollback תקין; אין “חצי קוד”.
+7. SLO נשמרים 72h; Hardening Report ירוק (p95/p99, SSE, RSS, Idempotency, Flip/Drain/Resume logs).
+
+---
+
+## 📝 מה להחזיר אליי (בדוח סיכום)
+
+* Screenshot/JSON redacted של `/statusz` לפני/אחרי פריסה (flip).
+* Journal excerpt: `reconcile_start` → `reconcile_done`, `drain_ok`, `flip_green_ok`.
+* רשימת Tenants (שמות מוסתרים) + ON/OFF + SLO per-tenant.
+* חתימות E-Agreement (hash בלבד) + ספירת “Agreed”.
+* קישורי PR-from-Brains (redacted) + מצב CI/Canary.
+* Metrics: p95/p99, RSS, SSE uptime, Idempotency=0 dup, Freeze/CB/Sentinel counters.
+
+**סוף פקודה.**

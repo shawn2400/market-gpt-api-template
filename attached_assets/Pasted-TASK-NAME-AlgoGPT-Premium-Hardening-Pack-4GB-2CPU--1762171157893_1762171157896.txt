@@ -1,0 +1,73 @@
+TASK NAME: AlgoGPT — Premium Hardening Pack (4GB/2CPU)
+
+מטרה:
+להשלים הקשחות ותוספות חסרות לפרימיום כך שהמערכת תעמוד ב-SLO, לא תיעצר לעולם, ותספק שקיפות מלאה ויציבות: Reconciliation מלא, Slippage/Liquidity Guards, Drift/Decay Monitor, Ablation+Shadow, News Trust, Backtesting WFV, Runbooks, Blue-Green Proofs, Multi-Tenant Load Control, Wallet Guard, Secret Hygiene, SLA/SLO scorecards, Data Integrity Watchdog, E-Agreement דיגיטלי.
+
+Deliverables:
+1) PnL Reconciliation:
+   - Job שבועי מול Account Statements (Binance/Bybit/OKX).
+   - דו"ח Diff per-trade + חתימת hash ל-Ledger + התראות n8n אם deviation>δ.
+
+2) Slippage & Liquidity Guards:
+   - מודל החלקה/impact per-symbol; gates: spread, depth, impact @ $X.
+   - התאמת TP/BE/Trail ex-ante; ביטול הזמנה אם Fill-Prob<0.62.
+
+3) Precision/LotSize & Dust:
+   - Normalizer אחיד לתקנים, rounding בטוח, ניקוי אבק.
+
+4) Drift/Decay Monitor:
+   - PSI/KS יומיים ל-Bandit/Consensus; טריגר reset/retune; דשבורד תוצאות.
+
+5) Ablation & Shadow:
+   - Shadow strategies קבוע + דו"ח uplift יומי (Live vs Shadow), תרומת רכיב.
+
+6) News Trust & Adversarial Filter:
+   - ניקוד מקור/כותב/מילות סיכון; denylist; penalty לנוסחי clickbait.
+
+7) Backtesting WFV:
+   - Walk-Forward + Monte-Carlo (1000), פרופילים SAFE/NORMAL/AGGR.
+   - SLA: הרצה <30s, שמירת גרפים ותוצאות ב-Reports.
+
+8) Ops Runbooks + Blue-Green Proofs:
+   - קבצי MD תפעוליים (Freeze/Unfreeze/Canary/Rollback/Outage).
+   - לוג חתום flip (reconcile_start→flip_green_ok) + גרף “trades during deploy”.
+
+9) Multi-Tenant Load Control:
+   - Top-K דינמי per-tenant, SSE quotas, Economy mode אוטומטי ב-RSS>3.2GB.
+
+10) Wallet Policy Guard:
+    - משיכה חד-כיוונית (לקר) רק עם whitelist; settlement internal/Invoice.
+
+11) Secret Hygiene:
+    - GH Actions: secrets scan + pre-commit hooks למניעת דליפות.
+
+12) SLA/SLO Scorecards + Alerts:
+    - p95/p99/RSS/SSE/Idempotency dashboards + n8n alerts (thresholds).
+
+13) Data Integrity Watchdog:
+    - Gap detector ל-WS/REST עם backfill בטוח + חיווי באתר.
+
+14) E-Agreement (Digital):
+    - מסך “I Agree” לפני ON; חתימה: hash+version+ts+IP+UA; PDF אוטומטי.
+
+SLO:
+- API p95<1.6s, p99<2.8s; SSE≥99%; Entry→Manage≤200ms; RSS≤3.2GB.
+- WFV<30s; 0 dups; Reconcile Pass יומי; Alerts פעילים.
+
+Acceptance:
+- דו"ח Reconcile “Pass” + Diff=0±δ; Guardrails עוצרים הזמנות בעייתיות.
+- Drift monitor מציג סטייה/ריסטרט; Ablation מציג uplift; News Trust מצמצם noise.
+- Backtesting WFV פעיל עם תוצאות בדשבורד; Runbooks זמינים; Blue-Green proofs מוצגים.
+- Multi-tenant עומד ב-SLO עם 5 full-load / 8 economy; Wallet guard אוכף whitelist.
+- Secret hygiene פעיל; SLA/SLO scorecards ירוקים; Data watchdog תקין.
+- E-Agreement חוסם ON ללא חתימה; PDF נשמר ב-Ledger.
+
+הערות:
+- אין שינוי למנגנוני Auth/HMAC/Anti-Replay/Idempotency.
+- הכל מאחורי Feature Flags + Kill-Switch.
+- 4GB-safe: Shedder/Economy מופעל אוטומטית מעל 3.2GB RSS.
+
+החזר:
+- Hardening Report (p95/p99, RSS, SSE, Idempotency, WFV, Reconcile).
+- Blue-Green flip logs; Shadow uplift; News Trust stats.
+- Multi-tenant SLO per-tenant; E-Agreement חתימות (hash בלבד).

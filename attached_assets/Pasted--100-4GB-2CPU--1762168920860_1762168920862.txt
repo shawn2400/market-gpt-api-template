@@ -1,0 +1,121 @@
+להדבקה לסוכן — **פקודה אחת** שמיישמת את כל החבילה שברשימה שלך, 100% במסגרת **4GB/2CPU**, עם משמעת עומסים, אבטחה, ותנאי קבלה ברורים.
+
+---
+
+## **TASK NAME:** AlgoGPT — Full 4GB Stack (Frontend+AI+Core+Ops) — Production-Grade, Load-Aware
+
+**מטרה (TL;DR):**
+להרים ולהקשיח מערכת מלאה לפי הרשימה שסיפקת — אתר פרטי (8 Tabs + Observer & Ops + PWA), AI משולש עם ניתוב חכם וקאשינג 90%, הגנות פרודקשן (Guardian, Circuit Breakers, Sentinel), שליטה (Toggle Telegram↔Web-Auto, Auto-Manage), n8n (5 Flows), סיכוני ארנק (Cold one-way), שקיפות מלאה (Observer, Audit Immutable), ואיכות (Smoke+Chaos+CI/CD) — הכל **4GB-safe**.
+
+---
+
+### מסגרת משאבים (קשיח, אסור לחרוג)
+
+* **CPU/RAM:** שרת יחיד 2CPU/4GB.
+* **Concurrency ליבה:** `8` async workers.
+* **ניהול פוזיציות במקביל:** עד `12`.
+* **Jobs כבדים (Backtest/Scenario/Correlation):** עד `2` במקביל (Queue); יתר בתור FIFO עם עדיפות.
+* **SSE:** batching כל `3–5s`, heartbeat `15s`, עד `50` חיבורים; מעבר אוטומטי ל־polling 5s מעל סף.
+* **Memory guard:** יעד ≤ `3.2GB` RSS; Auto-Degrade אם `>3.4GB` (כיבוי וידאו/אנימציות/גרפים כבדים).
+* **Top-K חם:** 20 סמלים לניהול־על ולסקאנים חמים בלבד.
+
+---
+
+### Deliverables — Frontend (אתר פרטי, PWA)
+
+1. **8 Tabs + Observer & Ops + PWA Mobile** (iOS/Android, offline):
+   Markets / Trades / Positions / News / Health / FinOps / Reports / Settings + לשונית Observer & Ops.
+2. **Media Pipeline + AI Chat (Admin-only):** תמונות/וידאו עם lazy+thumbnails; צ׳אט GPT-5 / DeepSeek / Grok, ניתוב חכם, קאש 90%, דו״חות עלות.
+3. **Command & Control + Per-Exchange Views:** פעולות Admin (Execute Now, Close/Partial, Hedge, Flip A+, Grid Start/Stop, Kill-Switch, Economy-Mode), תצוגות לפי VENUE (BINANCE_FUT / BYBIT_FUT / OKX_FUT).
+4. **Real-time SSE + Reports (09:00/21:00 באתר בלבד):** כפתור “Generate Now”, היסטוריה + Export PDF/CSV.
+5. **Ops Header:** KPIs במבט אחד: Execution Mode, Trades Open, CPU/MEM, p95, AI Budget, SSE Status.
+
+---
+
+### Deliverables — AI Intelligence
+
+* **3 AIs:** GPT-5 (מורכב/החלטות), DeepSeek (שגרה/זול), Grok/AI-X (אימות).
+* **Smart routing + Cache ≥90%** (TTL דינמי 10–60 דק׳).
+* **Budget forecaster + Auto-Pause** (התראה ב־80%, עצירה ב־100%).
+* **Consensus + Explainability** (confidence + פירוק גורמים).
+* **News Impact Vector קל**: `impact (-1..+1), confidence (0..1)` אחרי פילטר כפול.
+
+---
+
+### Deliverables — Core & Protection
+
+* **Guardian 24/7 auto-healing** (watchdog ל־RSS/p95/429).
+* **Circuit Breakers per-exchange** (Safe/Normal/Aggressive + auto-fallback).
+* **Liquidation Sentinel** (Distance-to-Liq → Reduce-Only).
+* **Memory guards + Auto-Degrade** (וידאו/אנימציות off עד ירידה).
+* **SSE backpressure** (50→poll).
+* **Toggle:** Telegram ↔ Web-Auto (ברירת מחדל: **Telegram**; Double-Confirm ל-Web-Auto; Cooldown 3s).
+* **Auto-Manage (כל טרייד):** אחרי Approve/Web-Auto/ידני → Position-AI: SL→BE, ATR-Trail אדפטיבי, TP-Shift, Flip A+ (Guarded), Grid attach בתור נפרד.
+* **n8n (5 workflows):** Incident Router, Approvals Fallback (חתום), News Pre-Sanity, Macro De-Risk Scheduler, Webhook Gateway.
+* **Policy Freeze Lever** (Freeze פתיחות חדשות, ניהול ממשיך).
+* **One-click Execute/Rollback N-1** (Site/Core).
+* **Wallets & Risk:** VaR-Live 0.8–1.2%, Daily Loss Cap 2–3%, Cold-wallet one-way withdraw (טריגר/ידני; ללא החזר אוטומטי), Exposure/Correlation guards, Anomaly detection (ΔOI/OBI/Latency).
+
+---
+
+### Deliverables — Visibility & Security
+
+* **Observer (all systems):** summary/events/config-snapshot/health/topology + SSE.
+* **Per-Exchange tabs** בכל מסך; Naming Policy אחיד (TRD-{VENUE}-{SYMBOL}-{YYYYMMDD}-{SEQ}).
+* **Immutable Audit (hash-chain)** + deep-links Event→Audit/Timeline.
+* **Secret rotation (30d) + Dual Keys**; **Order idempotency** end-to-end.
+* **Anti-replay (±60s), HMAC+nonce+ts, RBAC (Admin/Viewer)**; חשיפת סודות `****last4`.
+* **Logs compressed (zstd)** + שמירה 90 יום.
+
+---
+
+### ביצועים (SLO מחייב)
+
+* **API p95 < 1.6s, p99 < 2.8s**.
+* **SSE uptime ≥ 99%**.
+* **Cache hit ≥ 90%** לשאילתות חוזרות.
+* **Toggle/Ops POST ≤ 150ms; UI update ≤ 500ms**.
+* **Entry → Auto-Manage hook ≤ 200ms; עדכוני ניהול ≤ 10s**.
+* **RSS ≤ 3.2GB** (Auto-Degrade אם >3.4GB).
+
+---
+
+### איכות (QA/DevOps)
+
+* **Weekly smoke + chaos tests** (ניתוק בורסה/429/Latency spike, memory stress).
+* **CI/CD green gates** (staging→prod), **Auto-rollback N-1** אם KPIs לא עומדים.
+* **Shadow-trade audit** יומי (Live vs Shadow + uplift).
+
+---
+
+### Acceptance (PASS)
+
+1. אתר פעיל (8 Tabs + Observer & Ops + PWA) עם SSE יציב, דוחות 09:00/21:00 באתר בלבד.
+2. Toggle Telegram↔Web-Auto עובד, עם Cooldown ו-Audit; במצב Web-Auto טלגרם view-only.
+3. כל טרייד (Approve/Web-Auto/ידני) → נכנס **מיד** ל-Auto-Manage; אירועי manage ב-SSE.
+4. Circuit Breakers ו-Sentinel פועלים בסימולציות; אין כפילות הזמנות (Idempotency).
+5. Budget forecaster עוצר AI-Chat ב-100%, הליבה ממשיכה.
+6. Observer מספק summary/events/config-snapshot/health/topology + hash-chain תקין.
+7. RSS/p95 עומדים ב-SLO 72 שעות רצופות; Auto-Degrade פועל וחוזר כשנרגע.
+8. דו״ח מסכם: **Go-Live + Hardening Report** (p95/p99, SSE uptime, AI cost/budget, cache-hit, CB activations, Sentinel actions, shadow vs live).
+
+---
+
+### מגבלות/הנדסה
+
+* **לא לשנות** Auth/HMAC/Bearer/Anti-Replay — רק להשתמש.
+* כל רכיב חדש מאחורי **Feature Flag** + Kill-Switch.
+* **בלי Mesh/Kafka** ב־4GB; Redis-Streams קל אם חייב.
+* **אין הדלפת סודות**; הצגה `****last4` בלבד.
+* Polling ≥ 60s עם backoff+jitter; אין לולאות חמות.
+
+---
+
+### מה להחזיר אליי בסוף
+
+1. קישור/צילום (redacted) של **Observer Summary** + **Events (50 אחרונים)**.
+2. **hash** של config-snapshot + צילום Ops Header.
+3. **Hardening Report** (עמידה ב-SLO, תוצאות smoke/chaos, shadow uplift).
+   אאשר: **“אני רואה הכול”** ונעבור ל-Prod Go-Live.
+
+**סוף פקודה.**
