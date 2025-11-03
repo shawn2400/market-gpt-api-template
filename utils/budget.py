@@ -80,7 +80,10 @@ def _get_equity_usdt(*, use_available: bool = True) -> float:
                         pass
     except Exception as e:
         logger.error("equity fetch failed: %s", e)
-    return 0.0
+        raise RuntimeError(f"FAIL-HARD: Cannot fetch equity from Binance API: {e}")
+    
+    # HARDENED: No silent 0.0 return - raise error if equity unavailable
+    raise RuntimeError("FAIL-HARD: No USDT equity found in futures balance - cannot size positions safely")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Min Notional per symbol (USDT)

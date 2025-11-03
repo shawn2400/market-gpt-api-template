@@ -90,13 +90,17 @@ async def make_decision(features: Dict[str, Any], quality_score: float) -> Dict[
     final_prob = _clamp01(num / den) if den > 0 else (qn if qn is not None else 0.0)
 
     approved_prob = final_prob >= FINAL_PROB_MIN
-    legacy_ok = (quality_score >= LEGACY_QUALITY_PASS)
-
+    
+    # REMOVED: legacy_ok = (quality_score >= LEGACY_QUALITY_PASS)
+    # Permissive fallback ELIMINATED per 8-AI consultation findings
+    
     veto: Optional[str] = None
     if not anchor_ok: veto = "anchor"
     elif not risk_ok: veto = "risk"
 
-    approved = (approved_prob or legacy_ok) and (veto is None)
+    # HARDENED: Strict Dual-Gate approval (Quant AND AI AND Risk)
+    # No legacy bypass - must pass final_prob threshold AND no veto
+    approved = approved_prob and (veto is None)
 
     ai_summary = ""
     try:
