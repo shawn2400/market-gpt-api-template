@@ -1,0 +1,2054 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>בס"ד - AlgoGPT Ultimate Dynamic Workbook</title>
+    
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800;900&family=Rubik:wght@300;400;500;600;700;800;900&display=swap');
+        
+        :root {
+            --primary: #667eea;
+            --secondary: #764ba2;
+            --accent: #f093fb;
+            --glass-bg: rgba(31, 41, 55, 0.6);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --bg-dark: #0a0a1a;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --info: #3b82f6;
+        }
+        
+        [data-theme="ocean"] {
+            --primary: #06b6d4;
+            --secondary: #0891b2;
+            --accent: #22d3ee;
+        }
+        
+        [data-theme="forest"] {
+            --primary: #10b981;
+            --secondary: #059669;
+            --accent: #34d399;
+        }
+        
+        [data-theme="sunset"] {
+            --primary: #f59e0b;
+            --secondary: #d97706;
+            --accent: #fb923c;
+        }
+        
+        [data-theme="dark"] {
+            --primary: #6b7280;
+            --secondary: #4b5563;
+            --accent: #9ca3af;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Heebo', 'Rubik', sans-serif;
+            background: linear-gradient(135deg, #0a0a1a 0%, #1a1a2e 50%, #16213e 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+        
+        .gradient-text {
+            background: linear-gradient(135deg, var(--primary), var(--secondary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-weight: 800;
+        }
+        
+        .glass-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .glass-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 30px 60px -12px rgba(139, 92, 246, 0.3);
+            border-color: rgba(139, 92, 246, 0.3);
+        }
+        
+        .tab-button {
+            padding: 12px 20px;
+            background: transparent;
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            white-space: nowrap;
+        }
+        
+        .tab-button:hover {
+            background: rgba(102, 126, 234, 0.1);
+            border-color: var(--primary);
+            color: var(--text-primary);
+            transform: translateY(-2px);
+        }
+        
+        .tab-button.active {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-color: transparent;
+            color: white;
+            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+        }
+        
+        .progress-bar {
+            height: 8px;
+            background: rgba(107, 114, 128, 0.3);
+            border-radius: 999px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--secondary), var(--accent));
+            border-radius: 999px;
+            transition: width 1s ease-out;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .progress-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: shimmer 2s infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .fade-in {
+            animation: fadeIn 0.6s ease-out forwards;
+        }
+        
+        .pulse {
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        
+        .status-active {
+            background: linear-gradient(135deg, #10b981, #059669);
+            box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+        }
+        
+        .status-planned {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+        }
+        
+        .status-error {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            box-shadow: 0 0 12px rgba(239, 68, 68, 0.4);
+        }
+        
+        .status-waiting {
+            background: linear-gradient(135deg, #6366f1, #4f46e5);
+            box-shadow: 0 0 12px rgba(99, 102, 241, 0.4);
+        }
+        
+        .metric-card {
+            background: rgba(17, 24, 39, 0.8);
+            padding: 24px;
+            border-radius: 12px;
+            border: 1px solid var(--glass-border);
+            transition: all 0.3s;
+        }
+        
+        .metric-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+        }
+        
+        .metric-value {
+            font-size: 32px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin: 20px 0;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 60px;
+            font-size: 18px;
+            color: var(--text-secondary);
+        }
+        
+        .error {
+            text-align: center;
+            padding: 60px;
+            font-size: 18px;
+            color: var(--error);
+        }
+        
+        .icon-box {
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-radius: 12px;
+            font-size: 24px;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: right;
+            border-bottom: 1px solid var(--glass-border);
+        }
+        
+        th {
+            background: rgba(102, 126, 234, 0.1);
+            font-weight: 700;
+            color: var(--primary);
+        }
+        
+        tr:hover {
+            background: rgba(102, 126, 234, 0.05);
+        }
+        
+        .theme-picker {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 12px;
+        }
+        
+        .theme-option {
+            padding: 20px;
+            border: 2px solid var(--glass-border);
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-align: center;
+        }
+        
+        .theme-option:hover {
+            border-color: var(--primary);
+            transform: scale(1.05);
+        }
+        
+        .theme-option.active {
+            border-color: var(--primary);
+            background: rgba(102, 126, 234, 0.1);
+        }
+        
+        #flow-viz {
+            width: 100%;
+            height: 600px;
+            background: rgba(17, 24, 39, 0.5);
+            border-radius: 16px;
+            border: 1px solid var(--glass-border);
+        }
+        
+        .node {
+            cursor: pointer;
+        }
+        
+        .node circle {
+            transition: all 0.3s;
+        }
+        
+        .node:hover circle {
+            r: 40;
+            fill-opacity: 0.9;
+        }
+        
+        .link {
+            fill: none;
+            stroke: var(--primary);
+            stroke-width: 2;
+            opacity: 0.6;
+            transition: all 0.3s;
+        }
+        
+        .link:hover {
+            stroke-width: 4;
+            opacity: 1;
+        }
+        
+        .whats-new-card {
+            background: rgba(17, 24, 39, 0.6);
+            padding: 20px;
+            border-radius: 12px;
+            border-right: 4px solid var(--primary);
+            margin-bottom: 16px;
+            transition: all 0.3s;
+        }
+        
+        .whats-new-card:hover {
+            transform: translateX(-4px);
+            box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
+        }
+        
+        .timeline {
+            position: relative;
+            padding-right: 40px;
+        }
+        
+        .timeline::before {
+            content: '';
+            position: absolute;
+            right: 20px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: linear-gradient(180deg, var(--primary), var(--secondary));
+        }
+        
+        .timeline-item {
+            position: relative;
+            padding-bottom: 24px;
+        }
+        
+        .timeline-dot {
+            position: absolute;
+            right: 12px;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--primary);
+            box-shadow: 0 0 12px rgba(102, 126, 234, 0.6);
+        }
+        
+        .news-item {
+            padding: 16px;
+            background: rgba(17, 24, 39, 0.5);
+            border-radius: 8px;
+            border-right: 3px solid var(--info);
+            margin-bottom: 12px;
+        }
+        
+        .sentiment-bullish {
+            color: var(--success);
+            font-weight: 700;
+        }
+        
+        .sentiment-bearish {
+            color: var(--error);
+            font-weight: 700;
+        }
+        
+        .sentiment-neutral {
+            color: var(--text-secondary);
+            font-weight: 700;
+        }
+        
+        .impact-high {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+        }
+        
+        .impact-medium {
+            background: linear-gradient(135deg, #f59e0b, #d97706);
+        }
+        
+        .impact-low {
+            background: linear-gradient(135deg, #6b7280, #4b5563);
+        }
+        
+        input[type="range"] {
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(107, 114, 128, 0.3);
+            outline: none;
+        }
+        
+        input[type="range"]::-webkit-slider-thumb {
+            appearance: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            background: var(--primary);
+            cursor: pointer;
+            box-shadow: 0 0 12px rgba(102, 126, 234, 0.6);
+        }
+        
+        .tooltip {
+            position: absolute;
+            background: rgba(17, 24, 39, 0.95);
+            border: 1px solid var(--primary);
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 14px;
+            pointer-events: none;
+            z-index: 1000;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: rgba(17, 24, 39, 0.5);
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: var(--primary);
+            border-radius: 3px;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+            background: var(--secondary);
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        
+        const UltimateWorkbook = () => {
+            const [activeTab, setActiveTab] = useState(1);
+            const [data, setData] = useState(null);
+            const [loading, setLoading] = useState(true);
+            const [error, setError] = useState(null);
+            const [theme, setTheme] = useState('default');
+            const [fontSize, setFontSize] = useState(16);
+            const [glassEffect, setGlassEffect] = useState(0.6);
+            const [rtl, setRtl] = useState(true);
+            
+            useEffect(() => {
+                fetchData();
+                const interval = setInterval(fetchData, 30000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            useEffect(() => {
+                document.body.style.fontSize = `${fontSize}px`;
+                document.body.dir = rtl ? 'rtl' : 'ltr';
+                document.body.setAttribute('data-theme', theme);
+                document.documentElement.style.setProperty('--glass-bg', `rgba(31, 41, 55, ${glassEffect})`);
+                
+                localStorage.setItem('ultimate-workbook-prefs', JSON.stringify({
+                    theme, fontSize, glassEffect, rtl
+                }));
+            }, [theme, fontSize, glassEffect, rtl]);
+            
+            useEffect(() => {
+                const prefs = localStorage.getItem('ultimate-workbook-prefs');
+                if (prefs) {
+                    const parsed = JSON.parse(prefs);
+                    setTheme(parsed.theme || 'default');
+                    setFontSize(parsed.fontSize || 16);
+                    setGlassEffect(parsed.glassEffect || 0.6);
+                    setRtl(parsed.rtl !== undefined ? parsed.rtl : true);
+                }
+            }, []);
+            
+            const fetchData = async () => {
+                try {
+                    const response = await fetch('/dashboard/ultimate-data');
+                    if (!response.ok) throw new Error('Failed to fetch data');
+                    const json = await response.json();
+                    setData(json);
+                    setLoading(false);
+                } catch (err) {
+                    setError(err.message);
+                    setLoading(false);
+                }
+            };
+            
+            const tabs = [
+                { id: 1, name: 'Dashboard', icon: '📊' },
+                { id: 2, name: 'Finance', icon: '💰' },
+                { id: 3, name: 'What\'s New', icon: '📋' },
+                { id: 4, name: 'Changelog', icon: '📚' },
+                { id: 5, name: 'Live Flow', icon: '🔄' },
+                { id: 6, name: 'Approvals', icon: '📱' },
+                { id: 7, name: 'News', icon: '📰' },
+                { id: 8, name: 'Strategies', icon: '🎯' },
+                { id: 9, name: '8-AI Mesh', icon: '🤖' },
+                { id: 10, name: 'Architecture', icon: '🏗️' },
+                { id: 11, name: 'Live Metrics', icon: '📈' },
+                { id: 12, name: 'ROI Analysis', icon: '💵' },
+                { id: 13, name: 'System Map', icon: '🗺️' },
+                { id: 14, name: 'Theme', icon: '🎨' },
+                { id: 15, name: 'User Guide', icon: '📖' }
+            ];
+            
+            if (loading) return (
+                <div className="loading">
+                    <div className="pulse">⏳ טוען נתונים...</div>
+                </div>
+            );
+            
+            if (error) return (
+                <div className="error">
+                    ❌ שגיאה: {error}
+                    <br />
+                    <button onClick={fetchData} style={{marginTop: '20px', padding: '10px 20px', cursor: 'pointer'}}>
+                        נסה שוב
+                    </button>
+                </div>
+            );
+            
+            if (!data) return <div className="error">❌ אין נתונים</div>;
+            
+            return (
+                <div className="p-4 md:p-8 max-w-7xl mx-auto">
+                    <header className="glass-card p-6 mb-6 fade-in">
+                        <div className="flex items-center justify-between flex-wrap gap-4">
+                            <div>
+                                <h1 className="text-4xl font-bold gradient-text mb-2">
+                                    בס"ד - AlgoGPT Ultimate Edition
+                                </h1>
+                                <p className="text-xl text-gray-300">
+                                    Ultimate Dynamic Workbook - ספר עבודה דינמי מלא
+                                </p>
+                            </div>
+                            <div className="text-left">
+                                <div className="text-sm text-gray-400">Last Updated</div>
+                                <div className="text-lg font-semibold text-blue-300">
+                                    {new Date(data.metadata.generated_at).toLocaleString('he-IL')}
+                                </div>
+                            </div>
+                        </div>
+                    </header>
+                    
+                    <div className="glass-card p-4 mb-6 fade-in overflow-x-auto scrollbar-thin">
+                        <div className="flex flex-wrap gap-2 min-w-max">
+                            {tabs.map(tab => (
+                                <button
+                                    key={tab.id}
+                                    className={`tab-button ${activeTab === tab.id ? 'active' : ''}`}
+                                    onClick={() => setActiveTab(tab.id)}
+                                >
+                                    <span>{tab.icon}</span>
+                                    <span>{tab.name}</span>
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    <div className="fade-in">
+                        {activeTab === 1 && <Tab1Dashboard data={data} />}
+                        {activeTab === 2 && <Tab2Finance data={data.finance_orchestrator} />}
+                        {activeTab === 3 && <Tab3WhatsNew data={data.whats_new} />}
+                        {activeTab === 4 && <Tab4Changelog data={data.changelog} />}
+                        {activeTab === 5 && <Tab5LiveFlow data={data.live_flow} />}
+                        {activeTab === 6 && <Tab6Approvals data={data.pending_approvals} />}
+                        {activeTab === 7 && <Tab7News data={data.news_feed} />}
+                        {activeTab === 8 && <Tab8Strategies data={data.strategy_performance} />}
+                        {activeTab === 9 && <Tab9AIMesh data={data.ai_mesh} />}
+                        {activeTab === 10 && <Tab10Architecture data={data.architecture} />}
+                        {activeTab === 11 && <Tab11LiveMetrics data={data.live_metrics} />}
+                        {activeTab === 12 && <Tab12ROI data={data.roi_analysis} />}
+                        {activeTab === 13 && <Tab13SystemMap data={data.system_map} />}
+                        {activeTab === 14 && <Tab14Theme theme={theme} setTheme={setTheme} fontSize={fontSize} setFontSize={setFontSize} glassEffect={glassEffect} setGlassEffect={setGlassEffect} rtl={rtl} setRtl={setRtl} />}
+                        {activeTab === 15 && <Tab15UserGuide />}
+                    </div>
+                </div>
+            );
+        };
+        
+        const Tab1Dashboard = ({ data }) => (
+            <div className="space-y-6">
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">📊</div>
+                        <h2 className="text-3xl font-bold gradient-text">Dashboard Overview</h2>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-4 gap-4">
+                        <div className="metric-card">
+                            <div className="text-sm text-gray-400 mb-2">Total AUM</div>
+                            <div className="metric-value">${data.finance_orchestrator.aum.total.toLocaleString()}</div>
+                            <div className="text-xs text-success mt-1">+{data.finance_orchestrator.aum.growth_ytd}% YTD</div>
+                        </div>
+                        
+                        <div className="metric-card">
+                            <div className="text-sm text-gray-400 mb-2">Active Users</div>
+                            <div className="metric-value">{data.finance_orchestrator.users.length}</div>
+                            <div className="text-xs text-gray-400 mt-1">Multi-tenant ready</div>
+                        </div>
+                        
+                        <div className="metric-card">
+                            <div className="text-sm text-gray-400 mb-2">Monthly TCO</div>
+                            <div className="metric-value">${data.finance_orchestrator.monthly_tco.total}</div>
+                            <div className="text-xs text-gray-400 mt-1">All services included</div>
+                        </div>
+                        
+                        <div className="metric-card">
+                            <div className="text-sm text-gray-400 mb-2">Runway</div>
+                            <div className="metric-value">{data.finance_orchestrator.runway_months}</div>
+                            <div className="text-xs text-gray-400 mt-1">months remaining</div>
+                        </div>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-2 gap-6 mt-6">
+                        <div>
+                            <h3 className="text-xl font-bold text-blue-300 mb-4">System Status</h3>
+                            <div className="space-y-3">
+                                <div className="flex justify-between items-center">
+                                    <span>Auto Scanner</span>
+                                    <span className="status-badge status-active">🟢 Running</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span>8-AI Mesh</span>
+                                    <span className="status-badge status-active">🟢 Active</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span>Position Monitor</span>
+                                    <span className="status-badge status-active">🟢 Running</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span>Telegram Bot</span>
+                                    <span className="status-badge status-active">🟢 Online</span>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <h3 className="text-xl font-bold text-blue-300 mb-4">Quick Stats</h3>
+                            <div className="space-y-3">
+                                <div className="flex justify-between items-center">
+                                    <span>Trades Today</span>
+                                    <span className="font-bold text-primary">{data.live_metrics.trades.total_today}</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span>Win Rate</span>
+                                    <span className="font-bold text-success">{data.live_metrics.trades.win_rate}%</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span>Total P&L</span>
+                                    <span className={`font-bold ${data.live_metrics.trades.total_pnl >= 0 ? 'text-success' : 'text-error'}`}>
+                                        ${data.live_metrics.trades.total_pnl.toLocaleString()}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span>Uptime</span>
+                                    <span className="font-bold text-info">{data.live_metrics.system.uptime_days.toFixed(1)} days</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab2Finance = ({ data }) => {
+            const chartRef = useRef(null);
+            
+            useEffect(() => {
+                if (!data || !chartRef.current) return;
+                
+                const ctx = chartRef.current.getContext('2d');
+                const chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.roi_12m.map(d => d.month),
+                        datasets: [{
+                            label: 'Revenue',
+                            data: data.roi_12m.map(d => d.revenue),
+                            borderColor: '#10b981',
+                            backgroundColor: 'rgba(16, 185, 129, 0.1)',
+                            tension: 0.4,
+                            fill: true
+                        }, {
+                            label: 'Costs',
+                            data: data.roi_12m.map(d => d.costs),
+                            borderColor: '#ef4444',
+                            backgroundColor: 'rgba(239, 68, 68, 0.1)',
+                            tension: 0.4,
+                            fill: true
+                        }, {
+                            label: 'Profit',
+                            data: data.roi_12m.map(d => d.profit),
+                            borderColor: '#667eea',
+                            backgroundColor: 'rgba(102, 126, 234, 0.1)',
+                            tension: 0.4,
+                            fill: true
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                labels: { color: '#f3f4f6' }
+                            }
+                        },
+                        scales: {
+                            y: {
+                                ticks: { color: '#9ca3af' },
+                                grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                            },
+                            x: {
+                                ticks: { color: '#9ca3af' },
+                                grid: { color: 'rgba(255, 255, 255, 0.1)' }
+                            }
+                        }
+                    }
+                });
+                
+                return () => chart.destroy();
+            }, [data]);
+            
+            return (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-4 mb-6">
+                            <div className="icon-box">💰</div>
+                            <h2 className="text-3xl font-bold gradient-text">Finance Orchestrator 2.0</h2>
+                        </div>
+                        
+                        <div className="grid md:grid-cols-3 gap-4 mb-6">
+                            <div className="metric-card">
+                                <div className="text-sm text-gray-400 mb-2">Assets Under Management</div>
+                                <div className="metric-value">${data.aum.total.toLocaleString()}</div>
+                                <div className="text-xs text-success mt-1">+{data.aum.growth_ytd}% YTD</div>
+                            </div>
+                            
+                            <div className="metric-card">
+                                <div className="text-sm text-gray-400 mb-2">Monthly TCO</div>
+                                <div className="metric-value">${data.monthly_tco.total}</div>
+                                <div className="text-xs text-gray-400 mt-1">Total cost of ownership</div>
+                            </div>
+                            
+                            <div className="metric-card">
+                                <div className="text-sm text-gray-400 mb-2">Runway</div>
+                                <div className="metric-value">{data.runway_months} mo</div>
+                                <div className="text-xs text-gray-400 mt-1">At current burn rate</div>
+                            </div>
+                        </div>
+                        
+                        <div className="mb-6">
+                            <h3 className="text-xl font-bold text-blue-300 mb-4">7 Users Portfolio</h3>
+                            <div className="overflow-x-auto">
+                                <table>
+                                    <thead>
+                                        <tr>
+                                            <th>User</th>
+                                            <th>Capital</th>
+                                            <th>Share %</th>
+                                            <th>HWM</th>
+                                            <th>Current</th>
+                                            <th>P&L</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {data.users.map(user => {
+                                            const pnl = user.current_value - user.capital;
+                                            const pnlPct = ((pnl / user.capital) * 100).toFixed(2);
+                                            return (
+                                                <tr key={user.id}>
+                                                    <td>{user.name}</td>
+                                                    <td>${user.capital.toLocaleString()}</td>
+                                                    <td>{user.share_pct}%</td>
+                                                    <td>${user.hwm.toLocaleString()}</td>
+                                                    <td>${user.current_value.toLocaleString()}</td>
+                                                    <td className={pnl >= 0 ? 'text-success' : 'text-error'}>
+                                                        ${pnl.toLocaleString()} ({pnlPct}%)
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        
+                        <div className="grid md:grid-cols-2 gap-6">
+                            <div>
+                                <h3 className="text-xl font-bold text-blue-300 mb-4">Profit Distribution</h3>
+                                <div className="space-y-3">
+                                    <div>
+                                        <div className="flex justify-between mb-2">
+                                            <span>Growth Fund</span>
+                                            <span className="font-bold">{data.profit_distribution.growth_fund_pct}%</span>
+                                        </div>
+                                        <div className="progress-bar">
+                                            <div className="progress-fill" style={{width: `${data.profit_distribution.growth_fund_pct}%`}}></div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div className="flex justify-between mb-2">
+                                            <span>Operations</span>
+                                            <span className="font-bold">{data.profit_distribution.operations_pct}%</span>
+                                        </div>
+                                        <div className="progress-bar">
+                                            <div className="progress-fill" style={{width: `${data.profit_distribution.operations_pct}%`}}></div>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div className="flex justify-between mb-2">
+                                            <span>User Payouts</span>
+                                            <span className="font-bold">{data.profit_distribution.user_payouts_pct}%</span>
+                                        </div>
+                                        <div className="progress-bar">
+                                            <div className="progress-fill" style={{width: `${data.profit_distribution.user_payouts_pct}%`}}></div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div>
+                                <h3 className="text-xl font-bold text-blue-300 mb-4">TCO Breakdown</h3>
+                                <div className="space-y-2">
+                                    {Object.entries(data.monthly_tco.breakdown).map(([key, value]) => (
+                                        <div key={key} className="flex justify-between items-center p-2 bg-gray-800/50 rounded">
+                                            <span className="capitalize">{key.replace('_', ' ')}</span>
+                                            <span className="font-bold text-primary">${value}</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="mt-6">
+                            <h3 className="text-xl font-bold text-blue-300 mb-4">12-Month ROI Chart</h3>
+                            <div className="chart-container">
+                                <canvas ref={chartRef}></canvas>
+                            </div>
+                        </div>
+                        
+                        <div className="mt-6 p-4 bg-blue-900/20 rounded-lg border border-blue-500/30">
+                            <h3 className="text-lg font-bold text-blue-300 mb-2">Performance Fees</h3>
+                            <p className="text-gray-300">
+                                {data.performance_fees.min_pct}%-{data.performance_fees.max_pct}% of profit {data.performance_fees.trigger}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const Tab3WhatsNew = ({ data }) => (
+            <div className="space-y-6">
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">📋</div>
+                        <h2 className="text-3xl font-bold gradient-text">What's New</h2>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-5 gap-3 mb-6">
+                        {Object.entries(data.summary.by_status).map(([status, count]) => (
+                            <div key={status} className="metric-card text-center">
+                                <div className="text-2xl font-bold text-primary">{count}</div>
+                                <div className="text-sm text-gray-400 capitalize">{status}</div>
+                            </div>
+                        ))}
+                    </div>
+                    
+                    <div className="space-y-4">
+                        {data.items.map(item => (
+                            <div key={item.id} className="whats-new-card">
+                                <div className="flex items-start justify-between mb-3">
+                                    <div className="flex items-center gap-3">
+                                        <span className="text-3xl">{item.icon}</span>
+                                        <div>
+                                            <h3 className="text-xl font-bold text-white">{item.title}</h3>
+                                            <p className="text-sm text-gray-400">{item.category}</p>
+                                        </div>
+                                    </div>
+                                    <span className={`status-badge ${item.status === 'production' ? 'status-active' : item.status === 'retired' ? 'status-error' : 'status-planned'}`}>
+                                        {item.status === 'production' && '🚀 Production'}
+                                        {item.status === 'poc' && '🧪 POC'}
+                                        {item.status === 'canary' && '🐤 Canary'}
+                                        {item.status === 'radar' && '🛰 Radar'}
+                                        {item.status === 'retired' && '🗑️ Retired'}
+                                    </span>
+                                </div>
+                                
+                                <p className="text-gray-300 mb-4">{item.why_need}</p>
+                                
+                                <div className="grid md:grid-cols-2 gap-4 mb-4">
+                                    <div>
+                                        <h4 className="text-sm font-bold text-blue-300 mb-2">KPIs</h4>
+                                        <div className="space-y-1 text-sm">
+                                            {Object.entries(item.kpis).map(([key, value]) => (
+                                                <div key={key} className="flex justify-between">
+                                                    <span className="text-gray-400">{key}:</span>
+                                                    <span className="font-semibold text-white">{typeof value === 'boolean' ? (value ? 'Yes' : 'No') : value}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <h4 className="text-sm font-bold text-blue-300 mb-2">Cost</h4>
+                                        <div className="space-y-1 text-sm">
+                                            <div className="flex justify-between">
+                                                <span className="text-gray-400">One-time:</span>
+                                                <span className="font-semibold text-white">${item.cost.one_time}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-gray-400">Monthly:</span>
+                                                <span className="font-semibold text-white">${item.cost.monthly}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-gray-400">TCO 12m:</span>
+                                                <span className="font-semibold text-warning">${item.cost.tco_12m}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <div className="flex items-center justify-between text-sm">
+                                    <div>
+                                        <span className="text-gray-400">Decision: </span>
+                                        <span className={`font-bold ${item.decision.type === 'approved' ? 'text-success' : item.decision.type === 'rejected' ? 'text-error' : 'text-warning'}`}>
+                                            {item.decision.type.toUpperCase()}
+                                        </span>
+                                        <span className="text-gray-400 mr-2"> ({item.decision.confidence}% confidence)</span>
+                                    </div>
+                                    <div className="text-gray-400">
+                                        Owner: <span className="text-white font-semibold">{item.owner}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab4Changelog = ({ data }) => (
+            <div className="space-y-6">
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">📚</div>
+                        <h2 className="text-3xl font-bold gradient-text">Changelog Timeline</h2>
+                    </div>
+                    
+                    <div className="timeline">
+                        {data.entries.map((entry, idx) => (
+                            <div key={idx} className="timeline-item">
+                                <div className="timeline-dot"></div>
+                                <div className="pr-10 pb-4">
+                                    <div className="bg-gray-800/50 p-4 rounded-lg border border-gray-700">
+                                        <div className="flex items-center justify-between mb-2">
+                                            <span className="text-sm text-gray-400">{entry.date}</span>
+                                            <span className={`status-badge text-xs ${
+                                                entry.type === 'added' ? 'status-active' :
+                                                entry.type === 'improved' ? 'bg-blue-600' :
+                                                entry.type === 'fixed' ? 'bg-yellow-600' :
+                                                'bg-red-600'
+                                            }`}>
+                                                {entry.type.toUpperCase()}
+                                            </span>
+                                        </div>
+                                        <h3 className="font-bold text-white mb-1">{entry.title}</h3>
+                                        <p className="text-sm text-gray-300">{entry.description}</p>
+                                        <span className="inline-block mt-2 text-xs bg-gray-700 px-2 py-1 rounded">{entry.category}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab5LiveFlow = ({ data }) => {
+            const svgRef = useRef(null);
+            
+            useEffect(() => {
+                if (!data || !svgRef.current) return;
+                
+                const width = svgRef.current.clientWidth;
+                const height = 600;
+                
+                const svg = d3.select(svgRef.current);
+                svg.selectAll('*').remove();
+                
+                const g = svg.append('g')
+                    .attr('transform', `translate(${width / 2}, 50)`);
+                
+                const nodeHeight = 80;
+                const nodeSpacing = 100;
+                
+                data.nodes.forEach((node, i) => {
+                    const y = i * nodeSpacing;
+                    
+                    const nodeG = g.append('g')
+                        .attr('class', 'node')
+                        .attr('transform', `translate(0, ${y})`);
+                    
+                    nodeG.append('circle')
+                        .attr('r', 35)
+                        .attr('fill', node.status === 'active' ? '#10b981' : node.status === 'waiting' ? '#f59e0b' : '#ef4444')
+                        .attr('fill-opacity', 0.8)
+                        .attr('stroke', '#fff')
+                        .attr('stroke-width', 2);
+                    
+                    nodeG.append('text')
+                        .attr('text-anchor', 'middle')
+                        .attr('dy', -45)
+                        .style('fill', '#f3f4f6')
+                        .style('font-size', '24px')
+                        .text(node.icon);
+                    
+                    nodeG.append('text')
+                        .attr('text-anchor', 'middle')
+                        .attr('dy', 5)
+                        .style('fill', '#fff')
+                        .style('font-weight', 'bold')
+                        .style('font-size', '14px')
+                        .text(node.name);
+                    
+                    if (i < data.nodes.length - 1) {
+                        g.append('line')
+                            .attr('class', 'link')
+                            .attr('x1', 0)
+                            .attr('y1', y + 35)
+                            .attr('x2', 0)
+                            .attr('y2', y + nodeSpacing - 35);
+                        
+                        g.append('polygon')
+                            .attr('points', '0,' + (y + nodeSpacing - 35) + ' -5,' + (y + nodeSpacing - 45) + ' 5,' + (y + nodeSpacing - 45))
+                            .attr('fill', '#667eea');
+                    }
+                });
+                
+            }, [data]);
+            
+            return (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-4 mb-6">
+                            <div className="icon-box">🔄</div>
+                            <h2 className="text-3xl font-bold gradient-text">Live Trading Flow</h2>
+                        </div>
+                        
+                        <div className="grid md:grid-cols-5 gap-3 mb-6">
+                            <div className="metric-card text-center">
+                                <div className="text-2xl font-bold text-primary">{data.stats.total_processed_today}</div>
+                                <div className="text-sm text-gray-400">Processed Today</div>
+                            </div>
+                            <div className="metric-card text-center">
+                                <div className="text-2xl font-bold text-warning">{data.stats.proposals_generated}</div>
+                                <div className="text-sm text-gray-400">Proposals</div>
+                            </div>
+                            <div className="metric-card text-center">
+                                <div className="text-2xl font-bold text-success">{data.stats.risk_passed}</div>
+                                <div className="text-sm text-gray-400">Risk Passed</div>
+                            </div>
+                            <div className="metric-card text-center">
+                                <div className="text-2xl font-bold text-info">{data.stats.approved}</div>
+                                <div className="text-sm text-gray-400">Approved</div>
+                            </div>
+                            <div className="metric-card text-center">
+                                <div className="text-2xl font-bold text-success">{data.stats.executed}</div>
+                                <div className="text-sm text-gray-400">Executed</div>
+                            </div>
+                        </div>
+                        
+                        <svg ref={svgRef} id="flow-viz"></svg>
+                        
+                        <div className="mt-6 grid md:grid-cols-2 gap-4">
+                            {data.nodes.map(node => (
+                                <div key={node.id} className="metric-card">
+                                    <div className="flex items-center gap-3 mb-3">
+                                        <span className="text-3xl">{node.icon}</span>
+                                        <div>
+                                            <h3 className="font-bold text-white">{node.name}</h3>
+                                            <span className={`text-xs ${node.status === 'active' ? 'text-success' : node.status === 'waiting' ? 'text-warning' : 'text-error'}`}>
+                                                {node.status === 'active' && '🟢 Active'}
+                                                {node.status === 'waiting' && '🟡 Waiting'}
+                                                {node.status === 'error' && '🔴 Error'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <div className="space-y-1 text-sm">
+                                        {Object.entries(node.data).map(([key, value]) => (
+                                            <div key={key} className="flex justify-between">
+                                                <span className="text-gray-400">{key}:</span>
+                                                <span className="text-white font-semibold">{value}</span>
+                                            </div>
+                                        ))}
+                                        {Object.entries(node.metrics).map(([key, value]) => (
+                                            <div key={key} className="flex justify-between">
+                                                <span className="text-gray-400">{key}:</span>
+                                                <span className="text-primary font-semibold">{value}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const Tab6Approvals = ({ data }) => (
+            <div className="space-y-6">
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">📱</div>
+                        <h2 className="text-3xl font-bold gradient-text">Trade Approval Dashboard</h2>
+                    </div>
+                    
+                    <div className="metric-card mb-6">
+                        <div className="flex items-center justify-between">
+                            <div>
+                                <div className="text-3xl font-bold text-primary">{data.count}</div>
+                                <div className="text-sm text-gray-400">Pending Approvals</div>
+                            </div>
+                            <div className="text-right">
+                                <div className={`status-badge ${data.telegram_bot_active ? 'status-active' : 'status-error'}`}>
+                                    {data.telegram_bot_active ? '🟢 Telegram Bot Online' : '🔴 Telegram Bot Offline'}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {data.count === 0 ? (
+                        <div className="text-center py-12">
+                            <div className="text-6xl mb-4">✅</div>
+                            <div className="text-xl text-gray-400">No pending approvals</div>
+                            <div className="text-sm text-gray-500 mt-2">All trades have been processed</div>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            {data.pending.map((trade, idx) => (
+                                <div key={idx} className="metric-card border-right-4 border-warning">
+                                    <div className="flex items-start justify-between mb-4">
+                                        <div>
+                                            <h3 className="text-xl font-bold text-white">{trade.symbol}</h3>
+                                            <p className="text-sm text-gray-400">{trade.side} @ ${trade.price}</p>
+                                        </div>
+                                        <span className="status-badge status-waiting">🟡 Pending</span>
+                                    </div>
+                                    <div className="grid md:grid-cols-4 gap-4 mb-4">
+                                        <div>
+                                            <div className="text-xs text-gray-400">Quantity</div>
+                                            <div className="font-bold text-white">{trade.quantity}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-xs text-gray-400">Entry</div>
+                                            <div className="font-bold text-white">${trade.entry}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-xs text-gray-400">Stop Loss</div>
+                                            <div className="font-bold text-error">${trade.stop_loss}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-xs text-gray-400">Take Profit</div>
+                                            <div className="font-bold text-success">${trade.take_profit}</div>
+                                        </div>
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <button className="flex-1 px-4 py-2 bg-success text-white rounded-lg font-bold hover:bg-green-600 transition">
+                                            ✅ Approve
+                                        </button>
+                                        <button className="flex-1 px-4 py-2 bg-error text-white rounded-lg font-bold hover:bg-red-600 transition">
+                                            ❌ Reject
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                    
+                    <div className="mt-6 p-4 bg-blue-900/20 rounded-lg border border-blue-500/30">
+                        <h3 className="text-lg font-bold text-blue-300 mb-2">Telegram Bot Integration</h3>
+                        <p className="text-gray-300 text-sm">
+                            Approvals can also be handled via Telegram bot with inline buttons. 
+                            Bot status: <span className="font-bold text-success">{data.telegram_bot_active ? 'Online' : 'Offline'}</span>
+                        </p>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab7News = ({ data }) => (
+            <div className="space-y-6">
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">📰</div>
+                        <h2 className="text-3xl font-bold gradient-text">News Center - 10 Sources</h2>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-2 gap-6 mb-6">
+                        <div>
+                            <h3 className="text-xl font-bold text-blue-300 mb-4">News Sources Status</h3>
+                            <div className="space-y-2">
+                                {data.sources.map((source, idx) => (
+                                    <div key={idx} className="flex items-center justify-between p-3 bg-gray-800/50 rounded">
+                                        <div>
+                                            <div className="font-bold text-white">{source.name}</div>
+                                            <div className="text-xs text-gray-400">{source.category}</div>
+                                        </div>
+                                        <span className={`status-badge text-xs ${source.status === 'active' ? 'status-active' : 'status-planned'}`}>
+                                            {source.status === 'active' ? '🟢 Active' : '🟡 Planned'}
+                                        </span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        
+                        <div>
+                            <h3 className="text-xl font-bold text-blue-300 mb-4">Sentiment Summary</h3>
+                            <div className="space-y-3">
+                                <div>
+                                    <div className="flex justify-between mb-2">
+                                        <span className="sentiment-bullish">Bullish</span>
+                                        <span className="font-bold text-success">{data.sentiment_summary.bullish}%</span>
+                                    </div>
+                                    <div className="progress-bar">
+                                        <div className="progress-fill" style={{width: `${data.sentiment_summary.bullish}%`, background: 'linear-gradient(90deg, #10b981, #059669)'}}></div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div className="flex justify-between mb-2">
+                                        <span className="sentiment-bearish">Bearish</span>
+                                        <span className="font-bold text-error">{data.sentiment_summary.bearish}%</span>
+                                    </div>
+                                    <div className="progress-bar">
+                                        <div className="progress-fill" style={{width: `${data.sentiment_summary.bearish}%`, background: 'linear-gradient(90deg, #ef4444, #dc2626)'}}></div>
+                                    </div>
+                                </div>
+                                <div>
+                                    <div className="flex justify-between mb-2">
+                                        <span className="sentiment-neutral">Neutral</span>
+                                        <span className="font-bold text-gray-400">{data.sentiment_summary.neutral}%</span>
+                                    </div>
+                                    <div className="progress-bar">
+                                        <div className="progress-fill" style={{width: `${data.sentiment_summary.neutral}%`, background: 'linear-gradient(90deg, #6b7280, #4b5563)'}}></div>
+                                    </div>
+                                </div>
+                            </div>
+                            
+                            <div className="mt-6">
+                                <h4 className="text-lg font-bold text-blue-300 mb-3">Processing Pipeline</h4>
+                                <div className="flex items-center justify-between gap-2">
+                                    {data.pipeline.stages.map((stage, idx) => (
+                                        <React.Fragment key={stage}>
+                                            <div className={`flex-1 text-center p-2 rounded ${stage === data.pipeline.current_stage ? 'bg-primary text-white' : 'bg-gray-800 text-gray-400'}`}>
+                                                <div className="font-bold text-xs">{stage}</div>
+                                            </div>
+                                            {idx < data.pipeline.stages.length - 1 && <div className="text-primary">→</div>}
+                                        </React.Fragment>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <h3 className="text-xl font-bold text-blue-300 mb-4">Live News Feed</h3>
+                        <div className="space-y-3 max-h-96 overflow-y-auto scrollbar-thin">
+                            {data.live_feed.map((item, idx) => (
+                                <div key={idx} className="news-item">
+                                    <div className="flex items-start justify-between mb-2">
+                                        <div className="flex-1">
+                                            <div className="text-sm text-gray-400 mb-1">{item.source}</div>
+                                            <div className="font-bold text-white">{item.title}</div>
+                                        </div>
+                                        <span className={`status-badge text-xs ml-3 ${
+                                            item.impact === 'high' ? 'impact-high' :
+                                            item.impact === 'medium' ? 'impact-medium' :
+                                            'impact-low'
+                                        }`}>
+                                            {item.impact.toUpperCase()}
+                                        </span>
+                                    </div>
+                                    <div className="flex items-center justify-between text-sm">
+                                        <span className={
+                                            item.sentiment === 'bullish' ? 'sentiment-bullish' :
+                                            item.sentiment === 'bearish' ? 'sentiment-bearish' :
+                                            'sentiment-neutral'
+                                        }>
+                                            {item.sentiment === 'bullish' && '📈 Bullish'}
+                                            {item.sentiment === 'bearish' && '📉 Bearish'}
+                                            {item.sentiment === 'neutral' && '➡️ Neutral'}
+                                        </span>
+                                        <span className="text-gray-500">{new Date(item.timestamp).toLocaleTimeString('he-IL')}</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab8Strategies = ({ data }) => (
+            <div className="space-y-6">
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">🎯</div>
+                        <h2 className="text-3xl font-bold gradient-text">Strategy Manager</h2>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-4 gap-4 mb-6">
+                        <div className="metric-card text-center">
+                            <div className="text-2xl font-bold text-primary">{data.summary.total_strategies}</div>
+                            <div className="text-sm text-gray-400">Total Strategies</div>
+                        </div>
+                        <div className="metric-card text-center">
+                            <div className="text-2xl font-bold text-success">{data.summary.active_count}</div>
+                            <div className="text-sm text-gray-400">Active</div>
+                        </div>
+                        <div className="metric-card text-center">
+                            <div className="text-2xl font-bold text-info">{data.summary.total_trades}</div>
+                            <div className="text-sm text-gray-400">Total Trades</div>
+                        </div>
+                        <div className="metric-card text-center">
+                            <div className={`text-2xl font-bold ${data.summary.total_pnl >= 0 ? 'text-success' : 'text-error'}`}>
+                                ${data.summary.total_pnl.toLocaleString()}
+                            </div>
+                            <div className="text-sm text-gray-400">Total P&L</div>
+                        </div>
+                    </div>
+                    
+                    <div className="mb-6">
+                        <h3 className="text-xl font-bold text-blue-300 mb-4">Active Strategies Performance</h3>
+                        <div className="overflow-x-auto">
+                            <table>
+                                <thead>
+                                    <tr>
+                                        <th>Strategy</th>
+                                        <th>Status</th>
+                                        <th>Win Rate</th>
+                                        <th>Avg RR</th>
+                                        <th>Total Trades</th>
+                                        <th>P&L</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {data.active_strategies.map((strategy, idx) => (
+                                        <tr key={idx}>
+                                            <td className="font-bold">{strategy.name}</td>
+                                            <td>
+                                                <span className={`status-badge text-xs ${strategy.status === 'active' ? 'status-active' : 'status-planned'}`}>
+                                                    {strategy.status === 'active' ? '🟢 Active' : '🟡 Paused'}
+                                                </span>
+                                            </td>
+                                            <td className={strategy.win_rate >= 50 ? 'text-success' : 'text-warning'}>{strategy.win_rate}%</td>
+                                            <td className="text-primary">{strategy.avg_rr.toFixed(2)}</td>
+                                            <td>{strategy.total_trades}</td>
+                                            <td className={strategy.pnl >= 0 ? 'text-success' : 'text-error'}>
+                                                ${strategy.pnl.toLocaleString()}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <h3 className="text-xl font-bold text-blue-300 mb-4">Dynamic Filters</h3>
+                        <div className="grid md:grid-cols-2 gap-4">
+                            <div className="metric-card">
+                                <div className="text-sm text-gray-400 mb-2">Market Mood</div>
+                                <div className="text-2xl font-bold text-warning capitalize">{data.dynamic_filters.market_mood}</div>
+                            </div>
+                            <div className="metric-card">
+                                <div className="text-sm text-gray-400 mb-2">Quality Threshold</div>
+                                <div className="text-2xl font-bold text-primary">{data.dynamic_filters.quality_threshold}/10</div>
+                            </div>
+                            <div className="metric-card">
+                                <div className="text-sm text-gray-400 mb-2">Success % Threshold</div>
+                                <div className="text-2xl font-bold text-success">{data.dynamic_filters.success_threshold_pct}%</div>
+                            </div>
+                            <div className="metric-card">
+                                <div className="text-sm text-gray-400 mb-2">RR Minimum (Top10)</div>
+                                <div className="text-2xl font-bold text-info">{data.dynamic_filters.rr_minimum_top10}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab9AIMesh = ({ data }) => (
+            <div className="space-y-6">
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">🤖</div>
+                        <h2 className="text-3xl font-bold gradient-text">8-AI Mesh Consensus Engine</h2>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-4">
+                        {data.map((ai, idx) => (
+                            <div key={idx} className="metric-card border-r-4" style={{borderRightColor: ai.weight > 0 ? '#10b981' : '#6b7280'}}>
+                                <div className="flex items-center gap-3 mb-3">
+                                    <span className="text-3xl">{ai.icon}</span>
+                                    <div>
+                                        <h3 className="font-bold text-white">{ai.name}</h3>
+                                        <p className="text-xs text-gray-400">{ai.provider}</p>
+                                    </div>
+                                </div>
+                                <div className="mb-3">
+                                    <div className="text-sm text-gray-400 mb-1">Role</div>
+                                    <div className="text-sm font-semibold text-blue-300">{ai.role}</div>
+                                </div>
+                                <div className="mb-3">
+                                    <div className="text-sm text-gray-400 mb-1">Weight</div>
+                                    <div className="progress-bar">
+                                        <div className="progress-fill" style={{width: `${ai.weight}%`}}></div>
+                                    </div>
+                                    <div className="text-xs text-right mt-1 font-bold text-primary">{ai.weight}%</div>
+                                </div>
+                                <div className="mb-3">
+                                    <div className="text-sm text-gray-400 mb-1">Strengths</div>
+                                    <ul className="text-xs space-y-1">
+                                        {ai.strengths.slice(0, 3).map((strength, i) => (
+                                            <li key={i} className="text-gray-300">• {strength}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                                <div className="mt-3">
+                                    <span className={`status-badge text-xs ${ai.status === 'active' ? 'status-active' : 'status-planned'}`}>
+                                        {ai.status === 'active' ? '🟢 Active' : '🟡 Planned'}
+                                    </span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    
+                    <div className="mt-6 p-4 bg-blue-900/20 rounded-lg border border-blue-500/30">
+                        <h3 className="text-lg font-bold text-blue-300 mb-2">Consensus Mechanism</h3>
+                        <p className="text-gray-300 text-sm mb-3">
+                            Trades require 60% weighted consensus from active AI models. Each model contributes its analysis,
+                            and the orchestrator aggregates scores based on confidence weights.
+                        </p>
+                        <div className="grid md:grid-cols-3 gap-4 text-sm">
+                            <div className="text-center p-3 bg-gray-800/50 rounded">
+                                <div className="text-2xl font-bold text-primary">60%</div>
+                                <div className="text-gray-400">Consensus Threshold</div>
+                            </div>
+                            <div className="text-center p-3 bg-gray-800/50 rounded">
+                                <div className="text-2xl font-bold text-success">{data.filter(ai => ai.status === 'active').length}/8</div>
+                                <div className="text-gray-400">Active Models</div>
+                            </div>
+                            <div className="text-center p-3 bg-gray-800/50 rounded">
+                                <div className="text-2xl font-bold text-info">5-10s</div>
+                                <div className="text-gray-400">Avg Response Time</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab10Architecture = ({ data }) => (
+            <div className="space-y-6">
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">🏗️</div>
+                        <h2 className="text-3xl font-bold gradient-text">System Architecture - 5 Layers</h2>
+                    </div>
+                    
+                    {data.layers.map((layer, idx) => (
+                        <div key={layer.id} className="mb-6 last:mb-0">
+                            <div className="metric-card border-r-4" style={{borderRightColor: `hsl(${idx * 72}, 70%, 60%)`}}>
+                                <h3 className="text-2xl font-bold text-white mb-2">
+                                    Layer {layer.id}: {layer.name}
+                                </h3>
+                                <p className="text-gray-300 mb-4">{layer.description}</p>
+                                
+                                <div className="grid md:grid-cols-2 gap-4 mb-4">
+                                    <div>
+                                        <h4 className="text-sm font-bold text-blue-300 mb-2">Components</h4>
+                                        <div className="space-y-2">
+                                            {layer.components.map((comp, i) => (
+                                                <div key={i} className="flex items-center gap-2 p-2 bg-gray-800/50 rounded">
+                                                    <div className={`w-2 h-2 rounded-full ${comp.status === 'active' ? 'bg-success' : comp.status === 'partial' ? 'bg-warning' : 'bg-gray-600'}`}></div>
+                                                    <span className="text-white font-semibold">{comp.name}</span>
+                                                    <span className="text-xs text-gray-400">({comp.type})</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <h4 className="text-sm font-bold text-blue-300 mb-2">Metrics</h4>
+                                        <div className="space-y-2">
+                                            {layer.throughput && (
+                                                <div className="flex justify-between p-2 bg-gray-800/50 rounded">
+                                                    <span className="text-gray-400">Throughput:</span>
+                                                    <span className="text-white font-bold">{layer.throughput}</span>
+                                                </div>
+                                            )}
+                                            {layer.latency && (
+                                                <div className="flex justify-between p-2 bg-gray-800/50 rounded">
+                                                    <span className="text-gray-400">Latency:</span>
+                                                    <span className="text-success font-bold">{layer.latency}</span>
+                                                </div>
+                                            )}
+                                            {layer.processing_time && (
+                                                <div className="flex justify-between p-2 bg-gray-800/50 rounded">
+                                                    <span className="text-gray-400">Processing:</span>
+                                                    <span className="text-white font-bold">{layer.processing_time}</span>
+                                                </div>
+                                            )}
+                                            {layer.threshold && (
+                                                <div className="flex justify-between p-2 bg-gray-800/50 rounded">
+                                                    <span className="text-gray-400">Threshold:</span>
+                                                    <span className="text-warning font-bold">{layer.threshold}</span>
+                                                </div>
+                                            )}
+                                            {layer.execution_speed && (
+                                                <div className="flex justify-between p-2 bg-gray-800/50 rounded">
+                                                    <span className="text-gray-400">Exec Speed:</span>
+                                                    <span className="text-success font-bold">{layer.execution_speed}</span>
+                                                </div>
+                                            )}
+                                            {layer.retention && (
+                                                <div className="flex justify-between p-2 bg-gray-800/50 rounded">
+                                                    <span className="text-gray-400">Retention:</span>
+                                                    <span className="text-white font-bold">{layer.retention}</span>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            {idx < data.layers.length - 1 && (
+                                <div className="text-center my-4">
+                                    <div className="text-3xl text-primary">↓</div>
+                                </div>
+                            )}
+                        </div>
+                    ))}
+                </div>
+            </div>
+        );
+        
+        const Tab11LiveMetrics = ({ data }) => {
+            const chartRef = useRef(null);
+            
+            useEffect(() => {
+                if (!data || !chartRef.current) return;
+                
+                const ctx = chartRef.current.getContext('2d');
+                const chart = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: ['Wins', 'Losses'],
+                        datasets: [{
+                            data: [data.trades.win_rate, 100 - data.trades.win_rate],
+                            backgroundColor: ['#10b981', '#ef4444'],
+                            borderWidth: 0
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                labels: { color: '#f3f4f6' }
+                            }
+                        }
+                    }
+                });
+                
+                return () => chart.destroy();
+            }, [data]);
+            
+            return (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-4 mb-6">
+                            <div className="icon-box">📈</div>
+                            <h2 className="text-3xl font-bold gradient-text">Live Metrics Dashboard</h2>
+                        </div>
+                        
+                        <div className="grid md:grid-cols-4 gap-4 mb-6">
+                            <div className="metric-card text-center">
+                                <div className="text-sm text-gray-400 mb-2">Trades Today</div>
+                                <div className="metric-value">{data.trades.total_today}</div>
+                            </div>
+                            <div className="metric-card text-center">
+                                <div className="text-sm text-gray-400 mb-2">Trades This Week</div>
+                                <div className="metric-value">{data.trades.total_week}</div>
+                            </div>
+                            <div className="metric-card text-center">
+                                <div className="text-sm text-gray-400 mb-2">Total Trades</div>
+                                <div className="metric-value">{data.trades.total_all_time}</div>
+                            </div>
+                            <div className="metric-card text-center">
+                                <div className="text-sm text-gray-400 mb-2">Total P&L</div>
+                                <div className={`metric-value ${data.trades.total_pnl >= 0 ? 'text-success' : 'text-error'}`}>
+                                    ${data.trades.total_pnl.toLocaleString()}
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="grid md:grid-cols-2 gap-6 mb-6">
+                            <div className="metric-card">
+                                <h3 className="text-xl font-bold text-blue-300 mb-4">Win Rate</h3>
+                                <div className="chart-container" style={{height: '250px'}}>
+                                    <canvas ref={chartRef}></canvas>
+                                </div>
+                                <div className="text-center mt-4">
+                                    <div className="text-3xl font-bold text-success">{data.trades.win_rate}%</div>
+                                    <div className="text-sm text-gray-400">Current Win Rate</div>
+                                </div>
+                            </div>
+                            
+                            <div className="metric-card">
+                                <h3 className="text-xl font-bold text-blue-300 mb-4">Performance Metrics</h3>
+                                <div className="space-y-4">
+                                    <div>
+                                        <div className="flex justify-between mb-2">
+                                            <span className="text-gray-400">Average RR</span>
+                                            <span className="text-2xl font-bold text-primary">{data.performance.avg_rr.toFixed(2)}</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div className="flex justify-between mb-2">
+                                            <span className="text-gray-400">Best Trade</span>
+                                            <span className="text-2xl font-bold text-success">${data.performance.best_trade_pnl.toLocaleString()}</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div className="flex justify-between mb-2">
+                                            <span className="text-gray-400">Worst Trade</span>
+                                            <span className="text-2xl font-bold text-error">${data.performance.worst_trade_pnl.toLocaleString()}</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="metric-card">
+                            <h3 className="text-xl font-bold text-blue-300 mb-4">System Health</h3>
+                            <div className="grid md:grid-cols-3 gap-4">
+                                <div className="text-center p-4 bg-gray-800/50 rounded">
+                                    <div className="text-3xl mb-2">⏱️</div>
+                                    <div className="text-2xl font-bold text-primary">{data.system.uptime_hours.toFixed(0)}h</div>
+                                    <div className="text-sm text-gray-400">Uptime</div>
+                                </div>
+                                <div className="text-center p-4 bg-gray-800/50 rounded">
+                                    <div className="text-3xl mb-2">📅</div>
+                                    <div className="text-2xl font-bold text-info">{data.system.uptime_days.toFixed(1)} days</div>
+                                    <div className="text-sm text-gray-400">Total Uptime</div>
+                                </div>
+                                <div className="text-center p-4 bg-gray-800/50 rounded">
+                                    <div className="text-3xl mb-2">🟢</div>
+                                    <div className="text-2xl font-bold text-success">Healthy</div>
+                                    <div className="text-sm text-gray-400">System Status</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const Tab12ROI = ({ data }) => (
+            <div className="space-y-6">
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">💵</div>
+                        <h2 className="text-3xl font-bold gradient-text">ROI & Cost Analysis</h2>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-4 gap-4 mb-6">
+                        <div className="metric-card text-center">
+                            <div className="text-sm text-gray-400 mb-2">Monthly TCO</div>
+                            <div className="metric-value">${data.monthly_tco.total}</div>
+                        </div>
+                        <div className="metric-card text-center">
+                            <div className="text-sm text-gray-400 mb-2">Monthly Revenue</div>
+                            <div className="metric-value text-success">${data.revenue.monthly_avg}</div>
+                        </div>
+                        <div className="metric-card text-center">
+                            <div className="text-sm text-gray-400 mb-2">Monthly Profit</div>
+                            <div className="metric-value text-success">${data.profit.monthly_avg}</div>
+                        </div>
+                        <div className="metric-card text-center">
+                            <div className="text-sm text-gray-400 mb-2">ROI</div>
+                            <div className="metric-value text-success">{data.roi_pct.toFixed(1)}%</div>
+                        </div>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-2 gap-6 mb-6">
+                        <div className="metric-card">
+                            <h3 className="text-xl font-bold text-blue-300 mb-4">Monthly TCO Breakdown</h3>
+                            <div className="space-y-3">
+                                {Object.entries(data.monthly_tco.breakdown).map(([key, value]) => (
+                                    <div key={key}>
+                                        <div className="flex justify-between mb-2">
+                                            <span className="capitalize text-gray-300">{key.replace('_', ' ')}</span>
+                                            <span className="font-bold text-white">${value}</span>
+                                        </div>
+                                        <div className="progress-bar">
+                                            <div className="progress-fill" style={{width: `${(value / data.monthly_tco.total) * 100}%`}}></div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        
+                        <div className="metric-card">
+                            <h3 className="text-xl font-bold text-blue-300 mb-4">Financial Metrics</h3>
+                            <div className="space-y-4">
+                                <div className="flex justify-between p-3 bg-gray-800/50 rounded">
+                                    <span className="text-gray-400">Cost per Trade</span>
+                                    <span className="text-xl font-bold text-warning">${data.cost_per_trade.toFixed(2)}</span>
+                                </div>
+                                <div className="flex justify-between p-3 bg-gray-800/50 rounded">
+                                    <span className="text-gray-400">Profit Margin</span>
+                                    <span className="text-xl font-bold text-success">{data.profit.margin_pct.toFixed(1)}%</span>
+                                </div>
+                                <div className="flex justify-between p-3 bg-gray-800/50 rounded">
+                                    <span className="text-gray-400">Performance Fees</span>
+                                    <span className="text-xl font-bold text-primary">${data.revenue.performance_fees.toLocaleString()}</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="metric-card">
+                        <h3 className="text-xl font-bold text-blue-300 mb-4">Cost Comparison</h3>
+                        <div className="grid md:grid-cols-3 gap-4">
+                            <div className="text-center p-4 bg-gray-800/50 rounded">
+                                <div className="text-sm text-gray-400 mb-2">Baseline Cost</div>
+                                <div className="text-2xl font-bold text-error">${data.comparison.baseline_cost}</div>
+                            </div>
+                            <div className="text-center p-4 bg-gray-800/50 rounded">
+                                <div className="text-sm text-gray-400 mb-2">Our Cost</div>
+                                <div className="text-2xl font-bold text-success">${data.comparison.our_cost}</div>
+                            </div>
+                            <div className="text-center p-4 bg-gray-800/50 rounded">
+                                <div className="text-sm text-gray-400 mb-2">Savings</div>
+                                <div className="text-2xl font-bold text-success">{data.comparison.savings_pct.toFixed(1)}%</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab13SystemMap = ({ data }) => (
+            <div className="space-y-6">
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">🗺️</div>
+                        <h2 className="text-3xl font-bold gradient-text">System Components Map</h2>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-4 gap-4 mb-6">
+                        <div className="metric-card text-center">
+                            <div className="text-2xl font-bold text-primary">{data.summary.total_workers}</div>
+                            <div className="text-sm text-gray-400">Workers</div>
+                        </div>
+                        <div className="metric-card text-center">
+                            <div className="text-2xl font-bold text-success">{data.summary.running_workers}</div>
+                            <div className="text-sm text-gray-400">Running</div>
+                        </div>
+                        <div className="metric-card text-center">
+                            <div className="text-2xl font-bold text-info">{data.summary.total_layers}</div>
+                            <div className="text-sm text-gray-400">Layers</div>
+                        </div>
+                        <div className="metric-card text-center">
+                            <div className="text-2xl font-bold text-warning">{data.summary.active_apis}</div>
+                            <div className="text-sm text-gray-400">Active APIs</div>
+                        </div>
+                    </div>
+                    
+                    <div className="mb-6">
+                        <h3 className="text-xl font-bold text-blue-300 mb-4">8 Workers</h3>
+                        <div className="grid md:grid-cols-2 gap-4">
+                            {data.workers.map((worker, idx) => (
+                                <div key={idx} className="metric-card">
+                                    <div className="flex items-center gap-3 mb-3">
+                                        <span className="text-3xl">{worker.icon}</span>
+                                        <div>
+                                            <h4 className="font-bold text-white">{worker.name}</h4>
+                                            <span className={`text-xs ${worker.status === 'running' ? 'text-success' : 'text-error'}`}>
+                                                {worker.status === 'running' ? '🟢 Running' : '🔴 Stopped'}
+                                            </span>
+                                        </div>
+                                    </div>
+                                    <p className="text-sm text-gray-300">{worker.description}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    <div className="mb-6">
+                        <h3 className="text-xl font-bold text-blue-300 mb-4">5 Layers</h3>
+                        <div className="space-y-3">
+                            {data.layers.map((layer, idx) => (
+                                <div key={layer.id} className="metric-card">
+                                    <div className="flex items-center justify-between mb-3">
+                                        <h4 className="text-lg font-bold text-white">Layer {layer.id}: {layer.name}</h4>
+                                        <span className="text-sm text-gray-400">{layer.components.length} components</span>
+                                    </div>
+                                    <div className="flex flex-wrap gap-2">
+                                        {layer.components.map((comp, i) => (
+                                            <span key={i} className="px-3 py-1 bg-gray-700 text-white text-sm rounded-full">
+                                                {comp}
+                                            </span>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <h3 className="text-xl font-bold text-blue-300 mb-4">APIs</h3>
+                        <div className="grid md:grid-cols-3 gap-4">
+                            {data.apis.map((api, idx) => (
+                                <div key={idx} className="metric-card">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <h4 className="font-bold text-white">{api.name}</h4>
+                                        <span className={`status-badge text-xs ${api.status === 'active' ? 'status-active' : 'status-planned'}`}>
+                                            {api.status === 'active' ? '🟢' : '🟡'}
+                                        </span>
+                                    </div>
+                                    <p className="text-sm text-gray-400">{api.purpose}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab14Theme = ({ theme, setTheme, fontSize, setFontSize, glassEffect, setGlassEffect, rtl, setRtl }) => (
+            <div className="space-y-6">
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">🎨</div>
+                        <h2 className="text-3xl font-bold gradient-text">Theme Customizer</h2>
+                    </div>
+                    
+                    <div className="mb-6">
+                        <h3 className="text-xl font-bold text-blue-300 mb-4">Color Schemes</h3>
+                        <div className="theme-picker">
+                            {[
+                                { id: 'default', name: 'Default', colors: ['#667eea', '#764ba2', '#f093fb'] },
+                                { id: 'ocean', name: 'Ocean', colors: ['#06b6d4', '#0891b2', '#22d3ee'] },
+                                { id: 'forest', name: 'Forest', colors: ['#10b981', '#059669', '#34d399'] },
+                                { id: 'sunset', name: 'Sunset', colors: ['#f59e0b', '#d97706', '#fb923c'] },
+                                { id: 'dark', name: 'Dark', colors: ['#6b7280', '#4b5563', '#9ca3af'] }
+                            ].map(t => (
+                                <div
+                                    key={t.id}
+                                    className={`theme-option ${theme === t.id ? 'active' : ''}`}
+                                    onClick={() => setTheme(t.id)}
+                                >
+                                    <div className="flex justify-center gap-1 mb-2">
+                                        {t.colors.map((color, i) => (
+                                            <div key={i} style={{width: '30px', height: '30px', borderRadius: '8px', background: color}}></div>
+                                        ))}
+                                    </div>
+                                    <div className="font-bold text-sm">{t.name}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    <div className="space-y-6">
+                        <div>
+                            <label className="block text-sm font-bold text-blue-300 mb-2">
+                                Font Size: {fontSize}px
+                            </label>
+                            <input
+                                type="range"
+                                min="12"
+                                max="20"
+                                value={fontSize}
+                                onChange={(e) => setFontSize(parseInt(e.target.value))}
+                            />
+                        </div>
+                        
+                        <div>
+                            <label className="block text-sm font-bold text-blue-300 mb-2">
+                                Glass Effect: {(glassEffect * 100).toFixed(0)}%
+                            </label>
+                            <input
+                                type="range"
+                                min="0"
+                                max="1"
+                                step="0.1"
+                                value={glassEffect}
+                                onChange={(e) => setGlassEffect(parseFloat(e.target.value))}
+                            />
+                        </div>
+                        
+                        <div className="flex items-center gap-4">
+                            <label className="text-sm font-bold text-blue-300">RTL/LTR:</label>
+                            <button
+                                className={`px-4 py-2 rounded-lg font-bold transition ${rtl ? 'bg-primary text-white' : 'bg-gray-700 text-gray-400'}`}
+                                onClick={() => setRtl(true)}
+                            >
+                                RTL (עברית)
+                            </button>
+                            <button
+                                className={`px-4 py-2 rounded-lg font-bold transition ${!rtl ? 'bg-primary text-white' : 'bg-gray-700 text-gray-400'}`}
+                                onClick={() => setRtl(false)}
+                            >
+                                LTR (English)
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <div className="mt-6 p-4 bg-blue-900/20 rounded-lg border border-blue-500/30">
+                        <h3 className="text-lg font-bold text-blue-300 mb-2">💾 Auto-Save</h3>
+                        <p className="text-gray-300 text-sm">
+                            Your preferences are automatically saved to localStorage and will persist across sessions.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        const Tab15UserGuide = () => (
+            <div className="space-y-6">
+                <div className="glass-card p-6">
+                    <div className="flex items-center gap-4 mb-6">
+                        <div className="icon-box">📖</div>
+                        <h2 className="text-3xl font-bold gradient-text">User Guide</h2>
+                    </div>
+                    
+                    <div className="space-y-6">
+                        <div className="metric-card">
+                            <h3 className="text-xl font-bold text-blue-300 mb-3">🚀 Quick Start</h3>
+                            <ol className="space-y-2 mr-6">
+                                <li className="text-gray-300"><strong>1.</strong> Navigate using the tab buttons at the top</li>
+                                <li className="text-gray-300"><strong>2.</strong> Dashboard tab shows overall system status</li>
+                                <li className="text-gray-300"><strong>3.</strong> Finance tab tracks AUM, users, and ROI</li>
+                                <li className="text-gray-300"><strong>4.</strong> Live Flow shows real-time trading pipeline</li>
+                                <li className="text-gray-300"><strong>5.</strong> Customize theme in Theme Settings tab</li>
+                            </ol>
+                        </div>
+                        
+                        <div className="metric-card">
+                            <h3 className="text-xl font-bold text-blue-300 mb-3">📊 Features</h3>
+                            <ul className="space-y-2">
+                                <li className="flex items-start gap-2">
+                                    <span className="text-success">✓</span>
+                                    <span className="text-gray-300"><strong>Live Updates:</strong> Data refreshes every 30 seconds automatically</span>
+                                </li>
+                                <li className="flex items-start gap-2">
+                                    <span className="text-success">✓</span>
+                                    <span className="text-gray-300"><strong>8-AI Mesh:</strong> Multi-model consensus for trade decisions</span>
+                                </li>
+                                <li className="flex items-start gap-2">
+                                    <span className="text-success">✓</span>
+                                    <span className="text-gray-300"><strong>Finance Orchestrator:</strong> Tracks 7 users with performance fees</span>
+                                </li>
+                                <li className="flex items-start gap-2">
+                                    <span className="text-success">✓</span>
+                                    <span className="text-gray-300"><strong>News Center:</strong> 10 integrated news sources</span>
+                                </li>
+                                <li className="flex items-start gap-2">
+                                    <span className="text-success">✓</span>
+                                    <span className="text-gray-300"><strong>System Map:</strong> Complete architecture overview</span>
+                                </li>
+                            </ul>
+                        </div>
+                        
+                        <div className="metric-card">
+                            <h3 className="text-xl font-bold text-blue-300 mb-3">🎨 Theme Customization</h3>
+                            <p className="text-gray-300 mb-3">
+                                Visit the Theme Settings tab to customize:
+                            </p>
+                            <ul className="space-y-1 mr-4">
+                                <li className="text-gray-300">• Color scheme (5 presets)</li>
+                                <li className="text-gray-300">• Font size (12-20px)</li>
+                                <li className="text-gray-300">• Glass effect opacity</li>
+                                <li className="text-gray-300">• RTL/LTR direction</li>
+                            </ul>
+                        </div>
+                        
+                        <div className="metric-card">
+                            <h3 className="text-xl font-bold text-blue-300 mb-3">💡 Tips & Tricks</h3>
+                            <ul className="space-y-2">
+                                <li className="text-gray-300"><strong>Hover</strong> over cards for additional details</li>
+                                <li className="text-gray-300"><strong>Click</strong> on flow nodes to see detailed metrics</li>
+                                <li className="text-gray-300"><strong>Scroll</strong> horizontally on mobile for tab buttons</li>
+                                <li className="text-gray-300"><strong>Refresh</strong> page to force data update</li>
+                            </ul>
+                        </div>
+                        
+                        <div className="metric-card bg-blue-900/20 border border-blue-500/30">
+                            <h3 className="text-xl font-bold text-blue-300 mb-3">📞 Support</h3>
+                            <p className="text-gray-300">
+                                For questions or issues, contact the AlgoGPT team via Telegram bot or email.
+                                System status: <span className="text-success font-bold">🟢 All systems operational</span>
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        );
+        
+        ReactDOM.render(<UltimateWorkbook />, document.getElementById('root'));
+    </script>
+</body>
+</html>
