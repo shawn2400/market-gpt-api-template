@@ -625,18 +625,37 @@
                         </div>
                     </header>
                     
-                    <div className="glass-card p-4 mb-6 fade-in overflow-x-auto scrollbar-thin">
-                        <div className="flex flex-wrap gap-2 min-w-max">
-                            {tabs.map(tab => (
-                                <button
-                                    key={tab.id}
-                                    className={`tab-button ${activeTab === tab.id ? 'active' : ''}`}
-                                    onClick={() => setActiveTab(tab.id)}
-                                >
-                                    <span>{tab.icon}</span>
-                                    <span>{tab.name}</span>
-                                </button>
-                            ))}
+                    <div className="glass-card p-4 mb-6 fade-in">
+                        <div className="flex items-center gap-4 mb-3">
+                            <select 
+                                value={activeTab} 
+                                onChange={(e) => setActiveTab(parseInt(e.target.value))}
+                                className="glass-card px-4 py-2 rounded-lg border border-purple-500/30 bg-slate-900/50 text-white cursor-pointer hover:bg-slate-800/70 transition-all"
+                                style={{minWidth: '250px'}}
+                            >
+                                {tabs.map(tab => (
+                                    <option key={tab.id} value={tab.id}>
+                                        {tab.icon} {tab.name}
+                                    </option>
+                                ))}
+                            </select>
+                            <div className="text-sm text-gray-400">
+                                📑 בחר טאב מהרשימה | {tabs.length} טאבים זמינים
+                            </div>
+                        </div>
+                        <div className="overflow-x-auto scrollbar-thin">
+                            <div className="flex flex-wrap gap-2 min-w-max">
+                                {tabs.map(tab => (
+                                    <button
+                                        key={tab.id}
+                                        className={`tab-button ${activeTab === tab.id ? 'active' : ''}`}
+                                        onClick={() => setActiveTab(tab.id)}
+                                    >
+                                        <span>{tab.icon}</span>
+                                        <span>{tab.name}</span>
+                                    </button>
+                                ))}
+                            </div>
                         </div>
                     </div>
                     
