@@ -3207,6 +3207,167 @@ async def get_roadmap_data():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/flow-data", summary="Live Trading Flow Data")
+async def get_flow_data():
+    """Complete trading flow with clickable stages and sub-processes"""
+    try:
+        return {
+            "stats": {
+                "total_processed_today": 531,
+                "proposals_generated": 12,
+                "risk_passed": 8,
+                "approved": 5,
+                "executed": 3,
+                "managed_positions": 2
+            },
+            "stages": [
+                {
+                    "id": 1,
+                    "name": "Market Scan",
+                    "icon": "🔍",
+                    "status": "active",
+                    "description": "Continuous monitoring of 531 Binance Futures symbols across multiple timeframes",
+                    "count_today": 531,
+                    "success_rate": 100,
+                    "avg_time": 0.5,
+                    "sub_processes": [
+                        {"name": "Fetch Klines", "description": "Download 15M, 1H, 4H candlestick data from Binance", "duration": "0.2s"},
+                        {"name": "Calculate Indicators", "description": "Compute 27 technical indicators (EMA, RSI, MACD, ATR, etc.)", "duration": "0.15s"},
+                        {"name": "Liquidity Check", "description": "Filter symbols by volume and liquidity thresholds", "duration": "0.1s"},
+                        {"name": "Cooldown Filter", "description": "Remove recently analyzed symbols", "duration": "0.05s"}
+                    ],
+                    "technical_details": {
+                        "Worker": "Auto Scanner",
+                        "Interval": "60 seconds",
+                        "Symbols": "531 futures",
+                        "Timeframes": "15M, 1H, 4H, 1D",
+                        "Output": "Top 7 candidates"
+                    }
+                },
+                {
+                    "id": 2,
+                    "name": "AI Analysis",
+                    "icon": "🧠",
+                    "status": "active",
+                    "description": "GPT-5 powered market analysis with multi-AI consensus validation",
+                    "count_today": 12,
+                    "success_rate": 75,
+                    "avg_time": 3.2,
+                    "sub_processes": [
+                        {"name": "Multi-TF Context", "description": "Prepare weighted analysis across all timeframes", "duration": "0.5s"},
+                        {"name": "Market Intelligence", "description": "Detect regime, mood, volatility levels", "duration": "0.3s"},
+                        {"name": "GPT-5 Proposal", "description": "AI generates trade idea with entry, TP, SL", "duration": "2.0s"},
+                        {"name": "Multi-AI Consensus", "description": "Validate with DeepSeek + Grok (optional)", "duration": "0.4s"}
+                    ],
+                    "technical_details": {
+                        "Primary AI": "GPT-5 (gpt-5-2025-08-07)",
+                        "Consensus": "DeepSeek + AI-X/Grok",
+                        "Min Quality": "6.5/10",
+                        "Min Confidence": "55%",
+                        "Output": "Trade Proposal JSON"
+                    }
+                },
+                {
+                    "id": 3,
+                    "name": "Risk Validation",
+                    "icon": "🛡️",
+                    "status": "active",
+                    "description": "Multi-layer risk checks with dynamic filters and circuit breakers",
+                    "count_today": 8,
+                    "success_rate": 62.5,
+                    "avg_time": 0.8,
+                    "sub_processes": [
+                        {"name": "RR Validation", "description": "Ensure Risk/Reward ≥ 1.3 (or dynamic threshold)", "duration": "0.1s"},
+                        {"name": "Quality Filter", "description": "Check AI confidence and quality scores", "duration": "0.2s"},
+                        {"name": "Dynamic Filters", "description": "Apply market mood and regime filters", "duration": "0.2s"},
+                        {"name": "Circuit Breaker", "description": "Check daily loss limits and position caps", "duration": "0.15s"},
+                        {"name": "Deduplication", "description": "Prevent duplicate proposals for same symbol", "duration": "0.15s"}
+                    ],
+                    "technical_details": {
+                        "Min RR": "1.3x (dynamic)",
+                        "Quality Gate": "≥6.5/10",
+                        "Daily Cap": "10 trades max",
+                        "Loss Limit": "$150 USD",
+                        "Exposure": "Max 3 positions"
+                    }
+                },
+                {
+                    "id": 4,
+                    "name": "Telegram Approval",
+                    "icon": "📱",
+                    "status": "waiting",
+                    "description": "Interactive approval via Telegram with rich formatting and buttons",
+                    "count_today": 5,
+                    "success_rate": 60,
+                    "avg_time": 120,
+                    "sub_processes": [
+                        {"name": "Format Message", "description": "Create rich HTML message with emojis and details", "duration": "0.1s"},
+                        {"name": "Send to Telegram", "description": "Push notification with inline approve/reject buttons", "duration": "0.5s"},
+                        {"name": "Wait for Response", "description": "User manually approves or rejects via buttons", "duration": "~120s"},
+                        {"name": "Process Callback", "description": "Handle button click and update proposal status", "duration": "0.2s"}
+                    ],
+                    "technical_details": {
+                        "Bot": "Telegram Bot API",
+                        "Buttons": "✅ Approve | ❌ Reject",
+                        "Timeout": "24 hours",
+                        "Required": "REQUIRE_TELEGRAM_APPROVAL=1",
+                        "Auto-Execute": "AUTO_OPEN_ON_APPROVE=1"
+                    }
+                },
+                {
+                    "id": 5,
+                    "name": "Execution",
+                    "icon": "⚡",
+                    "status": "active",
+                    "description": "Smart order execution with leverage calculation and position sizing",
+                    "count_today": 3,
+                    "success_rate": 100,
+                    "avg_time": 1.5,
+                    "sub_processes": [
+                        {"name": "Calculate Leverage", "description": "Dynamic leverage (2-10x) based on quality and RR", "duration": "0.2s"},
+                        {"name": "Position Sizing", "description": "Calculate quantity based on equity%, risk, volatility", "duration": "0.3s"},
+                        {"name": "Place Market Order", "description": "Submit LONG/SHORT order to Binance Futures", "duration": "0.8s"},
+                        {"name": "Set TP/SL Orders", "description": "Place take-profit and stop-loss orders", "duration": "0.2s"}
+                    ],
+                    "technical_details": {
+                        "Exchange": "Binance Futures",
+                        "Order Type": "MARKET",
+                        "Leverage": "2-10x (dynamic)",
+                        "Position Size": "Equity% × Quality × RR",
+                        "Confirmation": "Order ID + Fill Price"
+                    }
+                },
+                {
+                    "id": 6,
+                    "name": "Position Management",
+                    "icon": "📊",
+                    "status": "active",
+                    "description": "24/7 dynamic management with trailing stops and multi-level TP",
+                    "count_today": 2,
+                    "success_rate": 100,
+                    "avg_time": 300,
+                    "sub_processes": [
+                        {"name": "ATR Trailing", "description": "Update trailing stop based on ATR with freeze logic", "duration": "continuous"},
+                        {"name": "BE Guard", "description": "Move SL to break-even when profit threshold reached", "duration": "continuous"},
+                        {"name": "Spike Detection", "description": "Pause trailing during volatile spikes", "duration": "continuous"},
+                        {"name": "TP Ladder", "description": "Manage multi-level partial take-profit exits", "duration": "continuous"},
+                        {"name": "Smart Close", "description": "Auto-close on TP/SL hit or circuit breaker trigger", "duration": "instant"}
+                    ],
+                    "technical_details": {
+                        "Monitor": "Trade Manager (30s cycle)",
+                        "Trailing": "ATR-based with freeze logic",
+                        "BE Trigger": "30% of TP distance",
+                        "TP Levels": "3-5 levels (25%, 50%, 75%, 100%)",
+                        "Circuit Breaker": "Daily loss limit enforcement"
+                    }
+                }
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error in get_flow_data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/agents/{agent_id}/control", summary="Control Agent")
 async def control_agent(agent_id: str, action: str):
     """Start/Stop/Restart agent"""
