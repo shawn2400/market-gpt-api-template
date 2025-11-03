@@ -1,0 +1,24 @@
+{
+  "smoke_tests": {
+    "status": "FAIL",
+    "return_code": 1,
+    "output": "\n============================================================\n\ud83d\ude80 Starting Comprehensive Smoke Tests (P1-17)\n============================================================\n\n\ud83d\udd0d Testing Validation Endpoints...\n\ud83e\udd16 Testing AI Performance Endpoints...\n\ud83d\udcca Testing Dashboard Endpoints...\n\ud83d\udd0c Testing WebSocket Connection...\n\n============================================================\n\ud83d\udccb SMOKE TEST RESULTS SUMMARY\n============================================================\n\n\nValidation:\n  \u274c /monitors/health - FAIL (1.794s)\n      Error: Expected [200], got 404\n  \u2705 /monitors/breaker/status - PASS (0.021s)\n  \u274c /validate/status?id=test123 - FAIL (1.691s)\n      Error: Expected [200, 404], got 500\n\nAI Performance:\n  \u274c /ai/leaderboard?timeframe_days=7 - FAIL (0.027s)\n      Error: Expected [200], got 404\n  \u274c /ai/performance?model=gpt5&timeframe_days=7 - FAIL (0.022s)\n      Error: Expected [200], got 404\n\nDashboard:\n  \u2705 /dashboard/roadmap/data - PASS (0.022s)\n  \u274c /dashboard/gantt/data - FAIL (0.035s)\n      Error: Expected [200], got 404\n  \u274c /kpis/live - FAIL (0.027s)\n      Error: Expected [200], got 404\n\nWebSocket:\n  \u26a0\ufe0f /ws/pnl - ERROR\n      Error: server rejected WebSocket connection: HTTP 403\n\n------------------------------------------------------------\nTotal Tests: 9\n\u2705 Passed: 2\n\u274c Failed: 6\n\u26a0\ufe0f  Errors: 1\nSuccess Rate: 22.2%\n------------------------------------------------------------\n\n"
+  },
+  "load_tests": {
+    "status": "FAIL",
+    "success_count": 0,
+    "total_requests": 100,
+    "success_rate": 0,
+    "duration": 6.569040536880493,
+    "target_success_rate": 95,
+    "target_duration": 10,
+    "output": ""
+  },
+  "memory_tests": {
+    "status": "PASS",
+    "return_code": 0,
+    "output": "\n============================================================\n\ud83d\udcbe Memory Usage Verification Test (P1-19)\n============================================================\n\n\ud83d\udcca Step 1: Checking initial memory usage...\n\nInitial Memory Usage\n------------------------------------------------------------\nTotal Python Processes: 12\nTotal Memory Usage: 774.07 MB (0.756 GB)\n\nTop Memory Consumers:\n  1. PID 6650: 198.10 MB - /nix/store/2lcqw1d28vklbk8ikiwad28iq2smwndv-python-wrapped-0.1.0/bin/python3 /ho\n  2. PID 4035: 160.62 MB - python workers/gpt_auto_suggest.py\n  3. PID 463: 69.05 MB - python workers/position_monitor.py\n  4. PID 488: 61.37 MB - python workers/gpt5_orchestrator.py\n  5. PID 513: 45.85 MB - python workers/system_heartbeat.py\n------------------------------------------------------------\n\n\ud83d\udcca Step 2: Triggering operations...\n\ud83d\udd04 Triggering operations...\n   Completed 0/20 API calls successfully\n\n\ud83d\udcca Step 3: Waiting 30 seconds for memory to stabilize...\n   30 seconds remaining...\n   25 seconds remaining...\n   20 seconds remaining...\n   15 seconds remaining...\n   10 seconds remaining...\n   5 seconds remaining...\n\n\ud83d\udcca Step 4: Checking memory usage after operations...\n\nFinal Memory Usage\n------------------------------------------------------------\nTotal Python Processes: 12\nTotal Memory Usage: 777.93 MB (0.760 GB)\n\nTop Memory Consumers:\n  1. PID 6650: 198.54 MB - /nix/store/2lcqw1d28vklbk8ikiwad28iq2smwndv-python-wrapped-0.1.0/bin/python3 /ho\n  2. PID 4035: 160.65 MB - python workers/gpt_auto_suggest.py\n  3. PID 463: 69.05 MB - python workers/position_monitor.py\n  4. PID 488: 61.37 MB - python workers/gpt5_orchestrator.py\n  5. PID 513: 45.85 MB - python workers/system_heartbeat.py\n------------------------------------------------------------\n\n============================================================\n\ud83d\udcc8 MEMORY ANALYSIS\n============================================================\n\nMemory Change: +3.86 MB (+0.5%)\nFinal Memory: 0.760 GB\n\n------------------------------------------------------------\nVERIFICATION:\n\u2705 PASS: Memory (0.760 GB) is under ideal limit (1.2 GB)\n------------------------------------------------------------\n\n"
+  },
+  "timestamp": "2025-11-03T22:41:56.458201",
+  "overall_status": "FAIL"
+}
