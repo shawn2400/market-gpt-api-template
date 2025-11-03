@@ -688,7 +688,10 @@
             );
         };
         
-        const Tab1Dashboard = ({ data }) => (
+        const Tab1Dashboard = ({ data }) => {
+            if (!data) return <div className="loading">⏳ טוען נתונים...</div>;
+            
+            return (
             <div className="space-y-6">
                 <div className="glass-card p-6">
                     <div className="flex items-center gap-4 mb-6">
@@ -771,7 +774,8 @@
                     </div>
                 </div>
             </div>
-        );
+            );
+        };
         
         const Tab2Finance = ({ data }) => {
             const chartRef = useRef(null);
