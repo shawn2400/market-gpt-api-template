@@ -7,11 +7,9 @@ from typing import Any, Dict, Optional
 import httpx
 from fastapi import APIRouter, Request, Query, HTTPException, Header
 
-from utils.telegram_notifier import (
-    verify_callback_data,
-    TelegramNotifier,
-)
-from utils.compat_shims import build_signature_headers  # ✔ shim במקום anti_replay
+from utils.telegram_notifier import TelegramNotifier
+from utils.compat_shims import build_signature_headers
+from utils.anti_replay import verify_telegram_callback_payload  # ✅ Updated signature verification
 
 logger = logging.getLogger("algogpt.telegram.webhook")
 router = APIRouter(prefix="/telegram", tags=["telegram"])
@@ -74,13 +72,33 @@ async def webhook(
     chat_id = str(((message.get("chat") or {}).get("id")) or "")
     msg_id  = int(message.get("message_id") or 0)
 
-    # פענוח / אימות callback_data (תומך גם בחתימות אם צורפו)
+    # פענוח / אימות callback_data עם verify_telegram_callback_payload (תומך 4/6/8 char sigs + _canon)
     try:
-        parsed   = verify_callback_data(data)  # dict
-        action   = parsed["action"]            # e.g. APPROVE / REJECT / MANAGE_AGAIN / CANCEL_TPS / CLOSE_50
-        trade_id = parsed.get("trade_id")      # idem / ticket_id (ל-approve/reject)
-        symbol   = parsed.get("symbol")        # לכפתורי POS
-        pct      = float(parsed.get("pct", 0) or 0.0)
+        # Verify signature first with updated anti_replay function
+        is_valid, reason = verify_telegram_callback_payload(data, ttl_sec=900)
+        if not is_valid:
+            raise ValueError(f"sig_verify_failed: {reason}")
+        
+        # Parse callback data after verification
+        parts = data.split(":")
+        if len(parts) < 3:
+            raise ValueError("bad_format")
+        
+        # CONFIRM:ACTION:TICKET:TS:SIG format
+        if parts[0] == "CONFIRM":
+            action = parts[1].upper()
+            trade_id = parts[2]
+            symbol = None
+            pct = 0.0
+        # POS:ACTION:SYMBOL:PCT:TS:SIG format
+        elif parts[0] == "POS":
+            action = parts[1].upper()
+            symbol = parts[2] if len(parts) > 2 else None
+            pct = float(parts[3]) if len(parts) > 3 and parts[3].replace('.','').isdigit() else 0.0
+            trade_id = None
+        else:
+            raise ValueError("unknown_callback_type")
+            
     except Exception as e:
         try:
             await TelegramNotifier.answer_callback(cb_id, text=f"Callback invalid: {e}", show_alert=True)
