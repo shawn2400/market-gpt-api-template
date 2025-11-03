@@ -1748,24 +1748,28 @@ async def _on_startup():
     logger.info("  ℹ️  Circuit breakers enforced in utils/trade_manager.py::manage_open_trades()")
     
     # ==================== Phase 3 AI Workers ====================
-    try:
-        logger.info("🚀 Starting Phase 3 AI Workers...")
-        
-        # Import workers
-        from workers.ai_supervisor import ai_supervisor  # type: ignore
-        from workers.news_sentiment import news_sentiment  # type: ignore
-        from workers.fear_greed import fear_greed  # type: ignore
-        from workers.auto_risk_manager import auto_risk_manager  # type: ignore
-        
-        # Launch all workers in parallel
-        asyncio.create_task(ai_supervisor.supervisor_loop())
-        asyncio.create_task(news_sentiment.sentiment_loop())
-        asyncio.create_task(fear_greed.fear_greed_loop())
-        asyncio.create_task(auto_risk_manager.risk_manager_loop())
-        
-        logger.info("✅ Phase 3 AI Workers started successfully")
-    except Exception as e:
-        logger.error(f"❌ Failed to start Phase 3 workers: {e}", exc_info=True)
+    # OPTIONAL: Legacy workers (disabled by default for v2.0 Validation Infrastructure)
+    if os.getenv("ENABLE_LEGACY_WORKERS", "0") == "1":
+        try:
+            logger.info("🚀 Starting Phase 3 AI Workers...")
+            
+            # Import workers
+            from workers.ai_supervisor import ai_supervisor  # type: ignore
+            from workers.news_sentiment import news_sentiment  # type: ignore
+            from workers.fear_greed import fear_greed  # type: ignore
+            from workers.auto_risk_manager import auto_risk_manager  # type: ignore
+            
+            # Launch all workers in parallel
+            asyncio.create_task(ai_supervisor.supervisor_loop())
+            asyncio.create_task(news_sentiment.sentiment_loop())
+            asyncio.create_task(fear_greed.fear_greed_loop())
+            asyncio.create_task(auto_risk_manager.risk_manager_loop())
+            
+            logger.info("✅ Phase 3 AI Workers started successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to start Phase 3 workers: {e}", exc_info=True)
+    else:
+        logger.info("ℹ️  Phase 3 AI Workers disabled (set ENABLE_LEGACY_WORKERS=1 to enable)")
     
     # ==================== Mesh Bus Ping Loop ====================
     try:
