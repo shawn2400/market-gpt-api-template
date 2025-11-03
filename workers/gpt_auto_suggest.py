@@ -458,7 +458,7 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
         resp = cli.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{"role":"system","content":sys_prompt},{"role":"user","content":user}],
-            max_tokens=300,
+            max_completion_tokens=300,
             response_format={"type":"json_object"},
         )
         content = resp.choices[0].message.content or ""

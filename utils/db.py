@@ -275,6 +275,25 @@ def _init_postgres(cur):
     cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);")
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS market_states (
+          id SERIAL PRIMARY KEY,
+          symbol VARCHAR NOT NULL,
+          regime VARCHAR NOT NULL,
+          mood VARCHAR NOT NULL,
+          volatility VARCHAR NOT NULL,
+          trend_strength FLOAT NOT NULL,
+          strategy VARCHAR NOT NULL,
+          min_rr FLOAT NOT NULL,
+          min_quality FLOAT NOT NULL,
+          indicators JSONB,
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_market_states_symbol ON market_states(symbol);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_market_states_updated_at ON market_states(updated_at);")
 
 def _init_sqlite(cur):
     """Initialize SQLite schema"""
@@ -462,6 +481,23 @@ def _init_sqlite(cur):
         CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
         CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);
         CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
+        
+        CREATE TABLE IF NOT EXISTS market_states (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          symbol TEXT NOT NULL,
+          regime TEXT NOT NULL,
+          mood TEXT NOT NULL,
+          volatility TEXT NOT NULL,
+          trend_strength REAL NOT NULL,
+          strategy TEXT NOT NULL,
+          min_rr REAL NOT NULL,
+          min_quality REAL NOT NULL,
+          indicators TEXT,
+          created_at REAL DEFAULT (strftime('%s', 'now')),
+          updated_at REAL DEFAULT (strftime('%s', 'now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_market_states_symbol ON market_states(symbol);
+        CREATE INDEX IF NOT EXISTS idx_market_states_updated_at ON market_states(updated_at);
     """)
     
 

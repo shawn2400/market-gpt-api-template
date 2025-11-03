@@ -1686,6 +1686,12 @@ try:
 except Exception as e:
     logger.warning("Failed to load monitors routes: %s", e)
 
+try:
+    from routes.ai import router as ai_router
+    app.include_router(ai_router)
+except Exception as e:
+    logger.warning("Failed to load AI routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():

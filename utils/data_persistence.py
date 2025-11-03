@@ -1,15 +1,19 @@
 #!/usr/bin/env python3
 # utils/data_persistence.py
 """
-Data Persistence Module - Stub Implementation
+Data Persistence Module - Full Implementation
 ==============================================
 This module provides database persistence for market analysis data.
-Currently implemented as a stub that logs operations without persisting.
 
-TODO: Implement full database persistence when schema is finalized.
+Features:
+- Save/Load market state analysis
+- Save/Load trade analysis data
+- Full PostgreSQL and SQLite support
 """
 
 import logging
+import json
+import time
 from typing import Dict, Any, Optional
 
 logger = logging.getLogger("algogpt.data_persistence")
@@ -19,12 +23,13 @@ class DataPersistence:
     """
     Data persistence interface for market intelligence and analysis data.
     
-    This is a stub implementation that logs operations without actual persistence.
+    Provides database persistence for market states and trade analysis.
+    Supports both PostgreSQL and SQLite through utils.db infrastructure.
     """
     
     def __init__(self):
         self.logger = logger
-        self.logger.info("DataPersistence initialized (stub mode - no actual persistence)")
+        self.logger.info("DataPersistence initialized with database backend")
     
     def save_market_state(
         self,
@@ -55,22 +60,56 @@ class DataPersistence:
         Returns:
             True if saved successfully, False otherwise
         """
-        # Stub implementation - just log the operation
-        self.logger.debug(
-            f"Market state for {symbol}: regime={regime}, mood={mood}, "
-            f"volatility={volatility}, trend_strength={trend_strength:.1f}, "
-            f"strategy={strategy}, min_rr={min_rr:.2f}"
-        )
-        
-        # TODO: Implement actual database persistence
-        # Example implementation would save to a market_states table:
-        # with db_conn() as conn:
-        #     conn.execute(
-        #         "INSERT INTO market_states (symbol, regime, mood, ...) VALUES (?, ?, ?, ...)",
-        #         (symbol, regime, mood, ...)
-        #     )
-        
-        return True
+        try:
+            from utils.db import _conn, _is_postgres, DB_URL, USE_DB
+            
+            if not USE_DB:
+                self.logger.debug("Database disabled (USE_DB=0), skipping market state save")
+                return True
+            
+            is_pg = _is_postgres(DB_URL)
+            
+            with _conn() as con:
+                cur = con.cursor()
+                
+                # Prepare indicators JSON
+                indicators_json = json.dumps(indicators) if indicators else None
+                
+                if is_pg:
+                    # PostgreSQL - INSERT with timestamp for backward compatibility
+                    cur.execute("""
+                        INSERT INTO market_states 
+                        (timestamp, symbol, regime, mood, volatility, trend_strength, strategy, 
+                         min_rr, min_quality, indicators, created_at, updated_at)
+                        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                    """, (
+                        symbol, regime, mood, volatility, trend_strength, 
+                        strategy, min_rr, min_quality, indicators_json
+                    ))
+                else:
+                    # SQLite - INSERT with timestamp for backward compatibility
+                    cur.execute("""
+                        INSERT INTO market_states 
+                        (timestamp, symbol, regime, mood, volatility, trend_strength, strategy, 
+                         min_rr, min_quality, indicators, created_at, updated_at)
+                        VALUES (strftime('%s', 'now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+                    """, (
+                        symbol, regime, mood, volatility, trend_strength, 
+                        strategy, min_rr, min_quality, indicators_json
+                    ))
+                    con.commit()
+                
+                self.logger.debug(
+                    f"Market state saved for {symbol}: regime={regime}, mood={mood}, "
+                    f"volatility={volatility}, trend_strength={trend_strength:.1f}, "
+                    f"strategy={strategy}, min_rr={min_rr:.2f}"
+                )
+                
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Failed to save market state for {symbol}: {e}", exc_info=True)
+            return False
     
     def get_market_state(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
@@ -82,9 +121,66 @@ class DataPersistence:
         Returns:
             Dict with market state data or None if not found
         """
-        self.logger.debug(f"Retrieving market state for {symbol} (stub - returns None)")
-        # TODO: Implement actual database retrieval
-        return None
+        try:
+            from utils.db import _conn, _is_postgres, DB_URL, USE_DB
+            
+            if not USE_DB:
+                self.logger.debug("Database disabled (USE_DB=0), skipping market state load")
+                return None
+            
+            is_pg = _is_postgres(DB_URL)
+            
+            with _conn() as con:
+                cur = con.cursor()
+                
+                if is_pg:
+                    cur.execute("""
+                        SELECT regime, mood, volatility, trend_strength, strategy, 
+                               min_rr, min_quality, indicators, created_at, updated_at
+                        FROM market_states
+                        WHERE symbol = %s
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                    """, (symbol,))
+                else:
+                    cur.execute("""
+                        SELECT regime, mood, volatility, trend_strength, strategy, 
+                               min_rr, min_quality, indicators, created_at, updated_at
+                        FROM market_states
+                        WHERE symbol = ?
+                        ORDER BY updated_at DESC
+                        LIMIT 1
+                    """, (symbol,))
+                
+                row = cur.fetchone()
+                
+                if row:
+                    indicators_data = None
+                    if row[7]:  # indicators column
+                        try:
+                            indicators_data = json.loads(row[7])
+                        except:
+                            pass
+                    
+                    return {
+                        "symbol": symbol,
+                        "regime": row[0],
+                        "mood": row[1],
+                        "volatility": row[2],
+                        "trend_strength": row[3],
+                        "strategy": row[4],
+                        "min_rr": row[5],
+                        "min_quality": row[6],
+                        "indicators": indicators_data,
+                        "created_at": row[8],
+                        "updated_at": row[9]
+                    }
+                
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Failed to load market state for {symbol}: {e}", exc_info=True)
+            return None
     
     def save_trade_analysis(
         self,

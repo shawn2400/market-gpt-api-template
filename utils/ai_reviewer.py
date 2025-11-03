@@ -63,7 +63,7 @@ async def _openai_chat(messages: list[dict[str, str]], temperature: float = 0.2,
         return None
     url = f"{OPENAI_BASE_URL}/chat/completions"
     headers = {"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"}
-    payload = {"model": OPENAI_MODEL, "messages": messages, "temperature": temperature, "max_tokens": max_tokens}
+    payload = {"model": OPENAI_MODEL, "messages": messages, "temperature": temperature, "max_completion_tokens": max_tokens}
     try:
         _C_OPENAI_CALLS.inc()
         async with httpx.AsyncClient(timeout=30.0) as cli:
