@@ -93,8 +93,7 @@ class MultiAIScorer:
                     {"role": "system", "content": "You are an expert trading analyst. Provide numerical scores 0-100."},
                     {"role": "user", "content": prompt}
                 ],
-                "temperature": 0.3,
-                "max_tokens": max_tokens
+                "max_completion_tokens": max_tokens
             }
             
             async with httpx.AsyncClient(timeout=30.0) as client:
@@ -276,11 +275,11 @@ class MultiAIScorer:
         
         # Call all enabled providers in parallel
         tasks = []
-        if "openai" in use_providers and ENABLE_OPENAI:
+        if use_providers and "openai" in use_providers and ENABLE_OPENAI:
             tasks.append(self._call_openai(prompt))
-        if "deepseek" in use_providers and ENABLE_DEEPSEEK:
+        if use_providers and "deepseek" in use_providers and ENABLE_DEEPSEEK:
             tasks.append(self._call_deepseek(prompt))
-        if "xai" in use_providers and ENABLE_XAI:
+        if use_providers and "xai" in use_providers and ENABLE_XAI:
             tasks.append(self._call_xai(prompt))
         
         responses: List[AIResponse] = await asyncio.gather(*tasks) if tasks else []
