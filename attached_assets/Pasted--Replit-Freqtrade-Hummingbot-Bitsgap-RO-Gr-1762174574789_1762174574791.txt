@@ -1,0 +1,102 @@
+הנה הודעה אחת, קצרה ומדויקת, להדבקה לסוכן Replit — מקים **Freqtrade + Hummingbot + Bitsgap (RO) + Grafana/Superset** בצורה קלה וללא עומס, 4GB-safe, עם אבטחה ו-SLO ברורים.
+
+---
+
+**TASK NAME:** AlgoGPT — External Benchmarks (Freqtrade + Hummingbot + Bitsgap RO) & Analytics (Grafana/Superset) — 4GB Safe
+
+**מטרה:** לחבר 3 רפרנסים “הכי-הכי” לבנצ'מרק חיצוני ללא עומס:
+
+1. **Freqtrade** (Backtest/Optimize, קוד פתוח)
+2. **Hummingbot** (MM/Arb בסיסי, קוד פתוח)
+3. **Bitsgap** **Read-Only** בלבד (Benchmark SaaS)
+
+* דשבורד השוואות ב-**Grafana** (Ops/Health) ו-**Apache Superset** (PnL/Analytics).
+
+**אל תשנה:** אבטחה/HMAC/Bearer/RBAC, מנגנוני Always-On/Blue-Green, טלגרם (אישור בלבד), Wallet Pull-Only ל-Cold.
+
+---
+
+### היקף עבודה (בצע לפי סדר, בלי קוד כבד)
+
+1. **Freqtrade (Service קל)**
+
+   * התקנה “thin” + חיבור API-keys **READ-ONLY** (ל-backtests/דאטה).
+   * הפעל **Backtest nightly** על 10–20 סימבולים מובילים (דקות 15/60), שמור תוצאות CSV/JSON ל-`/benchmarks/freqtrade/`.
+   * הפעל **Walk-Forward** שבועי קצר (ללא אופטימיזציה עמוקה).
+   * Feature flag: `BENCH_FREQTRADE=on`.
+
+2. **Hummingbot (MM/Arb לייט)**
+
+   * התקנה “thin” + **אין פתיחת טריידים חיים** — רק סימולציות/פינג לטובת נתוני עומק/ספר.
+   * הרץ **dry-run market maker** על 2–3 זוגות נזילים לקבלת Metrics של spread/latency/תנודתיות.
+   * לוגים וסטטיסטיקות ל-`/benchmarks/hummingbot/`.
+   * Feature flag: `BENCH_HBOT=on`.
+
+3. **Bitsgap (SaaS) — Read-Only בלבד**
+
+   * הוסף מפתחות **קריאה בלבד** לתצפית/דוחות; **אין ביצוע**.
+   * משוך Snapshot יומי של ביצועים להשוואה (PnL/Win% אם זמין) → `benchmarks/bitsgap/`.
+   * Feature flag: `BENCH_BITSGAP_RO=on`.
+
+4. **Analytics**
+
+   * **Grafana**: לוח “Bench-Ops” — CPU/RAM/p95/p99/SSE uptime/429, סטטוס workers (AlgoGPT/Freqtrade/Hummingbot).
+   * **Superset**: לוח “Bench-PnL” — Equity/Profit Factor/Win%/MaxDD, טבלת השוואה: AlgoGPT מול Freqtrade/Hummingbot/Bitsgap.
+   * הפוך את שני הלוחות לקריאים בלבד למשתמשים Viewer, Admin מלא אליי.
+
+5. **חיבור לאתר הפרטי (ללא עומס)**
+
+   * טאב “Benchmarks” מציג תקציר: Win%, PF, MaxDD, #trades, גרף Equity השוואתי; לינקים ללוחות המלאים (SSO/RBAC).
+   * רענון נתונים דרך **SSE/Polling חכם** (backoff+jitter), לא יותר מ-1×/10s.
+
+---
+
+### עומסים ו-SLO (Guardrails ל-4GB/2CPU)
+
+* **CPU avg ≤ 65%**, **RSS ≤ 3.1GB** (מעל 3.3GB ⇒ disable heavy jobs; מעל 3.5GB ⇒ pause bench first).
+* Backtests: **nightly** בלבד + cap ל-20 סימבולים; סימולציות Hummingbot: חלון 10–15 דק' פעם בשעה.
+* Grafana/Superset: טעינה < 3s; אין שאילתות כבדות רציפות.
+* SSE uptime ≥ 99%, p95<1.6s, p99<2.8s.
+
+---
+
+### אבטחה
+
+* כל המפתחות ל-Freqtrade/Hummingbot/Bitsgap = **READ-ONLY**.
+* סגמנטציה: שירותי Bench רצים תחת משתמש/namespace נפרד; RBAC: Viewer/ReadOnly.
+* אין כתיבה/ביצוע הזמנות מצד Bench; רק AlgoGPT מפעיל טריידים.
+
+---
+
+### תוצרים (Deliverables)
+
+* `/benchmarks/freqtrade/*.json|csv` (Backtest/WF)
+* `/benchmarks/hummingbot/*.json` (MM/Arb dry stats)
+* `/benchmarks/bitsgap/*.json` (RO snapshots)
+* Grafana: Dashboard **Bench-Ops**
+* Superset: Dashboard **Bench-PnL**
+* אתר: טאב **Benchmarks** (תקציר+קישורים), Feature flags ו-SSO.
+
+---
+
+### Acceptance (בדיקה שאתה מסיים לפני “סגור”)
+
+1. ריצה לילה אחת של Freqtrade + קבצי תוצאות תקינים.
+2. Hummingbot dry-run נתן סטטיסטיקות ספר על 2–3 זוגות.
+3. Bitsgap מחובר RO ושומר snapshot יומי.
+4. Grafana/Superset מציגים נתונים אמיתיים; אתר מציג תקציר.
+5. SLO: p95/p99 ירוקים; RSS ≤ 3.1GB; אין 429 רציפים.
+6. אין שום ביצוע הזמנות דרך Bench; RBAC תקף.
+
+---
+
+### דוח סיום (להחזיר לי)
+
+* **Executive (≤10 שורות)**: סטטוס חיבורים, SLO, חריגים.
+* **Bench-PnL Summary**: AlgoGPT מול Freqtrade/Hummingbot/Bitsgap (Win%, PF, MaxDD, Equity).
+* **Load & Safety**: CPU/RSS, האם הופעל degrade, זמני ריצה בפועל.
+* **Gaps & Next**: איפה חסר דאטה/שיפור (≤5 נק').
+
+---
+
+> מטרה: לקבל *בנצ'מרק חיצוני אמיתי* בלי לגעת בכסף/להעמיס — כדי לאמת שה-AlgoGPT מנצח בשטח, ולעשות Fine-Tune מושכל קדימה.
