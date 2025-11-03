@@ -78,6 +78,52 @@ def init():
         );
         CREATE INDEX IF NOT EXISTS idx_tf_snapshots_symbol_interval ON tf_snapshots(symbol, interval);
         CREATE INDEX IF NOT EXISTS idx_tf_snapshots_timestamp ON tf_snapshots(timestamp);
+
+        CREATE TABLE IF NOT EXISTS bt_runs (
+          id TEXT PRIMARY KEY,
+          strategy TEXT NOT NULL,
+          start_date TEXT NOT NULL,
+          end_date TEXT NOT NULL,
+          folds INTEGER NOT NULL,
+          created_at REAL DEFAULT (strftime('%s', 'now')),
+          status TEXT DEFAULT 'running',
+          summary_json TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS bt_results (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          bt_run_id TEXT NOT NULL,
+          symbol TEXT,
+          regime TEXT,
+          winrate REAL,
+          avg_rr REAL,
+          expectancy REAL,
+          max_dd REAL,
+          sample_n INTEGER,
+          FOREIGN KEY (bt_run_id) REFERENCES bt_runs(id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_bt_results_run_id ON bt_results(bt_run_id);
+        CREATE INDEX IF NOT EXISTS idx_bt_results_symbol_regime ON bt_results(symbol, regime);
+
+        CREATE TABLE IF NOT EXISTS live_kpis (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          day TEXT NOT NULL UNIQUE,
+          winrate_7d REAL,
+          winrate_30d REAL,
+          exp_rr_30d REAL,
+          dd_7d REAL,
+          consec_sl INTEGER,
+          updated_at REAL DEFAULT (strftime('%s', 'now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_live_kpis_day ON live_kpis(day);
+
+        CREATE TABLE IF NOT EXISTS blocks_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          reason TEXT NOT NULL,
+          ctx_json TEXT,
+          created_at REAL DEFAULT (strftime('%s', 'now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_blocks_log_created_at ON blocks_log(created_at);
         """)
         con.commit()
 
