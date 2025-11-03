@@ -3373,8 +3373,8 @@ async def get_telegram_pending_approvals():
     """Fetch all pending trade proposals waiting for approval"""
     try:
         try:
-            from utils.trade_executor import ConfirmStore
-            pending = ConfirmStore.pending()
+            from utils.confirm_store import ConfirmStore
+            pending = await ConfirmStore.pending()
         except Exception as e:
             logger.warning(f"ConfirmStore not available: {e}")
             pending = []
@@ -3422,8 +3422,8 @@ async def approve_trade_web(ticket_id: str):
     """Approve a pending trade proposal from web interface"""
     try:
         try:
-            from utils.trade_executor import ConfirmStore
-            result = ConfirmStore.decide(ticket_id, approved=True)
+            from utils.confirm_store import ConfirmStore
+            result = await ConfirmStore.decide(ticket_id, approved=True)
         except Exception as e:
             logger.error(f"ConfirmStore.decide failed: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to approve: {e}")
@@ -3447,8 +3447,8 @@ async def reject_trade_web(ticket_id: str, reason: Optional[str] = "Rejected fro
     """Reject a pending trade proposal from web interface"""
     try:
         try:
-            from utils.trade_executor import ConfirmStore
-            result = ConfirmStore.decide(ticket_id, approved=False)
+            from utils.confirm_store import ConfirmStore
+            result = await ConfirmStore.decide(ticket_id, approved=False)
         except Exception as e:
             logger.error(f"ConfirmStore.decide failed: {e}")
             raise HTTPException(status_code=500, detail=f"Failed to reject: {e}")
