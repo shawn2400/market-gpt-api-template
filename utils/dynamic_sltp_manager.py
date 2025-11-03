@@ -23,12 +23,8 @@ from typing import Dict, Any, Optional, Tuple, List, Literal
 from dataclasses import dataclass
 import numpy as np
 
-# UPGRADED: Import Student-t Monte Carlo (NOT Gaussian)
-try:
-    from utils.validation.sltp_mc import estimate_sltp_probabilities
-    SLTP_MC_AVAILABLE = True
-except ImportError:
-    SLTP_MC_AVAILABLE = False
+# UPGRADED: Now using Student-t distribution in _run_monte_carlo (NOT Gaussian)
+# See line ~210 for scipy.stats.t implementation
 
 logger = logging.getLogger("dynamic_sltp")
 

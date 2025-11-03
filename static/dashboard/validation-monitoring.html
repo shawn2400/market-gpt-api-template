@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AlgoGPT - Validation & Monitoring</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;600;700&display=swap');
+        body { font-family: 'Heebo', sans-serif; }
+        .tab-active { background: linear-gradient(135deg, #667eea, #764ba2); color: white; }
+        .glass-card { background: rgba(31, 41, 55, 0.6); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900 text-white min-h-screen p-6">
+
+    <div class="max-w-7xl mx-auto">
+        <!-- Header -->
+        <div class="mb-8 text-center">
+            <h1 class="text-4xl font-bold mb-2 bg-gradient-to-r from-purple-400 to-pink-400 bg-clip-text text-transparent">
+                🛡️ Validation & Safety Monitoring
+            </h1>
+            <p class="text-gray-400">AlgoGPT Ultimate Edition v2.0 - Production-Grade Safety Infrastructure</p>
+        </div>
+
+        <!-- Tabs Navigation -->
+        <div class="flex gap-4 mb-6 flex-wrap">
+            <button onclick="switchTab('validation')" id="tab-validation" class="tab-active px-6 py-3 rounded-lg font-semibold transition">
+                📊 Validation Results
+            </button>
+            <button onclick="switchTab('monitoring')" id="tab-monitoring" class="px-6 py-3 rounded-lg font-semibold bg-gray-700 hover:bg-gray-600 transition">
+                🔍 Live Monitoring
+            </button>
+            <button onclick="switchTab('breaker')" id="tab-breaker" class="px-6 py-3 rounded-lg font-semibold bg-gray-700 hover:bg-gray-600 transition">
+                🚨 Circuit Breaker
+            </button>
+            <button onclick="location.reload()" class="ml-auto px-4 py-3 rounded-lg font-semibold bg-green-600 hover:bg-green-500 transition">
+                🔄 Refresh
+            </button>
+        </div>
+
+        <!-- Tab Content -->
+        <div id="content-validation" class="tab-content">
+            <div class="glass-card rounded-xl p-6 mb-6">
+                <h2 class="text-2xl font-bold mb-4">🧪 Historical Backtest Validation</h2>
+                <p class="text-gray-300 mb-4">Test your trading strategy against historical data with walk-forward testing.</p>
+                
+                <!-- Run Backtest Form -->
+                <div class="bg-gray-800 rounded-lg p-4 mb-4">
+                    <h3 class="font-semibold mb-3">Start New Validation Run</h3>
+                    <div class="grid grid-cols-2 gap-4 mb-4">
+                        <div>
+                            <label class="block text-sm mb-1">Strategy</label>
+                            <input id="strategy" type="text" value="gpt5_dual_gate" class="w-full px-3 py-2 bg-gray-700 rounded">
+                        </div>
+                        <div>
+                            <label class="block text-sm mb-1">Walk-Forward Folds</label>
+                            <input id="folds" type="number" value="6" class="w-full px-3 py-2 bg-gray-700 rounded">
+                        </div>
+                    </div>
+                    <button onclick="runBacktest()" class="w-full bg-purple-600 hover:bg-purple-500 py-2 rounded font-semibold">
+                        ▶️ Run Backtest
+                    </button>
+                </div>
+
+                <!-- Results Display -->
+                <div id="validation-results" class="bg-gray-800 rounded-lg p-4">
+                    <p class="text-gray-400">Click "Run Backtest" to start validation...</p>
+                </div>
+            </div>
+        </div>
+
+        <div id="content-monitoring" class="tab-content hidden">
+            <div class="glass-card rounded-xl p-6">
+                <h2 class="text-2xl font-bold mb-4">📈 Live Trading Health Monitor</h2>
+                <div id="health-display" class="grid grid-cols-3 gap-4">
+                    <div class="bg-gray-800 rounded-lg p-4">
+                        <div class="text-sm text-gray-400">Win Rate 7d</div>
+                        <div id="winrate-7d" class="text-3xl font-bold">--</div>
+                    </div>
+                    <div class="bg-gray-800 rounded-lg p-4">
+                        <div class="text-sm text-gray-400">Max Drawdown</div>
+                        <div id="max-dd" class="text-3xl font-bold">--</div>
+                    </div>
+                    <div class="bg-gray-800 rounded-lg p-4">
+                        <div class="text-sm text-gray-400">Consecutive Losses</div>
+                        <div id="consec-loss" class="text-3xl font-bold">--</div>
+                    </div>
+                </div>
+                <div id="health-raw" class="bg-gray-800 rounded-lg p-4 mt-4">
+                    <pre class="text-xs text-gray-300 overflow-auto">Loading...</pre>
+                </div>
+            </div>
+        </div>
+
+        <div id="content-breaker" class="tab-content hidden">
+            <div class="glass-card rounded-xl p-6">
+                <h2 class="text-2xl font-bold mb-4">⚡ Circuit Breaker Status</h2>
+                
+                <!-- Breaker Controls -->
+                <div class="grid grid-cols-3 gap-4 mb-6">
+                    <button onclick="breakerAction('pause')" class="bg-red-600 hover:bg-red-500 py-3 rounded font-semibold">
+                        ⏸️ Manual Pause
+                    </button>
+                    <button onclick="breakerAction('reset')" class="bg-yellow-600 hover:bg-yellow-500 py-3 rounded font-semibold">
+                        🔄 Reset Breaker
+                    </button>
+                    <button onclick="loadBreakerStatus()" class="bg-blue-600 hover:bg-blue-500 py-3 rounded font-semibold">
+                        🔍 Check Status
+                    </button>
+                </div>
+
+                <!-- Breaker Status Display -->
+                <div id="breaker-status" class="bg-gray-800 rounded-lg p-4">
+                    <p class="text-gray-400">Click "Check Status" to load circuit breaker info...</p>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // Tab Switching
+        function switchTab(tab) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('[id^="tab-"]').forEach(el => el.classList.remove('tab-active', 'bg-gray-700'));
+            document.querySelectorAll('[id^="tab-"]').forEach(el => el.classList.add('bg-gray-700'));
+            
+            document.getElementById('content-' + tab).classList.remove('hidden');
+            document.getElementById('tab-' + tab).classList.add('tab-active');
+            document.getElementById('tab-' + tab).classList.remove('bg-gray-700');
+
+            // Auto-load data for each tab
+            if (tab === 'monitoring') loadHealthStatus();
+            if (tab === 'breaker') loadBreakerStatus();
+        }
+
+        // Run Backtest
+        async function runBacktest() {
+            const strategy = document.getElementById('strategy').value;
+            const folds = parseInt(document.getElementById('folds').value);
+            const resultsDiv = document.getElementById('validation-results');
+            
+            resultsDiv.innerHTML = '<p class="text-yellow-400">⏳ Starting backtest...</p>';
+            
+            try {
+                const response = await fetch('/validate/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        strategy,
+                        symbols: ['BTCUSDT', 'ETHUSDT'],
+                        start: '2024-01-01',
+                        end: '2024-12-31',
+                        folds
+                    })
+                });
+                
+                if (!response.ok) throw new Error('Backtest failed: ' + response.status);
+                const data = await response.json();
+                
+                resultsDiv.innerHTML = `
+                    <div class="text-green-400 mb-2">✅ Backtest started! Run ID: ${data.run_id}</div>
+                    <div class="text-sm text-gray-400">Status: ${data.status}</div>
+                    <div class="mt-3">
+                        <button onclick="checkBacktestStatus('${data.run_id}')" class="bg-blue-600 px-4 py-2 rounded">
+                            🔍 Check Status
+                        </button>
+                        <button onclick="getBacktestReport('${data.run_id}')" class="bg-purple-600 px-4 py-2 rounded ml-2">
+                            📊 View Report
+                        </button>
+                    </div>
+                `;
+            } catch (err) {
+                resultsDiv.innerHTML = `<p class="text-red-400">❌ Error: ${err.message}</p>`;
+            }
+        }
+
+        // Check Backtest Status
+        async function checkBacktestStatus(runId) {
+            const resultsDiv = document.getElementById('validation-results');
+            try {
+                const response = await fetch(`/validate/status?id=${runId}`);
+                const data = await response.json();
+                resultsDiv.innerHTML = `<pre class="text-xs text-gray-300">${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (err) {
+                resultsDiv.innerHTML = `<p class="text-red-400">❌ ${err.message}</p>`;
+            }
+        }
+
+        // Get Backtest Report
+        async function getBacktestReport(runId) {
+            const resultsDiv = document.getElementById('validation-results');
+            try {
+                const response = await fetch(`/validate/report?id=${runId}`);
+                const data = await response.json();
+                
+                const verdict = data.validation_pass ? 
+                    '<span class="text-green-400 font-bold">✅ APPROVED FOR PRODUCTION</span>' :
+                    '<span class="text-red-400 font-bold">❌ FAILED VALIDATION</span>';
+                
+                resultsDiv.innerHTML = `
+                    <div class="mb-4">${verdict}</div>
+                    <div class="grid grid-cols-3 gap-4 mb-4">
+                        <div class="bg-gray-700 p-3 rounded">
+                            <div class="text-sm text-gray-400">Win Rate</div>
+                            <div class="text-2xl font-bold">${(data.overall_metrics?.winrate || 0).toFixed(1)}%</div>
+                        </div>
+                        <div class="bg-gray-700 p-3 rounded">
+                            <div class="text-sm text-gray-400">Avg RR</div>
+                            <div class="text-2xl font-bold">${(data.overall_metrics?.avg_rr || 0).toFixed(2)}</div>
+                        </div>
+                        <div class="bg-gray-700 p-3 rounded">
+                            <div class="text-sm text-gray-400">Max DD</div>
+                            <div class="text-2xl font-bold">${(data.overall_metrics?.max_dd || 0).toFixed(1)}%</div>
+                        </div>
+                    </div>
+                    <details class="bg-gray-700 p-3 rounded">
+                        <summary class="cursor-pointer font-semibold">📋 Full Report</summary>
+                        <pre class="text-xs mt-2 overflow-auto">${JSON.stringify(data, null, 2)}</pre>
+                    </details>
+                `;
+            } catch (err) {
+                resultsDiv.innerHTML = `<p class="text-red-400">❌ ${err.message}</p>`;
+            }
+        }
+
+        // Load Health Status
+        async function loadHealthStatus() {
+            const display = document.getElementById('health-raw');
+            try {
+                const response = await fetch('/monitors/health');
+                const data = await response.json();
+                
+                document.getElementById('winrate-7d').textContent = `${(data.metrics?.winrate_7d || 0).toFixed(1)}%`;
+                document.getElementById('max-dd').textContent = `${(data.metrics?.max_dd_pct || 0).toFixed(1)}%`;
+                document.getElementById('consec-loss').textContent = data.metrics?.consecutive_losses || 0;
+                
+                display.innerHTML = `<pre class="text-xs text-gray-300">${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (err) {
+                display.innerHTML = `<pre class="text-red-400">Error: ${err.message}</pre>`;
+            }
+        }
+
+        // Breaker Actions
+        async function breakerAction(action) {
+            const statusDiv = document.getElementById('breaker-status');
+            statusDiv.innerHTML = '<p class="text-yellow-400">⏳ Processing...</p>';
+            
+            try {
+                const response = await fetch(`/monitors/breaker/${action}`, { method: 'POST' });
+                const data = await response.json();
+                statusDiv.innerHTML = `
+                    <div class="text-green-400 mb-2">✅ ${action.toUpperCase()} successful!</div>
+                    <pre class="text-xs text-gray-300">${JSON.stringify(data, null, 2)}</pre>
+                `;
+            } catch (err) {
+                statusDiv.innerHTML = `<p class="text-red-400">❌ ${err.message}</p>`;
+            }
+        }
+
+        // Load Breaker Status
+        async function loadBreakerStatus() {
+            const statusDiv = document.getElementById('breaker-status');
+            try {
+                const response = await fetch('/monitors/breaker/status');
+                const data = await response.json();
+                
+                const statusColor = data.active ? 'text-red-400' : 'text-green-400';
+                const statusText = data.active ? '🚨 BREAKER ACTIVE' : '✅ SYSTEM OPERATIONAL';
+                
+                statusDiv.innerHTML = `
+                    <div class="${statusColor} text-xl font-bold mb-4">${statusText}</div>
+                    <div class="grid grid-cols-2 gap-4 mb-4">
+                        <div class="bg-gray-700 p-3 rounded">
+                            <div class="text-sm text-gray-400">Daily DD Limit</div>
+                            <div class="text-lg">${data.config?.dd_limit_pct || 5}%</div>
+                        </div>
+                        <div class="bg-gray-700 p-3 rounded">
+                            <div class="text-sm text-gray-400">Max Consecutive SL</div>
+                            <div class="text-lg">${data.config?.consec_sl_max || 4}</div>
+                        </div>
+                    </div>
+                    <details class="bg-gray-700 p-3 rounded">
+                        <summary class="cursor-pointer font-semibold">🔍 Full Status</summary>
+                        <pre class="text-xs mt-2">${JSON.stringify(data, null, 2)}</pre>
+                    </details>
+                `;
+            } catch (err) {
+                statusDiv.innerHTML = `<p class="text-red-400">❌ ${err.message}</p>`;
+            }
+        }
+
+        // Auto-load initial tab
+        window.onload = () => switchTab('validation');
+    </script>
+
+</body>
+</html>
