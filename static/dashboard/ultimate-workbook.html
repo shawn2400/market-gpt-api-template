@@ -1067,133 +1067,190 @@
         );
         
         const Tab5LiveFlow = ({ data }) => {
-            const svgRef = useRef(null);
+            const [selectedStage, setSelectedStage] = useState(null);
+            const [flowData, setFlowData] = useState(null);
             
             useEffect(() => {
-                if (!data || !svgRef.current) return;
-                
-                const width = svgRef.current.clientWidth;
-                const height = 600;
-                
-                const svg = d3.select(svgRef.current);
-                svg.selectAll('*').remove();
-                
-                const g = svg.append('g')
-                    .attr('transform', `translate(${width / 2}, 50)`);
-                
-                const nodeHeight = 80;
-                const nodeSpacing = 100;
-                
-                data.nodes.forEach((node, i) => {
-                    const y = i * nodeSpacing;
-                    
-                    const nodeG = g.append('g')
-                        .attr('class', 'node')
-                        .attr('transform', `translate(0, ${y})`);
-                    
-                    nodeG.append('circle')
-                        .attr('r', 35)
-                        .attr('fill', node.status === 'active' ? '#10b981' : node.status === 'waiting' ? '#f59e0b' : '#ef4444')
-                        .attr('fill-opacity', 0.8)
-                        .attr('stroke', '#fff')
-                        .attr('stroke-width', 2);
-                    
-                    nodeG.append('text')
-                        .attr('text-anchor', 'middle')
-                        .attr('dy', -45)
-                        .style('fill', '#f3f4f6')
-                        .style('font-size', '24px')
-                        .text(node.icon);
-                    
-                    nodeG.append('text')
-                        .attr('text-anchor', 'middle')
-                        .attr('dy', 5)
-                        .style('fill', '#fff')
-                        .style('font-weight', 'bold')
-                        .style('font-size', '14px')
-                        .text(node.name);
-                    
-                    if (i < data.nodes.length - 1) {
-                        g.append('line')
-                            .attr('class', 'link')
-                            .attr('x1', 0)
-                            .attr('y1', y + 35)
-                            .attr('x2', 0)
-                            .attr('y2', y + nodeSpacing - 35);
-                        
-                        g.append('polygon')
-                            .attr('points', '0,' + (y + nodeSpacing - 35) + ' -5,' + (y + nodeSpacing - 45) + ' 5,' + (y + nodeSpacing - 45))
-                            .attr('fill', '#667eea');
+                const fetchFlow = async () => {
+                    try {
+                        const res = await fetch('/dashboard/flow-data');
+                        const result = await res.json();
+                        setFlowData(result);
+                    } catch (err) {
+                        console.error(err);
                     }
-                });
-                
-            }, [data]);
+                };
+                fetchFlow();
+                const interval = setInterval(fetchFlow, 5000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            if (!flowData) return <div className="loading">⏳ Loading Flow...</div>;
             
             return (
-                <div className="space-y-6">
+                <div className="space-y-6" style={{width: '100%', maxWidth: '100%'}}>
                     <div className="glass-card p-6">
-                        <div className="flex items-center gap-4 mb-6">
+                        <div className="flex items-center gap-4 mb-4">
                             <div className="icon-box">🔄</div>
-                            <h2 className="text-3xl font-bold gradient-text">Live Trading Flow</h2>
+                            <h2 className="text-3xl font-bold gradient-text">Live Trading Flow - Full System Pipeline</h2>
                         </div>
                         
-                        <div className="grid md:grid-cols-5 gap-3 mb-6">
+                        <div className="grid grid-cols-6 gap-3 mb-6">
                             <div className="metric-card text-center">
-                                <div className="text-2xl font-bold text-primary">{data.stats.total_processed_today}</div>
-                                <div className="text-sm text-gray-400">Processed Today</div>
+                                <div className="text-2xl font-bold text-primary">{flowData.stats.total_processed_today}</div>
+                                <div className="text-xs text-gray-400">Processed</div>
                             </div>
                             <div className="metric-card text-center">
-                                <div className="text-2xl font-bold text-warning">{data.stats.proposals_generated}</div>
-                                <div className="text-sm text-gray-400">Proposals</div>
+                                <div className="text-2xl font-bold text-warning">{flowData.stats.proposals_generated}</div>
+                                <div className="text-xs text-gray-400">Proposals</div>
                             </div>
                             <div className="metric-card text-center">
-                                <div className="text-2xl font-bold text-success">{data.stats.risk_passed}</div>
-                                <div className="text-sm text-gray-400">Risk Passed</div>
+                                <div className="text-2xl font-bold text-success">{flowData.stats.risk_passed}</div>
+                                <div className="text-xs text-gray-400">Risk Pass</div>
                             </div>
                             <div className="metric-card text-center">
-                                <div className="text-2xl font-bold text-info">{data.stats.approved}</div>
-                                <div className="text-sm text-gray-400">Approved</div>
+                                <div className="text-2xl font-bold text-info">{flowData.stats.approved}</div>
+                                <div className="text-xs text-gray-400">Approved</div>
                             </div>
                             <div className="metric-card text-center">
-                                <div className="text-2xl font-bold text-success">{data.stats.executed}</div>
-                                <div className="text-sm text-gray-400">Executed</div>
+                                <div className="text-2xl font-bold text-success">{flowData.stats.executed}</div>
+                                <div className="text-xs text-gray-400">Executed</div>
+                            </div>
+                            <div className="metric-card text-center">
+                                <div className="text-2xl font-bold text-purple-400">{flowData.stats.managed_positions}</div>
+                                <div className="text-xs text-gray-400">Managed</div>
                             </div>
                         </div>
-                        
-                        <svg ref={svgRef} id="flow-viz"></svg>
-                        
-                        <div className="mt-6 grid md:grid-cols-2 gap-4">
-                            {data.nodes.map(node => (
-                                <div key={node.id} className="metric-card">
-                                    <div className="flex items-center gap-3 mb-3">
-                                        <span className="text-3xl">{node.icon}</span>
-                                        <div>
-                                            <h3 className="font-bold text-white">{node.name}</h3>
-                                            <span className={`text-xs ${node.status === 'active' ? 'text-success' : node.status === 'waiting' ? 'text-warning' : 'text-error'}`}>
-                                                {node.status === 'active' && '🟢 Active'}
-                                                {node.status === 'waiting' && '🟡 Waiting'}
-                                                {node.status === 'error' && '🔴 Error'}
-                                            </span>
+                    </div>
+                    
+                    <div className="w-full" style={{width: '100%', maxWidth: '100%'}}>
+                        <div className="flex items-center gap-2 overflow-x-auto pb-4" style={{width: '100%'}}>
+                            {flowData.stages.map((stage, idx) => (
+                                <React.Fragment key={stage.id}>
+                                    <div 
+                                        onClick={() => setSelectedStage(stage)}
+                                        className={`flex-shrink-0 glass-card p-4 cursor-pointer hover:scale-105 transition-transform border-2 ${
+                                            stage.status === 'active' ? 'border-success' : 
+                                            stage.status === 'waiting' ? 'border-warning' : 
+                                            stage.status === 'idle' ? 'border-gray-600' : 'border-error'
+                                        }`}
+                                        style={{minWidth: '180px'}}
+                                    >
+                                        <div className="text-center mb-2">
+                                            <div className="text-4xl mb-2">{stage.icon}</div>
+                                            <div className="font-bold text-sm text-white">{stage.name}</div>
+                                            <div className={`text-xs mt-1 ${
+                                                stage.status === 'active' ? 'text-success' : 
+                                                stage.status === 'waiting' ? 'text-warning' : 
+                                                stage.status === 'idle' ? 'text-gray-400' : 'text-error'
+                                            }`}>
+                                                {stage.status === 'active' && '🟢 Active'}
+                                                {stage.status === 'waiting' && '🟡 Waiting'}
+                                                {stage.status === 'idle' && '⚪ Idle'}
+                                                {stage.status === 'error' && '🔴 Error'}
+                                            </div>
+                                        </div>
+                                        <div className="space-y-1 text-xs">
+                                            <div className="flex justify-between">
+                                                <span className="text-gray-400">Today:</span>
+                                                <span className="text-white font-bold">{stage.count_today}</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-gray-400">Success:</span>
+                                                <span className="text-success font-bold">{stage.success_rate}%</span>
+                                            </div>
+                                            <div className="flex justify-between">
+                                                <span className="text-gray-400">Avg Time:</span>
+                                                <span className="text-gray-300">{stage.avg_time}s</span>
+                                            </div>
                                         </div>
                                     </div>
-                                    <div className="space-y-1 text-sm">
-                                        {Object.entries(node.data).map(([key, value]) => (
-                                            <div key={key} className="flex justify-between">
-                                                <span className="text-gray-400">{key}:</span>
-                                                <span className="text-white font-semibold">{value}</span>
-                                            </div>
-                                        ))}
-                                        {Object.entries(node.metrics).map(([key, value]) => (
-                                            <div key={key} className="flex justify-between">
-                                                <span className="text-gray-400">{key}:</span>
-                                                <span className="text-primary font-semibold">{value}</span>
+                                    {idx < flowData.stages.length - 1 && (
+                                        <div className="text-primary text-3xl flex-shrink-0">→</div>
+                                    )}
+                                </React.Fragment>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    {selectedStage && (
+                        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4" onClick={() => setSelectedStage(null)}>
+                            <div className="glass-card p-8 max-w-6xl w-full max-h-screen overflow-y-auto" onClick={e => e.stopPropagation()}>
+                                <div className="flex items-center gap-4 mb-6">
+                                    <div className="text-6xl">{selectedStage.icon}</div>
+                                    <div>
+                                        <h2 className="text-4xl font-bold gradient-text">{selectedStage.name}</h2>
+                                        <p className="text-gray-300 mt-2">{selectedStage.description}</p>
+                                    </div>
+                                </div>
+                                
+                                <div className="grid md:grid-cols-4 gap-4 mb-6">
+                                    <div className="metric-card">
+                                        <div className="text-sm text-gray-400">Status</div>
+                                        <div className={`text-xl font-bold ${
+                                            selectedStage.status === 'active' ? 'text-success' : 
+                                            selectedStage.status === 'waiting' ? 'text-warning' : 'text-error'
+                                        }`}>
+                                            {selectedStage.status.toUpperCase()}
+                                        </div>
+                                    </div>
+                                    <div className="metric-card">
+                                        <div className="text-sm text-gray-400">Processed Today</div>
+                                        <div className="text-xl font-bold">{selectedStage.count_today}</div>
+                                    </div>
+                                    <div className="metric-card">
+                                        <div className="text-sm text-gray-400">Success Rate</div>
+                                        <div className="text-xl font-bold text-success">{selectedStage.success_rate}%</div>
+                                    </div>
+                                    <div className="metric-card">
+                                        <div className="text-sm text-gray-400">Avg Time</div>
+                                        <div className="text-xl font-bold">{selectedStage.avg_time}s</div>
+                                    </div>
+                                </div>
+                                
+                                <div className="mb-6">
+                                    <h3 className="text-2xl font-bold mb-4">🔧 Sub-Processes ({selectedStage.sub_processes.length})</h3>
+                                    <div className="grid md:grid-cols-2 gap-4">
+                                        {selectedStage.sub_processes.map((sub, i) => (
+                                            <div key={i} className="glass-card p-4 border-r-4 border-primary">
+                                                <div className="flex items-center gap-2 mb-2">
+                                                    <div className="w-8 h-8 rounded-full bg-primary flex items-center justify-center text-white font-bold">
+                                                        {i + 1}
+                                                    </div>
+                                                    <h4 className="font-bold text-white">{sub.name}</h4>
+                                                </div>
+                                                <p className="text-sm text-gray-300 mb-2">{sub.description}</p>
+                                                <div className="text-xs text-gray-400">
+                                                    Duration: <span className="text-primary font-bold">{sub.duration}</span>
+                                                </div>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
-                            ))}
+                                
+                                <div className="mb-6">
+                                    <h3 className="text-2xl font-bold mb-4">📊 Technical Details</h3>
+                                    <div className="glass-card p-4">
+                                        <div className="grid md:grid-cols-2 gap-4 text-sm">
+                                            {Object.entries(selectedStage.technical_details).map(([key, value]) => (
+                                                <div key={key} className="flex justify-between">
+                                                    <span className="text-gray-400">{key}:</span>
+                                                    <span className="text-white font-semibold">{value}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                                
+                                <button 
+                                    onClick={() => setSelectedStage(null)}
+                                    className="px-6 py-3 bg-primary rounded-lg hover:opacity-80 font-bold"
+                                >
+                                    סגור
+                                </button>
+                            </div>
                         </div>
-                    </div>
+                    )}
                 </div>
             );
         };
