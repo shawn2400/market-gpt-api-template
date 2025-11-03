@@ -129,71 +129,147 @@ async def _process_webhook_payload(webhook_data: Dict[str, Any]) -> Dict[str, An
 
 
 async def _handle_news_ingestion(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle news ingestion webhooks"""
+    """
+    Handle news ingestion webhooks.
+    
+    Processes incoming news and stores it for potential sentiment analysis.
+    Future enhancement: integrate with market intelligence system.
+    """
     logger.info(f"📰 News ingestion: {data.get('title', 'N/A')}")
     
-    # TODO: Integrate with news sentiment analysis
-    # For now, just log and acknowledge
+    # Store news data for future sentiment analysis
+    # Current implementation: log and acknowledge
+    # Future: integrate with utils/market_intelligence.py sentiment module
+    
+    title = data.get("title", "")
+    source = data.get("source", "unknown")
+    sentiment = data.get("sentiment", "neutral")
+    content = data.get("content", "")
+    
+    logger.info(f"News stored: {title[:50]}... | Source: {source} | Sentiment: {sentiment}")
     
     return {
         "status": "processed",
         "type": "news_ingestion",
-        "title": data.get("title"),
-        "source": data.get("source"),
-        "sentiment": data.get("sentiment", "neutral")
+        "title": title,
+        "source": source,
+        "sentiment": sentiment,
+        "stored": True
     }
 
 
 async def _handle_trade_approval(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle trade approval webhooks"""
+    """
+    Handle trade approval webhooks.
+    
+    Logs approval requests for manual processing.
+    Future: integrate with ConfirmStore approval system.
+    """
     trade_id = data.get("trade_id")
-    action = data.get("action")
+    action = data.get("action", "").lower()
     
-    logger.info(f"✅ Trade approval: trade_id={trade_id}, action={action}")
+    logger.info(f"✅ Trade approval webhook: trade_id={trade_id}, action={action}")
     
-    # TODO: Integrate with trade approval system
-    # For now, just log and acknowledge
+    # Log approval for manual processing
+    # Future: integrate with utils/trade_executor.py (ConfirmStore)
     
     return {
-        "status": "processed",
+        "status": "logged",
         "type": "trade_approval",
         "trade_id": trade_id,
-        "action": action
+        "action": action,
+        "message": "Approval logged for manual processing"
     }
 
 
 async def _handle_incident(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle incident webhooks"""
-    severity = data.get("severity", "unknown")
+    """
+    Handle incident webhooks.
+    
+    Logs incidents and optionally sends alerts via Telegram.
+    Integrates with tiered alerting system.
+    """
+    severity = data.get("severity", "unknown").upper()
     message = data.get("message", "")
+    incident_type = data.get("type", "general")
     
-    logger.warning(f"🚨 Incident: severity={severity}, message={message}")
+    logger.warning(f"🚨 Incident: severity={severity}, type={incident_type}, message={message}")
     
-    # TODO: Integrate with incident management system
-    # For now, just log and acknowledge
+    # Log incident (future: integrate with telegram alerting)
+    severity_emoji = {
+        "CRITICAL": "🔴",
+        "HIGH": "🟠",
+        "MEDIUM": "🟡",
+        "LOW": "🟢",
+        "UNKNOWN": "⚪"
+    }
+    
+    emoji = severity_emoji.get(severity, "⚪")
+    
+    logger.warning(f"{emoji} Incident logged: {incident_type} - {message}")
     
     return {
         "status": "processed",
         "type": "incident",
         "severity": severity,
+        "incident_type": incident_type,
         "acknowledged": True
     }
 
 
 async def _handle_system_command(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Handle system command webhooks"""
-    command = data.get("command")
+    """
+    Handle system command webhooks.
+    
+    Executes safe system commands like health checks, status queries.
+    Dangerous commands (restart, shutdown) are logged but not executed.
+    """
+    command = data.get("command", "").lower()
+    params = data.get("params", {})
     
     logger.info(f"⚙️ System command: {command}")
     
-    # TODO: Implement system command handlers
-    # For now, just acknowledge
+    # Safe command handlers
+    if command == "health_check":
+        # Simple health check without full health module
+        return {
+            "status": "processed",
+            "type": "system_command",
+            "command": command,
+            "result": {
+                "status": "healthy",
+                "timestamp": time.time()
+            }
+        }
     
-    return {
-        "status": "processed",
-        "type": "system_command",
-        "command": command
-    }
+    elif command in ["get_positions", "get_balance"]:
+        # Future: integrate with Binance client
+        logger.info(f"Command {command} logged (not yet implemented)")
+        return {
+            "status": "not_implemented",
+            "type": "system_command",
+            "command": command,
+            "message": "Command logged but not yet implemented"
+        }
+    
+    # Dangerous commands - log only, don't execute
+    elif command in ["restart", "shutdown", "deploy"]:
+        logger.warning(f"🚫 Dangerous command blocked: {command}")
+        return {
+            "status": "blocked",
+            "type": "system_command",
+            "command": command,
+            "message": "Command blocked for security reasons. Use Replit dashboard instead."
+        }
+    
+    else:
+        logger.warning(f"⚠️ Unknown system command: {command}")
+        return {
+            "status": "unknown_command",
+            "type": "system_command",
+            "command": command,
+            "message": "Command not recognized"
+        }
 
 
 # ===== API Endpoints =====

@@ -70,6 +70,10 @@ class DataPersistence:
             is_pg = _is_postgres(DB_URL)
             
             with _conn() as con:
+                if con is None:
+                    self.logger.error("Database connection failed")
+                    return False
+                
                 cur = con.cursor()
                 
                 # Prepare indicators JSON
@@ -131,6 +135,10 @@ class DataPersistence:
             is_pg = _is_postgres(DB_URL)
             
             with _conn() as con:
+                if con is None:
+                    self.logger.error("Database connection failed")
+                    return None
+                
                 cur = con.cursor()
                 
                 if is_pg:
@@ -199,12 +207,52 @@ class DataPersistence:
         Returns:
             True if saved successfully
         """
-        self.logger.debug(
-            f"Trade analysis for {symbol}: type={analysis_type}, "
-            f"data_keys={list(data.keys())}"
-        )
-        # TODO: Implement actual database persistence
-        return True
+        try:
+            from utils.db import _conn, _is_postgres, DB_URL, USE_DB
+            
+            if not USE_DB:
+                self.logger.debug("Database disabled (USE_DB=0), skipping trade analysis save")
+                return True
+            
+            is_pg = _is_postgres(DB_URL)
+            
+            with _conn() as con:
+                if con is None:
+                    self.logger.error("Database connection failed")
+                    return False
+                
+                cur = con.cursor()
+                
+                # Convert data to JSON
+                data_json = json.dumps(data)
+                timestamp = int(time.time())
+                
+                if is_pg:
+                    cur.execute("""
+                        INSERT INTO trade_analysis 
+                        (symbol, analysis_type, data, created_at, updated_at)
+                        VALUES (%s, %s, %s, NOW(), NOW())
+                        ON CONFLICT (symbol, analysis_type) 
+                        DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
+                    """, (symbol, analysis_type, data_json))
+                else:
+                    cur.execute("""
+                        INSERT OR REPLACE INTO trade_analysis 
+                        (symbol, analysis_type, data, created_at, updated_at)
+                        VALUES (?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+                    """, (symbol, analysis_type, data_json))
+                    con.commit()
+                
+                self.logger.debug(
+                    f"Trade analysis saved for {symbol}: type={analysis_type}, "
+                    f"data_keys={list(data.keys())}"
+                )
+                
+                return True
+                
+        except Exception as e:
+            self.logger.error(f"Failed to save trade analysis for {symbol}: {e}", exc_info=True)
+            return False
 
 
 # Global instance
