@@ -12,7 +12,7 @@ logger = logging.getLogger("algogpt.ai_reviewer")
 ENABLE_AI_ROUTES = str(os.getenv("ENABLE_AI_ROUTES", "false")).lower() in ("1","true","yes","on")
 AI_REVIEW_ENABLE = str(os.getenv("AI_REVIEW_ENABLE", "1")).lower() in ("1","true","yes","on")
 OPENAI_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o").strip()
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-2025-08-07").strip()
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 
 RATE_PER_MIN = int(os.getenv("AI_REVIEW_RATE_PER_MIN", "12"))

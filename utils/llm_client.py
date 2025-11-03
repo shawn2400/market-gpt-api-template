@@ -12,7 +12,7 @@ OPENAI_API_BASE   = os.getenv("OPENAI_API_BASE", os.getenv("OPENAI_BASE_URL", "h
 DEEPSEEK_API_KEY  = os.getenv("DEEPSEEK_API_KEY", "")
 OPENAI_API_KEY    = os.getenv("OPENAI_API_KEY", "")
 
-DEFAULT_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat") if LLM_PROVIDER == "deepseek" else os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+DEFAULT_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat") if LLM_PROVIDER == "deepseek" else os.getenv("OPENAI_MODEL", "gpt-5-2025-08-07")
 
 def _ct_equal(a: str, b: str) -> bool:
     try:

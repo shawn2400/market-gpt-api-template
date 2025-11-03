@@ -74,7 +74,7 @@ LOGGER = logging.getLogger("gpt_auto_suggest")
 logging.basicConfig(level=os.getenv("LOG_LEVEL","INFO").upper())
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY","").strip()
-OPENAI_MODEL   = os.getenv("OPENAI_MODEL","gpt-4o").strip()
+OPENAI_MODEL   = os.getenv("OPENAI_MODEL","gpt-5-2025-08-07").strip()
 
 CONTEXT_URL = os.getenv("CONTEXT_URL","").strip()  # למשל: https://your-host
 ALERT_INGEST_URL = os.getenv("ALERT_INGEST_URL","http://127.0.0.1:8000/alerts/trade-ingest").strip()

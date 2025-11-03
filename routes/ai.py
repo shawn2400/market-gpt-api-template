@@ -131,18 +131,18 @@ ALERTS_INGEST_URL = os.getenv("ALERTS_INGEST_URL", "http://127.0.0.1:8000/alerts
 # =======================
 @router.get("/ping")
 async def ping():
-    return {"ok": True, "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
+    return {"ok": True, "model": os.getenv("OPENAI_MODEL", "gpt-5-2025-08-07")}
 
 @router.get("/health")
 async def ai_health():
     ok = bool((os.getenv("OPENAI_API_KEY") or "").strip())
-    return {"ok": ok, "model": os.getenv("OPENAI_MODEL", "gpt-4o"),
+    return {"ok": ok, "model": os.getenv("OPENAI_MODEL", "gpt-5-2025-08-07"),
             "reason": None if ok else "Missing OPENAI_API_KEY"}
 
 # NEW: simple POST /ai/test for agent scripts (Bearer required via router deps)
 @router.post("/test")
 async def ai_test():
-    return {"ok": True, "echo": "pong", "model": os.getenv("OPENAI_MODEL", "gpt-4o")}
+    return {"ok": True, "echo": "pong", "model": os.getenv("OPENAI_MODEL", "gpt-5-2025-08-07")}
 
 @router.get("/price")
 async def ai_price(symbol: str = Query(..., description="e.g. BTCUSDT")):

@@ -16,7 +16,7 @@ except Exception:
     AsyncOpenAI = None  # type: ignore
 
 _API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
-_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o").strip()
+_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-2025-08-07").strip()
 _BASE_URL = (os.getenv("OPENAI_BASE") or os.getenv("OPENAI_BASE_URL") or "").strip()
 
 _client = None
