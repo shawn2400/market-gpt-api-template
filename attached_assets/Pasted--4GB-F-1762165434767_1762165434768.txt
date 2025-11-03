@@ -1,0 +1,110 @@
+הבנתי – אין סיבה לוותר. נרים **כמה שיותר** מהרשימה שלך על **4GB** בלי לקרוס, בעזרת **תורים, דגלים (Feature Flags), קצב-דגימה, וקאשינג**. הנה מפת-דרכים קצרה וחדה: מה נכנס עכשיו, מה נכנס ב“מצב לייט”, ומה עדיף לדחות.
+
+---
+
+# ✅ נכנס עכשיו (4GB-SAFE)
+
+**AI/Explainability**
+
+* AI Chat Sidebar (GPT-5 + DeepSeek + Grok) — *Admin-only*, ניתוב חכם, מגבלות תקציב, Cache.
+* Multi-AI Consensus Display — הצבעות חי/Confidence.
+* AI Explainability — “למה ה-AI הציע”, Decision Tree, Factor Rank.
+* Smart Caching — יעד **≥90%** חיסכון לשאלות חוזרות (semantic cache + TTL דינמי).
+* Advanced Budget Management — Limits יומי/חודשי, התראות @80%, Auto-Pause.
+
+**Trading/Monitoring**
+
+* Live Trade Journey Tracker — Timeline חי (Approved→Filled→TP/SL→Close) ברענון **≤10s**.
+* Market Regime Detector — Bull/Bear/Sideways/Volatile + confidence.
+* Auto-Remediation (לייט) — orphan pos, reset BE/Trail, flip-guard, SSE reconnect.
+
+**Ops**
+
+* Secret Rotation — רוטציה כל 30 יום (חפיפה בטוחה), Audit.
+
+> **שמירת עומס:** Admin-only, SSE דק (batch כל 3–5s), קאשינג אגרסיבי, ללא פולינג כבד.
+
+---
+
+# 🟨 נכנס ב“מצב לייט” (עם מגבלות/תורים)
+
+**למידה/אנליטיקה**
+
+* Post-Trade Learning Loop — עדכון משקולות כל N=20–50 טריידים (ריצה תקופתית בלבד).
+* Backtesting Dashboard — **Queue only**, חלונות קצרים, Monte-Carlo **100–200** ריצות.
+* Correlation Matrix — Top-K (10–20 סמלים פעילים) + Rolling + PCA; לא 531×531 מלא.
+* Scenario Lab — תרחישים קלים (Flash/Rally/Sideways) בתור; אין Black-Swan כבד.
+
+**תשתית קלה**
+
+* Event Streaming — **Redis Streams/Queues** (לא Kafka).
+* Grafana/Prometheus — מדדים קלים או דשבורד פנימי; ללא scrape כבד.
+
+**Multi-Exchange**
+
+* Bybit/OKX — **בסיסי**: balances/positions/execution עם Rate-Limit חכם; **ללא ארביטראז’**.
+
+> **שמירת עומס:** כל הרצות באסינכרון (job queue), חלונות נתונים קטנים, דגימה (sampling), ולוגיקה **Top-K** בלבד.
+
+---
+
+# ⛔ לדחות (או להשתמש בשירות מנוהל/שרת גדול יותר)
+
+* Service Mesh מלא, Kafka אמיתי, HA PostgreSQL + Data Lake, Institutional Feeds כבדים (Kaiko/Nansen/Glassnode),
+* Chaos Testing אגרסיבי רציף, DR מלא (Cross-region, RPO/RTO מחמירים).
+
+> אפשר חלופות קלות: גיבוי יומי/שבועי, Chaos “קל” Off-hours, דשבורד מדדים פנימי.
+
+---
+
+## איך אנחנו מונעים עומס? (כללים מחייבים)
+
+1. **Feature Flags** לכל רכיב (הפעלה מדורגת, Kill-Switch).
+2. **Job Queue** לכל חישוב כבד (Backtest/Scenario/Sync).
+3. **Top-K** בלבד בכל מקום: Symbols, Pairs, Correlations.
+4. **Sampling & Windows**: חלונות קצרים, רזולוציה נמוכה כשאין טריידים.
+5. **SSE Batch**: לא זורקים אירוע כל שנייה – מאגדים כל 3–5 שניות.
+6. **Cache → DB → API**: קודם קאש; DB רק כשצריך; API חי רק כשחייבים.
+7. **Rate-Limit Profiles** לבורסות (Safe/Normal/Aggressive) + backoff+jitter.
+8. **Economy Mode** אוטומטי כש-p95↑ או token burn↑ (מכבה זמנית אנליטיקות).
+
+---
+
+## מפה-לפעולה (העתק/י כסדר ביצוע)
+
+1. להדליק: **AI Chat + Consensus + Explainability + Cache + Budget** (Admin-only).
+2. להוסיף: **Journey Tracker + Regime + Auto-Remediation (לייט)**.
+3. להפעיל: **Redis Streams** לאירועים, **Secret Rotation**.
+4. להרים “לייט”: **Post-Trade Learning**, **Backtesting (Queue)**, **Correlation Top-K**, **Scenario Lab קל**.
+5. לחבר: **Bybit/OKX בסיסי** עם Rate-Limits; **בלי ארביטראז’**.
+6. אופציונלי: **Grafana/Prometheus קל** או דשבורד פנימי למדדים.
+
+---
+
+## SLOs (יעדים ריאליים ל-4GB)
+
+* Chat < **2s**, Cache-Hit ≥ **90%**.
+* Trade Journey עדכון ≤ **10s**.
+* Regime accuracy ≥ **85%**.
+* Backtest (חלון קצר) ≤ **30s** (Queue).
+* Correlation Top-K Load ≤ **5s**.
+* p95 API < **1.6s**, p99 < **2.8s**.
+* No rate-limit breaches (בורסות), error-rate < **1%**.
+
+---
+
+## Acceptance קצר (בדיקות עשן)
+
+* אותה שאלה ×5 → **Cache-Hit ≥ 90%**; ניתוב: פשוט→DeepSeek, מורכב→GPT-5, verify→Grok.
+* Journey מציג: Approved→Filled→TP/SL→Close.
+* Regime מתחלף בזמן אמת ומשפיע על החלטות (לייט).
+* Backtest קצר מחזיר תוצאה (Queue), Correlation Top-K נטען מהר, Scenario קל רץ.
+* Bybit/OKX מחוברים, אין חריגות Rate-Limit.
+* Economy Mode מכבה אנליטיקות כשעומס עולה.
+
+---
+
+### שורה תחתונה
+
+את **רוב** היכולות שלך אפשר להרים על 4GB — אם נפעיל אותן **חכם**: דגלים, תורים, Top-K, קאשינג, ודגימה.
+רוצה שאארוז את זה לשתי “פקודות סוכן” קצרות (אתר / ליבה) כמו שעשינו קודם?

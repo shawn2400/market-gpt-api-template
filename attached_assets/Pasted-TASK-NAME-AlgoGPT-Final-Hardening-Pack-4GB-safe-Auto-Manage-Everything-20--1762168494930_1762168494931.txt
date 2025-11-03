@@ -1,0 +1,51 @@
+TASK NAME: AlgoGPT — Final Hardening Pack (4GB-safe, Auto-Manage Everything)
+
+מטרה: להחיל 20 שדרוגים/תיקונים אחרונים לסגירת פערי פרודקשן: אבטחה/רוטציה, בוררים לפי עומס, שמירה מנזילות, בקרה עלויות AI, טוגול מצב מאובטח, ניהול עומסי SSE, דחיסה ושקיפות מלאה באתר.
+
+Deliverables (חובה):
+1) Secret Rotation + Dual Keys (30d) עם Audit.
+2) Order Idempotency Audit (fallback-safe).
+3) Per-Exchange Circuit Breaker + Rate Profiles (Safe/Normal/Aggressive).
+4) Liquidation Sentinel + Reduce-Only אוטומטי.
+5) One-Way Auto-Withdraw לקולד (טריגרים, TXID, בלי החזר).
+6) Policy Freeze Lever (Freeze new entries; manage continues).
+7) Latency Profiler + Auto-Tune (p95/p99; widgets degrade/restore).
+8) AI Token Budget Forecaster (24h) + alerts@80% + auto-pause@100%.
+9) Shadow-Trade Audit (דוח יומי).
+10) Anomaly Guard (ΔOI/OBI/Latency) + Heatmap.
+11) Mode Switch Cooldown persisted (3s).
+12) Anti-Replay clock-skew tolerance (±60s).
+13) SSE backpressure + fallback (50→polling 5s).
+14) Logs/Reports compression (zstd) + retention 90d.
+15) Immutable Audit hash-chain.
+16) Ops Header (one-glance KPIs).
+17) Per-Exchange tabs בכל המסכים (BINANCE_FUT, BYBIT_FUT…).
+18) Prepared Ticket: Execute Now ≤150ms / Schedule.
+19) Observer deep-links (event→audit/timeline).
+20) Weekly smoke+chaos suites (CI green).
+
+SLO (מחייב):
+- Toggle/Ops POST ≤150ms; UI update ≤500ms.
+- Entry→Auto-Manage hook start ≤200ms; BE/Trail/TP-Shift applied ≤10s.
+- p95 API <1.6s, SSE uptime ≥99%, error-rate <1%.
+- AI Cache-Hit ≥90%, News false-positive ≤2%.
+- RSS ≤3.2GB; Auto-Degrade אם >3.4GB.
+- No duplicate orders under retry/fallback.
+
+Acceptance:
+- תחת ניתוק/429, ה-Router עובר ל-Safe/Disable venue ומבצע fallback בלי כפילות.
+- Liquidation Sentinel מצמצם חשיפה ומונע ליקווידציה במבחן.
+- Freeze Lever מקפיא פתיחות חדשות ושומר ניהול קיים; Observer מציג מצב.
+- Budget Forecaster פעיל; חציית 100% עוצרת Chat/AI-aux ושומרת Core.
+- Mode Switch Cooldown חוסם “פינג-פונג”; כל שינוי חתום ומופיע ב-SSE+Audit.
+- דוחות דחוסים; hash-chain מאמת שלא הושחתו.
+- Chaos/Smoke ירוקים ב-CI; Release מתויג ופרוס.
+
+הערות מחייבות:
+- לא לשנות Auth/HMAC/Bearer/Anti-Replay, רק להשתמש.
+- כל פיצ'ר מאחורי Feature Flag + Kill-Switch.
+- בלי Mesh/Kafka ב-4GB; Redis-Streams קל אם חייב.
+- אין הדלפת סודות; ****last4 בלבד.
+
+סיום:
+- החזר “Hardening Report” עם: p95/p99, SSE uptime, AI budget, cache-hit, venues CB activations, Sentinel actions, smoke+chaos summary, hash-chain tip.

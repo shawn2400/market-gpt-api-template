@@ -1,0 +1,165 @@
+להדבקה לסוכן — **פקודה אחת מדויקת, מודעת־עומסים, 4GB/2CPU-safe**.
+מטרה: להרים את **דאשבורד הפיקוד + מתג מצב אישור (טלגרם↔Web Auto)** ולחבר לליבה — עם **קצב, גבולות, תורים וקאשינג קשיחים** כדי למנוע עומסים/קריסות.
+
+---
+
+## TASK NAME: AlgoGPT — Super-Dashboard + Mode Switch (Load-Aware, 4GB/2CPU-Safe)
+
+**מטרה:**
+
+1. אתר עם **לוח פיקוד** מלא (Command & Control).
+2. **ברירת מחדל**: אישורי טרייד בטלגרם (Approve/Reject).
+3. **Toggle באתר** למעבר דינמי ל-**Web Auto** (ביצוע אוטומטי ללא אישור), וחזרה לטלגרם — מאובטח ומתועד.
+4. הכל רץ **חכם תחת עומסים**: Rate-limits, תורים, קאשינג, דגימה, SSE batching.
+
+---
+
+## דרישות עומס/ביצועים (קשיח)
+
+**משאבים כוללים (שרת 4GB/2CPU):**
+
+* מקסימום **Concurrency עיבוד ליבה**: `8` (async workers).
+* מקסימום **Jobs כבדים** במקביל (Backtests/Scenario/Correlation): `2` (בתור בלבד).
+* תקציב זיכרון ליישום: ≤ **3.2GB** בפועל; Guard: הורד פיצ’רים אם RSS ≥ **3.4GB**.
+
+**SSE / רשת:**
+
+* SSE batching: **כל 3–5s** (ללא פושים לכל אירוע).
+* חיבורי SSE סימולטניים: ≤ **50**. מעבר ל-50 ⇒ fallback ל-polling 5s.
+* Heartbeat SSE כל **15s**.
+
+**קאשינג/דאטה:**
+
+* **AI Semantic Cache-Hit ≥ 90%** לשאלות חוזרות. TTL דינמי: 10–60 דק׳.
+* קאש סימבולים/סטֵיט: TTL **15–45s**; only **Top-K=20** סימבולים חמים.
+* חיפושי טבלה: ≤ **100ms** עד 10k רשומות (client-side virtualized).
+
+**AI עלויות/ניתוב:**
+
+* תקציב יומי AI: **$8** (ברירת מחדל), חודשי: **$180**. התראה ב-80%, Auto-Pause ב-100%.
+* ניתוב:
+
+  * שאילתא **פשוטה/קצרה** → **DeepSeek** (זול).
+  * מורכבת/החלטת מסחר/דוח → **GPT-5**.
+  * אימות/השוואה נקודתית → **AI-X/Grok**.
+* p95 תשובת צ׳אט: < **2s** (שאילתות non-stream).
+
+**בורסות/Rate Limits:**
+
+* פרופילים: **Safe / Normal / Aggressive**. ברירת מחדל: **Normal**.
+* מעבר אוטומטי ל-Safe אם מקבלים **429** או p95 API > **800ms**.
+* חזרתיות (Retry) עם **exponential backoff + jitter**: 250→500→1000ms (מקס׳ 3 נסיונות).
+* Router: Fallback עד **2** מקומות (venues) עם **Idempotency**.
+
+**טריידים/ניהול:**
+
+* מקסימום טריידים מנוהלים במקביל: **12**.
+* **No-Chase > 0.3%**; Fill-Prob gate ≥ **0.62**.
+* **VaR-Live 0.8–1.2%** לטרייד; **Daily Loss Cap 2–3%**; **Kelly-Lite ≤ 0.5×**.
+* Flip **A+ בלבד**; Grid = פי **3** עומס בתור־עדיפות נפרד.
+
+**דשבורד/Frontend:**
+
+* **LCP < 2.0s**, **TTI < 3.0s**, bundle ≤ **250KB** gzip.
+* תמונות: thumbnails 200/800px + lazy; וידאו: HLS 360/720 עם poster.
+* CSP/HSTS + SameSite=Strict; RBAC: Admin/Viewer.
+
+---
+
+## Deliverables (מפתחי מערכת)
+
+### A) Backend (חתום, RBAC)
+
+1. **Global Execution Mode**
+
+   * `GET /control/execution-mode` → `{ mode: "TELEGRAM" | "WEB_AUTO", updated_at, updated_by }`.
+   * `POST /control/execution-mode` (Admin + HMAC+nonce+ts) → שינוי מצב.
+   * **Cooldown 3s** בין שינויים; **Audit Trail** + `execution_mode.changed` ב-SSE.
+
+2. **Enforcement ברמה מערכתית**
+
+   * `TELEGRAM`: כל כרטיס כשיר → **Pending** לטלגרם; כפתורי אישור באתר כבויים.
+   * `WEB_AUTO`: Auto-Executor מבצע כשירים **ללא אישור**; טלגרם **view-only**.
+   * Gates/Policies תמיד פעילים (BTC-Gate, Quality≥Threshold, VaR, DailyCap, Kelly-Lite, No-Chase, Exposure/Correlation).
+
+3. **Control Plane APIs (Ops)**
+
+   * `POST /trade/ticket/prepare|execute|schedule` — תשובה כוללת `idempotency_key`/`audit_id`.
+   * `POST /positions/{symbol}/manage` — SL→BE / Trail(ATR×N) / TP-Shift / Partial / Flip / Attach-Grid.
+   * `POST /emergency/kill-switch` / `/economy-mode` / `/freeze-noncritical`.
+
+4. **Load Guards**
+
+   * Queue לכבדים (Backtest/Scenario/Correlation): מקס׳ **2** במקביל, FIFO עם עדיפות.
+   * Memory watchdog: RSS>3.4GB ⇒ כבה פיצ’רים לא-קריטיים (גרפים/וידאו/אנימציות), עבור ל-Economy Mode.
+
+5. **Observability**
+
+   * p95/p99 per-route; queue depth; ratelimit hits; AI cost/decision; cache hit/miss; SSE uptime.
+   * דו״ח יומי: **Core Guardian Report**.
+
+### B) Frontend (Website)
+
+1. **Toggle מרכזי (Header + Ops Tab)**
+
+   * כיתוב: **“Execution Mode: Telegram Approvals / Web Auto”**.
+   * סטטוס צבעוני: 🟦 Telegram (ברירת מחדל) / 🟩 Web Auto.
+   * מעבר ל-Web Auto: **Double-Confirm** (סיסמה קצרה + checkbox אחריות).
+   * SSE מציג שינוי מצב מיד (toast + קישור לרשומת Audit).
+
+2. **Command & Control**
+
+   * Quick Actions: Approve Next / Reject All / Place Prepared Ticket / Close All / Reduce 50% / Hedge Now / Flip A+ Only / Grid Start-Pause-Stop / Kill-Switch / Economy-Mode.
+   * **Approvals Page**:
+
+     * במצב Telegram — **read-only**.
+     * במצב Web Auto — כפתורי Execute/Approve פעילים; בטלגרם view-only.
+
+3. **ביצועים/אבטחה**
+
+   * SSE batching 3–5s; עד 50 חיבורים; fallback ל-polling.
+   * RBAC (Admin-only לשינויים), HMAC+nonce+ts בכל פעולה; CSRF+SameSite=Strict; WebAuthn אופציונלי.
+
+---
+
+## SLOs (מחייב)
+
+* Toggle POST → ≤ **150ms**; UI עדכון ≤ **500ms**.
+* One-Click Execute (כרטיס מוכן) → route+place internal ≤ **150ms**.
+* ניהול פוזיציה (BE/Trail/TP-Shift) → ≤ **10s**.
+* SSE uptime ≥ **99%**; p95 API < **1.6s**; error-rate < **1%**.
+* Cache-Hit (AI חוזר) ≥ **90%**; News false-positive ≤ **2%**.
+* זיכרון יציב ≤ **3.2GB**; Auto-Degrade אם > **3.4GB**.
+
+---
+
+## Acceptance (PASS)
+
+* אחרי Deploy: מצב **TELEGRAM**. כרטיס כשיר → Pending, אישור בטלגרם בלבד.
+* לחיצה על Toggle באתר → **WEB_AUTO**: כרטיס כשיר חדש **מבוצע אוטומטית**; בטלגרם אין כפתורי אישור.
+* חזרה ל-**TELEGRAM**: האתר read-only לאישורים; טלגרם חוזר לשליטה.
+* עומס מבוקר: 12 טריידים מקבילים בלי חריגות p95/זיכרון; Jobs כבדים ≤2 במקביל.
+* אין הפרות Rate-Limit; Router מבצע Fallback+Idempotency כנדרש.
+* דו״ח **Core Guardian Report** מראה עמידה ב-SLO ו-Auto-Degrade כשנדרש.
+
+---
+
+## Smoke (10 דק׳)
+
+1. `GET /control/execution-mode` → TELEGRAM. כרטיס A+ → Pending; אישור בטלגרם עובד.
+2. Toggle ל-WEB_AUTO (Double-Confirm) → כרטיס A+ חדש **מבצע** אוטומטית; בטלגרם view-only.
+3. הצף עומס (Backtests×3) → רק 2 רצים; השלישי בתור; אין OOM/p95 חריג.
+4. הדמיית 429 בבורסה → מעבר לפרופיל Safe + backoff+jitter + Fallback ל-venue אחר; אין הזמנה כפולה.
+5. RSS>3.4GB דמו → כיבוי מדיה/אנימציות; Economy-Mode; חזרה לנורמלי מתועדת.
+6. אותה שאילתת AI ×5 → Cache-Hit ≥ 90%.
+
+---
+
+## הנחיות לסוכן
+
+* לכתוב **קוד מלא** (API+UI), בדיקות ו-PRs; לפרוס ל-staging→prod.
+* לא לשנות Auth/HMAC/Anti-Replay; להשתמש בהם.
+* להפעיל **Feature Flags** לכל רכיב; Job Queue לכל חישוב כבד.
+* לצרף **Release Notes** + **Core Guardian Report** + **Site Go-Live** בסיום.
+
+**סוף פקודה.**
