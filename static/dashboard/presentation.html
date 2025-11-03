@@ -1,0 +1,1049 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>בס"ד - AlgoGPT Ultimate Edition</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700&display=swap');
+        
+        body {
+            font-family: 'Heebo', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        }
+        
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .card-hover {
+            transition: all 0.3s ease;
+        }
+        
+        .card-hover:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+        }
+        
+        .tab-active {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+        }
+        
+        .pulse-green {
+            animation: pulse-green 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        
+        @keyframes pulse-green {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.5;
+            }
+        }
+        
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        
+        .status-active {
+            background-color: #10b981;
+            box-shadow: 0 0 8px #10b981;
+        }
+        
+        .status-planned {
+            background-color: #f59e0b;
+        }
+        
+        .status-error {
+            background-color: #ef4444;
+            box-shadow: 0 0 8px #ef4444;
+        }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+
+        const translations = {
+            he: {
+                header: 'בס"ד - AlgoGPT Ultimate Edition',
+                subtitle: 'פלטפורמת מסחר אלגוריתמי אוטונומית 24/7 ברמה תעשייתית',
+                tabs: {
+                    architecture: 'ארכיטקטורה',
+                    ai_mesh: '8-AI Mesh',
+                    news: 'מקורות חדשות',
+                    benchmarking: 'Benchmarking',
+                    budget: 'תקציב',
+                    roadmap: 'ROADMAP',
+                    metrics: 'מדדים',
+                    quickstart: 'Quick Start'
+                },
+                connected: 'מחובר',
+                disconnected: 'מנותק',
+                reconnecting: 'מתחבר מחדש...',
+                loading: 'טוען...',
+                error: 'שגיאה בטעינת נתונים',
+                status: 'סטטוס',
+                active: 'פעיל',
+                planned: 'מתוכנן',
+                weight: 'משקל',
+                provider: 'ספק',
+                model: 'מודל',
+                type: 'סוג',
+                category: 'קטגוריה',
+                totalWeight: 'משקל כולל',
+                consensusThreshold: 'סף קונצנזוס',
+                totalSources: 'מקורות כוללים',
+                activeSources: 'מקורות פעילים',
+                totalEngines: 'מנועים כוללים',
+                monthlyBudget: 'תקציב חודשי',
+                recommended: 'מומלץ',
+                features: 'פיצ׳רים',
+                additionalCosts: 'עלויות נוספות',
+                totalEstimated: 'סה"כ משוער',
+                totalWeeks: 'שבועות כוללים',
+                totalTasks: 'משימות כוללות',
+                currentPhase: 'שלב נוכחי',
+                completion: 'השלמה',
+                phase: 'שלב',
+                weeks: 'שבועות',
+                tasks: 'משימות',
+                systemUptime: 'זמן פעילות מערכת',
+                tradesToday: 'עסקאות היום',
+                tradesWeek: 'עסקאות השבוע',
+                tradesAllTime: 'כל העסקאות',
+                winRate: 'אחוז הצלחה',
+                totalPnL: 'רווח/הפסד כולל',
+                avgRR: 'ממוצע RR',
+                bestTrade: 'העסקה הטובה ביותר',
+                worstTrade: 'העסקה הגרועה ביותר',
+                hosting: 'אירוח',
+                versionControl: 'בקרת גרסאות',
+                aiReviewer: 'בודק AI',
+                backend: 'Backend',
+                frontend: 'Frontend',
+                workers: 'Workers',
+                days: 'ימים',
+                hours: 'שעות'
+            },
+            en: {
+                header: 'B"H - AlgoGPT Ultimate Edition',
+                subtitle: 'Production-Grade 24/7 Autonomous Algorithmic Trading Platform',
+                tabs: {
+                    architecture: 'Architecture',
+                    ai_mesh: '8-AI Mesh',
+                    news: 'News Sources',
+                    benchmarking: 'Benchmarking',
+                    budget: 'Budget',
+                    roadmap: 'ROADMAP',
+                    metrics: 'Metrics',
+                    quickstart: 'Quick Start'
+                },
+                connected: 'Connected',
+                disconnected: 'Disconnected',
+                reconnecting: 'Reconnecting...',
+                loading: 'Loading...',
+                error: 'Error loading data',
+                status: 'Status',
+                active: 'Active',
+                planned: 'Planned',
+                weight: 'Weight',
+                provider: 'Provider',
+                model: 'Model',
+                type: 'Type',
+                category: 'Category',
+                totalWeight: 'Total Weight',
+                consensusThreshold: 'Consensus Threshold',
+                totalSources: 'Total Sources',
+                activeSources: 'Active Sources',
+                totalEngines: 'Total Engines',
+                monthlyBudget: 'Monthly Budget',
+                recommended: 'Recommended',
+                features: 'Features',
+                additionalCosts: 'Additional Costs',
+                totalEstimated: 'Total Estimated',
+                totalWeeks: 'Total Weeks',
+                totalTasks: 'Total Tasks',
+                currentPhase: 'Current Phase',
+                completion: 'Completion',
+                phase: 'Phase',
+                weeks: 'Weeks',
+                tasks: 'Tasks',
+                systemUptime: 'System Uptime',
+                tradesToday: 'Trades Today',
+                tradesWeek: 'Trades This Week',
+                tradesAllTime: 'All Time Trades',
+                winRate: 'Win Rate',
+                totalPnL: 'Total P&L',
+                avgRR: 'Avg RR',
+                bestTrade: 'Best Trade',
+                worstTrade: 'Worst Trade',
+                hosting: 'Hosting',
+                versionControl: 'Version Control',
+                aiReviewer: 'AI Reviewer',
+                backend: 'Backend',
+                frontend: 'Frontend',
+                workers: 'Workers',
+                days: 'days',
+                hours: 'hours'
+            }
+        };
+
+        function App() {
+            const [data, setData] = useState(null);
+            const [activeTab, setActiveTab] = useState('architecture');
+            const [wsStatus, setWsStatus] = useState('disconnected');
+            const [language, setLanguage] = useState('he');
+            const [lastUpdate, setLastUpdate] = useState(null);
+            const wsRef = useRef(null);
+            const reconnectTimeoutRef = useRef(null);
+
+            const t = translations[language];
+
+            useEffect(() => {
+                document.documentElement.lang = language;
+                document.documentElement.dir = language === 'he' ? 'rtl' : 'ltr';
+            }, [language]);
+
+            useEffect(() => {
+                fetchData();
+                connectWebSocket();
+
+                return () => {
+                    if (wsRef.current) {
+                        wsRef.current.close();
+                    }
+                    if (reconnectTimeoutRef.current) {
+                        clearTimeout(reconnectTimeoutRef.current);
+                    }
+                };
+            }, []);
+
+            const fetchData = async () => {
+                try {
+                    const response = await fetch('/dashboard/presentation');
+                    if (!response.ok) throw new Error('Failed to fetch');
+                    const json = await response.json();
+                    setData(json);
+                    setLastUpdate(new Date());
+                } catch (error) {
+                    console.error('Error fetching data:', error);
+                }
+            };
+
+            const connectWebSocket = () => {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/dashboard/ws/presentation`;
+
+                try {
+                    const ws = new WebSocket(wsUrl);
+                    wsRef.current = ws;
+
+                    ws.onopen = () => {
+                        console.log('WebSocket connected');
+                        setWsStatus('connected');
+                    };
+
+                    ws.onmessage = (event) => {
+                        try {
+                            const update = JSON.parse(event.data);
+                            if (update.type === 'metrics_update' && data) {
+                                setData(prevData => ({
+                                    ...prevData,
+                                    sections: {
+                                        ...prevData.sections,
+                                        metrics: update.data
+                                    }
+                                }));
+                                setLastUpdate(new Date());
+                            }
+                        } catch (error) {
+                            console.error('Error parsing WebSocket message:', error);
+                        }
+                    };
+
+                    ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        setWsStatus('error');
+                    };
+
+                    ws.onclose = () => {
+                        console.log('WebSocket closed');
+                        setWsStatus('reconnecting');
+                        
+                        reconnectTimeoutRef.current = setTimeout(() => {
+                            connectWebSocket();
+                        }, 5000);
+                        
+                        setInterval(() => {
+                            fetchData();
+                        }, 5000);
+                    };
+                } catch (error) {
+                    console.error('Error creating WebSocket:', error);
+                    setWsStatus('error');
+                }
+            };
+
+            const toggleLanguage = () => {
+                setLanguage(prev => prev === 'he' ? 'en' : 'he');
+            };
+
+            if (!data) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center">
+                        <div className="text-center">
+                            <div className="animate-spin rounded-full h-16 w-16 border-b-2 border-purple-500 mx-auto mb-4"></div>
+                            <p className="text-xl text-gray-400">{t.loading}</p>
+                        </div>
+                    </div>
+                );
+            }
+
+            return (
+                <div className="min-h-screen bg-gray-900">
+                    <header className="gradient-bg shadow-lg">
+                        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+                            <div className="flex justify-between items-center flex-wrap gap-4">
+                                <div>
+                                    <h1 className="text-3xl font-bold text-white mb-2">{t.header}</h1>
+                                    <p className="text-purple-100">{t.subtitle}</p>
+                                </div>
+                                <div className="flex items-center gap-4">
+                                    <button
+                                        onClick={toggleLanguage}
+                                        className="bg-white bg-opacity-20 hover:bg-opacity-30 text-white px-4 py-2 rounded-lg transition-all"
+                                    >
+                                        {language === 'he' ? 'EN' : 'עב'}
+                                    </button>
+                                    <div className="flex items-center gap-2 bg-white bg-opacity-20 px-4 py-2 rounded-lg">
+                                        <span className={`status-dot ${wsStatus === 'connected' ? 'status-active pulse-green' : wsStatus === 'error' ? 'status-error' : 'status-planned'}`}></span>
+                                        <span className="text-sm text-white">
+                                            {wsStatus === 'connected' ? t.connected : wsStatus === 'reconnecting' ? t.reconnecting : t.disconnected}
+                                        </span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </header>
+
+                    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+                        <div className="bg-gray-800 rounded-xl shadow-xl overflow-hidden mb-8">
+                            <div className="flex overflow-x-auto">
+                                {Object.entries(t.tabs).map(([key, label]) => (
+                                    <button
+                                        key={key}
+                                        onClick={() => setActiveTab(key)}
+                                        className={`px-6 py-4 font-semibold whitespace-nowrap transition-all ${
+                                            activeTab === key
+                                                ? 'tab-active'
+                                                : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                                        }`}
+                                    >
+                                        {label}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="bg-gray-800 rounded-xl shadow-xl p-6">
+                            {activeTab === 'architecture' && <ArchitectureTab data={data.sections.architecture} t={t} />}
+                            {activeTab === 'ai_mesh' && <AIMeshTab data={data.sections.ai_mesh} t={t} />}
+                            {activeTab === 'news' && <NewsTab data={data.sections.news_sources} t={t} />}
+                            {activeTab === 'benchmarking' && <BenchmarkingTab data={data.sections.benchmarking} t={t} />}
+                            {activeTab === 'budget' && <BudgetTab data={data.sections.budget} t={t} />}
+                            {activeTab === 'roadmap' && <RoadmapTab data={data.sections.roadmap} t={t} />}
+                            {activeTab === 'metrics' && <MetricsTab data={data.sections.metrics} t={t} />}
+                            {activeTab === 'quickstart' && <QuickStartTab data={data.sections.quick_start} t={t} />}
+                        </div>
+
+                        <footer className="mt-8 text-center text-gray-500 text-sm">
+                            {lastUpdate && (
+                                <p>
+                                    Last updated: {lastUpdate.toLocaleString(language === 'he' ? 'he-IL' : 'en-US')}
+                                </p>
+                            )}
+                        </footer>
+                    </div>
+                </div>
+            );
+        }
+
+        function ArchitectureTab({ data, t }) {
+            return (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-bold mb-6">{t.tabs.architecture}</h2>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="bg-gray-700 rounded-lg p-6 card-hover">
+                            <h3 className="text-xl font-semibold mb-4 text-purple-400">{t.hosting}</h3>
+                            <div className="space-y-2">
+                                <p><span className="text-gray-400">Provider:</span> {data.hosting.provider}</p>
+                                <p><span className="text-gray-400">Tier:</span> {data.hosting.tier}</p>
+                                <div className="mt-4">
+                                    <p className="text-gray-400 mb-2">{t.features}:</p>
+                                    <ul className="list-disc list-inside space-y-1 text-sm">
+                                        {data.hosting.features.map((feature, i) => (
+                                            <li key={i}>{feature}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="bg-gray-700 rounded-lg p-6 card-hover">
+                            <h3 className="text-xl font-semibold mb-4 text-purple-400">{t.versionControl}</h3>
+                            <div className="space-y-2">
+                                <p><span className="text-gray-400">Provider:</span> {data.version_control.provider}</p>
+                                <div className="mt-4">
+                                    <p className="text-gray-400 mb-2">{t.features}:</p>
+                                    <ul className="list-disc list-inside space-y-1 text-sm">
+                                        {data.version_control.features.map((feature, i) => (
+                                            <li key={i}>{feature}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="bg-gray-700 rounded-lg p-6 card-hover">
+                            <h3 className="text-xl font-semibold mb-4 text-purple-400">{t.backend}</h3>
+                            <div className="space-y-2">
+                                <p><span className="text-gray-400">Framework:</span> {data.backend.framework}</p>
+                                <p><span className="text-gray-400">Language:</span> {data.backend.language}</p>
+                                <p><span className="text-gray-400">Database:</span> {data.backend.database}</p>
+                                <p><span className="text-gray-400">Cache:</span> {data.backend.cache}</p>
+                            </div>
+                        </div>
+
+                        <div className="bg-gray-700 rounded-lg p-6 card-hover">
+                            <h3 className="text-xl font-semibold mb-4 text-purple-400">{t.frontend}</h3>
+                            <div className="space-y-2">
+                                <p><span className="text-gray-400">Framework:</span> {data.frontend.framework}</p>
+                                <p><span className="text-gray-400">Styling:</span> {data.frontend.styling}</p>
+                                <p><span className="text-gray-400">Charts:</span> {data.frontend.charts}</p>
+                                <p><span className="text-gray-400">Mobile:</span> {data.frontend.mobile}</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="bg-gray-700 rounded-lg p-6 card-hover">
+                        <h3 className="text-xl font-semibold mb-4 text-purple-400">{t.workers}</h3>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
+                            {data.workers.map((worker, i) => (
+                                <div key={i} className="bg-gray-800 rounded-lg p-3 text-sm">
+                                    <span className="status-dot status-active"></span> {worker}
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function AIMeshTab({ data, t }) {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            useEffect(() => {
+                if (chartRef.current && data.models) {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+
+                    const ctx = chartRef.current.getContext('2d');
+                    chartInstance.current = new Chart(ctx, {
+                        type: 'doughnut',
+                        data: {
+                            labels: data.models.map(m => m.name),
+                            datasets: [{
+                                data: data.models.map(m => m.weight),
+                                backgroundColor: [
+                                    '#8b5cf6', '#ec4899', '#f59e0b', '#10b981',
+                                    '#3b82f6', '#ef4444', '#6366f1', '#14b8a6'
+                                ],
+                                borderWidth: 2,
+                                borderColor: '#1f2937'
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    position: 'bottom',
+                                    labels: {
+                                        color: '#e5e7eb',
+                                        padding: 15
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+
+                return () => {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+                };
+            }, [data]);
+
+            return (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-bold mb-6">{t.tabs.ai_mesh}</h2>
+                    
+                    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mb-6">
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.totalWeight}</p>
+                            <p className="text-4xl font-bold text-purple-400">{data.total_weight}%</p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.consensusThreshold}</p>
+                            <p className="text-4xl font-bold text-purple-400">{data.consensus_threshold}%</p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">Total Models</p>
+                            <p className="text-4xl font-bold text-purple-400">{data.models.length}</p>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <div className="bg-gray-700 rounded-lg p-6">
+                            <h3 className="text-xl font-semibold mb-4">Weight Distribution</h3>
+                            <div style={{ height: '300px' }}>
+                                <canvas ref={chartRef}></canvas>
+                            </div>
+                        </div>
+
+                        <div className="space-y-3">
+                            {data.models.map((model, i) => (
+                                <div key={i} className="bg-gray-700 rounded-lg p-4 card-hover">
+                                    <div className="flex justify-between items-start mb-2">
+                                        <div className="flex-1">
+                                            <h4 className="font-semibold">{model.name}</h4>
+                                            <p className="text-sm text-gray-400">{model.provider} - {model.model}</p>
+                                        </div>
+                                        <div className="flex items-center gap-2">
+                                            <span className={`status-dot ${model.status === 'active' ? 'status-active' : 'status-planned'}`}></span>
+                                            <span className="text-sm capitalize">{model.status}</span>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                        <div className="flex-1 bg-gray-600 rounded-full h-2">
+                                            <div 
+                                                className="bg-purple-500 h-2 rounded-full transition-all"
+                                                style={{ width: `${model.weight}%` }}
+                                            ></div>
+                                        </div>
+                                        <span className="text-sm font-semibold">{model.weight}%</span>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function NewsTab({ data, t }) {
+            const activeCount = data.sources.filter(s => s.status === 'active').length;
+
+            return (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-bold mb-6">{t.tabs.news}</h2>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6">
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.totalSources}</p>
+                            <p className="text-4xl font-bold text-purple-400">{data.total_sources}</p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.activeSources}</p>
+                            <p className="text-4xl font-bold text-green-400">{activeCount}</p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">Planned</p>
+                            <p className="text-4xl font-bold text-yellow-400">{data.total_sources - activeCount}</p>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {data.sources.map((source, i) => (
+                            <div key={i} className="bg-gray-700 rounded-lg p-5 card-hover">
+                                <div className="flex justify-between items-start mb-3">
+                                    <h3 className="font-semibold text-lg">{source.name}</h3>
+                                    <span className={`status-dot ${source.status === 'active' ? 'status-active' : 'status-planned'}`}></span>
+                                </div>
+                                <div className="space-y-1 text-sm">
+                                    <p><span className="text-gray-400">{t.type}:</span> {source.type}</p>
+                                    <p><span className="text-gray-400">{t.category}:</span> {source.category}</p>
+                                    <p><span className="text-gray-400">{t.status}:</span> <span className="capitalize">{source.status}</span></p>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        function BenchmarkingTab({ data, t }) {
+            return (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-bold mb-6">{t.tabs.benchmarking}</h2>
+                    
+                    <div className="bg-gray-700 rounded-lg p-6 text-center mb-6">
+                        <p className="text-gray-400 mb-2">{t.totalEngines}</p>
+                        <p className="text-4xl font-bold text-purple-400">{data.total_engines}</p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {data.engines.map((engine, i) => (
+                            <div key={i} className="bg-gray-700 rounded-lg p-5 card-hover">
+                                <div className="flex justify-between items-start mb-3">
+                                    <div>
+                                        <h3 className="font-semibold text-lg">{engine.name}</h3>
+                                        <p className="text-sm text-gray-400">{engine.language}</p>
+                                    </div>
+                                    <span className={`status-dot ${engine.status === 'active' ? 'status-active' : 'status-planned'}`}></span>
+                                </div>
+                                <p className="text-sm text-gray-300">{engine.use_case}</p>
+                                <div className="mt-2 text-xs text-gray-400 capitalize">
+                                    {t.status}: {engine.status}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        function BudgetTab({ data, t }) {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            useEffect(() => {
+                if (chartRef.current && data.additional_costs) {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+
+                    const costs = data.additional_costs;
+                    const ctx = chartRef.current.getContext('2d');
+                    chartInstance.current = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: Object.keys(costs).filter(k => k !== 'total_estimated_monthly'),
+                            datasets: [{
+                                label: 'Monthly Cost (USD)',
+                                data: Object.entries(costs)
+                                    .filter(([k]) => k !== 'total_estimated_monthly')
+                                    .map(([, v]) => v),
+                                backgroundColor: '#8b5cf6',
+                                borderColor: '#6d28d9',
+                                borderWidth: 2
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    labels: {
+                                        color: '#e5e7eb'
+                                    }
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                        color: '#e5e7eb'
+                                    },
+                                    grid: {
+                                        color: '#374151'
+                                    }
+                                },
+                                x: {
+                                    ticks: {
+                                        color: '#e5e7eb'
+                                    },
+                                    grid: {
+                                        color: '#374151'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+
+                return () => {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+                };
+            }, [data]);
+
+            return (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-bold mb-6">{t.tabs.budget}</h2>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                        {data.options.map((option, i) => (
+                            <div key={i} className={`bg-gray-700 rounded-lg p-6 card-hover ${option.recommended ? 'ring-2 ring-purple-500' : ''}`}>
+                                {option.recommended && (
+                                    <div className="bg-purple-600 text-white px-3 py-1 rounded-full text-xs inline-block mb-3">
+                                        {t.recommended}
+                                    </div>
+                                )}
+                                <h3 className="text-xl font-semibold mb-2">{option.name}</h3>
+                                <p className="text-3xl font-bold text-purple-400 mb-4">${option.monthly_cost_usd}/mo</p>
+                                <div className="space-y-2">
+                                    <p className="text-gray-400">RAM: {option.ram}</p>
+                                    <div>
+                                        <p className="text-gray-400 mb-2">{t.features}:</p>
+                                        <ul className="list-disc list-inside space-y-1 text-sm">
+                                            {option.features.map((feature, j) => (
+                                                <li key={j}>{feature}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <div className="bg-gray-700 rounded-lg p-6">
+                        <h3 className="text-xl font-semibold mb-4">{t.additionalCosts}</h3>
+                        <div style={{ height: '300px' }} className="mb-6">
+                            <canvas ref={chartRef}></canvas>
+                        </div>
+                        <div className="bg-purple-900 bg-opacity-30 rounded-lg p-4 text-center">
+                            <p className="text-gray-400 mb-2">{t.totalEstimated}</p>
+                            <p className="text-4xl font-bold text-purple-400">${data.additional_costs.total_estimated_monthly}/mo</p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function RoadmapTab({ data, t }) {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            useEffect(() => {
+                if (chartRef.current && data.phases) {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+
+                    const ctx = chartRef.current.getContext('2d');
+                    chartInstance.current = new Chart(ctx, {
+                        type: 'bar',
+                        data: {
+                            labels: data.phases.map(p => `${t.phase} ${p.phase}: ${p.name}`),
+                            datasets: [{
+                                label: t.tasks,
+                                data: data.phases.map(p => p.tasks),
+                                backgroundColor: data.phases.map((p, i) => 
+                                    p.status === 'in_progress' ? '#10b981' : 
+                                    i < data.current_phase ? '#8b5cf6' : '#374151'
+                                ),
+                                borderWidth: 2,
+                                borderColor: '#1f2937'
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            indexAxis: 'y',
+                            plugins: {
+                                legend: {
+                                    labels: {
+                                        color: '#e5e7eb'
+                                    }
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    ticks: {
+                                        color: '#e5e7eb'
+                                    },
+                                    grid: {
+                                        color: '#374151'
+                                    }
+                                },
+                                x: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                        color: '#e5e7eb'
+                                    },
+                                    grid: {
+                                        color: '#374151'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+
+                return () => {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+                };
+            }, [data, t]);
+
+            return (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-bold mb-6">{t.tabs.roadmap}</h2>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.totalWeeks}</p>
+                            <p className="text-4xl font-bold text-purple-400">{data.total_weeks}</p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.totalTasks}</p>
+                            <p className="text-4xl font-bold text-purple-400">{data.total_tasks}</p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.currentPhase}</p>
+                            <p className="text-4xl font-bold text-green-400">{data.current_phase}</p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.completion}</p>
+                            <p className="text-4xl font-bold text-purple-400">{data.completion_percentage}%</p>
+                        </div>
+                    </div>
+
+                    <div className="bg-gray-700 rounded-lg p-6 mb-6">
+                        <h3 className="text-xl font-semibold mb-4">Progress by Phase</h3>
+                        <div style={{ height: '400px' }}>
+                            <canvas ref={chartRef}></canvas>
+                        </div>
+                    </div>
+
+                    <div className="space-y-4">
+                        {data.phases.map((phase, i) => (
+                            <div key={i} className="bg-gray-700 rounded-lg p-5 card-hover">
+                                <div className="flex justify-between items-start mb-3">
+                                    <div>
+                                        <h3 className="font-semibold text-lg">{t.phase} {phase.phase}: {phase.name}</h3>
+                                        <p className="text-sm text-gray-400">{t.weeks} {phase.weeks}</p>
+                                    </div>
+                                    <span className={`px-3 py-1 rounded-full text-xs font-semibold ${
+                                        phase.status === 'in_progress' ? 'bg-green-600' :
+                                        phase.status === 'completed' ? 'bg-purple-600' :
+                                        'bg-gray-600'
+                                    }`}>
+                                        {phase.status.replace('_', ' ').toUpperCase()}
+                                    </span>
+                                </div>
+                                <div className="flex items-center gap-4">
+                                    <span className="text-sm text-gray-400">{phase.tasks} {t.tasks}</span>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        }
+
+        function MetricsTab({ data, t }) {
+            const chartRef = useRef(null);
+            const chartInstance = useRef(null);
+
+            useEffect(() => {
+                if (chartRef.current && data.trades) {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+
+                    const ctx = chartRef.current.getContext('2d');
+                    chartInstance.current = new Chart(ctx, {
+                        type: 'line',
+                        data: {
+                            labels: [t.tradesToday, t.tradesWeek, t.tradesAllTime],
+                            datasets: [{
+                                label: 'Trades',
+                                data: [data.trades.total_today, data.trades.total_week, data.trades.total_all_time],
+                                borderColor: '#8b5cf6',
+                                backgroundColor: 'rgba(139, 92, 246, 0.1)',
+                                tension: 0.4,
+                                fill: true
+                            }]
+                        },
+                        options: {
+                            responsive: true,
+                            maintainAspectRatio: false,
+                            plugins: {
+                                legend: {
+                                    labels: {
+                                        color: '#e5e7eb'
+                                    }
+                                }
+                            },
+                            scales: {
+                                y: {
+                                    beginAtZero: true,
+                                    ticks: {
+                                        color: '#e5e7eb'
+                                    },
+                                    grid: {
+                                        color: '#374151'
+                                    }
+                                },
+                                x: {
+                                    ticks: {
+                                        color: '#e5e7eb'
+                                    },
+                                    grid: {
+                                        color: '#374151'
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+
+                return () => {
+                    if (chartInstance.current) {
+                        chartInstance.current.destroy();
+                    }
+                };
+            }, [data, t]);
+
+            return (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-bold mb-6">{t.tabs.metrics}</h2>
+                    
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-6">
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.systemUptime}</p>
+                            <p className="text-3xl font-bold text-purple-400">
+                                {data.system.uptime_days} {t.days}
+                            </p>
+                            <p className="text-sm text-gray-400 mt-1">
+                                ({data.system.uptime_hours} {t.hours})
+                            </p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.tradesToday}</p>
+                            <p className="text-3xl font-bold text-green-400">{data.trades.total_today}</p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.tradesWeek}</p>
+                            <p className="text-3xl font-bold text-blue-400">{data.trades.total_week}</p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.tradesAllTime}</p>
+                            <p className="text-3xl font-bold text-purple-400">{data.trades.total_all_time}</p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.winRate}</p>
+                            <p className="text-3xl font-bold text-green-400">{data.trades.win_rate}%</p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.totalPnL}</p>
+                            <p className={`text-3xl font-bold ${data.trades.total_pnl >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                                ${data.trades.total_pnl.toFixed(2)}
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="bg-gray-700 rounded-lg p-6 mb-6">
+                        <h3 className="text-xl font-semibold mb-4">Trading Activity</h3>
+                        <div style={{ height: '300px' }}>
+                            <canvas ref={chartRef}></canvas>
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.bestTrade}</p>
+                            <p className="text-2xl font-bold text-green-400">
+                                ${data.performance.best_trade_pnl.toFixed(2)}
+                            </p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.worstTrade}</p>
+                            <p className="text-2xl font-bold text-red-400">
+                                ${data.performance.worst_trade_pnl.toFixed(2)}
+                            </p>
+                        </div>
+                        <div className="bg-gray-700 rounded-lg p-6 text-center">
+                            <p className="text-gray-400 mb-2">{t.avgRR}</p>
+                            <p className="text-2xl font-bold text-purple-400">
+                                {data.performance.avg_rr.toFixed(2)}
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        function QuickStartTab({ data, t }) {
+            return (
+                <div className="space-y-6">
+                    <h2 className="text-2xl font-bold mb-6">{t.tabs.quickstart}</h2>
+                    
+                    <div className="bg-gray-700 rounded-lg p-6">
+                        <h3 className="text-xl font-semibold mb-4">Getting Started</h3>
+                        <p className="text-gray-300 mb-6">
+                            Follow these steps to set up and deploy AlgoGPT Ultimate Edition:
+                        </p>
+                        <div className="space-y-4">
+                            {data.steps.map((step, i) => (
+                                <div key={i} className="flex items-start gap-4 bg-gray-800 rounded-lg p-4 card-hover">
+                                    <div className="flex-shrink-0 w-8 h-8 bg-purple-600 rounded-full flex items-center justify-center font-bold">
+                                        {i + 1}
+                                    </div>
+                                    <p className="flex-1 text-gray-200 pt-1">{step}</p>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <div className="bg-gray-700 rounded-lg p-6">
+                            <h3 className="text-xl font-semibold mb-4">📚 Documentation</h3>
+                            <ul className="space-y-2 text-gray-300">
+                                <li>• API Reference: <code className="bg-gray-800 px-2 py-1 rounded">/docs</code></li>
+                                <li>• Health Check: <code className="bg-gray-800 px-2 py-1 rounded">/health</code></li>
+                                <li>• Metrics: <code className="bg-gray-800 px-2 py-1 rounded">/metrics</code></li>
+                                <li>• Dashboard: <code className="bg-gray-800 px-2 py-1 rounded">/dashboard</code></li>
+                            </ul>
+                        </div>
+
+                        <div className="bg-gray-700 rounded-lg p-6">
+                            <h3 className="text-xl font-semibold mb-4">🔑 Required API Keys</h3>
+                            <ul className="space-y-2 text-gray-300">
+                                <li>• BINANCE_API_KEY</li>
+                                <li>• BINANCE_API_SECRET</li>
+                                <li>• OPENAI_API_KEY</li>
+                                <li>• TELEGRAM_BOT_TOKEN</li>
+                                <li>• API_BEARER_TOKEN (optional)</li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>

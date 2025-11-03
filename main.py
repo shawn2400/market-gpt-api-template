@@ -1610,6 +1610,12 @@ try:
 except Exception as e:
     logger.warning("Failed to load n8n routes: %s", e)
 
+try:
+    from routes.dashboard import router as dashboard_router
+    app.include_router(dashboard_router)
+except Exception as e:
+    logger.warning("Failed to load dashboard routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():
