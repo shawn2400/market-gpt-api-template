@@ -26,6 +26,7 @@ logger = logging.getLogger("sentinel_security")
 SENTINEL_ENABLED = os.getenv("SENTINEL_ENABLED", "1").lower() in ("1", "true", "yes")
 SENTINEL_INTERVAL_SEC = int(os.getenv("SENTINEL_INTERVAL_SEC", "300"))
 ALERT_THRESHOLD = int(os.getenv("SENTINEL_ALERT_THRESHOLD", "3"))
+SENTINEL_ALERT_LEVEL = os.getenv("SENTINEL_ALERT_LEVEL", "critical").lower()
 
 REQUEST_RATE_WINDOW = 60
 MAX_REQUESTS_PER_MINUTE = int(os.getenv("MAX_REQUESTS_PER_MINUTE", "100"))
@@ -204,9 +205,17 @@ async def security_cycle(is_first: bool = False):
         anomalies = _monitor.detect_anomalies()
         summary = _monitor.get_security_summary()
         
-        await send_security_alert(anomalies, summary, force=is_first)
-        
         status = anomalies.get("overall_status", "unknown")
+        
+        if SENTINEL_ALERT_LEVEL == "critical":
+            should_alert = status in ("critical", "warning")
+            if should_alert:
+                await send_security_alert(anomalies, summary, force=True)
+            else:
+                logger.info(f"No alert needed: {anomalies.get('total_events', 0)} events, status {status}")
+        else:
+            await send_security_alert(anomalies, summary, force=is_first)
+        
         logger.info(f"Security cycle completed: {status}")
     except Exception as e:
         logger.error(f"Security cycle failed: {e}")

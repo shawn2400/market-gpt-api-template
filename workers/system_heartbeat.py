@@ -27,6 +27,7 @@ BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:5000").rstrip("/")
 HEARTBEAT_INTERVAL = int(os.getenv("HEARTBEAT_INTERVAL", "600"))
 HEARTBEAT_ENABLED = os.getenv("HEARTBEAT_ENABLED", "1").lower() in ("1", "true", "yes")
 ALERT_ON_FAILURE = os.getenv("HEARTBEAT_ALERT_ON_FAILURE", "1").lower() in ("1", "true", "yes")
+HEARTBEAT_ALERT_LEVEL = os.getenv("HEARTBEAT_ALERT_LEVEL", "critical").lower()
 
 HEALTH_ENDPOINTS = [
     "/health",
@@ -157,13 +158,22 @@ async def heartbeat_cycle(is_first: bool = False):
         health = await get_system_health()
         
         status = health.get("overall_status", "unknown")
-        should_alert = (
-            is_first or
-            status != "healthy" or
-            (ALERT_ON_FAILURE and status == "degraded")
-        )
         
-        await send_heartbeat(health, force=should_alert)
+        if HEARTBEAT_ALERT_LEVEL == "critical":
+            should_alert = status in ("degraded", "error")
+        elif HEARTBEAT_ALERT_LEVEL == "all":
+            should_alert = True
+        else:
+            should_alert = (
+                is_first or
+                status != "healthy" or
+                (ALERT_ON_FAILURE and status == "degraded")
+            )
+        
+        if should_alert:
+            await send_heartbeat(health, force=True)
+        else:
+            logger.info(f"Skipping notification: status={status}, alert_level={HEARTBEAT_ALERT_LEVEL}")
         
         logger.info(f"Heartbeat cycle completed: {status}")
     except Exception as e:

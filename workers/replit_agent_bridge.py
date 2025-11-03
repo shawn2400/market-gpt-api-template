@@ -25,6 +25,7 @@ logger = logging.getLogger("replit_agent_bridge")
 REPLIT_AGENT_ENABLED = os.getenv("REPLIT_AGENT_ENABLED", "1").lower() in ("1", "true", "yes")
 BRIDGE_INTERVAL_SEC = int(os.getenv("REPLIT_BRIDGE_INTERVAL_SEC", "3600"))
 REPLIT_ENVIRONMENT = os.getenv("REPL_SLUG") is not None
+REPLIT_BRIDGE_NOTIFICATIONS = os.getenv("REPLIT_BRIDGE_NOTIFICATIONS", "0").lower() in ("1", "true", "yes")
 
 async def check_replit_environment() -> Dict[str, Any]:
     """Check if running in Replit environment and gather context"""
@@ -111,6 +112,10 @@ def format_bridge_message(env_check: Dict[str, Any], improvements: Dict[str, Any
 async def send_bridge_update(env_check: Dict[str, Any], improvements: Dict[str, Any]):
     """Send bridge status update to Telegram"""
     try:
+        if not REPLIT_BRIDGE_NOTIFICATIONS:
+            logger.info("Bridge notifications disabled (REPLIT_BRIDGE_NOTIFICATIONS=0)")
+            return
+        
         message = format_bridge_message(env_check, improvements)
         
         await send_telegram_message(

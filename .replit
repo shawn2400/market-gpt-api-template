@@ -43,19 +43,11 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Position Monitor"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Daily Digest"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "Auto Scanner"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Heartbeat Monitor"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
@@ -67,7 +59,19 @@ args = "GPT-5 Central Brain"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Replit Agent Bridge"
+args = "AlgoGPT Server"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "N8N Bridge"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Heartbeat Monitor"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Position Monitor"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
@@ -75,22 +79,7 @@ args = "Sentinel Security"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "AlgoGPT Server"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "N8N Bridge"
-
-[[workflows.workflow]]
-name = "Position Monitor"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_POSITION_MONITOR=1 POSITION_REPORT_INTERVAL_SEC=1800 python workers/position_monitor.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
+args = "Replit Agent Bridge"
 
 [[workflows.workflow]]
 name = "Daily Digest"
@@ -99,17 +88,6 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/daily_digest.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
-name = "Heartbeat Monitor"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG BASE_URL=http://127.0.0.1:5000 HEARTBEAT_INTERVAL=600 python workers/system_heartbeat.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
@@ -137,28 +115,6 @@ args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python 
 outputType = "console"
 
 [[workflows.workflow]]
-name = "Replit Agent Bridge"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG REPLIT_AGENT_ENABLED=1 python workers/replit_agent_bridge.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
-name = "Sentinel Security"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG SENTINEL_ENABLED=1 python workers/sentinel_security.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
 name = "N8N Bridge"
 author = "agent"
 
@@ -169,13 +125,53 @@ args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python 
 [workflows.workflow.metadata]
 outputType = "console"
 
+[[workflows.workflow]]
+name = "Heartbeat Monitor"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG BASE_URL=http://127.0.0.1:5000 HEARTBEAT_INTERVAL=600 HEARTBEAT_ALERT_LEVEL=critical python workers/system_heartbeat.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Position Monitor"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_POSITION_MONITOR=1 POSITION_REPORT_INTERVAL_SEC=1800 POSITION_ALERT_LEVEL=critical python workers/position_monitor.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Sentinel Security"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG SENTINEL_ENABLED=1 SENTINEL_ALERT_LEVEL=critical python workers/sentinel_security.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Replit Agent Bridge"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG REPLIT_AGENT_ENABLED=1 REPLIT_BRIDGE_NOTIFICATIONS=0 python workers/replit_agent_bridge.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 36093
-externalPort = 5000
 
 [[ports]]
 localPort = 43085

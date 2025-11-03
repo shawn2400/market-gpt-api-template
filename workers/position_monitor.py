@@ -27,6 +27,12 @@ logger = logging.getLogger("position_monitor")
 # Configuration
 REPORT_INTERVAL_SEC = int(os.getenv("POSITION_REPORT_INTERVAL_SEC", "1800"))  # 30 minutes
 ENABLE_POSITION_MONITOR = os.getenv("ENABLE_POSITION_MONITOR", "1").lower() in ("1", "true", "yes")
+POSITION_ALERT_LEVEL = os.getenv("POSITION_ALERT_LEVEL", "critical").lower()
+POSITION_PNL_THRESHOLD = float(os.getenv("POSITION_PNL_THRESHOLD_PCT", "10.0"))
+
+# Track previous state to detect changes
+_previous_positions: Dict[str, Dict[str, Any]] = {}
+_last_position_count = 0
 
 def get_active_positions() -> List[Dict[str, Any]]:
     """Get all active positions from Binance"""
@@ -91,10 +97,64 @@ def format_position_summary(positions: List[Dict[str, Any]]) -> str:
     
     return "\n".join(lines)
 
+def detect_significant_changes(positions: List[Dict[str, Any]]) -> tuple[bool, str]:
+    """Detect if there are significant changes worth alerting"""
+    global _previous_positions, _last_position_count
+    
+    current_count = len(positions)
+    current_symbols = {p["symbol"]: p for p in positions}
+    
+    new_positions = []
+    closed_positions = []
+    large_pnl_changes = []
+    
+    for symbol, pos in current_symbols.items():
+        if symbol not in _previous_positions:
+            new_positions.append(symbol)
+    
+    for symbol, prev_pos in _previous_positions.items():
+        if symbol not in current_symbols:
+            closed_positions.append(symbol)
+    
+    for symbol, pos in current_symbols.items():
+        if symbol in _previous_positions:
+            prev_pnl = float(_previous_positions[symbol].get("unRealizedProfit", 0))
+            curr_pnl = float(pos.get("unRealizedProfit", 0))
+            entry = float(pos.get("entryPrice", 1))
+            
+            if entry > 0:
+                pnl_change_pct = abs((curr_pnl - prev_pnl) / entry * 100)
+                if pnl_change_pct >= POSITION_PNL_THRESHOLD:
+                    large_pnl_changes.append((symbol, pnl_change_pct, curr_pnl))
+    
+    _previous_positions = current_symbols.copy()
+    _last_position_count = current_count
+    
+    reasons = []
+    if new_positions:
+        reasons.append(f"{len(new_positions)} new position(s): {', '.join(new_positions)}")
+    if closed_positions:
+        reasons.append(f"{len(closed_positions)} closed: {', '.join(closed_positions)}")
+    if large_pnl_changes:
+        reasons.append(f"{len(large_pnl_changes)} large PnL changes (>{POSITION_PNL_THRESHOLD}%)")
+    
+    should_alert = bool(new_positions or closed_positions or large_pnl_changes)
+    reason = " | ".join(reasons) if reasons else "No significant changes"
+    
+    return should_alert, reason
+
 async def send_position_report():
     """Send consolidated position report to Telegram"""
     try:
         positions = get_active_positions()
+        
+        if POSITION_ALERT_LEVEL == "critical":
+            should_alert, reason = detect_significant_changes(positions)
+            if not should_alert:
+                logger.info(f"Skipping notification: {reason}")
+                return
+            logger.info(f"Sending alert: {reason}")
+        
         message = format_position_summary(positions)
         
         await send_telegram_message(
