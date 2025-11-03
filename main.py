@@ -59,6 +59,7 @@ def _ct_equal(a: str, b: str) -> bool:
 # =============== FastAPI / Starlette ===============
 from fastapi import FastAPI, APIRouter, Request, HTTPException, Body, Query, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response as StarletteResponse, PlainTextResponse, JSONResponse, HTMLResponse
 
 # =============== App config ===============
@@ -121,6 +122,14 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# =============== Static Files ===============
+# Mount static files directory for serving HTML/CSS/JS/images
+try:
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+    logger.info("✅ Static files mounted at /static")
+except Exception as e:
+    logger.warning(f"⚠️ Failed to mount static files: {e}")
 
 # =============== HTTP helpers ===============
 def _http2_enabled_runtime() -> bool:
