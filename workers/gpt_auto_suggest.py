@@ -23,6 +23,7 @@ from utils.resource_manager import get_resource_manager  # ← Smart Resource Ma
 from utils.multi_tf_manager import MultiTFContextManager  # ← Multi-Timeframe Context Manager
 from utils.auto_flip import analyze_multi_tf_weighted  # ← Weighted Multi-TF Analysis
 from utils.db import insert_tf_snapshot  # ← TF Snapshot Persistence
+from utils.ai_tracker import log_prediction, MarketRegime, AIModel  # ← AI Performance Tracking
 
 # Grid helper
 try:
@@ -624,6 +625,40 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
 
+    # 📊 AI PERFORMANCE TRACKING: Log prediction for Win% calculation
+    try:
+        # Extract market regime from market_condition
+        regime_str = market_condition.regime.upper() if market_condition and hasattr(market_condition, 'regime') else "UNKNOWN"
+        if regime_str not in ("TRENDING", "RANGING", "VOLATILE", "UNKNOWN"):
+            regime_str = "UNKNOWN"
+        regime: MarketRegime = regime_str  # type: ignore
+        
+        # Extract features from context for tracking
+        features = {
+            "rr": rr,
+            "quality_score": quality_score,
+            "volatility": volatility,
+            "atr": _maybe_float(ctx, "atr", "atr14", "atr_abs"),
+            "rsi": _maybe_float((ctx.get("filters") or {}), "rsi"),
+            "adx": _maybe_float((ctx.get("filters") or {}), "adx"),
+            "volume_regime": vol_reg,
+            "price": price,
+            "leverage": leverage,
+        }
+        
+        # Log prediction with ai_tracker
+        prediction_id = log_prediction(
+            symbol=symbol,
+            ai_model="gpt5",  # Currently using GPT-5
+            confidence=float(prop.get("success_pct") or 70.0) / 100.0,  # Convert % to 0-1
+            prediction=prop,
+            regime=regime,
+            features=features
+        )
+    except Exception as e:
+        LOGGER.warning(f"Failed to log AI prediction for {symbol}: {e}")
+        prediction_id = ""
+
     payload = {
         "trade_id": f"f{int(time.time())}{random.randint(100,999)}",
         "trade_type": "FUTURES",
@@ -641,6 +676,7 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
         "notional_usd": float(notional),
         "qty": None,
         "chat_id": TELEGRAM_CHAT_ID or None,
+        "prediction_id": prediction_id,  # Store for outcome linking
     }
     return payload
 
@@ -670,6 +706,38 @@ async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
 
+    # 📊 AI PERFORMANCE TRACKING: Log prediction for Win% calculation
+    try:
+        # Extract market regime from context (SPOT uses simpler context)
+        market_condition = ctx.get("_market_condition")
+        regime_str = market_condition.regime.upper() if market_condition and hasattr(market_condition, 'regime') else "UNKNOWN"
+        if regime_str not in ("TRENDING", "RANGING", "VOLATILE", "UNKNOWN"):
+            regime_str = "UNKNOWN"
+        regime: MarketRegime = regime_str  # type: ignore
+        
+        # Extract features from context for tracking
+        features = {
+            "rr": rr,
+            "atr": _maybe_float(ctx, "atr", "atr14", "atr_abs"),
+            "rsi": _maybe_float((ctx.get("filters") or {}), "rsi"),
+            "adx": _maybe_float((ctx.get("filters") or {}), "adx"),
+            "price": price,
+            "leverage": 1,
+        }
+        
+        # Log prediction with ai_tracker
+        prediction_id = log_prediction(
+            symbol=symbol,
+            ai_model="gpt5",  # Currently using GPT-5
+            confidence=float(prop.get("success_pct") or 70.0) / 100.0,  # Convert % to 0-1
+            prediction=prop,
+            regime=regime,
+            features=features
+        )
+    except Exception as e:
+        LOGGER.warning(f"Failed to log AI prediction for SPOT {symbol}: {e}")
+        prediction_id = ""
+
     payload = {
         "trade_id": f"s{int(time.time())}{random.randint(100,999)}",
         "trade_type": "SPOT",
@@ -687,6 +755,7 @@ async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -
         "notional_usd": float(budget),
         "qty": None,
         "chat_id": TELEGRAM_CHAT_ID or None,
+        "prediction_id": prediction_id,  # Store for outcome linking
     }
     return payload
 

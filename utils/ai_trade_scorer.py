@@ -3,6 +3,7 @@
 """
 Multi-AI Trade Scorer - Consensus-based trade scoring with 3 AI providers
 Supports OpenAI (GPT-5), DeepSeek, and AI-X (Grok) with budget tracking and fallbacks
+Includes dynamic weighting based on historical AI performance
 """
 import os
 import logging
@@ -12,6 +13,14 @@ from dataclasses import dataclass
 import httpx
 
 logger = logging.getLogger("algogpt.ai_trade_scorer")
+
+# Import AI performance tracker for dynamic weighting
+try:
+    from utils.ai_tracker import get_dynamic_weights, MarketRegime
+    AI_TRACKER_AVAILABLE = True
+except ImportError:
+    logger.warning("AI tracker not available, using static weights")
+    AI_TRACKER_AVAILABLE = False
 
 # API Keys
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
@@ -296,7 +305,8 @@ class MultiAIScorer:
                     "consensus_confidence": successful[0].confidence * 0.5,  # Reduce confidence
                     "providers_used": [successful[0].provider],
                     "individual_responses": successful,
-                    "recommendation": self._get_recommendation(successful[0].score)
+                    "recommendation": self._get_recommendation(successful[0].score),
+                    "weights_used": {},  # No weights for single provider
                 }
             else:
                 return {
@@ -304,18 +314,65 @@ class MultiAIScorer:
                     "consensus_confidence": 0.0,
                     "providers_used": [],
                     "individual_responses": responses,
-                    "recommendation": "AVOID"
+                    "recommendation": "AVOID",
+                    "weights_used": {},
                 }
         
-        # Calculate consensus score (weighted average)
-        total_weight = sum(r.confidence for r in successful)
+        # 📊 DYNAMIC WEIGHTING: Get performance-based weights
+        # Extract market regime from trade_data if available
+        regime_str = trade_data.get("regime", "UNKNOWN")
+        if regime_str not in ("TRENDING", "RANGING", "VOLATILE", "UNKNOWN"):
+            regime_str = "UNKNOWN"
+        
+        # Get dynamic weights based on historical performance
+        if AI_TRACKER_AVAILABLE:
+            try:
+                dynamic_weights = get_dynamic_weights(regime=regime_str, timeframe_days=7)  # type: ignore
+                # Map provider names to model names
+                provider_to_model = {
+                    "openai": "gpt5",
+                    "deepseek": "deepseek",
+                    "xai": "grok"
+                }
+                weights_dict = {}
+                for r in successful:
+                    model_name = provider_to_model.get(r.provider, "gpt5")
+                    weights_dict[r.provider] = dynamic_weights.get(model_name, 1.0)
+                
+                logger.info(f"🎯 Dynamic weights for {regime_str}: {weights_dict}")
+            except Exception as e:
+                logger.warning(f"Failed to get dynamic weights, using static: {e}")
+                # Fallback to static weights
+                weights_dict = {r.provider: 1.0 for r in successful}
+        else:
+            # Static weights fallback
+            weights_dict = {
+                "openai": 0.50,
+                "deepseek": 0.30,
+                "xai": 0.20
+            }
+            # Only use weights for providers that responded
+            weights_dict = {k: v for k, v in weights_dict.items() if any(r.provider == k for r in successful)}
+        
+        # Calculate consensus score using dynamic weights
+        total_weight = sum(weights_dict.get(r.provider, 1.0) * r.confidence for r in successful)
         if total_weight > 0:
-            consensus_score = sum(r.score * r.confidence for r in successful) / total_weight
+            consensus_score = sum(
+                r.score * r.confidence * weights_dict.get(r.provider, 1.0)
+                for r in successful
+            ) / total_weight
         else:
             consensus_score = sum(r.score for r in successful) / len(successful)
         
-        # Calculate consensus confidence (average)
-        consensus_confidence = sum(r.confidence for r in successful) / len(successful)
+        # Calculate consensus confidence (weighted average)
+        total_conf_weight = sum(weights_dict.get(r.provider, 1.0) for r in successful)
+        if total_conf_weight > 0:
+            consensus_confidence = sum(
+                r.confidence * weights_dict.get(r.provider, 1.0)
+                for r in successful
+            ) / total_conf_weight
+        else:
+            consensus_confidence = sum(r.confidence for r in successful) / len(successful)
         
         # Boost confidence if multiple providers agree
         if len(successful) >= 3:
@@ -323,9 +380,11 @@ class MultiAIScorer:
         
         recommendation = self._get_recommendation(consensus_score)
         
+        # 📋 AUDIT LOGGING: Log weights used in this decision
         logger.info(
             f"Consensus: score={consensus_score:.1f}, confidence={consensus_confidence:.1f}, "
-            f"providers={len(successful)}, recommendation={recommendation}"
+            f"providers={len(successful)}, recommendation={recommendation}, "
+            f"regime={regime_str}, weights={weights_dict}"
         )
         
         return {
@@ -342,7 +401,9 @@ class MultiAIScorer:
                 for r in successful
             ],
             "recommendation": recommendation,
-            "budget_usage": self.usage_tracking.copy()
+            "budget_usage": self.usage_tracking.copy(),
+            "weights_used": weights_dict,  # Audit trail for dynamic weights
+            "market_regime": regime_str  # Track which regime weights were optimized for
         }
     
     def _build_trade_prompt(self, trade_data: Dict[str, Any]) -> str:

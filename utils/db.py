@@ -256,6 +256,25 @@ def _init_postgres(cur):
         );
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_breaker_last_reset ON breaker_state(last_reset);")
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS audit_log (
+          id SERIAL PRIMARY KEY,
+          timestamp TIMESTAMP NOT NULL DEFAULT NOW(),
+          user_id VARCHAR,
+          action VARCHAR NOT NULL,
+          entity_type VARCHAR NOT NULL,
+          entity_id VARCHAR,
+          changes JSONB,
+          ip_address VARCHAR,
+          success BOOLEAN DEFAULT TRUE,
+          error TEXT,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);")
 
 def _init_sqlite(cur):
     """Initialize SQLite schema"""
@@ -426,6 +445,23 @@ def _init_sqlite(cur):
           updated_at REAL DEFAULT (strftime('%s', 'now'))
         );
         CREATE INDEX IF NOT EXISTS idx_breaker_last_reset ON breaker_state(last_reset);
+        
+        CREATE TABLE IF NOT EXISTS audit_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          timestamp REAL NOT NULL DEFAULT (strftime('%s', 'now')),
+          user_id TEXT,
+          action TEXT NOT NULL,
+          entity_type TEXT NOT NULL,
+          entity_id TEXT,
+          changes TEXT,
+          ip_address TEXT,
+          success INTEGER DEFAULT 1,
+          error TEXT,
+          created_at REAL DEFAULT (strftime('%s', 'now'))
+        );
+        CREATE INDEX IF NOT EXISTS idx_audit_log_timestamp ON audit_log(timestamp);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);
+        CREATE INDEX IF NOT EXISTS idx_audit_log_action ON audit_log(action);
     """)
     
 

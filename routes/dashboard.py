@@ -15,6 +15,7 @@ from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketDiscon
 from fastapi.responses import FileResponse
 from contextlib import suppress
 import logging
+import json
 
 from utils.ws_fallback import LAST_PRICE_CACHE
 from utils.watchlist_utils import load_watchlist
@@ -59,6 +60,122 @@ async def dashboard_snapshot():
         "count_symbols": len(last_prices),
         "ts": now
     }
+
+
+@router.websocket("/ws/pnl")
+async def websocket_pnl(websocket: WebSocket):
+    """
+    Real-time P&L WebSocket
+    Sends P&L, open positions, and daily stats every 10 seconds
+    """
+    await websocket.accept()
+    logger.info("WebSocket /ws/pnl: Client connected")
+    
+    try:
+        while True:
+            try:
+                # Import helpers for P&L and positions
+                from utils.binance_client import get_open_positions
+                from datetime import date
+                
+                # Get open positions
+                positions = []
+                try:
+                    open_positions = get_open_positions()
+                    for pos in open_positions:
+                        amt = float(pos.get("positionAmt", 0))
+                        if amt != 0:
+                            positions.append({
+                                "symbol": pos.get("symbol"),
+                                "side": "LONG" if amt > 0 else "SHORT",
+                                "amount": abs(amt),
+                                "entry_price": float(pos.get("entryPrice", 0)),
+                                "unrealized_pnl": float(pos.get("unRealizedProfit", 0)),
+                                "leverage": int(pos.get("leverage", 1))
+                            })
+                except Exception as e:
+                    logger.warning(f"Failed to fetch positions: {e}")
+                
+                # Calculate daily stats from pnl_tracker
+                daily_pnl = 0.0
+                daily_trades = 0
+                daily_wins = 0
+                win_rate = 0.0
+                
+                try:
+                    from utils.pnl_tracker import _load_json_or_empty, PNL_FILE
+                    pnl_data = _load_json_or_empty(PNL_FILE)
+                    today = date.today().isoformat()
+                    
+                    if today in pnl_data:
+                        today_trades = pnl_data[today]
+                        daily_trades = len(today_trades)
+                        for trade in today_trades:
+                            pnl = float(trade.get("pnl", 0))
+                            daily_pnl += pnl
+                            if pnl > 0:
+                                daily_wins += 1
+                        
+                        if daily_trades > 0:
+                            win_rate = (daily_wins / daily_trades) * 100
+                except Exception as e:
+                    logger.warning(f"Failed to load PnL data: {e}")
+                
+                # Calculate total unrealized P&L from positions
+                total_unrealized = sum(p["unrealized_pnl"] for p in positions)
+                
+                # Calculate current drawdown (simplified - from daily losses)
+                current_dd = min(0, daily_pnl)
+                dd_pct = 0.0
+                try:
+                    from utils.pnl_tracker import DAILY_HARD_LOSS_USD
+                    if DAILY_HARD_LOSS_USD < 0:
+                        dd_pct = (current_dd / DAILY_HARD_LOSS_USD) * 100
+                except:
+                    pass
+                
+                # Build message
+                message = {
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "daily_stats": {
+                        "pnl": round(daily_pnl, 2),
+                        "trades": daily_trades,
+                        "wins": daily_wins,
+                        "win_rate": round(win_rate, 1)
+                    },
+                    "positions": {
+                        "count": len(positions),
+                        "total_unrealized_pnl": round(total_unrealized, 2),
+                        "details": positions
+                    },
+                    "drawdown": {
+                        "current_dd": round(current_dd, 2),
+                        "dd_percentage": round(dd_pct, 1)
+                    }
+                }
+                
+                # Send to client
+                await websocket.send_json(message)
+                logger.debug(f"Sent P&L update: {len(positions)} positions, Daily P&L: {daily_pnl:.2f}")
+                
+            except Exception as e:
+                logger.error(f"Error preparing P&L update: {e}", exc_info=True)
+                # Send error message to client
+                await websocket.send_json({
+                    "error": str(e),
+                    "timestamp": datetime.utcnow().isoformat()
+                })
+            
+            # Wait 10 seconds before next update
+            await asyncio.sleep(10)
+            
+    except WebSocketDisconnect:
+        logger.info("WebSocket /ws/pnl: Client disconnected")
+    except Exception as e:
+        logger.error(f"WebSocket /ws/pnl error: {e}", exc_info=True)
+    finally:
+        logger.info("WebSocket /ws/pnl: Connection closed")
+
 
 def _auth_ok(auth_header: str) -> bool:
     """Check Bearer token authorization"""
@@ -3537,6 +3654,86 @@ async def control_agent(agent_id: str, action: str):
     except Exception as e:
         logger.error(f"Error in control_agent: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/ai/leaderboard", summary="AI Model Performance Leaderboard")
+async def get_ai_leaderboard(timeframe_days: int = 7):
+    """
+    Get AI model performance leaderboard with Win%, Avg RR, P&L, etc.
+    
+    Args:
+        timeframe_days: Number of days to look back (default: 7)
+    
+    Returns:
+        JSON with leaderboard data for all AI models
+    """
+    try:
+        from utils.ai_tracker import get_model_leaderboard
+        
+        # Get leaderboard data
+        leaderboard = get_model_leaderboard(timeframe_days=timeframe_days)
+        
+        return {
+            "ok": True,
+            "timeframe_days": timeframe_days,
+            "leaderboard": leaderboard,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error in get_ai_leaderboard: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get leaderboard: {str(e)}")
+
+
+@router.get("/ai/performance", summary="Detailed AI Model Performance")
+async def get_ai_performance(
+    model: Optional[str] = None,
+    regime: Optional[str] = None,
+    timeframe_days: int = 7
+):
+    """
+    Get detailed performance metrics for a specific AI model and/or market regime
+    
+    Args:
+        model: AI model to filter by (gpt5, deepseek, grok, consensus) - optional
+        regime: Market regime to filter by (TRENDING, RANGING, VOLATILE) - optional
+        timeframe_days: Number of days to look back (default: 7)
+    
+    Returns:
+        JSON with detailed performance metrics
+    """
+    try:
+        from utils.ai_tracker import get_model_leaderboard
+        
+        # Get leaderboard data and filter by model if specified
+        leaderboard = get_model_leaderboard(timeframe_days=timeframe_days)
+        
+        # Filter by model if specified
+        if model:
+            leaderboard = [m for m in leaderboard if m.model.lower() == model.lower()]
+        
+        return {
+            "ok": True,
+            "model": model,
+            "regime": regime,
+            "timeframe_days": timeframe_days,
+            "performance": [
+                {
+                    "model": m.model,
+                    "win_rate": m.win_rate,
+                    "avg_rr_achieved": m.avg_rr_achieved,
+                    "avg_pnl_pct": m.avg_pnl_pct,
+                    "total_pnl_usd": m.total_pnl_usd,
+                    "total_predictions": m.total_predictions,
+                    "total_outcomes": m.total_outcomes,
+                    "consistency_score": m.consistency_score,
+                }
+                for m in leaderboard
+            ],
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error in get_ai_performance: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to get performance: {str(e)}")
 
 
 

@@ -30,6 +30,10 @@ from utils.binance_client import (
 with suppress(Exception):
     from utils.guard_stop import ensure_protective_stop  # type: ignore
 
+# AI Performance Tracking
+with suppress(Exception):
+    from utils.ai_tracker import log_outcome  # type: ignore
+
 logger = logging.getLogger("algogpt.trade_manager")
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -313,7 +317,66 @@ async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> N
                 entry = float(prev.get("entryPrice") or 0.0) or 0.0
                 side = "LONG" if float(prev.get("positionAmt") or 0) > 0 else "SHORT"
                 exit_px = _price_now(s) or entry
-                ctx = {"entry": entry, "exit": exit_px, "pnl_usd": None, "rr": None, "indicators": {}, "reasons": ["auto_detected_closure"]}
+                
+                # 📊 AI PERFORMANCE TRACKING: Log trade outcome
+                try:
+                    # Calculate P&L
+                    qty = abs(float(prev.get("positionAmt") or 0.0))
+                    if side == "LONG":
+                        pnl_usd = (exit_px - entry) * qty
+                        pnl_pct = ((exit_px / entry) - 1.0) * 100.0
+                    else:
+                        pnl_usd = (entry - exit_px) * qty
+                        pnl_pct = ((entry / exit_px) - 1.0) * 100.0
+                    
+                    # Determine exit reason and success
+                    was_successful = pnl_usd > 0
+                    if was_successful:
+                        exit_reason = "tp"  # Assume TP if profitable
+                    else:
+                        exit_reason = "sl"  # Assume SL if not profitable
+                    
+                    # Calculate RR achieved (approximate based on P&L %)
+                    # Assuming standard risk of ~2%, RR = profit% / 2%
+                    rr_achieved = abs(pnl_pct) / 2.0 if abs(pnl_pct) > 0 else 0.0
+                    
+                    # Calculate time in trade (if we have updateTime)
+                    time_in_trade_minutes = 0
+                    try:
+                        update_time = prev.get("updateTime", 0)
+                        if update_time > 0:
+                            time_in_trade_minutes = int((time.time() * 1000 - update_time) / 60000)
+                    except:
+                        pass
+                    
+                    # Try to get prediction_id from trade metadata
+                    # For now, we'll construct it from symbol and approximate timestamp
+                    # This is a workaround - ideally prediction_id should be stored in trade metadata
+                    prediction_id = prev.get("prediction_id", "")
+                    if not prediction_id:
+                        # Fallback: try to match based on symbol and recent time
+                        # This won't link to specific predictions but allows outcome logging
+                        logger.debug(f"[ai_outcome] No prediction_id found for {s}, outcome not linked")
+                    else:
+                        # Log outcome with ai_tracker
+                        if log_outcome:
+                            success = log_outcome(
+                                prediction_id=prediction_id,
+                                symbol=s,
+                                pnl_usd=pnl_usd,
+                                pnl_pct=pnl_pct,
+                                rr_achieved=rr_achieved,
+                                time_in_trade_minutes=max(1, time_in_trade_minutes),
+                                exit_reason=exit_reason,
+                                was_successful=was_successful
+                            )
+                            if success:
+                                logger.info(f"✅ Logged AI outcome for {s}: P&L=${pnl_usd:.2f}, RR={rr_achieved:.2f}")
+                except Exception as e:
+                    logger.warning(f"[ai_outcome] Failed to log outcome for {s}: {e}")
+                
+                # Continue with AI review
+                ctx = {"entry": entry, "exit": exit_px, "pnl_usd": pnl_usd if 'pnl_usd' in locals() else None, "rr": None, "indicators": {}, "reasons": ["auto_detected_closure"]}
                 try:
                     await review_trade_async(s, side, ctx, to_telegram=True)
                 except Exception as e:

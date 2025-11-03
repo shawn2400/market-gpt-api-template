@@ -114,12 +114,23 @@ async def pause_trading(request: BreakerActionRequest):
     Manually trigger circuit breaker pause.
     """
     from utils.db import USE_DB, _conn
+    from utils.audit import log_action
     import time
     
     if not USE_DB:
         raise HTTPException(status_code=503, detail="Database required - set USE_DB=1")
     
     logger.warning(f"Manual circuit breaker pause triggered: {request.reason}")
+    
+    # Log to audit log
+    await log_action(
+        action="breaker_pause",
+        entity_type="breaker",
+        entity_id="circuit_breaker",
+        user_id="manual",
+        changes={"reason": request.reason, "action": "pause"},
+        success=True
+    )
     
     # Persist manual pause to database
     try:
@@ -132,6 +143,15 @@ async def pause_trading(request: BreakerActionRequest):
             con.commit()
     except Exception as e:
         logger.error(f"Failed to persist manual pause: {e}")
+        await log_action(
+            action="breaker_pause",
+            entity_type="breaker",
+            entity_id="circuit_breaker",
+            user_id="manual",
+            changes={"reason": request.reason},
+            success=False,
+            error=str(e)
+        )
         raise HTTPException(status_code=500, detail=f"Database write failed: {e}")
     
     # Also call circuit breaker with real manual trigger

@@ -135,6 +135,42 @@ async def add_no_cache_headers(request: Request, call_next):
         response.headers["Last-Modified"] = ""  # Remove Last-Modified
     return response
 
+# Rate Limiting Middleware
+@app.middleware("http")
+async def rate_limiting_middleware(request: Request, call_next):
+    """Rate limiting middleware to prevent abuse"""
+    try:
+        from utils.rate_limiter import get_rate_limiter
+        
+        limiter = get_rate_limiter()
+        endpoint = request.url.path
+        
+        # Extract client ID from IP or user header
+        client_ip = request.client.host if request.client else "unknown"
+        client_id = request.headers.get("X-User-ID", client_ip)
+        
+        # Check rate limit
+        allowed, retry_after = limiter.check_rate_limit(endpoint, client_id)
+        
+        if not allowed:
+            logger.warning(f"Rate limit exceeded for {client_id} on {endpoint}")
+            return JSONResponse(
+                status_code=429,
+                content={
+                    "error": "Too Many Requests",
+                    "message": f"Rate limit exceeded. Please retry after {retry_after} seconds.",
+                    "retry_after": retry_after
+                },
+                headers={"Retry-After": str(retry_after)}
+            )
+        
+        return await call_next(request)
+        
+    except Exception as e:
+        logger.error(f"Rate limiting middleware error: {e}")
+        # On error, allow the request to proceed
+        return await call_next(request)
+
 # =============== Static Files ===============
 # Custom StaticFiles with no-cache headers to prevent browser caching issues
 class NoCacheStaticFiles(StaticFiles):
