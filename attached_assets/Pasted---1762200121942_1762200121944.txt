@@ -1,0 +1,223 @@
+מעולה — קיבלתי את הדוח. הנה “הודעה אחת להדבקה לסוכן” שמבצעת **את כל התיקונים הקריטיים** שעלו (ויותר): ולידציה סטטיסטית מלאה, הקשחת שערי החלטה (fail-closed), Monte-Carlo מבוסס נתונים אמיתיים, Dual-Confirmation כמותי+AI, ניטור חי וצ’קפוינטים (circuit breakers). הכל דינמי, פרודקשן, עם קבצים/Endpoints/DB/ENV/בדיקות קבלה.
+
+---
+
+**TASK NAME:** AlgoGPT — Validation & Hardening v1 (Backtest+Dual Gates+Data-Driven SL/TP+Live Monitors)
+
+**GOAL:**
+
+1. לאשר פרודקשן **רק** אחרי הוכחת edge סטטיסטית (Backtest/WFT).
+2. להקשיח החלטות: **fail-closed** (בלי fallback-to-defaults), **Dual-Confirmation** (כמותי ∧ AI), ומסגרות RR/SL/TP אמפיריות.
+3. ניטור חי + Circuit Breakers (עצירה אוטומטית בשבירה), דוחות/מדדים/טלגרם.
+4. לשמר את ה־SOP והאבטחה (Bearer/HMAC), בלי עומסים, עם Cache וריסון קריאות.
+
+---
+
+## 0) ENV (הוסף/עדכן)
+
+```
+# Validation gates
+VALIDATION_REQUIRED=1
+MIN_WINRATE_PCT=46
+MIN_EXPECTED_RR=1.45
+MAX_DRAWDOWN_PCT_30D=12
+WALK_FORWARD_FOLDS=6
+BACKTEST_LOOKBACK_DAYS=240
+
+# Dual confirmation
+DUAL_CONFIRM_ENABLE=1
+QUANT_MIN_SCORE=0.70
+AI_MIN_SCORE=0.70
+
+# SL/TP modeling
+MC_RUNS=5000
+MC_DIST_SOURCE="empirical"   # empirical|bootstrap|kde
+SLIPPAGE_PCTL=0.75           # מבוסס היסטוריה
+
+# Live monitors / breakers
+BREAKER_WINRATE_30D_MIN=40
+BREAKER_DD_7D_MAX=8
+BREAKER_CONSEC_SL_MAX=4
+BREAKER_ACTION="PAUSE_AND_ALERT"  # או "REDUCE_RISK"
+
+# Safe ops
+DISABLE_PERMISSIVE_FALLBACKS=1
+```
+
+---
+
+## 1) קבצים חדשים/מעודכנים (מיקוד פרודקשן)
+
+* `utils/validation/backtest_core.py` — הרצה מהירה: סימולציה היסטורית, WFT, מטריקות לכל Regime/סטרטגיה.
+* `utils/validation/metrics.py` — win%, RR, expectancy, maxDD, hit-map לפי Regime/Symbol.
+* `utils/validation/slippage_model.py` — שליפאג’ אמפירי/Bootstrap/KDE לפי סימבול/זמן/וולאט.
+* `utils/validation/sltp_mc.py` — Monte-Carlo מבוסס דגימות אמיתיות (לא גאוסיאן!) לקאליברציית SL/TP.
+* `utils/decision_gates.py` — **Fail-Closed Dual-Gate** (כמותי∧AI∧Risk).
+* `utils/monitors/live_health.py` — חישוב Win% 7/30d, DD, Consecutive SL, והפעלת Breakers.
+* `routes/validation.py` — Endpoints: `/validate/run`, `/validate/status`, `/validate/report`.
+* `routes/monitors.py` — Endpoints: `/monitors/health`, `/monitors/breaker/{action}`.
+* עדכון נקודתי:
+
+  * `utils/dynamic_sltp_manager.py` → שימוש ב־`sltp_mc.py` + `slippage_model.py`.
+  * `utils/decision_engine.py` → החלפת לוגיקת אישור ל־Dual-Confirmation (מחמיר).
+  * **הסר/נטרל** כל `or default_value / or 0.0 / or True` במידע קריטי.
+
+---
+
+## 2) חוזי פונקציות — קצר וחד (מוכן להטמעה)
+
+```python
+# utils/validation/backtest_core.py
+async def run_backtest(symbols: list[str], strategy: str, *, start: str, end: str,
+                       walk_forward_folds: int) -> dict:
+    """
+    Returns: {
+      "overall": {"winrate":..., "rr":..., "expectancy":..., "max_dd":...},
+      "by_regime": {"trending": {...}, "chop": {...}, ...},
+      "per_symbol": {"BTCUSDT": {...}, ...},
+      "sample": {"trades": N, "period_days": D}
+    }
+    """
+
+# utils/validation/slippage_model.py
+def estimate_slippage(symbol: str, side: str, ts: int, *, vol_regime: str) -> float:
+    """ 반환 Δprice% אמפירי לפי היסטוריה (פקטיל מוגדר ב-ENV). """
+
+# utils/validation/sltp_mc.py
+def calibrate_sltp_from_history(symbol: str, tf: str, atr: float, adx: float,
+                                hist_returns: list[float], runs: int) -> dict:
+    """
+    מחזיר {"sl_mult": 0.6, "tp1_mult": 1.8, "tp2_mult": 3.2, "conf": 0.8}
+    דוגם התפלגות אמיתית/Bootstrap/KDE ולא נורמלית.
+    """
+
+# utils/decision_gates.py
+def dual_gate_decision(quant_score: float, ai_score: float, rr: float,
+                       risk_ok: bool, *, cfg: dict) -> tuple[bool, str]:
+    """
+    True רק אם (quant>=QUANT_MIN_SCORE ∧ ai>=AI_MIN_SCORE ∧ rr>=MIN_EXPECTED_RR ∧ risk_ok).
+    מחזיר (approved, reason|blocker).
+    """
+
+# utils/monitors/live_health.py
+def evaluate_live_health(metrics_7d: dict, metrics_30d: dict, consec_sl: int, dd_7d: float) -> dict:
+    """
+    קובע אם צריך להפעיל Breaker; מחזיר {"ok": bool, "action": "...", "reason": "..."}.
+    """
+```
+
+---
+
+## 3) שינוי קריטי בלוגיקת החלטה (Fail-Closed + Dual)
+
+**החלף** ב־`utils/decision_engine.py`:
+
+```python
+# ❌ קודם (פרמיסיבי)
+# approved = (approved_prob or legacy_ok) and (veto is None)
+
+# ✅ עכשיו (מחמיר + תיעוד חסימה)
+approved, block_reason = dual_gate_decision(
+    quant_score=signal.quant_score,
+    ai_score=signal.ai_score,
+    rr=signal.expected_rr,
+    risk_ok=risk_flags.all_passed,
+    cfg=cfg
+)
+if not approved:
+    return Reject(reason=block_reason, trace=trace_id)
+```
+
+והסר כל fallback מסוכן:
+
+```python
+# ❌ אל תעשה:
+x = feed or 0.0
+
+# ✅ כן:
+if feed is None:
+    raise CriticalDataMissing("feed missing: can't proceed")
+```
+
+---
+
+## 4) Endpoints (FastAPI)
+
+```
+POST /validate/run           # body: {symbols[], strategy, start, end}
+GET  /validate/status?id=... # מצב הרצה
+GET  /validate/report?id=... # תוצאות מפורטות JSON + קובץ PDF/CSV
+
+GET  /monitors/health        # KPIs חיים (win%, RR, DD, consec SL)
+POST /monitors/breaker/pause # פעולת עצירה (או reduce_risk)
+```
+
+---
+
+## 5) DB (טבלאות ליבה)
+
+* `bt_runs(id, strategy, start, end, folds, created_at, status, summary_json)`
+* `bt_results(id, symbol, regime, winrate, rr, expectancy, max_dd, sample_n)`
+* `live_kpis(day, winrate_7d, winrate_30d, exp_rr_30d, dd_7d, consec_sl)`
+* `blocks_log(id, reason, ctx_json, created_at)`  *(תיעוד חסימות גייטים)*
+
+אינדקסים: `(symbol, regime)`, `(day)`.
+
+---
+
+## 6) Prometheus/Logs (קריטי)
+
+Counters/Gauges:
+`backtest_runs_total`, `validation_pass_total`, `gate_blocks_total{reason}`,
+`live_winrate_30d`, `live_dd_7d`, `consec_sl`, `breaker_triggers_total{action}`.
+
+טלגרם:
+
+* On **validation failed** → הודעה עם תקציר.
+* On **breaker** → התראה מיידית (action, סיבה, חלון זמן).
+
+---
+
+## 7) בדיקות קבלה (חובה)
+
+* [ ] `run_backtest` על 180–240 ימים, 6 folds → Winrate≥MIN_WINRATE_PCT, RR≥MIN_EXPECTED_RR; אחרת **לא** לשחרר ל-LIVE.
+* [ ] MC-SL/TP נותן מולטי־פליירים שונים לפי Regime/ATR/ADX, ומקטין Stopouts ביחס לגרסה הישנה.
+* [ ] Dual-Gate חוסם טרייד כש־(quant<min ∨ ai<min ∨ rr<min ∨ risk_fail) ומחזיר סיבת חסימה בשקיפות.
+* [ ] Breaker פועל כש־win% 30d < 40% או 7d-DD > 8% או consec SL ≥ 4 → מבצע `PAUSE_AND_ALERT`.
+* [ ] אין אף שימוש ב־fallbacks רכים בקלטים קריטיים (בדיקת grep).
+* [ ] דוחות PDF/CSV נוצרים ונשלחים לטלגרם + זמינים ב־Dashboard “Finance & Reports”.
+
+---
+
+## 8) Rollout (בטוח)
+
+1. להריץ `/validate/run` על Universe הסמלים המרכזי.
+2. אם **Pass** → להפעיל `DUAL_CONFIRM_ENABLE=1` ו־`VALIDATION_REQUIRED=1`.
+3. 48 שעות Canary עם Breakers “ON”, ואז Rollout מלא.
+
+---
+
+## 9) cURL מהיר להתחלה
+
+```bash
+# Backtest 240d, 6 folds
+curl -s -X POST "$BASE_URL/validate/run" -H "Authorization: Bearer $ACT_BEARER" \
+ -H "Content-Type: application/json" \
+ -d '{"symbols":["BTCUSDT","ETHUSDT","SOLUSDT"],"strategy":"sop_v3","start":"-240d","end":"now","folds":6}'
+
+# בריאות חיה + Breaker
+curl -s "$BASE_URL/monitors/health" -H "Authorization: Bearer $RO_BEARER"
+curl -s -X POST "$BASE_URL/monitors/breaker/pause" -H "Authorization: Bearer $ACT_BEARER"
+```
+
+---
+
+### נקודות ניהול (בקיצור)
+
+* **אין לייב בלי Proof.**
+* **Fail-Closed תמיד.**
+* **SL/TP אמפירי, לא גאוסיאני.**
+* **ניטור חי + Breakers.**
+* **שקיפות מלאה: חסימות/החלטות/דוחות.**
+
+זה יעלה אותך מדרגה: החלטות אמינות, ניהול סיכונים קשוח, SL/TP מדויקים, וניטור חי שמונע בריחה לנזק — בדיוק ה-hardening שהיה חסר כדי להפוך את AlgoGPT ל־**Production-grade** עם יתרון מוכח.
