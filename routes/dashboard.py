@@ -12,6 +12,7 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse
 from contextlib import suppress
 import logging
 
@@ -829,7 +830,12 @@ def _get_news_pipeline() -> List[Dict[str, Any]]:
         }
     ]
 
-@router.get("/workbook", summary="בס\"ד - Professional Workbook Data")
+@router.get("/workbook", summary="בס\"ד - Professional Workbook Page")
+async def get_workbook_page():
+    """Serve the professional workbook HTML page"""
+    return FileResponse("static/dashboard/workbook.html", media_type="text/html")
+
+@router.get("/workbook-data", summary="בס\"ד - Professional Workbook Data")
 async def get_workbook_data():
     """
     Returns comprehensive workbook data for AlgoGPT Ultimate Edition

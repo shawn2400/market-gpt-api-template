@@ -97,6 +97,15 @@
             }
         }
         
+        @keyframes glow {
+            0%, 100% {
+                box-shadow: 0 0 20px rgba(102, 126, 234, 0.4);
+            }
+            50% {
+                box-shadow: 0 0 40px rgba(240, 147, 251, 0.6);
+            }
+        }
+        
         .fade-in {
             animation: fadeIn 0.6s ease-out forwards;
         }
@@ -115,6 +124,10 @@
             transform: translateY(-4px);
             box-shadow: 0 30px 60px -12px rgba(139, 92, 246, 0.3);
             border-color: rgba(139, 92, 246, 0.3);
+        }
+        
+        .glass-card.glow {
+            animation: glow 3s ease-in-out infinite;
         }
         
         .status-badge {
@@ -345,6 +358,41 @@
             transform: translateX(-4px);
         }
         
+        .tooltip {
+            position: absolute;
+            background: rgba(17, 24, 39, 0.95);
+            border: 1px solid var(--glass-border);
+            border-radius: 8px;
+            padding: 12px;
+            font-size: 12px;
+            pointer-events: none;
+            z-index: 9999;
+            box-shadow: var(--shadow-xl);
+            backdrop-filter: blur(12px);
+            max-width: 300px;
+        }
+        
+        #chartCanvas {
+            max-width: 400px;
+            margin: 0 auto;
+        }
+        
+        #networkDiagram, #archDiagram {
+            width: 100%;
+            height: 500px;
+            border-radius: 12px;
+            background: rgba(17, 24, 39, 0.5);
+        }
+        
+        .scrollbar-hide::-webkit-scrollbar {
+            display: none;
+        }
+        
+        .scrollbar-hide {
+            -ms-overflow-style: none;
+            scrollbar-width: none;
+        }
+        
         [dir="ltr"] .flow-stage::after {
             transform: translateX(-50%) rotate(-90deg);
         }
@@ -369,30 +417,6 @@
         [dir="ltr"] .news-source-card:hover {
             transform: translateX(4px);
         }
-        
-        .skeleton {
-            background: linear-gradient(90deg, 
-                rgba(255, 255, 255, 0.05) 25%, 
-                rgba(255, 255, 255, 0.1) 50%, 
-                rgba(255, 255, 255, 0.05) 75%
-            );
-            background-size: 200% 100%;
-            animation: loading 1.5s infinite;
-        }
-        
-        @keyframes loading {
-            0% { background-position: 200% 0; }
-            100% { background-position: -200% 0; }
-        }
-        
-        .scrollbar-hide::-webkit-scrollbar {
-            display: none;
-        }
-        
-        .scrollbar-hide {
-            -ms-overflow-style: none;
-            scrollbar-width: none;
-        }
     </style>
 </head>
 <body>
@@ -401,86 +425,20 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        const designTokens = {
-            colors: {
-                primary: '#667eea',
-                secondary: '#764ba2',
-                accent: '#f093fb',
-                success: '#10b981',
-                warning: '#f59e0b',
-                error: '#ef4444',
-                info: '#3b82f6'
-            },
-            spacing: {
-                xs: '4px',
-                sm: '8px',
-                md: '16px',
-                lg: '24px',
-                xl: '32px'
-            },
-            borderRadius: {
-                sm: '8px',
-                md: '12px',
-                lg: '16px',
-                full: '999px'
-            }
-        };
-
-        const translations = {
-            he: {
-                title: 'בס"ד - AlgoGPT Ultimate Workbook',
-                subtitle: 'ספר עבודה מקצועי - Phase 1: Foundation & Logo',
-                tabs: {
-                    overview: '📋 סקירה',
-                    ai_mesh: '🤖 8-AI Mesh',
-                    architecture: '🏗️ ארכיטקטורה',
-                    roadmap: '🗺️ ROADMAP',
-                    strategy: '⚡ אסטרטגיה',
-                    news: '📰 חדשות'
-                },
-                loading: 'טוען נתונים...',
-                error: 'שגיאה בטעינת נתונים',
-                status: {
-                    active: 'פעיל',
-                    planned: 'מתוכנן',
-                    partial: 'חלקי',
-                    completed: 'הושלם',
-                    in_progress: 'בביצוע'
-                }
-            },
-            en: {
-                title: 'B"H - AlgoGPT Ultimate Workbook',
-                subtitle: 'Professional Workbook - Phase 1: Foundation & Logo',
-                tabs: {
-                    overview: '📋 Overview',
-                    ai_mesh: '🤖 8-AI Mesh',
-                    architecture: '🏗️ Architecture',
-                    roadmap: '🗺️ ROADMAP',
-                    strategy: '⚡ Strategy',
-                    news: '📰 News'
-                },
-                loading: 'Loading data...',
-                error: 'Error loading data',
-                status: {
-                    active: 'Active',
-                    planned: 'Planned',
-                    partial: 'Partial',
-                    completed: 'Completed',
-                    in_progress: 'In Progress'
-                }
-            }
-        };
-
         function LogoSection({ logoPath }) {
             return (
-                <div className="logo-container glass-card fade-in">
+                <div className="logo-container glass-card glow fade-in">
                     <img src={logoPath} alt="AlgoGPT Logo" style={{ maxWidth: '400px', width: '100%', height: 'auto' }} />
                 </div>
             );
         }
 
         function AIMeshCard({ ai, language }) {
-            const t = translations[language].status;
+            const statusMap = {
+                active: language === 'he' ? 'פעיל' : 'Active',
+                planned: language === 'he' ? 'מתוכנן' : 'Planned',
+                partial: language === 'he' ? 'חלקי' : 'Partial'
+            };
             
             return (
                 <div className="glass-card ai-card p-6 fade-in">
@@ -491,35 +449,35 @@
                             <p className="text-sm text-gray-400">{ai.provider} · {ai.model}</p>
                         </div>
                         <div className={`status-badge status-${ai.status}`}>
-                            {t[ai.status]}
+                            {statusMap[ai.status]}
                         </div>
                     </div>
                     
                     <div className="mb-4">
-                        <div className="text-sm text-gray-400 mb-1">משקל: {ai.weight}%</div>
+                        <div className="text-sm text-gray-400 mb-1">{language === 'he' ? 'משקל' : 'Weight'}: {ai.weight}%</div>
                         <div className="progress-container">
                             <div className="progress-bar" style={{ width: `${ai.weight}%` }}></div>
                         </div>
                     </div>
                     
                     <div className="mb-3">
-                        <div className="text-sm font-semibold text-gray-300 mb-2">תפקיד:</div>
+                        <div className="text-sm font-semibold text-gray-300 mb-2">{language === 'he' ? 'תפקיד:' : 'Role:'}</div>
                         <div className="text-sm text-gray-400">{ai.role}</div>
                     </div>
                     
                     <div className="mb-3">
-                        <div className="text-sm font-semibold text-gray-300 mb-2">חוזקות:</div>
+                        <div className="text-sm font-semibold text-gray-300 mb-2">{language === 'he' ? 'חוזקות:' : 'Strengths:'}</div>
                         <div className="flex flex-wrap gap-2">
                             {ai.strengths.map((s, i) => (
                                 <span key={i} className="px-2 py-1 bg-blue-500 bg-opacity-20 text-blue-300 rounded text-xs">
-                                    {s}
+                                    ✓ {s}
                                 </span>
                             ))}
                         </div>
                     </div>
                     
                     <div>
-                        <div className="text-sm font-semibold text-gray-300 mb-2">מקרי שימוש:</div>
+                        <div className="text-sm font-semibold text-gray-300 mb-2">{language === 'he' ? 'מקרי שימוש:' : 'Use Cases:'}</div>
                         <ul className="text-xs text-gray-400 space-y-1">
                             {ai.use_cases.map((uc, i) => (
                                 <li key={i}>• {uc}</li>
@@ -530,7 +488,197 @@
             );
         }
 
-        function ArchitectureLayer({ layer }) {
+        function DoughnutChart({ data, language }) {
+            const canvasRef = useRef(null);
+            const chartRef = useRef(null);
+
+            useEffect(() => {
+                if (!canvasRef.current || !data) return;
+
+                if (chartRef.current) {
+                    chartRef.current.destroy();
+                }
+
+                const ctx = canvasRef.current.getContext('2d');
+                const weights = data.map(ai => ai.weight);
+                const labels = data.map(ai => ai.name);
+                const colors = [
+                    '#667eea', '#764ba2', '#f093fb', '#10b981',
+                    '#f59e0b', '#ef4444', '#3b82f6', '#8b5cf6'
+                ];
+
+                chartRef.current = new Chart(ctx, {
+                    type: 'doughnut',
+                    data: {
+                        labels: labels,
+                        datasets: [{
+                            data: weights,
+                            backgroundColor: colors,
+                            borderColor: '#1a1a2e',
+                            borderWidth: 3,
+                            hoverOffset: 10
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: true,
+                        plugins: {
+                            legend: {
+                                position: 'bottom',
+                                labels: {
+                                    color: '#f3f4f6',
+                                    padding: 15,
+                                    font: {
+                                        size: 12,
+                                        family: 'Heebo'
+                                    }
+                                }
+                            },
+                            tooltip: {
+                                backgroundColor: 'rgba(17, 24, 39, 0.95)',
+                                titleColor: '#f3f4f6',
+                                bodyColor: '#9ca3af',
+                                borderColor: 'rgba(255, 255, 255, 0.1)',
+                                borderWidth: 1,
+                                padding: 12,
+                                displayColors: true
+                            }
+                        },
+                        animation: {
+                            animateRotate: true,
+                            animateScale: true,
+                            duration: 1500
+                        }
+                    }
+                });
+
+                return () => {
+                    if (chartRef.current) {
+                        chartRef.current.destroy();
+                    }
+                };
+            }, [data]);
+
+            return (
+                <div className="glass-card p-6 fade-in">
+                    <h3 className="text-xl font-bold gradient-text mb-4 text-center">
+                        {language === 'he' ? 'התפלגות משקלות AI' : 'AI Weight Distribution'}
+                    </h3>
+                    <div id="chartCanvas">
+                        <canvas ref={canvasRef}></canvas>
+                    </div>
+                </div>
+            );
+        }
+
+        function NetworkDiagram({ data, language }) {
+            const svgRef = useRef(null);
+
+            useEffect(() => {
+                if (!svgRef.current || !data) return;
+
+                const svg = d3.select(svgRef.current);
+                svg.selectAll("*").remove();
+
+                const width = svgRef.current.clientWidth;
+                const height = 500;
+
+                const nodes = data.map((ai, i) => ({
+                    id: i,
+                    name: ai.name,
+                    weight: ai.weight,
+                    status: ai.status,
+                    icon: ai.icon
+                }));
+
+                const links = [];
+                for (let i = 0; i < nodes.length; i++) {
+                    if (i < nodes.length - 1) {
+                        links.push({ source: i, target: i + 1 });
+                    }
+                    if (i === 0 && nodes.length > 2) {
+                        links.push({ source: 0, target: nodes.length - 1 });
+                    }
+                }
+
+                const simulation = d3.forceSimulation(nodes)
+                    .force("link", d3.forceLink(links).id(d => d.id).distance(120))
+                    .force("charge", d3.forceManyBody().strength(-300))
+                    .force("center", d3.forceCenter(width / 2, height / 2))
+                    .force("collision", d3.forceCollide().radius(50));
+
+                const link = svg.append("g")
+                    .selectAll("line")
+                    .data(links)
+                    .join("line")
+                    .attr("stroke", "#667eea")
+                    .attr("stroke-width", 2)
+                    .attr("stroke-opacity", 0.6)
+                    .attr("stroke-dasharray", "5,5");
+
+                const node = svg.append("g")
+                    .selectAll("g")
+                    .data(nodes)
+                    .join("g")
+                    .call(d3.drag()
+                        .on("start", dragstarted)
+                        .on("drag", dragged)
+                        .on("end", dragended));
+
+                node.append("circle")
+                    .attr("r", d => 20 + (d.weight / 5))
+                    .attr("fill", d => d.status === 'active' ? '#10b981' : '#f59e0b')
+                    .attr("stroke", "#fff")
+                    .attr("stroke-width", 2);
+
+                node.append("text")
+                    .text(d => d.icon)
+                    .attr("text-anchor", "middle")
+                    .attr("dy", "0.35em")
+                    .attr("font-size", "20px");
+
+                node.append("title")
+                    .text(d => `${d.name} (${d.weight}%)`);
+
+                simulation.on("tick", () => {
+                    link
+                        .attr("x1", d => d.source.x)
+                        .attr("y1", d => d.source.y)
+                        .attr("x2", d => d.target.x)
+                        .attr("y2", d => d.target.y);
+
+                    node.attr("transform", d => `translate(${d.x},${d.y})`);
+                });
+
+                function dragstarted(event) {
+                    if (!event.active) simulation.alphaTarget(0.3).restart();
+                    event.subject.fx = event.subject.x;
+                    event.subject.fy = event.subject.y;
+                }
+
+                function dragged(event) {
+                    event.subject.fx = event.x;
+                    event.subject.fy = event.y;
+                }
+
+                function dragended(event) {
+                    if (!event.active) simulation.alphaTarget(0);
+                    event.subject.fx = null;
+                    event.subject.fy = null;
+                }
+            }, [data]);
+
+            return (
+                <div className="glass-card p-6 fade-in">
+                    <h3 className="text-xl font-bold gradient-text mb-4">
+                        {language === 'he' ? 'רשת AI אינטראקטיבית' : 'Interactive AI Network'}
+                    </h3>
+                    <svg ref={svgRef} id="networkDiagram"></svg>
+                </div>
+            );
+        }
+
+        function ArchitectureLayer({ layer, language }) {
             return (
                 <div className="glass-card layer-card p-6 mb-4 fade-in">
                     <div className="flex items-center gap-3 mb-4">
@@ -545,28 +693,106 @@
                     
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
                         {layer.components.map((comp, i) => (
-                            <div key={i} className="flex items-center gap-2 p-2 bg-gray-800 bg-opacity-50 rounded">
+                            <div key={i} className="flex items-center gap-2 p-2 bg-gray-800 bg-opacity-50 rounded hover:bg-opacity-70 transition-all">
                                 <div className={`w-2 h-2 rounded-full ${
-                                    comp.status === 'active' ? 'bg-green-500' :
+                                    comp.status === 'active' ? 'bg-green-500 animate-pulse' :
                                     comp.status === 'partial' ? 'bg-blue-500' : 'bg-yellow-500'
                                 }`}></div>
-                                <span className="text-sm">{comp.name}</span>
-                                <span className="text-xs text-gray-500 mr-auto">{comp.type}</span>
+                                <span className="text-sm flex-1">{comp.name}</span>
+                                <span className="text-xs text-gray-500">{comp.type}</span>
                             </div>
                         ))}
                     </div>
                     
-                    {layer.throughput && (
-                        <div className="flex gap-4 text-xs text-gray-400">
-                            <div>⚡ {layer.throughput}</div>
-                            {layer.latency && <div>⏱️ {layer.latency}</div>}
-                        </div>
-                    )}
+                    <div className="flex gap-4 text-xs text-gray-400">
+                        {layer.throughput && <div>⚡ {layer.throughput}</div>}
+                        {layer.latency && <div>⏱️ {layer.latency}</div>}
+                        {layer.processing_time && <div>⏱️ {layer.processing_time}</div>}
+                        {layer.threshold && <div>🎯 {layer.threshold}</div>}
+                        {layer.approval_flow && <div>✓ {layer.approval_flow}</div>}
+                        {layer.retention && <div>💾 {layer.retention}</div>}
+                    </div>
                 </div>
             );
         }
 
-        function RoadmapPhase({ phase }) {
+        function ArchitectureFlow({ layers, language }) {
+            const svgRef = useRef(null);
+
+            useEffect(() => {
+                if (!svgRef.current || !layers) return;
+
+                const svg = d3.select(svgRef.current);
+                svg.selectAll("*").remove();
+
+                const width = svgRef.current.clientWidth;
+                const height = 500;
+                const layerHeight = height / layers.length;
+
+                layers.forEach((layer, i) => {
+                    const y = i * layerHeight + layerHeight / 2;
+
+                    const g = svg.append("g")
+                        .attr("transform", `translate(${width / 2}, ${y})`);
+
+                    g.append("rect")
+                        .attr("x", -200)
+                        .attr("y", -30)
+                        .attr("width", 400)
+                        .attr("height", 60)
+                        .attr("fill", "rgba(102, 126, 234, 0.2)")
+                        .attr("stroke", "#667eea")
+                        .attr("stroke-width", 2)
+                        .attr("rx", 8);
+
+                    g.append("text")
+                        .attr("text-anchor", "middle")
+                        .attr("dy", "0.35em")
+                        .attr("fill", "#f3f4f6")
+                        .attr("font-size", "16px")
+                        .attr("font-weight", "bold")
+                        .text(layer.name);
+
+                    if (i < layers.length - 1) {
+                        svg.append("line")
+                            .attr("x1", width / 2)
+                            .attr("y1", y + 30)
+                            .attr("x2", width / 2)
+                            .attr("y2", (i + 1) * layerHeight + layerHeight / 2 - 30)
+                            .attr("stroke", "#764ba2")
+                            .attr("stroke-width", 3)
+                            .attr("marker-end", "url(#arrowhead)")
+                            .style("opacity", 0)
+                            .transition()
+                            .duration(1000)
+                            .delay(i * 200)
+                            .style("opacity", 1);
+                    }
+                });
+
+                svg.append("defs").append("marker")
+                    .attr("id", "arrowhead")
+                    .attr("markerWidth", 10)
+                    .attr("markerHeight", 10)
+                    .attr("refX", 9)
+                    .attr("refY", 3)
+                    .attr("orient", "auto")
+                    .append("polygon")
+                    .attr("points", "0 0, 10 3, 0 6")
+                    .attr("fill", "#764ba2");
+            }, [layers]);
+
+            return (
+                <div className="glass-card p-6 fade-in mb-6">
+                    <h3 className="text-xl font-bold gradient-text mb-4">
+                        {language === 'he' ? 'תרשים זרימה - 5 שכבות' : '5-Layer Flow Diagram'}
+                    </h3>
+                    <svg ref={svgRef} id="archDiagram"></svg>
+                </div>
+            );
+        }
+
+        function RoadmapPhase({ phase, language }) {
             const progress = phase.progress || 0;
             
             return (
@@ -577,7 +803,7 @@
                                 Phase {phase.id}: {phase.name}
                             </h3>
                             <p className="text-sm text-gray-400">
-                                {phase.start_date} → {phase.end_date} ({phase.weeks} שבועות)
+                                {phase.start_date} → {phase.end_date} ({phase.weeks} {language === 'he' ? 'שבועות' : 'weeks'})
                             </p>
                         </div>
                         <div className={`status-badge status-${phase.status}`}>
@@ -587,7 +813,7 @@
                     
                     <div className="mb-4">
                         <div className="flex justify-between text-sm mb-2">
-                            <span>התקדמות</span>
+                            <span>{language === 'he' ? 'התקדמות' : 'Progress'}</span>
                             <span className="font-bold">{progress}%</span>
                         </div>
                         <div className="progress-container">
@@ -613,7 +839,7 @@
             );
         }
 
-        function TradingStrategyFlow({ flow }) {
+        function TradingStrategyFlow({ flow, language }) {
             return (
                 <div className="space-y-8">
                     {flow.stages.map((stage, i) => (
@@ -630,11 +856,11 @@
                             
                             <div className="grid grid-cols-2 gap-4 text-sm mb-3">
                                 <div>
-                                    <span className="text-gray-400">משך: </span>
+                                    <span className="text-gray-400">{language === 'he' ? 'משך:' : 'Duration:'} </span>
                                     <span className="font-semibold">{stage.duration}</span>
                                 </div>
                                 <div>
-                                    <span className="text-gray-400">פלט: </span>
+                                    <span className="text-gray-400">{language === 'he' ? 'פלט:' : 'Output:'} </span>
                                     <span className="font-semibold">{stage.output}</span>
                                 </div>
                             </div>
@@ -652,7 +878,7 @@
             );
         }
 
-        function NewsPipeline({ sources }) {
+        function NewsPipeline({ sources, language }) {
             return (
                 <div className="space-y-3">
                     {sources.map((source) => (
@@ -662,7 +888,7 @@
                             </div>
                             <div className="flex-1">
                                 <div className="font-semibold">{source.source}</div>
-                                <div className="text-xs text-gray-400">{source.category} · {source.processing}</div>
+                                <div className="text-xs text-gray-400">{source.category} · {source.update_frequency}</div>
                             </div>
                             <div className={`status-badge status-${source.status}`}>
                                 {source.status}
@@ -679,8 +905,16 @@
             const [error, setError] = useState(null);
             const [activeTab, setActiveTab] = useState('overview');
             const [language, setLanguage] = useState('he');
+            const wsRef = useRef(null);
 
-            const t = translations[language];
+            const tabs = {
+                overview: language === 'he' ? '📋 סקירה' : '📋 Overview',
+                ai_mesh: language === 'he' ? '🤖 8-AI Mesh' : '🤖 8-AI Mesh',
+                architecture: language === 'he' ? '🏗️ ארכיטקטורה' : '🏗️ Architecture',
+                roadmap: language === 'he' ? '🗺️ ROADMAP' : '🗺️ ROADMAP',
+                strategy: language === 'he' ? '⚡ אסטרטגיה' : '⚡ Strategy',
+                news: language === 'he' ? '📰 חדשות' : '📰 News'
+            };
 
             useEffect(() => {
                 document.documentElement.lang = language;
@@ -694,7 +928,7 @@
             const fetchData = async () => {
                 try {
                     setLoading(true);
-                    const response = await fetch('/dashboard/workbook');
+                    const response = await fetch('/dashboard/workbook-data');
                     if (!response.ok) throw new Error('Failed to fetch');
                     const json = await response.json();
                     setData(json);
@@ -712,7 +946,7 @@
                     <div className="min-h-screen flex items-center justify-center">
                         <div className="text-center">
                             <div className="w-16 h-16 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-                            <p className="text-xl text-gray-300">{t.loading}</p>
+                            <p className="text-xl text-gray-300">{language === 'he' ? 'טוען נתונים...' : 'Loading data...'}</p>
                         </div>
                     </div>
                 );
@@ -723,10 +957,10 @@
                     <div className="min-h-screen flex items-center justify-center">
                         <div className="glass-card p-8 text-center max-w-md">
                             <div className="text-6xl mb-4">⚠️</div>
-                            <h2 className="text-2xl font-bold mb-2">{t.error}</h2>
+                            <h2 className="text-2xl font-bold mb-2">{language === 'he' ? 'שגיאה בטעינת נתונים' : 'Error loading data'}</h2>
                             <p className="text-gray-400 mb-4">{error}</p>
                             <button onClick={fetchData} className="tab-button active">
-                                נסה שוב
+                                {language === 'he' ? 'נסה שוב' : 'Try Again'}
                             </button>
                         </div>
                     </div>
@@ -739,8 +973,12 @@
                         <header className="gradient-bg rounded-2xl shadow-2xl p-6 mb-8 relative z-10 fade-in">
                             <div className="flex justify-between items-center flex-wrap gap-4">
                                 <div>
-                                    <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">{t.title}</h1>
-                                    <p className="text-purple-100">{t.subtitle}</p>
+                                    <h1 className="text-3xl md:text-4xl font-bold text-white mb-2">
+                                        {language === 'he' ? 'בס"ד - AlgoGPT Ultimate Workbook' : 'B"H - AlgoGPT Ultimate Workbook'}
+                                    </h1>
+                                    <p className="text-purple-100">
+                                        {language === 'he' ? 'ספר עבודה מקצועי - Phase 2: Advanced Visualizations' : 'Professional Workbook - Phase 2: Advanced Visualizations'}
+                                    </p>
                                 </div>
                                 <button
                                     onClick={() => setLanguage(prev => prev === 'he' ? 'en' : 'he')}
@@ -753,7 +991,7 @@
 
                         <div className="glass-card rounded-xl p-2 mb-8 fade-in">
                             <div className="flex gap-2 overflow-x-auto scrollbar-hide">
-                                {Object.entries(t.tabs).map(([key, label]) => (
+                                {Object.entries(tabs).map(([key, label]) => (
                                     <button
                                         key={key}
                                         onClick={() => setActiveTab(key)}
@@ -770,18 +1008,22 @@
                                 <div className="space-y-6">
                                     <LogoSection logoPath={data.logo_path} />
                                     
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                                        <div className="glass-card p-6">
+                                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                                        <div className="glass-card p-6 glow">
                                             <div className="metric-value mb-2">8</div>
-                                            <div className="text-gray-400">AI Models</div>
+                                            <div className="text-gray-400">{language === 'he' ? 'מודלי AI' : 'AI Models'}</div>
                                         </div>
-                                        <div className="glass-card p-6">
+                                        <div className="glass-card p-6 glow" style={{ animationDelay: '0.2s' }}>
                                             <div className="metric-value mb-2">5</div>
-                                            <div className="text-gray-400">Architecture Layers</div>
+                                            <div className="text-gray-400">{language === 'he' ? 'שכבות ארכיטקטורה' : 'Architecture Layers'}</div>
                                         </div>
-                                        <div className="glass-card p-6">
+                                        <div className="glass-card p-6 glow" style={{ animationDelay: '0.4s' }}>
                                             <div className="metric-value mb-2">{data.roadmap_gantt.total_tasks}</div>
-                                            <div className="text-gray-400">Total Tasks</div>
+                                            <div className="text-gray-400">{language === 'he' ? 'משימות סה"כ' : 'Total Tasks'}</div>
+                                        </div>
+                                        <div className="glass-card p-6 glow" style={{ animationDelay: '0.6s' }}>
+                                            <div className="metric-value mb-2">10</div>
+                                            <div className="text-gray-400">{language === 'he' ? 'מקורות חדשות' : 'News Sources'}</div>
                                         </div>
                                     </div>
 
@@ -813,11 +1055,17 @@
                             )}
 
                             {activeTab === 'ai_mesh' && (
-                                <div>
+                                <div className="space-y-6">
                                     <h2 className="section-header mb-6">
                                         <div className="icon-box">🤖</div>
-                                        <span>8-AI Mesh Network</span>
+                                        <span>{language === 'he' ? 'רשת 8-AI' : '8-AI Mesh Network'}</span>
                                     </h2>
+                                    
+                                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                                        <DoughnutChart data={data.ai_mesh_detailed} language={language} />
+                                        <NetworkDiagram data={data.ai_mesh_detailed} language={language} />
+                                    </div>
+                                    
                                     <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                         {data.ai_mesh_detailed.map((ai, i) => (
                                             <AIMeshCard key={i} ai={ai} language={language} />
@@ -830,10 +1078,11 @@
                                 <div>
                                     <h2 className="section-header mb-6">
                                         <div className="icon-box">🏗️</div>
-                                        <span>5-Layer Architecture</span>
+                                        <span>{language === 'he' ? 'ארכיטקטורה 5 שכבות' : '5-Layer Architecture'}</span>
                                     </h2>
+                                    <ArchitectureFlow layers={data.architecture_flow.layers} language={language} />
                                     {data.architecture_flow.layers.map((layer, i) => (
-                                        <ArchitectureLayer key={i} layer={layer} />
+                                        <ArchitectureLayer key={i} layer={layer} language={language} />
                                     ))}
                                 </div>
                             )}
@@ -842,30 +1091,30 @@
                                 <div>
                                     <h2 className="section-header mb-6">
                                         <div className="icon-box">🗺️</div>
-                                        <span>4-Phase Roadmap</span>
+                                        <span>{language === 'he' ? 'מפת דרכים 4 שלבים' : '4-Phase Roadmap'}</span>
                                     </h2>
                                     <div className="glass-card p-6 mb-6">
                                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-center">
                                             <div>
                                                 <div className="metric-value">{data.roadmap_gantt.total_tasks}</div>
-                                                <div className="text-sm text-gray-400">Total Tasks</div>
+                                                <div className="text-sm text-gray-400">{language === 'he' ? 'סה"כ משימות' : 'Total Tasks'}</div>
                                             </div>
                                             <div>
                                                 <div className="metric-value">{data.roadmap_gantt.completed_tasks}</div>
-                                                <div className="text-sm text-gray-400">Completed</div>
+                                                <div className="text-sm text-gray-400">{language === 'he' ? 'הושלמו' : 'Completed'}</div>
                                             </div>
                                             <div>
                                                 <div className="metric-value">{data.roadmap_gantt.in_progress_tasks}</div>
-                                                <div className="text-sm text-gray-400">In Progress</div>
+                                                <div className="text-sm text-gray-400">{language === 'he' ? 'בביצוע' : 'In Progress'}</div>
                                             </div>
                                             <div>
                                                 <div className="metric-value">{data.roadmap_gantt.overall_progress}%</div>
-                                                <div className="text-sm text-gray-400">Overall</div>
+                                                <div className="text-sm text-gray-400">{language === 'he' ? 'סה"כ' : 'Overall'}</div>
                                             </div>
                                         </div>
                                     </div>
                                     {data.roadmap_gantt.phases.map((phase, i) => (
-                                        <RoadmapPhase key={i} phase={phase} />
+                                        <RoadmapPhase key={i} phase={phase} language={language} />
                                     ))}
                                 </div>
                             )}
@@ -874,9 +1123,9 @@
                                 <div>
                                     <h2 className="section-header mb-6">
                                         <div className="icon-box">⚡</div>
-                                        <span>7-Stage Trading Flow</span>
+                                        <span>{language === 'he' ? 'זרימת מסחר 7 שלבים' : '7-Stage Trading Flow'}</span>
                                     </h2>
-                                    <TradingStrategyFlow flow={data.trading_strategy_flow} />
+                                    <TradingStrategyFlow flow={data.trading_strategy_flow} language={language} />
                                 </div>
                             )}
 
@@ -884,9 +1133,9 @@
                                 <div>
                                     <h2 className="section-header mb-6">
                                         <div className="icon-box">📰</div>
-                                        <span>10-Source News Pipeline</span>
+                                        <span>{language === 'he' ? 'צינור חדשות 10 מקורות' : '10-Source News Pipeline'}</span>
                                     </h2>
-                                    <NewsPipeline sources={data.news_pipeline} />
+                                    <NewsPipeline sources={data.news_pipeline} language={language} />
                                 </div>
                             )}
                         </div>
