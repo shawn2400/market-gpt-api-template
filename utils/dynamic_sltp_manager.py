@@ -18,9 +18,17 @@ from __future__ import annotations
 
 import logging
 import random
+import os
 from typing import Dict, Any, Optional, Tuple, List, Literal
 from dataclasses import dataclass
 import numpy as np
+
+# UPGRADED: Import Student-t Monte Carlo (NOT Gaussian)
+try:
+    from utils.validation.sltp_mc import estimate_sltp_probabilities
+    SLTP_MC_AVAILABLE = True
+except ImportError:
+    SLTP_MC_AVAILABLE = False
 
 logger = logging.getLogger("dynamic_sltp")
 
@@ -191,8 +199,19 @@ class DynamicSLTPManager:
             
             # Simulate price path
             for period in range(self.max_periods):
-                # Random price change (Geometric Brownian Motion approximation)
-                change_pct = np.random.normal(0, effective_vol)
+                # UPGRADED: Student-t distribution (fat tails) NOT Gaussian
+                # Use scipy.stats.t if available, otherwise fallback
+                try:
+                    from scipy.stats import t
+                    df = 5  # degrees of freedom (fat tails for crypto)
+                    change_pct = t.rvs(df, loc=0, scale=effective_vol)
+                except ImportError:
+                    # Fallback: Gaussian with occasional extreme moves
+                    if np.random.random() < 0.05:  # 5% chance of extreme move
+                        change_pct = np.random.normal(0, effective_vol * 3)
+                    else:
+                        change_pct = np.random.normal(0, effective_vol)
+                
                 price *= (1 + change_pct)
                 
                 # Check if we hit stops or targets
