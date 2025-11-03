@@ -1,0 +1,219 @@
+מעולה. הנה הודעה אחת, קצרה ומדויקת, להדבקה לסוכן ה-Replit שלך — מוסיפה את 12 משימות ה-Benchmarking (Lite, 4GB-Safe) + דגלי 8GB לעתיד, עם קונפיג מלא, שמירה על אפס עומס ועל האמינות של הטריידים החיים.
+
+---
+
+**TASK NAME:** AlgoGPT — Benchmarks Lite (4GB-Safe) + Cloud Analytics + 8GB Ready
+
+**מטרה:** להטמיע Benchmarking חכם ללא עומס (Freqtrade/Hummingbot/Bitsgap), חיבור Grafana Cloud, נרמול נתונים, PgBouncer, משמרי משאבים, וטאב “Benchmarks” באתר. לשמור על Always-On למסחר חי. להכין דגלי 8GB להפעלה עתידית (Real-Time Paper/RL/Optimizer) מבלי לשנות אבטחה/חתימות.
+
+**אל תשנה:** אימות/HMAC/Nonce/Timestamp/Bearer/RBAC, Anti-Replay, מנגנון אישורי טלגרם, מסלולי מסחר חיים, Blue-Green/Zero-Downtime, קודי ניהול SL/TP/BE/Trail.
+
+---
+
+### 1) ENV — הוסף דגלים (בקובץ `.env`)
+
+```
+# Bench Lite
+BENCH_FREQTRADE=on
+BENCH_HBOT=on
+BENCH_BITSGAP_RO=on
+BENCH_REALTIME_MODE=off   # 8GB: on
+BENCH_MAX_RUN_MIN=30
+BENCH_MIN_GAP_MIN=20
+
+# Guards / SLO
+RESOURCE_GUARDS=on
+GUARD_MAX_RSS_MB=3100
+GUARD_MAX_CPU_PCT=65
+GUARD_SKIP_IF_ACTIVE_TRADES=on
+
+# Pooling / Cache / Batching
+PGBOUNCER_ENABLE=on
+BATCH_API_ENABLE=on
+WS_MULTIPLEX=on
+REDIS_SHARED_CACHE=on
+OHLC_CACHE_TTL_SEC=90
+
+# Cloud Analytics
+GRAFANA_CLOUD=on
+SUPERSET_CLOUD=off   # אם יש free-tier – הפוך לon
+GRAFANA_CLOUD_URL=<fill>
+GRAFANA_CLOUD_TOKEN=<fill>
+
+# Read-Only Keys (משותפים לכלי ה-Bench)
+EXCHANGE_KEYS_SCOPE=READ_ONLY
+BINANCE_API_KEY_RO=<fill>
+BINANCE_API_SECRET_RO=<fill>
+
+# 8GB Future
+MODE_8GB_READY=off   # בעתיד: on
+```
+
+---
+
+### 2) PgBouncer — התקנה וקונפיג (DSN אחד לכל האפליקציה)
+
+צור `deploy/pgbouncer/pgbouncer.ini`:
+
+```
+[databases]
+algogpt = host=127.0.0.1 port=5432 dbname=algogpt pool_size=20
+
+[pgbouncer]
+listen_addr = 127.0.0.1
+listen_port = 6432
+auth_type = trust
+pool_mode = transaction
+max_client_conn = 200
+default_pool_size = 20
+server_reset_query = DISCARD ALL
+```
+
+עדכן את כל חיבורי ה-DB באפליקציה ל-DSN: `postgres://…@127.0.0.1:6432/algogpt`
+
+---
+
+### 3) Scheduler (קובץ יחיד) — `utils/benchmark_scheduler.py`
+
+* מפעיל תהליכים **ברצף בלבד** (אף פעם לא במקביל).
+* בודק Guards (RSS/CPU/Active trades/429) לפני כל ריצה.
+* הורג תהליך בסיום/חריגה.
+* שומר JSON תקני ל־`/benchmarks/{freqtrade|hbot|bitsgap}/YYYYMMDD/…json`
+
+פסאודו-קוד קצר (הסוכן יכתוב מימוש מלא):
+
+```
+def can_run():
+  if rss_mb()>ENV.GUARD_MAX_RSS_MB: return False,"rss"
+  if cpu_pct()>ENV.GUARD_MAX_CPU_PCT: return False,"cpu"
+  if ENV.GUARD_SKIP_IF_ACTIVE_TRADES and has_active_trades(): return False,"active"
+  return True,"ok"
+
+def run_job(tag, cmd, limit_min):
+  ok,reason = can_run()
+  if not ok: log_skip(tag, reason); return
+  kill_if_running(tag); rc = run_sandboxed(cmd, limit_min)
+  save_result(tag, rc); kill_if_running(tag)
+
+SCHEDULE:
+00:00  run_job("freqtrade",  ["freqtrade","backtesting","--config","bench/config.json","--timerange","last2d"], 20)
+02:00  run_job("hbot",       ["hummingbot","paper","--config","bench/hb.yml","--duration","10m"], 12)
+03:00  run_job("bitsgap_ro", ["python","bench/bitsgap_pull.py","--since","1d"], 10)
+```
+
+**Sandbox חובה:** הרצות bench ללא רשת בזמן backtest/sim. הסוכן יישם `run_sandboxed` עם `firejail` או Docker (`--network=none`, `--read-only`, `mem_limit=300m`).
+
+---
+
+### 4) Shared Cache + Batch
+
+* מאחד שכבת Redis ל-OHLCV/OrderBook (TTL 60–120s).
+* מפעיל `BATCH_API_ENABLE=on` (531→~11 קריאות).
+* מפעיל `WS_MULTIPLEX=on` (חיבור יחיד מרובה-ערוצים).
+
+הסוכן יעדכן את שכבת ה-market-data המשותפת כך שכל bench קורא **רק** מה-cache (לא ישירות לבורסות).
+
+---
+
+### 5) Data Normalization + DB Schema
+
+הוסף טבלה:
+
+```sql
+CREATE TABLE IF NOT EXISTS benchmark_results (
+  id SERIAL PRIMARY KEY,
+  source VARCHAR(20),      -- algogpt|freqtrade|hummingbot|bitsgap
+  period_start TIMESTAMP,
+  period_end   TIMESTAMP,
+  total_trades INT,
+  win_rate     DOUBLE PRECISION,
+  profit_factor DOUBLE PRECISION,
+  sharpe_ratio DOUBLE PRECISION,
+  max_drawdown DOUBLE PRECISION,
+  total_pnl_usd DOUBLE PRECISION,
+  avg_trade_duration_min INT,
+  composite_score DOUBLE PRECISION,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_bench_source_period
+ON benchmark_results(source, period_start);
+```
+
+קומפוזיט-סקור (ישקול Sharpe/PF/Win%/DD/PNL/AvgDur). הסוכן יחשב וישמור.
+
+---
+
+### 6) Cloud Analytics
+
+* Grafana Cloud: לוח **Bench-Ops** (CPU/RSS/p95/p99/SSE/429/Skipped reason).
+* Superset בענן (אופציונלי): לוח **Bench-PnL** (Equity/Win%/PF/Sharpe/DD). אם כבד — השאר `SUPERSET_CLOUD=off`.
+* מסכות נתונים/אנונימיזציה לשמות סמלים ובלי מפתחות בייצוא.
+
+---
+
+### 7) אתר — טאב “Benchmarks”
+
+* כותרת: **Winner Now (Composite)** + KPI cards (Win%/PF/Sharpe/DD/#Trades).
+* גרף Equity השוואתי + טבלת תוצאות מתעדכנת (SSE או Poll כל 10s).
+* **State badges:** `RUNNING / SKIPPED(rss|cpu|active) / DONE`.
+* קישורים (SSO) לפאנלים בענן.
+
+---
+
+### 8) Security & Audit
+
+* READ-ONLY keys בלבד; רוטציה אוטומטית 30d.
+* Audit trail לכל ריצה (start/end/skip+reason), עם **hash-chain** (הסוכן יוסיף עמודת `prev_hash,current_hash`).
+* אין ביצוע הזמנות מתוך Bench (אכיפה לוגית).
+
+---
+
+### 9) SLO/Guards (חובה)
+
+* דחיית Bench אם: `RSS>3.1GB` או `CPU>65%` או יש Active trades.
+* הריגת תהליך שחורג מ-`BENCH_MAX_RUN_MIN`.
+* Auto-degrade: הצגת “Degrade/Skipped” בטאב + מדד ב-Grafana.
+
+---
+
+### 10) 8GB Ready (דגלים בלבד, ללא הפעלה עכשיו)
+
+כשנשדרג:
+
+```
+MODE_8GB_READY=on
+BENCH_REALTIME_MODE=on   # Freqtrade/HB paper 24/7
+RL_AGENT_ENABLE=on       # PPO background
+BAYES_OPT_ENABLE=on      # param optimizer
+```
+
+* הפעל “Multi-Strategy Tournament” (paper) + Leaderboard.
+* השאר **אותו מודל אבטחה** (sandbox, RO-keys, RBAC).
+
+---
+
+### 11) בדיקות קבלה (Owner Acceptance)
+
+1. לילה ראשון: Freqtrade רץ ~20 דק׳, נשמר JSON ותוצאות ב-DB, זיכרון לא חוצה 3.1GB.
+2. 02:00 HB רץ 10 דק׳, נשמר תקין.
+3. 03:00 Bitsgap RO נשמר.
+4. Grafana Cloud מציג Bench-Ops; טאב “Benchmarks” מציג KPIs/Equity/States.
+5. אין 429-storms; אין פגיעה ב-AlgoGPT live; חיבורי DB יציבים דרך PgBouncer.
+
+החזר **Owner Summary ≤10 שורות**: מי הוביל, פערי מדדים, כמה ריצות דולגו ולמה, והמלצת Fine-Tune.
+
+---
+
+### 12) שמירה על 4GB (בלתי מתפשר)
+
+* לעולם לא להריץ יותר מעבודת Bench אחת בו-זמנית.
+* Bench תמיד משני למסחר חי (Priority Queue).
+* “Kill-on-finish” לכל תהליך Bench.
+* אם אחד המדדים חורג — Skip + Audit + Badge.
+
+---
+
+**סיום המשימה:** דו״ח קצר + צילום מסך טאב “Benchmarks” + לינק Grafana Cloud.
+לאחר השלמת 4GB-Lite, הכן PR קטן שמדליק `MODE_8GB_READY` בלבד (ללא הפעלה של Realtime) לבדיקת תצורה.
+
+---

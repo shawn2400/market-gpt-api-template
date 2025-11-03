@@ -1,0 +1,406 @@
+מעולה. הנה **הודעה אחת מוכנה להדבקה לסוכן ה-AI של Replit** (מייצרת 2 ראוטים חדשים, מעדכנת ה-Scheduler, מוסיפה ולידציית CSV, ריצה שמורה ל-Lean, ושילוב מלא עם טבלת `benchmark_results` + Audit Hash-Chain). הכל 4GB-Safe.
+
+---
+
+**TASK NAME:** AlgoGPT — Benchmarks Import (TradingView CSV) + Lean Runner (Lite) + Scheduler Update (Production-Grade, 4GB-Safe)
+
+**מטרה:**
+
+1. להוסיף ראוטים חדשים:
+
+   * `POST /benchmarks/import` — העלאת CSV (TradingView Pine Export) → נרמול → חישוב Composite → INSERT לטבלת `benchmark_results` + Audit Hash-Chain.
+   * `POST /benchmarks/lean-run` (Admin בלבד) — ריצה חד-פעמית ל-QuantConnect Lean (Lite, ממוסגר משאבים), המרת תוצאות → INSERT ל-DB.
+2. לעדכן `utils/benchmark_scheduler.py` כך ש-Lean ירוץ ב-00:40 (20 דקות) **רק אם** ה-guards אישרו (CPU≤65%, RSS≤3.1GB, אין active trades).
+3. לשמור תאימות מלאה: אין שבירת קוד, אין תלות ב-Pandas. שימוש ב-`csv` סטנדרטי + `psycopg` אם קיים, עם fallback.
+4. אבטחה: Bearer חובה; אופציונלי HMAC אם קיים במערכת (`utils.anti_replay`).
+5. 4GB-Safe: שימוש ב-firejail/`--net=none` ו-`read-only` אם קיים, `timeout`, ו-kill on finish.
+
+**אל תשנה:** אימות/חתימות/HMAC/Bearer קיימים, מנגנוני מסחר חיים, קבצי AI, Docker/Render, או כל קובץ לא מוזכר בפאץ'.
+
+---
+
+## 🔧 שינויים בקוד (Patch Set)
+
+### 1) `requirements.txt` (הוסף אם חסר, אל תשנה גרסאות קיימות)
+
+```diff
++ psycopg[binary]>=3.1
++ python-dateutil>=2.9
+```
+
+### 2) קובץ חדש: `routes/benchmarks.py`
+
+```python
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import io, csv, hashlib, os, json, asyncio, traceback, time, math
+from typing import Any, Dict, List, Optional, Tuple
+from datetime import datetime
+from dateutil import parser as dtp
+
+from fastapi import APIRouter, UploadFile, File, Header, HTTPException, Depends, Request
+from starlette.responses import JSONResponse
+
+# ==== אבטחה (Bearer + HMAC אם קיים) ====
+API_BEARER_TOKEN = os.getenv("API_BEARER_TOKEN", "")
+def _ct_equal(a: str, b: str) -> bool:
+    import hmac
+    try: return hmac.compare_digest(a or "", b or "")
+    except Exception: return (a or "") == (b or "")
+
+def require_bearer(auth: Optional[str]) -> None:
+    if not API_BEARER_TOKEN:
+        return
+    token = (auth or "").replace("Bearer ", "").strip()
+    if not _ct_equal(token, API_BEARER_TOKEN):
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+def verify_request_hmac(request: Request) -> None:
+    # אופציונלי: אם utils.anti_replay קיים
+    try:
+        from utils.anti_replay import verify_request  # type: ignore
+    except Exception:
+        return
+    ts = request.headers.get("X-Signature-Ts")
+    nonce = request.headers.get("X-Signature-Nonce")
+    sig = request.headers.get("X-Signature")
+    ok, msg = verify_request(ts, nonce, sig, route=request.url.path, body=None, require_signature=False)
+    if not ok:
+        raise HTTPException(status_code=401, detail=f"signature_failed: {msg}")
+
+# ==== DB helpers (psycopg v3 אם זמין) ====
+_DB_DSN = os.getenv("DATABASE_URL") or os.getenv("PG_DSN") or ""
+_psycopg = None
+def _db_open():
+    global _psycopg
+    if _psycopg is None:
+        try:
+            import psycopg  # psycopg v3
+            _psycopg = psycopg
+        except Exception:
+            _psycopg = False
+    if not _psycopg or not _DB_DSN:
+        return None
+    return _psycopg.connect(_DB_DSN)
+
+def _ensure_table():
+    conn = _db_open()
+    if not conn: return
+    with conn:
+        with conn.cursor() as cur:
+            cur.execute("""
+CREATE TABLE IF NOT EXISTS benchmark_results (
+  id SERIAL PRIMARY KEY,
+  source VARCHAR(20),
+  period_start TIMESTAMP,
+  period_end TIMESTAMP,
+  total_trades INT,
+  win_rate DOUBLE PRECISION,
+  profit_factor DOUBLE PRECISION,
+  sharpe_ratio DOUBLE PRECISION,
+  max_drawdown DOUBLE PRECISION,
+  total_pnl_usd DOUBLE PRECISION,
+  avg_trade_duration_min INT,
+  composite_score DOUBLE PRECISION,
+  created_at TIMESTAMP DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_bench_source_period
+ON benchmark_results(source, period_start);
+""")
+    conn.close()
+
+def _insert_rows(rows: List[Dict[str, Any]]):
+    conn = _db_open()
+    if not conn:
+        raise RuntimeError("DB not available (DATABASE_URL/psycopg missing)")
+    with conn:
+        with conn.cursor() as cur:
+            cur.executemany("""
+INSERT INTO benchmark_results
+(source, period_start, period_end, total_trades, win_rate, profit_factor, sharpe_ratio, max_drawdown, total_pnl_usd, avg_trade_duration_min, composite_score)
+VALUES
+(%(source)s, %(period_start)s, %(period_end)s, %(total_trades)s, %(win_rate)s, %(profit_factor)s, %(sharpe_ratio)s, %(max_drawdown)s, %(total_pnl_usd)s, %(avg_trade_duration_min)s, %(composite_score)s)
+""", rows)
+
+# ==== Composite Score ====
+def _norm(v: Optional[float], lo: float, hi: float, invert: bool=False) -> float:
+    if v is None or math.isnan(v): return 0.0
+    v = max(lo, min(hi, v))
+    x = (v - lo) / (hi - lo) if hi > lo else 0.0
+    return 1.0 - x if invert else x
+
+def calc_composite(r: Dict[str, Any]) -> float:
+    # משקולות: Sharpe 25% | PF 20% | Win% 20% | MaxDD 15% (הפוך) | PnL 10% | Duration 10% (הפוך)
+    s = 0.25 * _norm(r.get("sharpe_ratio"), 0.0, 3.0)
+    s += 0.20 * _norm(r.get("profit_factor"), 0.8, 3.0)
+    s += 0.20 * _norm(r.get("win_rate"), 0.2, 0.8)
+    s += 0.15 * _norm(r.get("max_drawdown"), 0.0, 0.5, invert=True)
+    s += 0.10 * _norm(r.get("total_pnl_usd"), -200.0, 200.0)
+    s += 0.10 * _norm(r.get("avg_trade_duration_min"), 0.0, 240.0, invert=True)
+    return round(s * 100.0, 2)
+
+# ==== CSV Validation ====
+_MAX_CSV_BYTES = 5 * 1024 * 1024  # 5MB
+_REQUIRED_HEADERS = {
+    "source","period_start","period_end","total_trades","win_rate","profit_factor",
+    "sharpe_ratio","max_drawdown","total_pnl_usd","avg_trade_duration_min"
+}
+def _parse_csv(data: bytes) -> List[Dict[str, Any]]:
+    if len(data) > _MAX_CSV_BYTES:
+        raise HTTPException(status_code=413, detail="csv_too_large")
+    txt = data.decode("utf-8", "ignore")
+    rd = csv.DictReader(io.StringIO(txt))
+    headers = {h.strip() for h in rd.fieldnames or []}
+    missing = sorted(list(_REQUIRED_HEADERS - headers))
+    if missing:
+        raise HTTPException(status_code=400, detail=f"missing_headers:{','.join(missing)}")
+
+    out: List[Dict[str, Any]] = []
+    for i, row in enumerate(rd):
+        try:
+            src = (row["source"] or "").strip().lower()
+            if src not in {"tradingview","algogpt","freqtrade","hummingbot","bitsgap","lean"}:
+                # עבור TradingView נשכתב ל-"tradingview"
+                src = "tradingview"
+            ps = dtp.parse(row["period_start"])
+            pe = dtp.parse(row["period_end"])
+            rec = {
+                "source": src,
+                "period_start": ps,
+                "period_end": pe,
+                "total_trades": int(row["total_trades"]),
+                "win_rate": float(row["win_rate"]),
+                "profit_factor": float(row["profit_factor"]),
+                "sharpe_ratio": float(row["sharpe_ratio"]),
+                "max_drawdown": float(row["max_drawdown"]),
+                "total_pnl_usd": float(row["total_pnl_usd"]),
+                "avg_trade_duration_min": int(row["avg_trade_duration_min"]),
+            }
+            rec["composite_score"] = calc_composite(rec)
+            out.append(rec)
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"row_{i}_invalid:{e}")
+    if not out:
+        raise HTTPException(status_code=400, detail="no_rows")
+    return out
+
+# ==== Audit Hash-Chain ====
+def _audit_append(source: str, result_digest: str, prev_hash: Optional[str]) -> str:
+    payload = f"{source}|{result_digest}|{prev_hash or ''}|{int(time.time())}"
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+# ==== Lean Runner helper ====
+async def run_lean_once_guarded(timeout_sec: int = 150) -> Dict[str, Any]:
+    # Guards: RSS/CPU/ActiveTrades (נשתמש בהוק אם קיים)
+    try:
+        from utils.resource_guards import can_run_benchmark  # type: ignore
+        ok, reason = await can_run_benchmark(max_rss_mb=int(os.getenv("GUARD_MAX_RSS_MB","3100")),
+                                             max_cpu_pct=int(os.getenv("GUARD_MAX_CPU_PCT","65")))
+        if not ok:
+            return {"ok": False, "skipped": True, "reason": reason}
+    except Exception:
+        pass
+
+    # הרצה מצומצמת: firejail אם קיים, אחרת subprocess רגיל
+    import subprocess, shlex
+    cmd = os.getenv("LEAN_CMD", "lean backtest -c configs/lean-lite.json")
+    args = shlex.split(cmd)
+    wrapper = []
+    if shutil.which("firejail"):
+        wrapper = ["firejail", "--quiet", "--private", "--net=none", "--read-only"]
+    full = wrapper + args
+
+    try:
+        p = subprocess.Popen(full, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    except Exception as e:
+        return {"ok": False, "error": f"lean_spawn_failed:{e}"}
+
+    start = time.time()
+    lines = []
+    while True:
+        if p.poll() is not None:
+            break
+        if (time.time() - start) > timeout_sec:
+            with contextlib.suppress(Exception):
+                p.kill()
+            return {"ok": False, "timeout": True, "skipped": True, "reason": "timeout_killed"}
+        with contextlib.suppress(Exception):
+            line = p.stdout.readline()
+            if line:
+                lines.append(line.strip())
+        await asyncio.sleep(0.1)
+
+    code = p.returncode
+    out_txt = "\n".join(lines)[-5000:]  # cap
+    if code != 0:
+        return {"ok": False, "code": code, "log_tail": out_txt}
+
+    # צפה לקובץ JSON עם תוצאות תחת /benchmarks/lean/YYYYMMDD/*.json
+    results_dir = os.path.join("benchmarks","lean", datetime.utcnow().strftime("%Y%m%d"))
+    payloads: List[Dict[str, Any]] = []
+    with contextlib.suppress(Exception):
+        for fn in os.listdir(results_dir):
+            if not fn.endswith(".json"): continue
+            with open(os.path.join(results_dir, fn), "r", encoding="utf-8") as f:
+                try:
+                    rec = json.load(f)
+                    # ודא שדות הכרחיים
+                    base = {
+                        "source":"lean",
+                        "period_start": dtp.parse(rec["period_start"]),
+                        "period_end": dtp.parse(rec["period_end"]),
+                        "total_trades": int(rec["total_trades"]),
+                        "win_rate": float(rec["win_rate"]),
+                        "profit_factor": float(rec["profit_factor"]),
+                        "sharpe_ratio": float(rec["sharpe_ratio"]),
+                        "max_drawdown": float(rec["max_drawdown"]),
+                        "total_pnl_usd": float(rec["total_pnl_usd"]),
+                        "avg_trade_duration_min": int(rec.get("avg_trade_duration_min", 0)),
+                    }
+                    base["composite_score"] = calc_composite(base)
+                    payloads.append(base)
+                except Exception:
+                    continue
+    if payloads:
+        _ensure_table()
+        _insert_rows(payloads)
+    digest = hashlib.sha256(out_txt.encode()).hexdigest()
+    return {"ok": True, "inserted": len(payloads), "audit": digest, "log_tail": out_txt[-1000:]}
+
+# ==== Router ====
+router = APIRouter(prefix="/benchmarks", tags=["Benchmarks"])
+
+@router.post("/import")
+async def import_tradingview_csv(
+    request: Request,
+    file: UploadFile = File(...),
+    authorization: Optional[str] = Header(None)
+):
+    require_bearer(authorization)
+    verify_request_hmac(request)
+
+    data = await file.read()
+    rows = _parse_csv(data)
+    _ensure_table()
+    _insert_rows(rows)
+
+    digest = hashlib.sha256(data).hexdigest()
+    prev = request.headers.get("X-Bench-Prev-Hash")  # אופציונלי
+    current = _audit_append("tradingview", digest, prev)
+    return JSONResponse({"ok": True, "rows": len(rows), "audit_hash": current})
+
+@router.post("/lean-run")
+async def lean_run_once(
+    request: Request,
+    authorization: Optional[str] = Header(None)
+):
+    # Admin only: השתמש ב-Bearer קיים
+    require_bearer(authorization)
+    verify_request_hmac(request)
+
+    # כבד מעט → הרץ ברקע ותחכה
+    res = await run_lean_once_guarded(timeout_sec=int(os.getenv("LEAN_MAX_RUN_MIN","25"))*60)
+    return JSONResponse(res)
+```
+
+> הערה: הקובץ משתמש ב-`psycopg v3`. אם אין `DATABASE_URL`, הראוט יחזיר שגיאה מתאימה. זה מכוון — בסביבת Prod יש DB.
+
+### 3) עדכון `main.py` — הוספת ה-router
+
+חפש את אזור include_router והוסף:
+
+```python
+# routes/benchmarks
+try:
+    from routes.benchmarks import router as benchmarks_router  # type: ignore
+    app.include_router(benchmarks_router)
+except Exception:
+    logger.warning("benchmarks router not loaded", exc_info=True)
+```
+
+### 4) קובץ חדש: `utils/lean_runner.py` (פונקציה חלופית אם תרצה שימוש פנימי)
+
+```python
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import asyncio
+from routes.benchmarks import run_lean_once_guarded  # reuse exact logic
+
+async def lean_run_now() -> dict:
+    return await run_lean_once_guarded()
+```
+
+### 5) עדכון `utils/benchmark_scheduler.py` — הוסף משימה ל-Lean ב-00:40
+
+```diff
+@@
+ def setup_benchmark_schedule():
+     # קיים: Freqtrade 00:00, Hummingbot 02:00, Bitsgap 03:00
+     # שמור: לעולם לא במקביל; בדיקות guards לפני כל ריצה.
++    import os, asyncio, logging
++    from datetime import datetime
++    from routes.benchmarks import run_lean_once_guarded
++    log = logging.getLogger("bench.scheduler")
+@@
+     schedule.every().day.at("00:00").do(run_freqtrade_job)
++    if os.getenv("LEAN_ENABLE","on").lower() in ("1","true","yes","on"):
++        def _lean_job():
++            try:
++                # respect guards; never parallel
++                asyncio.run(run_lean_once_guarded(timeout_sec=int(os.getenv("LEAN_MAX_RUN_MIN","25"))*60))
++            except Exception as e:
++                log.error("lean_job_failed: %s", e, exc_info=True)
++        schedule.every().day.at("00:40").do(_lean_job)
+     schedule.every().day.at("02:00").do(run_hummingbot_job)
+     schedule.every().day.at("03:00").do(run_bitsgap_job)
+```
+
+---
+
+## 🧪 בדיקות מהירות (cURL)
+
+**1) Import CSV (TradingView → DB):**
+
+```bash
+curl -X POST "$BASE_URL/benchmarks/import" \
+ -H "Authorization: Bearer $API_BEARER_TOKEN" \
+ -F "file=@/path/to/tradingview_export.csv"
+```
+
+**2) Trigger Lean once (Admin):**
+
+```bash
+curl -X POST "$BASE_URL/benchmarks/lean-run" \
+ -H "Authorization: Bearer $API_BEARER_TOKEN"
+```
+
+**3) וידוא טבלה:**
+
+```sql
+SELECT source, COUNT(*) cnt, AVG(composite_score) avg_score
+FROM benchmark_results
+GROUP BY source
+ORDER BY avg_score DESC;
+```
+
+---
+
+## 🛡️ שמירה על 4GB-Safe
+
+* ריצות Lean/Freqtrade/Hummingbot **תמיד סדרתיות**.
+* Guard לפני כל ריצה (CPU≤65%, RSS≤3100MB, אין active trades).
+* `LEAN_MAX_RUN_MIN=25` (timeout+kill).
+* Firejail/`--net=none`/`--read-only` אם מותקן (לא חובה).
+
+---
+
+## ✅ Acceptance
+
+* `/benchmarks/import` מקבל CSV ≤5MB, מאמת כותרות ושדות, מחשב Composite, מכניס ל-DB, מחזיר `audit_hash`.
+* `/benchmarks/lean-run` רץ, שומר JSON→DB (אם קיים), מחזיר סטטוס/`inserted`.
+* Scheduler מריץ Lean ב-00:40, לא חורג מגבולות משאבים, אין חפיפה בין משימות.
+
+---
+
+**סיום.**
+הפאץ' הזה יוצר את שני הראוטים, מחבר ל-DB, מוסיף Composite + Audit Hash-Chain, ומעדכן Scheduler—**ללא שבירת תאימות**, Production-Grade, ו-4GB-Safe.
