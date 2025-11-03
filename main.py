@@ -124,10 +124,18 @@ app.add_middleware(
 )
 
 # =============== Static Files ===============
-# Mount static files directory for serving HTML/CSS/JS/images
+# Custom StaticFiles with no-cache headers to prevent browser caching issues
+class NoCacheStaticFiles(StaticFiles):
+    async def get_response(self, path: str, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate, max-age=0"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        return response
+
 try:
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-    logger.info("✅ Static files mounted at /static")
+    app.mount("/static", NoCacheStaticFiles(directory="static"), name="static")
+    logger.info("✅ Static files mounted at /static with no-cache headers")
 except Exception as e:
     logger.warning(f"⚠️ Failed to mount static files: {e}")
 
