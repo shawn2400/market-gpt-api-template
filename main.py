@@ -1636,6 +1636,18 @@ try:
 except Exception as e:
     logger.warning("Failed to load dashboard routes: %s", e)
 
+try:
+    from routes.validation import router as validation_router
+    app.include_router(validation_router)
+except Exception as e:
+    logger.warning("Failed to load validation routes: %s", e)
+
+try:
+    from routes.monitors import router as monitors_router
+    app.include_router(monitors_router)
+except Exception as e:
+    logger.warning("Failed to load monitors routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():

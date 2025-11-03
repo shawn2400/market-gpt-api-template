@@ -19,9 +19,10 @@ logger = logging.getLogger("monitors.circuit_breaker")
 class BreakerAction:
     """Circuit breaker action result"""
     triggered: bool
-    action: str  # "none", "reduce_50", "pause", "emergency_stop"
+    action: str  # "none", "reduce_50", "pause", "emergency_stop", "pause_manual"
     reason: str
     metrics: Dict[str, Any]
+    details: Optional[Dict[str, Any]] = None
 
 # In-memory state (in production, use database)
 _breaker_state: Dict[str, Any] = {
@@ -112,6 +113,29 @@ def check_circuit_breaker(
         action=action,
         reason=reason,
         metrics={"dd": current_dd, "consec": consec_losses, "triggers": len(triggers)},
+    )
+
+def manual_pause(reason: str = "manual_pause") -> BreakerAction:
+    """
+    Manually pause trading via circuit breaker.
+    
+    Args:
+        reason: Why trading is being paused manually
+    
+    Returns:
+        BreakerAction with triggered=True
+    """
+    _breaker_state["paused"] = True
+    _breaker_state["pause_reason"] = f"MANUAL: {reason}"
+    _save_breaker_state()
+    
+    logger.warning(f"Circuit breaker MANUAL PAUSE: {reason}")
+    
+    return BreakerAction(
+        triggered=True,
+        action="pause_manual",
+        reason=reason,
+        metrics={"manual": True, "timestamp": datetime.now().isoformat()},
     )
 
 def reset_breaker(reason: str = "manual_reset") -> Dict[str, Any]:

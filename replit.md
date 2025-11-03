@@ -46,3 +46,50 @@ The core application is built with FastAPI (`main.py`) and uses Gunicorn for ser
 -   **Psycopg2**: PostgreSQL adapter for Python.
 -   **psutil**: System and process monitoring for resource management.
 -   **httpx**: Async HTTP client for AI provider API calls.
+-   **scipy**: Scientific computing library for Student-t distributions and statistical analysis.
+-   **numpy**: Numerical computing for Monte Carlo simulations and metrics.
+
+## Validation & Safety Infrastructure (v2.0)
+
+**NEW in Ultimate Edition v2.0:** Production-grade validation and safety systems based on 8+ AI consultations.
+
+### Components:
+-   **Validation Pipeline** - Historical backtesting with walk-forward testing (6 folds), per-regime analysis
+-   **Fail-Closed Decision Gates** - Dual Confirmation (Quant ∧ AI ∧ Risk) with no permissive fallbacks
+-   **Data-Driven Monte Carlo** - Student-t/Bootstrap distributions (NOT Gaussian) for realistic SL/TP probabilities
+-   **Live Health Monitor** - Win% 7d/30d, Drawdown tracking, Consecutive loss counter
+-   **Circuit Breakers** - Daily DD limits (5%), Consecutive SL limits (4), Volatility gates, Emergency stop
+
+### API Endpoints:
+```
+POST /validate/run         - Start backtest validation
+GET  /validate/status?id=X - Check backtest status
+GET  /validate/report?id=X - Get validation report
+
+GET  /monitors/health      - System health status
+POST /monitors/breaker/pause  - Manual circuit breaker trigger
+POST /monitors/breaker/reset  - Reset circuit breaker
+GET  /monitors/breaker/status - Detailed breaker status
+```
+
+### Environment Variables (Production Safety):
+```bash
+# Validation Controls
+VALIDATION_REQUIRED=1          # Require backtest validation before production
+DUAL_CONFIRM_ENABLE=1          # Enable fail-closed dual-gate confirmation
+MC_DIST_SOURCE=student_t       # Monte Carlo distribution (student_t/bootstrap/garch)
+
+# Circuit Breaker Settings
+BREAKER_DD_LIMIT_PCT=5.0       # Daily drawdown limit (%)
+BREAKER_CONSEC_SL_MAX=4        # Max consecutive stop losses
+BREAKER_VOLATILITY_THRESHOLD=50 # Volatility spike threshold (%)
+
+# Database
+USE_DB=1                       # Enable database persistence
+DATABASE_URL=sqlite:////app/data/algogpt.db  # Database path
+
+# Backtest Thresholds
+MIN_WINRATE_PCT=46             # Minimum winrate for validation pass
+MIN_RR=1.45                    # Minimum Risk/Reward ratio
+MAX_DRAWDOWN_PCT=12            # Maximum drawdown tolerance
+```
