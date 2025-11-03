@@ -102,7 +102,7 @@ class MultiAIScorer:
                     {"role": "system", "content": "You are an expert trading analyst. Provide numerical scores 0-100."},
                     {"role": "user", "content": prompt}
                 ],
-                "max_completion_tokens": max_tokens
+                "max_tokens": max_tokens
             }
             
             async with httpx.AsyncClient(timeout=30.0) as client:
