@@ -574,7 +574,11 @@
                 { id: 15, name: 'User Guide', icon: '📖' },
                 { id: 16, name: 'ROADMAP', icon: '🗺️' },
                 { id: 17, name: 'Tech Indicators', icon: '📊' },
-                { id: 18, name: 'System Docs', icon: '📚' }
+                { id: 18, name: 'System Docs', icon: '📚' },
+                { id: 19, name: 'Control Center', icon: '🎛️' },
+                { id: 20, name: 'Users', icon: '👥' },
+                { id: 21, name: 'Agents', icon: '🤖' },
+                { id: 22, name: 'Budget', icon: '💰' }
             ];
             
             if (loading) return (
@@ -654,6 +658,10 @@
                         {activeTab === 16 && <Tab16Roadmap />}
                         {activeTab === 17 && <Tab17TechnicalIndicators />}
                         {activeTab === 18 && <Tab18SystemDocs />}
+                        {activeTab === 19 && <Tab19ControlCenter />}
+                        {activeTab === 20 && <Tab20Users />}
+                        {activeTab === 21 && <Tab21Agents />}
+                        {activeTab === 22 && <Tab22Budget />}
                     </div>
                 </div>
             );
@@ -2339,6 +2347,459 @@
                                         </div>
                                     </div>
                                 ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const Tab19ControlCenter = () => {
+            const [data, setData] = useState(null);
+            
+            useEffect(() => {
+                const fetchData = async () => {
+                    try {
+                        const res = await fetch('/dashboard/control-center/overview');
+                        const result = await res.json();
+                        setData(result);
+                    } catch (err) {
+                        console.error(err);
+                    }
+                };
+                fetchData();
+                const interval = setInterval(fetchData, 5000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            if (!data) return <div className="loading">⏳ Loading Control Center...</div>;
+            
+            return (
+                <div className="space-y-6">
+                    <div className={`glass-card p-6 border-2 ${data.system_health.status === 'healthy' ? 'border-success' : 'border-error'}`}>
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="icon-box">{data.system_health.status === 'healthy' ? '🟢' : '🔴'}</div>
+                            <h2 className="text-3xl font-bold gradient-text">Control Center - System Health</h2>
+                        </div>
+                        <div className="grid md:grid-cols-4 gap-4">
+                            <div className="metric-card">
+                                <div className="text-sm text-gray-400">Uptime</div>
+                                <div className="metric-value">{Math.floor(data.system_health.uptime_hours / 24)}d {data.system_health.uptime_hours % 24}h</div>
+                            </div>
+                            <div className="metric-card">
+                                <div className="text-sm text-gray-400">CPU</div>
+                                <div className="metric-value">{data.system_health.cpu_percent}%</div>
+                            </div>
+                            <div className="metric-card">
+                                <div className="text-sm text-gray-400">Memory</div>
+                                <div className="metric-value">{data.system_health.memory_used_gb.toFixed(1)}/{data.system_health.memory_total_gb}GB</div>
+                            </div>
+                            <div className="metric-card">
+                                <div className="text-sm text-gray-400">Disk</div>
+                                <div className="metric-value">{data.system_health.disk_percent}%</div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-4 gap-4">
+                        {Object.entries(data.quick_stats).map(([key, value]) => (
+                            <div key={key} className="glass-card p-4">
+                                <div className="text-sm text-gray-400 mb-2">{key.replace(/_/g, ' ')}</div>
+                                <div className="text-3xl font-bold gradient-text">{value}</div>
+                            </div>
+                        ))}
+                    </div>
+                    
+                    <div className="glass-card p-6">
+                        <h3 className="text-2xl font-bold mb-4">📜 Live Activity Feed</h3>
+                        <div className="space-y-2 max-h-96 overflow-y-auto">
+                            {data.activity_feed.map((item, i) => (
+                                <div key={i} className="flex gap-3 p-3 rounded-lg bg-gray-800/30">
+                                    <div className="text-sm text-gray-400 w-20">{item.time}</div>
+                                    <div className="flex-1 text-gray-300">{item.message}</div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    {data.alerts.length > 0 && (
+                        <div className="glass-card p-6 border-2 border-warning">
+                            <h3 className="text-2xl font-bold mb-4">⚠️ Active Alerts ({data.alerts.length})</h3>
+                            <div className="space-y-3">
+                                {data.alerts.map((alert, i) => (
+                                    <div key={i} className={`p-4 rounded-lg ${alert.level === 'critical' ? 'bg-error/20' : 'bg-warning/20'}`}>
+                                        <div className="font-bold">{alert.message}</div>
+                                        {alert.details && <div className="text-sm text-gray-400 mt-1">{alert.details}</div>}
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+        
+        const Tab20Users = () => {
+            const [users, setUsers] = useState(null);
+            const [selectedUser, setSelectedUser] = useState(null);
+            
+            useEffect(() => {
+                const fetchUsers = async () => {
+                    try {
+                        const res = await fetch('/dashboard/users/management');
+                        const data = await res.json();
+                        setUsers(data.users);
+                    } catch (err) {
+                        console.error(err);
+                    }
+                };
+                fetchUsers();
+                const interval = setInterval(fetchUsers, 10000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            const viewUserDetails = async (userId) => {
+                try {
+                    const res = await fetch(`/dashboard/users/${userId}/details`);
+                    const data = await res.json();
+                    setSelectedUser(data);
+                } catch (err) {
+                    console.error(err);
+                }
+            };
+            
+            if (!users) return <div className="loading">⏳ Loading Users...</div>;
+            
+            return (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="icon-box">👥</div>
+                            <h2 className="text-3xl font-bold gradient-text">Users & Activity Control</h2>
+                        </div>
+                        <p className="text-gray-300">7 Active Users - Multi-Tenant Trading Platform</p>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-2 gap-4">
+                        {users.map(user => (
+                            <div key={user.id} className="glass-card p-6 hover:scale-105 transition-transform cursor-pointer"
+                                 onClick={() => viewUserDetails(user.id)}>
+                                <div className="flex justify-between items-start mb-4">
+                                    <div>
+                                        <h3 className="text-xl font-bold">{user.name}</h3>
+                                        <p className="text-sm text-gray-400">{user.email}</p>
+                                    </div>
+                                    <div className={`px-3 py-1 rounded-full text-sm ${user.status === 'active' ? 'bg-success' : 'bg-gray-500'}`}>
+                                        {user.status}
+                                    </div>
+                                </div>
+                                
+                                <div className="grid grid-cols-2 gap-3 text-sm">
+                                    <div>
+                                        <div className="text-gray-400">Capital</div>
+                                        <div className="font-bold text-lg">${user.capital.toLocaleString()}</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-gray-400">Performance Fee</div>
+                                        <div className="font-bold text-lg">{user.performance_fee}%</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-gray-400">Win Rate</div>
+                                        <div className="font-bold">{user.win_rate.toFixed(1)}%</div>
+                                    </div>
+                                    <div>
+                                        <div className="text-gray-400">Total P&L</div>
+                                        <div className={`font-bold ${user.total_pnl >= 0 ? 'text-success' : 'text-error'}`}>
+                                            ${user.total_pnl.toLocaleString()}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                    
+                    {selectedUser && (
+                        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={() => setSelectedUser(null)}>
+                            <div className="glass-card p-8 max-w-4xl w-full max-h-screen overflow-y-auto" onClick={e => e.stopPropagation()}>
+                                <h2 className="text-3xl font-bold mb-6">{selectedUser.user.name} - Detailed View</h2>
+                                
+                                <div className="grid md:grid-cols-4 gap-4 mb-6">
+                                    <div className="glass-card p-4">
+                                        <div className="text-sm text-gray-400">Capital</div>
+                                        <div className="text-2xl font-bold">${selectedUser.user.capital.toLocaleString()}</div>
+                                    </div>
+                                    <div className="glass-card p-4">
+                                        <div className="text-sm text-gray-400">P&L</div>
+                                        <div className={`text-2xl font-bold ${selectedUser.user.total_pnl >= 0 ? 'text-success' : 'text-error'}`}>
+                                            ${selectedUser.user.total_pnl.toLocaleString()}
+                                        </div>
+                                    </div>
+                                    <div className="glass-card p-4">
+                                        <div className="text-sm text-gray-400">Win Rate</div>
+                                        <div className="text-2xl font-bold">{selectedUser.user.win_rate.toFixed(1)}%</div>
+                                    </div>
+                                    <div className="glass-card p-4">
+                                        <div className="text-sm text-gray-400">ROI</div>
+                                        <div className="text-2xl font-bold">{selectedUser.user.ytd_roi}%</div>
+                                    </div>
+                                </div>
+                                
+                                <div className="mb-6">
+                                    <h3 className="text-xl font-bold mb-3">Recent Trades</h3>
+                                    <div className="overflow-x-auto">
+                                        <table className="w-full text-sm">
+                                            <thead className="border-b border-gray-700">
+                                                <tr className="text-right">
+                                                    <th className="pb-2">Time</th>
+                                                    <th className="pb-2">Symbol</th>
+                                                    <th className="pb-2">Side</th>
+                                                    <th className="pb-2">P&L</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {selectedUser.trade_history.map((trade, i) => (
+                                                    <tr key={i} className="border-b border-gray-800">
+                                                        <td className="py-2">{trade.time}</td>
+                                                        <td className="py-2">{trade.symbol}</td>
+                                                        <td className="py-2">{trade.side}</td>
+                                                        <td className={`py-2 ${trade.pnl >= 0 ? 'text-success' : 'text-error'}`}>
+                                                            ${trade.pnl}
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                
+                                <button onClick={() => setSelectedUser(null)} className="px-6 py-3 bg-primary rounded-lg hover:opacity-80">סגור</button>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+        
+        const Tab21Agents = () => {
+            const [agents, setAgents] = useState(null);
+            
+            useEffect(() => {
+                const fetchAgents = async () => {
+                    try {
+                        const res = await fetch('/dashboard/agents/all');
+                        const data = await res.json();
+                        setAgents(data);
+                    } catch (err) {
+                        console.error(err);
+                    }
+                };
+                fetchAgents();
+                const interval = setInterval(fetchAgents, 10000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            if (!agents) return <div className="loading">⏳ Loading Agents...</div>;
+            
+            return (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="icon-box">🤖</div>
+                            <h2 className="text-3xl font-bold gradient-text">Agents & Orchestrators Control</h2>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <h3 className="text-2xl font-bold mb-4">💼 System Workers ({agents.workers.length})</h3>
+                        <div className="grid gap-4">
+                            {agents.workers.map(worker => (
+                                <div key={worker.name} className="glass-card p-5">
+                                    <div className="flex justify-between items-start">
+                                        <div className="flex-1">
+                                            <div className="flex items-center gap-3 mb-2">
+                                                <h4 className="text-xl font-bold">{worker.name}</h4>
+                                                <span className={`px-2 py-1 rounded text-xs ${worker.status === 'running' ? 'bg-success' : 'bg-error'}`}>
+                                                    {worker.status}
+                                                </span>
+                                            </div>
+                                            <p className="text-sm text-gray-400">{worker.description}</p>
+                                        </div>
+                                        <div className="text-left mr-4">
+                                            <div className="text-sm text-gray-400">Uptime</div>
+                                            <div className="font-bold">{worker.uptime}</div>
+                                        </div>
+                                    </div>
+                                    <div className="grid md:grid-cols-3 gap-3 mt-4 text-sm">
+                                        <div>
+                                            <div className="text-gray-400">CPU</div>
+                                            <div className="font-bold">{worker.cpu_percent}%</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-gray-400">Memory</div>
+                                            <div className="font-bold">{worker.memory_mb}MB</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-gray-400">Success</div>
+                                            <div className="font-bold">{worker.success_rate}%</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <h3 className="text-2xl font-bold mb-4">🧠 AI Mesh ({agents.ai_agents.length})</h3>
+                        <div className="grid md:grid-cols-2 gap-4">
+                            {agents.ai_agents.map(ai => (
+                                <div key={ai.name} className="glass-card p-4">
+                                    <div className="flex justify-between items-start mb-3">
+                                        <div>
+                                            <h4 className="font-bold">{ai.name}</h4>
+                                            <p className="text-xs text-gray-400">{ai.provider}</p>
+                                        </div>
+                                        <div className="text-left">
+                                            <div className="text-2xl font-bold">{ai.weight}%</div>
+                                            <div className={`text-xs ${ai.status === 'active' ? 'text-success' : 'text-gray-400'}`}>{ai.status}</div>
+                                        </div>
+                                    </div>
+                                    <div className="grid grid-cols-2 gap-2 text-xs">
+                                        <div>
+                                            <div className="text-gray-400">Calls Today</div>
+                                            <div>{ai.calls_today}</div>
+                                        </div>
+                                        <div>
+                                            <div className="text-gray-400">Cost Today</div>
+                                            <div>${ai.cost_today.toFixed(2)}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <h3 className="text-2xl font-bold mb-4">🎛️ Orchestrators ({agents.orchestrators.length})</h3>
+                        <div className="grid gap-4">
+                            {agents.orchestrators.map(orch => (
+                                <div key={orch.name} className="glass-card p-5 border-2 border-purple-500">
+                                    <div className="flex justify-between items-start mb-3">
+                                        <div>
+                                            <h4 className="text-xl font-bold">{orch.name}</h4>
+                                            <p className="text-sm text-gray-400">{orch.type}</p>
+                                        </div>
+                                        <span className={`px-3 py-1 rounded-full text-sm ${orch.status === 'active' ? 'bg-success' : 'bg-gray-500'}`}>
+                                            {orch.status}
+                                        </span>
+                                    </div>
+                                    <p className="text-gray-300 mb-4">{orch.description}</p>
+                                    <div className="mt-4">
+                                        <div className="text-sm text-gray-400 mb-2">Features:</div>
+                                        <ul className="text-sm space-y-1">
+                                            {orch.features.map((f, i) => (
+                                                <li key={i} className="text-gray-300">• {f}</li>
+                                            ))}
+                                        </ul>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const Tab22Budget = () => {
+            const [budget, setBudget] = useState(null);
+            
+            useEffect(() => {
+                const fetchBudget = async () => {
+                    try {
+                        const res = await fetch('/dashboard/budget/detailed');
+                        const data = await res.json();
+                        setBudget(data);
+                    } catch (err) {
+                        console.error(err);
+                    }
+                };
+                fetchBudget();
+                const interval = setInterval(fetchBudget, 30000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            if (!budget) return <div className="loading">⏳ Loading Budget...</div>;
+            
+            return (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-4 mb-4">
+                            <div className="icon-box">💰</div>
+                            <h2 className="text-3xl font-bold gradient-text">Budget & Finance Control</h2>
+                        </div>
+                    </div>
+                    
+                    <div className="grid md:grid-cols-4 gap-4">
+                        <div className="glass-card p-4">
+                            <div className="text-sm text-gray-400">Monthly TCO</div>
+                            <div className="text-3xl font-bold">${budget.monthly_tco.total}</div>
+                        </div>
+                        <div className="glass-card p-4">
+                            <div className="text-sm text-gray-400">Daily Cost</div>
+                            <div className="text-3xl font-bold">${(budget.monthly_tco.total / 30).toFixed(2)}</div>
+                        </div>
+                        <div className="glass-card p-4">
+                            <div className="text-sm text-gray-400">Cost/Trade</div>
+                            <div className="text-3xl font-bold">${budget.cost_per_trade.avg_cost_per_trade.toFixed(3)}</div>
+                        </div>
+                        <div className="glass-card p-4">
+                            <div className="text-sm text-gray-400">ROI</div>
+                            <div className="text-3xl font-bold text-success">{budget.roi_projection.roi_percent}%</div>
+                        </div>
+                    </div>
+                    
+                    <div className="glass-card p-6">
+                        <h3 className="text-2xl font-bold mb-4">Monthly Budget Breakdown</h3>
+                        <div className="space-y-4">
+                            {budget.monthly_tco.categories.map(cat => (
+                                <div key={cat.name}>
+                                    <div className="flex justify-between mb-2">
+                                        <span className="font-semibold">{cat.name}</span>
+                                        <span className="text-gray-400">${cat.amount} ({cat.percent}%)</span>
+                                    </div>
+                                    <div className="w-full bg-gray-700 rounded-full h-3 mb-2">
+                                        <div className="progress-fill h-3 rounded-full" style={{width: `${cat.percent}%`}}></div>
+                                    </div>
+                                    <div className="mr-4 space-y-1">
+                                        {cat.items.map((item, i) => (
+                                            <div key={i} className="flex justify-between text-sm text-gray-400">
+                                                <span>• {item.item}</span>
+                                                <span>${item.cost}/mo</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                    
+                    <div className="glass-card p-6">
+                        <h3 className="text-2xl font-bold mb-4">ROI Projection</h3>
+                        <div className="grid md:grid-cols-2 gap-4">
+                            <div>
+                                <div className="text-sm text-gray-400">Monthly Costs</div>
+                                <div className="text-2xl font-bold text-error">${budget.roi_projection.monthly_costs}</div>
+                            </div>
+                            <div>
+                                <div className="text-sm text-gray-400">Gross Revenue</div>
+                                <div className="text-2xl font-bold text-success">${budget.roi_projection.monthly_gross_revenue}</div>
+                            </div>
+                            <div>
+                                <div className="text-sm text-gray-400">Performance Fees</div>
+                                <div className="text-2xl font-bold">${budget.roi_projection.performance_fee_collected}</div>
+                            </div>
+                            <div>
+                                <div className="text-sm text-gray-400">Net Profit</div>
+                                <div className="text-2xl font-bold text-success">${budget.roi_projection.net_profit}</div>
                             </div>
                         </div>
                     </div>
