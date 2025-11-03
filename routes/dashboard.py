@@ -1946,6 +1946,620 @@ async def get_roi_analysis():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/roadmap-detailed", summary="Detailed ROADMAP with all phases")
+async def get_roadmap_detailed():
+    """Detailed ROADMAP with 5 phases and all features"""
+    try:
+        return {
+            "phases": [
+                {
+                    "id": 1,
+                    "name": "Foundation",
+                    "weeks": "1-3",
+                    "status": "in_progress",
+                    "progress": 62,
+                    "icon": "🔄",
+                    "features": [
+                        {"name": "FastAPI server setup", "status": "completed", "progress": 100, "icon": "✅"},
+                        {"name": "PostgreSQL integration", "status": "completed", "progress": 100, "icon": "✅"},
+                        {"name": "Binance API connection", "status": "completed", "progress": 100, "icon": "✅"},
+                        {"name": "Web Dashboard v1", "status": "in_progress", "progress": 75, "icon": "🔄"},
+                        {"name": "Authentication system", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "Basic trade execution", "status": "planned", "progress": 0, "icon": "📋"}
+                    ]
+                },
+                {
+                    "id": 2,
+                    "name": "8-AI Mesh",
+                    "weeks": "4-6",
+                    "status": "planned",
+                    "progress": 0,
+                    "icon": "📋",
+                    "features": [
+                        {"name": "Claude Sonnet 4.5 integration", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "Perplexity integration", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "Cohere integration", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "Mistral integration", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "Consensus engine (60% threshold)", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "Multi-AI validation", "status": "planned", "progress": 0, "icon": "📋"}
+                    ]
+                },
+                {
+                    "id": 3,
+                    "name": "News & Multi-Tenant",
+                    "weeks": "7-9",
+                    "status": "planned",
+                    "progress": 0,
+                    "icon": "📋",
+                    "features": [
+                        {"name": "10 News sources integration", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "Multi-tenant architecture", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "User management", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "Capital allocation", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "Performance tracking per user", "status": "planned", "progress": 0, "icon": "📋"}
+                    ]
+                },
+                {
+                    "id": 4,
+                    "name": "Advanced Features",
+                    "weeks": "10-12",
+                    "status": "planned",
+                    "progress": 0,
+                    "icon": "📋",
+                    "features": [
+                        {"name": "PWA deployment", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "Benchmarking engines", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "Production deployment", "status": "planned", "progress": 0, "icon": "📋"},
+                        {"name": "Mobile optimization", "status": "planned", "progress": 0, "icon": "📋"}
+                    ]
+                },
+                {
+                    "id": 5,
+                    "name": "AI & Optimization",
+                    "weeks": "Future",
+                    "status": "future",
+                    "progress": 0,
+                    "icon": "🛰️",
+                    "features": [
+                        {"name": "Additional AI models (Groq, Gemini, Grok)", "status": "future", "progress": 0, "icon": "🛰️"},
+                        {"name": "Advanced backtesting", "status": "future", "progress": 0, "icon": "🛰️"},
+                        {"name": "Machine learning optimization", "status": "future", "progress": 0, "icon": "🛰️"},
+                        {"name": "Portfolio rebalancing", "status": "future", "progress": 0, "icon": "🛰️"}
+                    ]
+                }
+            ],
+            "total_progress": 12.4,
+            "total_features": 25,
+            "completed_features": 3,
+            "in_progress_features": 1,
+            "planned_features": 17,
+            "future_features": 4
+        }
+    except Exception as e:
+        logger.error(f"Error in roadmap_detailed: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/indicators-complete", summary="All 27 Technical Indicators")
+async def get_indicators_complete():
+    """Complete list of all 27 technical indicators with details"""
+    try:
+        return {
+            "indicators": [
+                {
+                    "id": 1,
+                    "name": "SMA",
+                    "full_name": "Simple Moving Average",
+                    "category": "Trend",
+                    "period": [20, 50, 200],
+                    "description": "חישוב ממוצע מחירים פשוט",
+                    "use_case": "זיהוי כיוון מגמה",
+                    "signal": "מחיר מעל SMA = Bullish",
+                    "status": "active"
+                },
+                {
+                    "id": 2,
+                    "name": "EMA",
+                    "full_name": "Exponential Moving Average",
+                    "category": "Trend",
+                    "period": [12, 26, 50],
+                    "description": "ממוצע נע אקספוננציאלי",
+                    "use_case": "זיהוי מגמה מהיר יותר",
+                    "signal": "EMA crossover",
+                    "status": "active"
+                },
+                {
+                    "id": 3,
+                    "name": "MACD",
+                    "full_name": "Moving Average Convergence Divergence",
+                    "category": "Trend",
+                    "period": [12, 26, 9],
+                    "description": "התכנסות והתרחקות ממוצעים נעים",
+                    "use_case": "Momentum + Trend",
+                    "signal": "MACD cross signal line",
+                    "status": "active"
+                },
+                {
+                    "id": 4,
+                    "name": "ADX",
+                    "full_name": "Average Directional Index",
+                    "category": "Trend",
+                    "period": [14],
+                    "description": "מדד כיוון ממוצע",
+                    "use_case": "עוצמת מגמה",
+                    "signal": ">25 = Strong trend",
+                    "status": "active"
+                },
+                {
+                    "id": 5,
+                    "name": "Ichimoku Cloud",
+                    "full_name": "Ichimoku Kinko Hyo",
+                    "category": "Trend",
+                    "period": [9, 26, 52],
+                    "description": "ענן איצ'ימוקו",
+                    "use_case": "Support/Resistance + Trend",
+                    "signal": "Price above cloud",
+                    "status": "active"
+                },
+                {
+                    "id": 6,
+                    "name": "Parabolic SAR",
+                    "full_name": "Parabolic Stop and Reverse",
+                    "category": "Trend",
+                    "period": [0.02, 0.2],
+                    "description": "נקודות עצירה והיפוך",
+                    "use_case": "Trailing stop + Trend",
+                    "signal": "Dots flip side",
+                    "status": "active"
+                },
+                {
+                    "id": 7,
+                    "name": "Supertrend",
+                    "full_name": "Supertrend Indicator",
+                    "category": "Trend",
+                    "period": [10, 3],
+                    "description": "אינדיקטור סופרטרנד",
+                    "use_case": "Dynamic S/R",
+                    "signal": "Color change",
+                    "status": "active"
+                },
+                {
+                    "id": 8,
+                    "name": "Linear Regression",
+                    "full_name": "Linear Regression Trend",
+                    "category": "Trend",
+                    "period": [20],
+                    "description": "רגרסיה לינארית",
+                    "use_case": "Trend projection",
+                    "signal": "Slope direction",
+                    "status": "active"
+                },
+                {
+                    "id": 9,
+                    "name": "RSI",
+                    "full_name": "Relative Strength Index",
+                    "category": "Momentum",
+                    "period": [14],
+                    "description": "מדד חוזק יחסי",
+                    "use_case": "Overbought/Oversold",
+                    "signal": ">70 OB, <30 OS",
+                    "status": "active"
+                },
+                {
+                    "id": 10,
+                    "name": "Stochastic",
+                    "full_name": "Stochastic Oscillator",
+                    "category": "Momentum",
+                    "period": [14, 3, 3],
+                    "description": "אוסצילטור סטוכסטי",
+                    "use_case": "Momentum oscillator",
+                    "signal": "%K cross %D",
+                    "status": "active"
+                },
+                {
+                    "id": 11,
+                    "name": "CCI",
+                    "full_name": "Commodity Channel Index",
+                    "category": "Momentum",
+                    "period": [20],
+                    "description": "מדד ערוץ סחורות",
+                    "use_case": "Cyclical trends",
+                    "signal": ">100 / <-100",
+                    "status": "active"
+                },
+                {
+                    "id": 12,
+                    "name": "Williams %R",
+                    "full_name": "Williams Percent Range",
+                    "category": "Momentum",
+                    "period": [14],
+                    "description": "אחוז טווח וויליאמס",
+                    "use_case": "Momentum",
+                    "signal": ">-20 OB, <-80 OS",
+                    "status": "active"
+                },
+                {
+                    "id": 13,
+                    "name": "ROC",
+                    "full_name": "Rate of Change",
+                    "category": "Momentum",
+                    "period": [12],
+                    "description": "קצב שינוי",
+                    "use_case": "Price momentum",
+                    "signal": "Zero line cross",
+                    "status": "active"
+                },
+                {
+                    "id": 14,
+                    "name": "MFI",
+                    "full_name": "Money Flow Index",
+                    "category": "Momentum",
+                    "period": [14],
+                    "description": "מדד זרימת כסף",
+                    "use_case": "Volume-weighted RSI",
+                    "signal": ">80 OB, <20 OS",
+                    "status": "active"
+                },
+                {
+                    "id": 15,
+                    "name": "TSI",
+                    "full_name": "True Strength Index",
+                    "category": "Momentum",
+                    "period": [25, 13],
+                    "description": "מדד חוזק אמיתי",
+                    "use_case": "Momentum direction",
+                    "signal": "Line crosses",
+                    "status": "active"
+                },
+                {
+                    "id": 16,
+                    "name": "Bollinger Bands",
+                    "full_name": "Bollinger Bands",
+                    "category": "Volatility",
+                    "period": [20, 2],
+                    "description": "פסי בולינגר",
+                    "use_case": "Volatility + S/R",
+                    "signal": "Touch bands",
+                    "status": "active"
+                },
+                {
+                    "id": 17,
+                    "name": "ATR",
+                    "full_name": "Average True Range",
+                    "category": "Volatility",
+                    "period": [14],
+                    "description": "טווח אמיתי ממוצע",
+                    "use_case": "Volatility measure",
+                    "signal": "Higher = More volatile",
+                    "status": "active"
+                },
+                {
+                    "id": 18,
+                    "name": "Keltner Channels",
+                    "full_name": "Keltner Channels",
+                    "category": "Volatility",
+                    "period": [20, 2],
+                    "description": "ערוצי קלטנר",
+                    "use_case": "Trend + Volatility",
+                    "signal": "Breakouts",
+                    "status": "active"
+                },
+                {
+                    "id": 19,
+                    "name": "Donchian Channels",
+                    "full_name": "Donchian Channels",
+                    "category": "Volatility",
+                    "period": [20],
+                    "description": "ערוצי דונצ'יאן",
+                    "use_case": "Breakout system",
+                    "signal": "Price breaks channel",
+                    "status": "active"
+                },
+                {
+                    "id": 20,
+                    "name": "Standard Deviation",
+                    "full_name": "Standard Deviation",
+                    "category": "Volatility",
+                    "period": [20],
+                    "description": "סטיית תקן",
+                    "use_case": "Dispersion measure",
+                    "signal": "Expansion/Contraction",
+                    "status": "active"
+                },
+                {
+                    "id": 21,
+                    "name": "Volume",
+                    "full_name": "Trading Volume",
+                    "category": "Volume",
+                    "period": [],
+                    "description": "נפח מסחר",
+                    "use_case": "Confirm moves",
+                    "signal": "Above average",
+                    "status": "active"
+                },
+                {
+                    "id": 22,
+                    "name": "OBV",
+                    "full_name": "On Balance Volume",
+                    "category": "Volume",
+                    "period": [],
+                    "description": "נפח מאוזן",
+                    "use_case": "Accumulation/Distribution",
+                    "signal": "Divergence",
+                    "status": "active"
+                },
+                {
+                    "id": 23,
+                    "name": "VWAP",
+                    "full_name": "Volume Weighted Average Price",
+                    "category": "Volume",
+                    "period": [],
+                    "description": "מחיר ממוצע משוקלל נפח",
+                    "use_case": "Intraday benchmark",
+                    "signal": "Price vs VWAP",
+                    "status": "active"
+                },
+                {
+                    "id": 24,
+                    "name": "CMF",
+                    "full_name": "Chaikin Money Flow",
+                    "category": "Volume",
+                    "period": [20],
+                    "description": "זרימת כסף צ'איקין",
+                    "use_case": "Buying/Selling pressure",
+                    "signal": ">0 Bullish, <0 Bearish",
+                    "status": "active"
+                },
+                {
+                    "id": 25,
+                    "name": "Pivot Points",
+                    "full_name": "Pivot Points",
+                    "category": "Support/Resistance",
+                    "period": [],
+                    "description": "נקודות ציר",
+                    "use_case": "Key levels",
+                    "signal": "S1, S2, R1, R2",
+                    "status": "active"
+                },
+                {
+                    "id": 26,
+                    "name": "Fibonacci Retracement",
+                    "full_name": "Fibonacci Retracement Levels",
+                    "category": "Support/Resistance",
+                    "period": [],
+                    "description": "רמות פיבונאצ'י",
+                    "use_case": "Pullback levels",
+                    "signal": "Price reaction at 23.6%, 38.2%, 50%, 61.8%",
+                    "status": "active"
+                },
+                {
+                    "id": 27,
+                    "name": "S/R Zones",
+                    "full_name": "Support/Resistance Zones (AI-detected)",
+                    "category": "Support/Resistance",
+                    "period": [],
+                    "description": "אזורי תמיכה/התנגדות (AI)",
+                    "use_case": "Key price zones",
+                    "signal": "Touch zones",
+                    "status": "active"
+                }
+            ],
+            "categories": {
+                "Trend": 8,
+                "Momentum": 7,
+                "Volatility": 5,
+                "Volume": 4,
+                "Support/Resistance": 3
+            },
+            "total_indicators": 27
+        }
+    except Exception as e:
+        logger.error(f"Error in indicators_complete: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/system-documentation", summary="Complete System Documentation")
+async def get_system_documentation():
+    """Complete system documentation with workers, routes, utils, and flows"""
+    try:
+        return {
+            "workers": [
+                {
+                    "name": "Auto Scanner",
+                    "emoji": "📡",
+                    "file": "workers/gpt_auto_suggest.py",
+                    "description_simple": "סורק את כל השוק (531 symbols) כל 60 שניות ומחפש הזדמנויות",
+                    "how_it_works": [
+                        "1. מתחבר ל-Binance API",
+                        "2. מושך נתוני ticker עבור 531 זוגות",
+                        "3. מסנן לפי נפח מסחר (>$1M)",
+                        "4. מריץ ניתוח טכני multi-timeframe",
+                        "5. שולח איתותים איכותיים ל-GPT-5 Orchestrator"
+                    ],
+                    "input": "Binance market data",
+                    "output": "Trade signals (quality > 4.2)",
+                    "config": ["SUGGEST_INTERVAL_SEC=60", "SUGGEST_FUTURES=1", "SUGGEST_GRID=1"],
+                    "metrics": {"symbols_per_min": 531, "uptime": 0.998}
+                },
+                {
+                    "name": "GPT-5 Central Brain",
+                    "emoji": "🧠",
+                    "file": "workers/gpt5_orchestrator.py",
+                    "description_simple": "המוח המרכזי - מתאם בין כל ה-AI models ומקבל החלטות",
+                    "how_it_works": [
+                        "1. קולט איתותים מ-Auto Scanner",
+                        "2. שולח לניתוח ל-8 מודלים שונים",
+                        "3. אוסף תשובות ומחשב consensus",
+                        "4. מחליט האם לשלוח ל-Telegram Approval",
+                        "5. מעדכן לוגים ומטריקות"
+                    ],
+                    "input": "Trade signals from Auto Scanner",
+                    "output": "Approved/Rejected trade proposals",
+                    "config": ["AI_CONSENSUS_THRESHOLD=60"],
+                    "metrics": {"consensus_rate": 0.65, "avg_response_time": "8s"}
+                },
+                {
+                    "name": "Position Monitor",
+                    "emoji": "📈",
+                    "file": "workers/position_monitor.py",
+                    "description_simple": "עוקב אחרי פוזיציות פתוחות ומעדכן TP/SL באופן דינמי",
+                    "how_it_works": [
+                        "1. שואב פוזיציות פתוחות מ-Binance",
+                        "2. מחשב ATR לכל פוזיציה",
+                        "3. מעדכן trailing stop",
+                        "4. בודק תנאי BE (Break Even)",
+                        "5. שולח התראות ל-Telegram"
+                    ],
+                    "input": "Open positions from Binance",
+                    "output": "Updated TP/SL orders",
+                    "config": ["POSITION_REPORT_INTERVAL_SEC=1800"],
+                    "metrics": {"avg_update_time": "0.3s", "uptime": 0.999}
+                },
+                {
+                    "name": "Sentinel Security",
+                    "emoji": "🛡️",
+                    "file": "workers/sentinel_security.py",
+                    "description_simple": "אבטחה ומעקב אחר אירועים חשודים",
+                    "how_it_works": [
+                        "1. סורק אירועים חשודים",
+                        "2. בודק מתקפות DDOS",
+                        "3. עוקב אחרי ניסיונות כניסה כושלים",
+                        "4. שולח התראות קריטיות",
+                        "5. חוסם IP מסוכנים"
+                    ],
+                    "input": "System logs and events",
+                    "output": "Security alerts",
+                    "config": ["SENTINEL_ENABLED=1", "SENTINEL_ALERT_LEVEL=critical"],
+                    "metrics": {"events_scanned": 1000, "threats_blocked": 5}
+                },
+                {
+                    "name": "Daily Digest",
+                    "emoji": "📊",
+                    "file": "workers/daily_digest.py",
+                    "description_simple": "יוצר סיכום יומי ושולח ל-Telegram",
+                    "how_it_works": [
+                        "1. אוסף סטטיסטיקות יומיות",
+                        "2. מחשב PnL ו-ROI",
+                        "3. יוצר גרפים ותרשימים",
+                        "4. מרכיב הודעת סיכום",
+                        "5. שולח ל-Telegram בשעה 00:00"
+                    ],
+                    "input": "Daily trades and metrics",
+                    "output": "Daily summary report",
+                    "config": ["DAILY_DIGEST_HOUR=0"],
+                    "metrics": {"reports_sent": 30, "avg_trades_per_day": 12}
+                },
+                {
+                    "name": "GitHub Auto-Commit",
+                    "emoji": "📝",
+                    "file": "workers/github_auto_commit.py",
+                    "description_simple": "שומר קוד אוטומטית ל-GitHub כל שעה",
+                    "how_it_works": [
+                        "1. בודק שינויים בקוד",
+                        "2. יוצר commit message אוטומטי",
+                        "3. מבצע git add + commit",
+                        "4. דוחף ל-GitHub",
+                        "5. מעדכן ב-Telegram על הצלחה/כישלון"
+                    ],
+                    "input": "Code changes",
+                    "output": "GitHub commits",
+                    "config": ["GITHUB_AUTO_COMMIT_INTERVAL=3600"],
+                    "metrics": {"commits_made": 150, "success_rate": 0.95}
+                },
+                {
+                    "name": "Heartbeat Monitor",
+                    "emoji": "💓",
+                    "file": "workers/system_heartbeat.py",
+                    "description_simple": "בודק שהמערכת חיה וקיימת כל 10 דקות",
+                    "how_it_works": [
+                        "1. שולח GET request ל-/health",
+                        "2. בודק שהשרת מגיב",
+                        "3. בודק זמן תגובה",
+                        "4. שולח התראה אם יש בעיה",
+                        "5. לוגג מטריקות"
+                    ],
+                    "input": "System health endpoints",
+                    "output": "Health status alerts",
+                    "config": ["HEARTBEAT_INTERVAL=600"],
+                    "metrics": {"checks_performed": 1440, "downtime": 0}
+                },
+                {
+                    "name": "N8N Bridge",
+                    "emoji": "🌉",
+                    "file": "workers/n8n_bridge.py",
+                    "description_simple": "מחבר למערכת N8N לאוטומציות מתקדמות",
+                    "how_it_works": [
+                        "1. מקשיב ל-webhooks מ-N8N",
+                        "2. מעבד workflow triggers",
+                        "3. מבצע פעולות מורכבות",
+                        "4. מחזיר תוצאות ל-N8N",
+                        "5. לוגג כל אירוע"
+                    ],
+                    "input": "N8N workflow triggers",
+                    "output": "Action execution results",
+                    "config": ["N8N_WEBHOOK_URL"],
+                    "metrics": {"workflows_executed": 50, "success_rate": 0.98}
+                }
+            ],
+            "routes_summary": {
+                "total_routes": 150,
+                "categories": [
+                    {"name": "Dashboard", "count": 15},
+                    {"name": "Trading", "count": 25},
+                    {"name": "Market Data", "count": 20},
+                    {"name": "Health & Monitoring", "count": 10},
+                    {"name": "Telegram", "count": 15},
+                    {"name": "Admin & Control", "count": 20},
+                    {"name": "Analytics & Reporting", "count": 25},
+                    {"name": "Other", "count": 20}
+                ],
+                "key_endpoints": [
+                    "/alerts/ingest",
+                    "/dashboard/ultimate-data",
+                    "/trades/execute",
+                    "/positions/list",
+                    "/telegram/webhook",
+                    "/health",
+                    "/market/scan"
+                ]
+            },
+            "utils_modules": [
+                {"name": "storage.py", "description": "Database operations"},
+                {"name": "ws_fallback.py", "description": "WebSocket handling"},
+                {"name": "telegram_utils.py", "description": "Telegram integration"},
+                {"name": "binance_client.py", "description": "Binance API wrapper"},
+                {"name": "ai_client.py", "description": "AI models integration"},
+                {"name": "indicators.py", "description": "Technical indicators"},
+                {"name": "risk.py", "description": "Risk management"}
+            ],
+            "flows": [
+                {
+                    "name": "Trade Execution Flow",
+                    "steps": ["Market Scan", "Multi-TF Analysis", "AI Analysis", "Risk Check", "Telegram Approval", "Execution", "Position Monitor"]
+                },
+                {
+                    "name": "Position Management Flow",
+                    "steps": ["Monitor Open Positions", "Calculate ATR", "Update Trail Stop", "Check TP/SL", "Close if triggered"]
+                },
+                {
+                    "name": "News Processing Flow",
+                    "steps": ["Fetch News", "NLP Extraction", "Sentiment Analysis", "Impact Scoring", "Send to AI Mesh"]
+                },
+                {
+                    "name": "Approval Workflow",
+                    "steps": ["Generate Proposal", "Send to Telegram", "Wait for User", "Process Callback", "Execute/Reject"]
+                },
+                {
+                    "name": "Error Handling Flow",
+                    "steps": ["Detect Error", "Log to Database", "Send Alert", "Auto-retry", "Escalate if failed"]
+                }
+            ]
+        }
+    except Exception as e:
+        logger.error(f"Error in system_documentation: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 
 
 

@@ -479,6 +479,20 @@
             const [fontSize, setFontSize] = useState(16);
             const [glassEffect, setGlassEffect] = useState(0.6);
             const [rtl, setRtl] = useState(true);
+            const [currentTime, setCurrentTime] = useState('');
+            
+            const fetchData = async () => {
+                try {
+                    const response = await fetch('/dashboard/ultimate-data');
+                    if (!response.ok) throw new Error('Failed to fetch data');
+                    const json = await response.json();
+                    setData(json);
+                    setLoading(false);
+                } catch (err) {
+                    setError(err.message);
+                    setLoading(false);
+                }
+            };
             
             useEffect(() => {
                 fetchData();
@@ -508,18 +522,39 @@
                 }
             }, []);
             
-            const fetchData = async () => {
-                try {
-                    const response = await fetch('/dashboard/ultimate-data');
-                    if (!response.ok) throw new Error('Failed to fetch data');
-                    const json = await response.json();
-                    setData(json);
-                    setLoading(false);
-                } catch (err) {
-                    setError(err.message);
-                    setLoading(false);
+            useEffect(() => {
+                const updateIsraelTime = () => {
+                    const now = new Date();
+                    const israelTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
+                    const days = ['ראשון', 'שני', 'שלישי', 'רביעי', 'חמישי', 'שישי', 'שבת'];
+                    const dayName = days[israelTime.getDay()];
+                    const dateStr = israelTime.toLocaleDateString('he-IL', {
+                        year: 'numeric',
+                        month: 'long',
+                        day: 'numeric'
+                    });
+                    const timeStr = israelTime.toLocaleTimeString('he-IL', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit'
+                    });
+                    setCurrentTime(`יום ${dayName}, ${dateStr}, ${timeStr}`);
+                };
+                updateIsraelTime();
+                const interval = setInterval(updateIsraelTime, 1000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            useEffect(() => {
+                const lastTab = localStorage.getItem('ultimate-workbook-last-tab');
+                if (lastTab) {
+                    setActiveTab(parseInt(lastTab));
                 }
-            };
+            }, []);
+            
+            useEffect(() => {
+                localStorage.setItem('ultimate-workbook-last-tab', activeTab.toString());
+            }, [activeTab]);
             
             const tabs = [
                 { id: 1, name: 'Dashboard', icon: '📊' },
@@ -536,7 +571,10 @@
                 { id: 12, name: 'ROI Analysis', icon: '💵' },
                 { id: 13, name: 'System Map', icon: '🗺️' },
                 { id: 14, name: 'Theme', icon: '🎨' },
-                { id: 15, name: 'User Guide', icon: '📖' }
+                { id: 15, name: 'User Guide', icon: '📖' },
+                { id: 16, name: 'ROADMAP', icon: '🗺️' },
+                { id: 17, name: 'Tech Indicators', icon: '📊' },
+                { id: 18, name: 'System Docs', icon: '📚' }
             ];
             
             if (loading) return (
@@ -559,6 +597,10 @@
             
             return (
                 <div className="p-4 md:p-8 max-w-7xl mx-auto">
+                    <div className="flex justify-center mb-4 fade-in" style={{animation: 'fadeIn 1s ease-out, pulse 3s infinite'}}>
+                        <img src="algogpt-logo.svg" alt="AlgoGPT Logo" style={{height: '100px', filter: 'drop-shadow(0 0 20px rgba(102, 126, 234, 0.5))'}} />
+                    </div>
+                    
                     <header className="glass-card p-6 mb-6 fade-in">
                         <div className="flex items-center justify-between flex-wrap gap-4">
                             <div>
@@ -570,9 +612,9 @@
                                 </p>
                             </div>
                             <div className="text-left">
-                                <div className="text-sm text-gray-400">Last Updated</div>
+                                <div className="text-sm text-gray-400">🕐 Israel Time</div>
                                 <div className="text-lg font-semibold text-blue-300">
-                                    {new Date(data.metadata.generated_at).toLocaleString('he-IL')}
+                                    {currentTime}
                                 </div>
                             </div>
                         </div>
@@ -609,6 +651,9 @@
                         {activeTab === 13 && <Tab13SystemMap data={data.system_map} />}
                         {activeTab === 14 && <Tab14Theme theme={theme} setTheme={setTheme} fontSize={fontSize} setFontSize={setFontSize} glassEffect={glassEffect} setGlassEffect={setGlassEffect} rtl={rtl} setRtl={setRtl} />}
                         {activeTab === 15 && <Tab15UserGuide />}
+                        {activeTab === 16 && <Tab16Roadmap />}
+                        {activeTab === 17 && <Tab17TechnicalIndicators />}
+                        {activeTab === 18 && <Tab18SystemDocs />}
                     </div>
                 </div>
             );
@@ -2047,6 +2092,259 @@
                 </div>
             </div>
         );
+        
+        const Tab16Roadmap = () => {
+            const [roadmapData, setRoadmapData] = useState(null);
+            
+            useEffect(() => {
+                fetch('/dashboard/roadmap-detailed')
+                    .then(res => res.json())
+                    .then(data => setRoadmapData(data))
+                    .catch(err => console.error('Error loading roadmap:', err));
+            }, []);
+            
+            if (!roadmapData) return <div className="loading">⏳ טוען ROADMAP...</div>;
+            
+            return (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-4 mb-6">
+                            <div className="icon-box">🗺️</div>
+                            <h2 className="text-3xl font-bold gradient-text">ROADMAP - 5 Phases Masterplan</h2>
+                        </div>
+                        
+                        <div className="mb-6">
+                            <h3 className="text-xl font-bold text-blue-300 mb-2">התקדמות כוללת</h3>
+                            <div className="progress-bar" style={{height: '20px'}}>
+                                <div className="progress-fill" style={{width: `${roadmapData.total_progress}%`}}></div>
+                            </div>
+                            <div className="text-center mt-2 text-2xl font-bold text-primary">{roadmapData.total_progress}%</div>
+                        </div>
+                        
+                        <div className="space-y-6">
+                            {roadmapData.phases.map((phase, idx) => (
+                                <div key={phase.id} className="metric-card border-r-4" style={{borderRightColor: phase.status === 'in_progress' ? '#10b981' : phase.status === 'future' ? '#6b7280' : '#f59e0b'}}>
+                                    <div className="flex items-center justify-between mb-4">
+                                        <div>
+                                            <h3 className="text-2xl font-bold text-white">Phase {phase.id}: {phase.name}</h3>
+                                            <p className="text-sm text-gray-400">Weeks {phase.weeks}</p>
+                                        </div>
+                                        <span className={`status-badge ${phase.status === 'in_progress' ? 'status-active' : phase.status === 'future' ? 'bg-gray-600' : 'status-planned'}`}>
+                                            {phase.icon} {phase.status === 'in_progress' ? 'בעבודה' : phase.status === 'future' ? 'ברדאר' : 'מתוכנן'}
+                                        </span>
+                                    </div>
+                                    
+                                    <div className="mb-4">
+                                        <div className="flex justify-between mb-2">
+                                            <span className="text-gray-400">התקדמות</span>
+                                            <span className="font-bold text-primary">{phase.progress}%</span>
+                                        </div>
+                                        <div className="progress-bar">
+                                            <div className="progress-fill" style={{width: `${phase.progress}%`}}></div>
+                                        </div>
+                                    </div>
+                                    
+                                    <div>
+                                        <h4 className="text-lg font-bold text-blue-300 mb-3">Features</h4>
+                                        <div className="space-y-2">
+                                            {phase.features.map((feature, featureIdx) => (
+                                                <div key={featureIdx} className="flex items-center justify-between p-3 bg-gray-800/50 rounded">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className="text-xl">{feature.icon}</span>
+                                                        <span className="text-white">{feature.name}</span>
+                                                    </div>
+                                                    <span className="font-bold text-primary">{feature.progress}%</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+        
+        const Tab17TechnicalIndicators = () => {
+            const [indicatorsData, setIndicatorsData] = useState(null);
+            
+            useEffect(() => {
+                fetch('/dashboard/indicators-complete')
+                    .then(res => res.json())
+                    .then(data => setIndicatorsData(data))
+                    .catch(err => console.error('Error loading indicators:', err));
+            }, []);
+            
+            if (!indicatorsData) return <div className="loading">⏳ טוען אינדיקטורים...</div>;
+            
+            const categorizedIndicators = {};
+            indicatorsData.indicators.forEach(ind => {
+                if (!categorizedIndicators[ind.category]) {
+                    categorizedIndicators[ind.category] = [];
+                }
+                categorizedIndicators[ind.category].push(ind);
+            });
+            
+            return (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-4 mb-6">
+                            <div className="icon-box">📊</div>
+                            <h2 className="text-3xl font-bold gradient-text">27 Technical Indicators Encyclopedia</h2>
+                        </div>
+                        
+                        <div className="grid md:grid-cols-5 gap-4 mb-6">
+                            {Object.keys(indicatorsData.categories).map(cat => (
+                                <div key={cat} className="metric-card text-center">
+                                    <div className="text-2xl font-bold text-primary">{indicatorsData.categories[cat]}</div>
+                                    <div className="text-sm text-gray-400">{cat}</div>
+                                </div>
+                            ))}
+                        </div>
+                        
+                        {Object.keys(categorizedIndicators).map(category => (
+                            <div key={category} className="mb-8">
+                                <h3 className="text-2xl font-bold text-blue-300 mb-4">
+                                    קטגוריה: {category} ({categorizedIndicators[category].length})
+                                </h3>
+                                <div className="overflow-x-auto">
+                                    <table>
+                                        <thead>
+                                            <tr>
+                                                <th>#</th>
+                                                <th>שם</th>
+                                                <th>Period/Params</th>
+                                                <th>שימוש</th>
+                                                <th>Signal</th>
+                                                <th>סטטוס</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            {categorizedIndicators[category].map(ind => (
+                                                <tr key={ind.id}>
+                                                    <td className="text-gray-400">{ind.id}</td>
+                                                    <td className="font-bold text-white">
+                                                        {ind.name}<br/>
+                                                        <span className="text-xs text-gray-400">{ind.full_name}</span>
+                                                    </td>
+                                                    <td className="text-primary">
+                                                        {ind.period && ind.period.length > 0 ? ind.period.join(', ') : '-'}
+                                                    </td>
+                                                    <td className="text-gray-300">{ind.use_case}</td>
+                                                    <td className="text-success text-sm">{ind.signal}</td>
+                                                    <td>
+                                                        <span className="status-badge status-active text-xs">🟢 Active</span>
+                                                    </td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            );
+        };
+        
+        const Tab18SystemDocs = () => {
+            const [docsData, setDocsData] = useState(null);
+            
+            useEffect(() => {
+                fetch('/dashboard/system-documentation')
+                    .then(res => res.json())
+                    .then(data => setDocsData(data))
+                    .catch(err => console.error('Error loading system docs:', err));
+            }, []);
+            
+            if (!docsData) return <div className="loading">⏳ טוען תיעוד מערכת...</div>;
+            
+            return (
+                <div className="space-y-6">
+                    <div className="glass-card p-6">
+                        <div className="flex items-center gap-4 mb-6">
+                            <div className="icon-box">📚</div>
+                            <h2 className="text-3xl font-bold gradient-text">System Documentation Hub</h2>
+                        </div>
+                        
+                        <div className="mb-8">
+                            <h3 className="text-2xl font-bold text-blue-300 mb-4">8 System Workers</h3>
+                            <div className="space-y-4">
+                                {docsData.workers.map((worker, idx) => (
+                                    <div key={idx} className="metric-card border-r-4 border-success">
+                                        <div className="flex items-center gap-3 mb-3">
+                                            <span className="text-3xl">{worker.emoji}</span>
+                                            <div>
+                                                <h4 className="text-xl font-bold text-white">{worker.name}</h4>
+                                                <p className="text-xs text-gray-400">{worker.file}</p>
+                                            </div>
+                                        </div>
+                                        
+                                        <p className="text-gray-300 mb-3">{worker.description_simple}</p>
+                                        
+                                        <div className="mb-3">
+                                            <h5 className="text-sm font-bold text-blue-300 mb-2">איך עובד:</h5>
+                                            <ol className="text-sm text-gray-300 mr-4 space-y-1">
+                                                {worker.how_it_works.map((step, stepIdx) => (
+                                                    <li key={stepIdx}>{step}</li>
+                                                ))}
+                                            </ol>
+                                        </div>
+                                        
+                                        <div className="grid md:grid-cols-2 gap-4 text-sm">
+                                            <div>
+                                                <span className="text-gray-400">Input: </span>
+                                                <span className="text-white">{worker.input}</span>
+                                            </div>
+                                            <div>
+                                                <span className="text-gray-400">Output: </span>
+                                                <span className="text-white">{worker.output}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        
+                        <div className="mb-8">
+                            <h3 className="text-2xl font-bold text-blue-300 mb-4">API Routes Summary</h3>
+                            <div className="grid md:grid-cols-2 gap-4">
+                                {docsData.routes_summary.categories.map((cat, idx) => (
+                                    <div key={idx} className="metric-card">
+                                        <div className="flex justify-between">
+                                            <span className="text-white font-bold">{cat.name}</span>
+                                            <span className="text-primary font-bold">{cat.count} routes</span>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                        
+                        <div className="mb-8">
+                            <h3 className="text-2xl font-bold text-blue-300 mb-4">5 System Flows</h3>
+                            <div className="space-y-4">
+                                {docsData.flows.map((flow, idx) => (
+                                    <div key={idx} className="metric-card">
+                                        <h4 className="text-lg font-bold text-white mb-3">{flow.name}</h4>
+                                        <div className="flex flex-wrap items-center gap-2">
+                                            {flow.steps.map((step, stepIdx) => (
+                                                <React.Fragment key={stepIdx}>
+                                                    <div className="px-3 py-2 bg-gray-700 text-white text-sm rounded-lg">
+                                                        {step}
+                                                    </div>
+                                                    {stepIdx < flow.steps.length - 1 && <span className="text-primary">→</span>}
+                                                </React.Fragment>
+                                            ))}
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
         
         ReactDOM.render(<UltimateWorkbook />, document.getElementById('root'));
     </script>
