@@ -3368,6 +3368,106 @@ async def get_flow_data():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/telegram/pending-approvals", summary="Get Pending Trade Approvals")
+async def get_telegram_pending_approvals():
+    """Fetch all pending trade proposals waiting for approval"""
+    try:
+        try:
+            from utils.trade_executor import ConfirmStore
+            pending = ConfirmStore.pending()
+        except Exception as e:
+            logger.warning(f"ConfirmStore not available: {e}")
+            pending = []
+        
+        if not isinstance(pending, list):
+            pending = []
+        
+        formatted = []
+        for item in pending:
+            if not isinstance(item, dict):
+                continue
+            
+            formatted.append({
+                "ticket_id": item.get("ticket_id", ""),
+                "symbol": item.get("symbol", ""),
+                "side": item.get("side", ""),
+                "entry_price": item.get("entry_price", 0),
+                "tp_price": item.get("tp_price", 0),
+                "sl_price": item.get("sl_price", 0),
+                "quantity": item.get("quantity", 0),
+                "leverage": item.get("leverage", 1),
+                "quality": item.get("quality", 0),
+                "confidence": item.get("confidence", 0),
+                "rr_ratio": item.get("rr_ratio", 0),
+                "reasoning": item.get("reasoning", ""),
+                "created_at": item.get("created_at", ""),
+                "expires_at": item.get("expires_at", ""),
+                "type": item.get("type", "FUTURES"),
+                "strategy": item.get("strategy", "REGULAR")
+            })
+        
+        return {
+            "ok": True,
+            "count": len(formatted),
+            "pending_approvals": formatted,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except Exception as e:
+        logger.error(f"Error in get_pending_approvals: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/telegram/approve/{ticket_id}", summary="Approve Trade from Web")
+async def approve_trade_web(ticket_id: str):
+    """Approve a pending trade proposal from web interface"""
+    try:
+        try:
+            from utils.trade_executor import ConfirmStore
+            result = ConfirmStore.decide(ticket_id, approved=True)
+        except Exception as e:
+            logger.error(f"ConfirmStore.decide failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to approve: {e}")
+        
+        return {
+            "ok": True,
+            "action": "approved",
+            "ticket_id": ticket_id,
+            "result": result,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in approve_trade_web: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/telegram/reject/{ticket_id}", summary="Reject Trade from Web")
+async def reject_trade_web(ticket_id: str, reason: Optional[str] = "Rejected from web"):
+    """Reject a pending trade proposal from web interface"""
+    try:
+        try:
+            from utils.trade_executor import ConfirmStore
+            result = ConfirmStore.decide(ticket_id, approved=False)
+        except Exception as e:
+            logger.error(f"ConfirmStore.decide failed: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to reject: {e}")
+        
+        return {
+            "ok": True,
+            "action": "rejected",
+            "ticket_id": ticket_id,
+            "reason": reason,
+            "result": result,
+            "timestamp": datetime.utcnow().isoformat()
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error in reject_trade_web: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.post("/agents/{agent_id}/control", summary="Control Agent")
 async def control_agent(agent_id: str, action: str):
     """Start/Stop/Restart agent"""
