@@ -1,0 +1,160 @@
+סבבה, נלך חד ופרודקשני. יש לך כבר: N8N Webhook Bridge + Telegram. הצעדים הבאים (מינימום חיכוך, מקסימום תועלת) + מה כל מקור מוסיף בפועל:
+
+# מה להוסיף עכשיו (4–6 מקורות, לפי סדר עדיפות)
+
+1. **Perplexity API (Sonar)** — חדשות ממוסמכות עם ציטוטים
+
+   * שימוש: “news_guard” לפני טריידים, סיכומי מאקרו+קריפטו עם מקורות.
+   * מודלים: `sonar-pro` לשוטף, `sonar-deep-research` למחקר עמוק. תמחור שקוף; יש גם Search API גולמי. ([docs.perplexity.ai][1])
+
+2. **TradingView Webhooks (Pine)** — טריגרים טכניים בזמן אמת
+
+   * שימוש: Breakout/Retest/Sweep מהסקריפט שלך ⇒ JSON ל־n8n/Executor.
+   * תיעוד Webhook ו־placeholders ל־{{ticker}}, {{close}} וכו’. ([TradingView][2])
+
+3. **Economic Calendar API** — חלונות “No-Trade” סביב מאקרו
+
+   * עדיפות: **TradingEconomics** (כיסוי עולמי, near-realtime), אלטרנטיבה/גיבוי: **FMP Economic Calendar** (עדכון ~15 דק’). לשאיבת סדר יום מאקרו (CPI/FOMC/NFP) והפעלת cooldown אוטומטי.
+   * TE docs/coverage + FMP endpoints. ([docs.tradingeconomics.com][3])
+
+4. **RSS → n8n** — intake קל ומהיר
+
+   * שימוש: CoinDesk/The Block/SEC RSS ועוד → טריאג’ לסנטימנט/סיכון. Node מובנה `RSS Feed Trigger`. ([docs.n8n.io][4])
+
+5. **X/Twitter דרך n8n** (אופציונלי, לפי תקציב)
+
+   * שימוש: ניטור חשבונות/מילות מפתח (ETF, Binance, SEC). כרגע ל־X יש Tierים/Pay-per-use בבטא—בודקים עלות מול תועלת. ([docs.x.com][5])
+
+6. **Social Sentiment “קריפטו בלבד” (אופציונלי)**
+
+   * **LunarCrush API**: סנטימנט/טרנדים בזמן אמת; משמש כפקטור Risk-Off או כ־cooldown. ([lunarcrush.com][6])
+   * **Whale Alert**: עסקאות ענק בין ארנקים/בורסות (סיגנל לחץ היצע/ביקוש). ([developer.whale-alert.io][7])
+
+---
+
+## אינטגרציה מהירה (Ready-to-use)
+
+### 1) מסר JSON מ-TradingView → n8n (Webhook)
+
+Alert message (סטנדרט):
+
+```json
+{
+  "source": "tradingview",
+  "symbol": "{{ticker}}",
+  "tf": "15m",
+  "event": "breakout_retest",
+  "price": "{{close}}",
+  "extras": { "ema21": "{{plot_0}}", "ema50": "{{plot_1}}", "adx": "{{plot_2}}" }
+}
+```
+
+יצירת alert עם Webhook URL + placeholders לפי TradingView. ([TradingView][2])
+
+### 2) n8n – RSS Trigger → סיווג → Telegram
+
+Use `RSS Feed Trigger` → Code/IF → HTTP Request (AlgoGPT `/news/ingest`). ([docs.n8n.io][4])
+
+### 3) “No-Trade Window” סביב מאקרו
+
+קריאה לכלכלה:
+
+* TradingEconomics: `/economic_calendar` (כיסוי גלובלי; 1600+ אירועים/חודש). ([docs.tradingeconomics.com][3])
+* FMP: `/economic-calendar` (עדכון ~15 דק’). ([Financial Modeling Prep][8])
+* FRED: למשוך סדרות (VIX proxy, Fed Rate, M2) לתמיכת Regime Scorer. ([FRED][9])
+
+### 4) Perplexity – news_guard
+
+קריאה ל־`/chat/completions` עם `model: "sonar-pro"` + prompt קצר: “Top 5 crypto/macro risks next 24h + cite sources”. ([docs.perplexity.ai][1])
+
+### 5) סיגנל לווייתנים (אופציונלי)
+
+Webhook מ-WhaleAlert / או פולינג קצר (טווח 1–5 דק’), מסנן: `value_usd >= 10M` + תייג `to=exchange`. ([developer.whale-alert.io][7])
+
+---
+
+## מה כל מקור מוסיף בפועל (במונחי AlgoGPT)
+
+* **Perplexity** — Grounded news + ציטוטים ⇒ החלטת “Trade/Skip/Cooldown” עם ראיות. ([docs.perplexity.ai][10])
+* **TradingView Webhooks** — גשר ישיר מהאינדיקטור שלך ⇒ “pre-trade check”/Ticket; latency נמוך. ([TradingView][2])
+* **Economic Calendar (TE/FMP)** — חלונות “אין כניסה”: FOMC/CPI/NFP וכד’ ⇒ מניעת טריידים מסוכנים. ([docs.tradingeconomics.com][11])
+* **RSS→n8n** — קליטת חדשות רשמיות (SEC/בלוגים/בורסות) עם פילטר כפול (מילות־עצירה/סקור סנטימנט). ([docs.n8n.io][4])
+* **X/Twitter** — מהירויות/דליפות/שמועות; להפעיל שמרנות כי תנאי API/עלויות משתנים. ([docs.x.com][5])
+* **LunarCrush/WhaleAlert** — סנטימנט/עסקאות ענק ⇒ טריגר ל־risk guard (הגדלת SL או מעבר ל־Grid). ([lunarcrush.com][6])
+
+---
+
+## סקיילינג: 2GB → 4GB → 8GB (בלי קריסות/חום)
+
+**מבנה תהליכים מומלץ:**
+
+* `news_worker` עצמאי (async) עם תור Redis: `news:intake → dedup → classify → route_guard`.
+* Rate limits: Perplexity ≤ 1–2 rps; TE/FMP ≤ 1 rps; WhaleAlert/X לפי tier. ([docs.tradingeconomics.com][3])
+* **De-dup**:哈ש על `{title|url|tx_hash}` ל־24h.
+* **Idempotency**: `idempotency_key` בהזרקה ל־AlgoGPT.
+* **Backoff**: 200/429/5xx ⇒ exponential backoff + jitter.
+* **Budget caps**: תקרת $/day לכל ספק (Perplexity/FMP/LunarCrush).
+* **Caching**: TE/FMP/FRED 30–60 דק’; RSS/X 5–10 דק’. ([FRED][9])
+* **Observability**: counters `news_ingested`, `dedup_hits`, `guard_skips`, `no_trade_windows_open`.
+
+המלצת הקצאה:
+
+* **4GB**: news_worker + executor על אותו שרת, אבל עם Uvicorn workers נפרדים.
+* **8GB**: לפצל service: `algogpt-core` (trade/executor) ו־`algogpt-news` (intake/guard), ביניהם Redis pub/sub.
+
+---
+
+## .env (רק מה שחסר)
+
+```
+# News/Sentiment
+PERPLEXITY_API_KEY=...
+TE_API_CLIENT=...           # TradingEconomics
+FMP_API_KEY=...             # אלטרנטיבה/גיבוי
+FRED_API_KEY=...            # לסדרות מאקרו
+
+# Social/On-chain (אופציונלי)
+LUNARCRUSH_API_KEY=...
+WHALEALERT_API_KEY=...
+
+# X/Twitter (אם מפעילים)
+X_BEARER=...                # שים לב לתנאי גישה/תמחור
+```
+
+---
+
+## Quick checks (cURL)
+
+```bash
+# Perplexity news guard
+curl -s https://api.perplexity.ai/chat/completions \
+ -H "Authorization: Bearer $PERPLEXITY_API_KEY" -H "Content-Type: application/json" \
+ -d '{"model":"sonar-pro","messages":[{"role":"user","content":"Top 5 crypto macro risks next 24h. Cite sources."}]}'
+
+# TradingEconomics (דוגמה כללי)
+curl -s "https://api.tradingeconomics.com/calendar?d1=2025-11-03&d2=2025-11-05&c=United%20States&format=json&client=$TE_API_CLIENT"
+```
+
+([docs.perplexity.ai][1])
+
+---
+
+### שורה תחתונה
+
+* תתחיל עם: **Perplexity + TradingView Webhooks + TradingEconomics + RSS→n8n**.
+* תוסיף בהמשך: **LunarCrush + WhaleAlert** (אם תרצה חיזוק סנטימנט/זרימות).
+* העבר ל-**4GB** כש־news_worker מבודד; ל-**8GB** כשמפצלים לשני מיקרו־סרביסים.
+
+אם תרצה, אשלח לך בלוק n8n מוכן (export JSON) שמכיל: RSS Trigger → Classify → Perplexity enrich → Guard → Telegram/Executor.
+
+[1]: https://docs.perplexity.ai/api-reference/chat-completions-post?utm_source=chatgpt.com "Chat Completions"
+[2]: https://www.tradingview.com/support/solutions/43000529348-how-to-configure-webhook-alerts/?utm_source=chatgpt.com "How to configure webhook alerts"
+[3]: https://docs.tradingeconomics.com/?utm_source=chatgpt.com "Trading Economics API Documentation"
+[4]: https://docs.n8n.io/integrations/builtin/core-nodes/n8n-nodes-base.rssfeedreadtrigger/?utm_source=chatgpt.com "RSS Feed Trigger node documentation"
+[5]: https://docs.x.com/x-api/getting-started/about-x-api?utm_source=chatgpt.com "About the X API"
+[6]: https://lunarcrush.com/developers/api/overview?utm_source=chatgpt.com "LunarCrush API Documentation v4 RESTful JSON API"
+[7]: https://developer.whale-alert.io/documentation/?utm_source=chatgpt.com "Whale Alert - API Documentation"
+[8]: https://site.financialmodelingprep.com/developer/docs/economic-calendar-api/?direct=true&utm_source=chatgpt.com "Economic Calendar API - FinancialModelingPrep"
+[9]: https://fred.stlouisfed.org/docs/api/fred/overview.html?utm_source=chatgpt.com "St. Louis Fed Web Services: FRED® API Overview"
+[10]: https://docs.perplexity.ai/getting-started/overview?utm_source=chatgpt.com "Perplexity: Overview"
+[11]: https://docs.tradingeconomics.com/economic_calendar/snapshot/?utm_source=chatgpt.com "Economic Calendar"

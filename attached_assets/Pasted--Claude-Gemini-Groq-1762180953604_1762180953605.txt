@@ -1,0 +1,314 @@
+מעולה. הנה חבילה קצרה–ממוקדת, “העתק-הדבק”, שמחלקת עומסים ותפקידים בין המוחות: Claude / Gemini / Groq / Perplexity / Voyage (+אופציונלי Mistral/OpenRouter). כולל ‎routing.yaml, ‎.env, מודול ‎ai_router.py מוכן לשילוב, ודוגמאות שימוש.
+
+# 1) routing.yaml
+
+```yaml
+# ./config/routing.yaml
+version: 1
+defaults:
+  http_timeout_sec: 45
+  connect_timeout_sec: 5
+  retries: 1
+  backoff_sec: 0.3
+  max_tokens: 4000
+
+providers:
+  claude:
+    base_url: https://api.anthropic.com
+    model: claude-3-5-sonnet-20241022
+    key_env: ANTHROPIC_API_KEY
+  gemini:
+    base_url: https://generativelanguage.googleapis.com
+    model: gemini-2.5-pro
+    key_env: GEMINI_API_KEY
+  groq_llama:
+    base_url: https://api.groq.com
+    model: llama-3.1-70b-versatile
+    key_env: GROQ_API_KEY
+  perplexity:
+    base_url: https://api.perplexity.ai
+    model: sonar-pro
+    key_env: PERPLEXITY_API_KEY
+  voyage_embed:
+    base_url: https://api.voyageai.com
+    embed_model: voyage-3-lite
+    rerank_model: voyage-rerank-2
+    key_env: VOYAGE_API_KEY
+
+  # אופציונלי (cost/fallback)
+  mistral:
+    base_url: https://api.mistral.ai
+    model: mistral-large-latest
+    key_env: MISTRAL_API_KEY
+  openrouter:
+    base_url: https://openrouter.ai/api/v1
+    model: meta-llama/llama-3.1-70b-instruct
+    key_env: OPENROUTER_API_KEY
+
+tasks:
+  # ===== Orchestration / קוד / פלייבוקים =====
+  orchestrate:
+    primary: claude
+    fallback: [mistral, openrouter]
+    max_tokens: 8000
+    temperature: 0.2
+
+  # ===== Long-context / ניתוח דוחות/לוגים גדולים =====
+  long_context:
+    primary: gemini
+    fallback: [claude]
+    max_tokens: 12000
+    temperature: 0.15
+
+  # ===== Low latency / Pre-trade checks / אישורים =====
+  low_latency:
+    primary: groq_llama
+    fallback: [mistral]
+    max_tokens: 2000
+    temperature: 0.0
+
+  # ===== News-grounding / חיפוש ממוסמך =====
+  news_search:
+    primary: perplexity
+    fallback: []
+    max_tokens: 2000
+    temperature: 0.1
+
+  # ===== RAG פנימי (SOP/תקלות/פלייבוקים/לוגים) =====
+  rag:
+    embedding: voyage_embed
+    generation: claude
+    rerank: voyage_embed
+    max_context_docs: 6
+    temperature: 0.1
+
+routing_rules:
+  - when: {intent: "manage_trade" }
+    use: low_latency
+  - when: {intent: "pre_trade_check" }
+    use: low_latency
+  - when: {intent: "code_edit" }
+    use: orchestrate
+  - when: {intent: "post_trade_analysis" }
+    use: orchestrate
+  - when: {intent: "daily_report" }
+    use: long_context
+  - when: {intent: "news_guard" }
+    use: news_search
+  - when: {intent: "rag_query" }
+    use: rag
+
+budget_guardrails:
+  per_request_usd_max:
+    orchestrate: 0.08
+    long_context: 0.10
+    low_latency: 0.01
+    news_search: 0.02
+    rag: 0.04
+  action_on_exceed: "fallback_or_abort"  # fallback -> ספק זול יותר, אחרת ביטול
+```
+
+# 2) ‎.env (מפתחות בלבד)
+
+```bash
+# ./config/.env.ai
+ANTHROPIC_API_KEY=...
+GEMINI_API_KEY=...
+GROQ_API_KEY=...
+PERPLEXITY_API_KEY=...
+VOYAGE_API_KEY=...
+
+# אופציונלי
+MISTRAL_API_KEY=...
+OPENROUTER_API_KEY=...
+```
+
+# 3) מודול Router מוכן לשילוב (`utils/ai_router.py`)
+
+```python
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import os, json, time, httpx, math
+from typing import Any, Dict, List, Optional, Tuple
+import yaml
+from functools import lru_cache
+
+class AiRouterError(Exception): ...
+
+@lru_cache(maxsize=1)
+def _load_cfg(path: str = "./config/routing.yaml") -> Dict[str, Any]:
+    with open(path, "r", encoding="utf-8") as f:
+        return yaml.safe_load(f)
+
+def _env(key: str) -> str:
+    v = os.getenv(key, "")
+    if not v:
+        raise AiRouterError(f"Missing API key: {key}")
+    return v
+
+def _choose_task(intent: str, cfg: Dict[str, Any]) -> Dict[str, Any]:
+    for rule in cfg.get("routing_rules", []):
+        when = rule.get("when", {})
+        if when.get("intent") == intent:
+            name = rule.get("use")
+            task = cfg["tasks"][name]
+            task["_name"] = name
+            return task
+    raise AiRouterError(f"No routing rule for intent={intent}")
+
+def _headers_for(provider: Dict[str, Any], body_is_json=True) -> Dict[str, str]:
+    key = _env(provider["key_env"])
+    h = {"Authorization": f"Bearer {key}"}
+    if body_is_json:
+        h["Content-Type"] = "application/json"
+    # ספקים מסוימים דורשים כותרות נוספות – הוסף כאן אם צריך
+    return h
+
+async def _call_llm(provider: Dict[str, Any], prompt: str, max_tokens: int, temperature: float, timeout: float) -> str:
+    base = provider["base_url"]
+    model = provider["model"]
+    headers = _headers_for(provider)
+
+    # התאמות קלות לפי ספק (נתיבים/פורמט):
+    if "anthropic" in base:
+        url = f"{base}/v1/messages"
+        payload = {"model": model, "max_tokens": max_tokens, "temperature": temperature,
+                   "messages": [{"role": "user", "content": prompt}]}
+    elif "googleapis" in base:  # Gemini
+        url = f"{base}/v1beta/models/{model}:generateContent?key={_env(provider['key_env'])}"
+        headers = {"Content-Type":"application/json"}  # Gemini לא משתמש Bearer בשאילתא הזו
+        payload = {"contents":[{"parts":[{"text": prompt}]}], "generationConfig":{"temperature":temperature, "maxOutputTokens": max_tokens}}
+    elif "groq.com" in base:
+        url = f"{base}/openai/v1/chat/completions"
+        payload = {"model": model, "messages":[{"role":"user","content":prompt}],
+                   "temperature": temperature, "max_tokens": max_tokens}
+    elif "perplexity.ai" in base:
+        url = f"{base}/chat/completions"
+        payload = {"model": model, "messages":[{"role":"user","content":prompt}],
+                   "temperature": temperature, "max_tokens": max_tokens}
+    elif "mistral.ai" in base:
+        url = f"{base}/v1/chat/completions"
+        payload = {"model": model, "messages":[{"role":"user","content":prompt}],
+                   "temperature": temperature, "max_tokens": max_tokens}
+    elif "openrouter.ai" in base:
+        url = f"{base}/chat/completions"
+        payload = {"model": model, "messages":[{"role":"user","content":prompt}],
+                   "temperature": temperature, "max_tokens": max_tokens}
+    else:
+        raise AiRouterError(f"Unknown provider base: {base}")
+
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        r = await client.post(url, headers=headers, json=payload)
+        if r.status_code >= 400:
+            raise AiRouterError(f"{provider.get('model')}: HTTP {r.status_code} – {r.text[:200]}")
+        data = r.json()
+        # חילוץ טקסט לפי ספק:
+        if "anthropic" in base:
+            return "".join([blk.get("text","") for blk in data["content"] if blk.get("type")=="text"])
+        if "googleapis" in base:
+            return "".join(p.get("text","") for p in data["candidates"][0]["content"]["parts"])
+        return data["choices"][0]["message"]["content"]
+
+async def route_llm(intent: str, prompt: str, *, cfg_path: str = "./config/routing.yaml") -> str:
+    cfg = _load_cfg(cfg_path)
+    task = _choose_task(intent, cfg)
+    defaults = cfg.get("defaults", {})
+    timeout = float(defaults.get("http_timeout_sec", 45.0))
+    per_req_cap = cfg.get("budget_guardrails", {}).get("per_request_usd_max", {})
+    cap = float(per_req_cap.get(task["_name"], 9e9))
+
+    primary = task.get("primary"); fallbacks = task.get("fallback", [])
+    max_tokens = int(task.get("max_tokens", defaults.get("max_tokens", 2000)))
+    temperature = float(task.get("temperature", 0.0))
+    tried = []
+
+    # נסה primary ואז fallback
+    for prov_name in [primary] + fallbacks:
+        prov = cfg["providers"].get(prov_name)
+        if not prov:
+            continue
+        tried.append(prov_name)
+        try:
+            # (אופציונלי) guard תקציב — כאן ניתן להכניס heuristic משלך
+            if cap < 0.02 and prov_name not in ("groq_llama","mistral","openrouter"):
+                continue
+            return await _call_llm(prov, prompt, max_tokens, temperature, timeout)
+        except Exception as e:
+            last_err = f"{prov_name}: {e}"
+            continue
+    raise AiRouterError(f"All providers failed (intent={intent}, tried={tried})")
+
+# ===== Embeddings / RAG (Voyage) =====
+async def embed(texts: List[str], *, cfg_path: str = "./config/routing.yaml") -> List[List[float]]:
+    cfg = _load_cfg(cfg_path); prov = cfg["providers"]["voyage_embed"]
+    url = f"{prov['base_url']}/v1/embeddings"
+    headers = {"Authorization": f"Bearer {_env(prov['key_env'])}", "Content-Type":"application/json"}
+    payload = {"model": prov["embed_model"], "input": texts, "input_type": "document"}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        data = r.json()
+        return [item["embedding"] for item in data["data"]]
+
+async def rerank(query: str, docs: List[str], *, cfg_path: str = "./config/routing.yaml") -> List[int]:
+    cfg = _load_cfg(cfg_path); prov = cfg["providers"]["voyage_embed"]
+    url = f"{prov['base_url']}/v1/rerank"
+    headers = {"Authorization": f"Bearer {_env(prov['key_env'])}", "Content-Type":"application/json"}
+    payload = {"model": prov["rerank_model"], "query": query, "documents": [{"text": d} for d in docs]}
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        r = await client.post(url, headers=headers, json=payload)
+        r.raise_for_status()
+        data = r.json()
+        order = sorted(range(len(docs)), key=lambda i: data["data"][i]["relevance_score"], reverse=True)
+        return order
+```
+
+# 4) שימוש (במערכת הקיימת)
+
+```python
+# דוגמה קצרה לשילוב בתוך utils/ai_analysis.py או routes/ai.py
+from utils.ai_router import route_llm, embed, rerank
+
+# 1) סיכום יומי (Long context)
+resp = await route_llm("daily_report", "נתח לי PnL יומי + חריגות זמן/latency + כשלי SL/TP.")
+
+# 2) Pre-trade check (Low latency)
+resp = await route_llm("pre_trade_check", "BTCUSDT 15m: ATR, ADX, RSI, EMA21/50 alignment ו־BTC-gate? החלטה קצרה.")
+
+# 3) Post-trade analysis / Playbook (Orchestrate)
+resp = await route_llm("post_trade_analysis", "תרחיש A: breakdown fail. הצע תיקוני ניהול ו־cooldown.")
+
+# 4) News guard (Perplexity)
+resp = await route_llm("news_guard", "מה האירועים/כותרות שעלולים להשפיע על BTC/ETH ב־24h הקרובות? ציין מקורות.")
+
+# 5) RAG פנימי
+vecs = await embed(["Checklist v3", "SOP manage BE/ATR", "תקלת TP שלא ננעל"])
+order = await rerank("איך למנוע החמצת TP1 בגריד?", ["doc1...", "doc2...", "doc3..."])
+```
+
+# 5) דוגמאות cURL מהירות
+
+```bash
+# sanity (Groq – low latency)
+curl -s https://api.groq.com/openai/v1/chat/completions \
+  -H "Authorization: Bearer $GROQ_API_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"llama-3.1-70b-versatile","messages":[{"role":"user","content":"ping"}]}'
+
+# news (Perplexity)
+curl -s https://api.perplexity.ai/chat/completions \
+  -H "Authorization: Bearer $PERPLEXITY_API_KEY" -H "Content-Type: application/json" \
+  -d '{"model":"sonar-pro","messages":[{"role":"user","content":"BTC macro events next 24h, cite sources"}]}'
+```
+
+---
+
+## מה כל אחד תורם בפועל (חד ולעניין)
+
+* **Claude (Sonnet 4.5)** – מוח אסטרטגי/קודר: Orchestrator, פלייבוקים, post-trade, תיקוני קוד לא פולשניים.
+* **Gemini 2.5 Pro** – קונטקסט ארוך ו־deep analysis: סיכומי יום/שבוע, לוגים/דוחות ארוכים, OpenAPI/README.
+* **Groq (Llama 3.x)** – לטנסי נמוך לבדיקות מיידיות: pre-trade, ניהול-פעם-יחידה, אישורי טלגרם/אופטימיזציות קטנות.
+* **Perplexity** – חדשות ממוסמכות עם ציטוטים: מסנן “No-Trade Window” ומניעת החלטות על בסיס הזיות.
+* **Voyage (Embed+Rerank)** – שליפת ידע פנימי מדויקת: SOP, תקלות, playbooks, “למה זה נכשל?” במהירות.
+
+זה כל מה שצריך כדי “להרחיב מוחות” בלי להעמיס: קובץ קונפיג אחד, מודול Router יחיד, מפתחות ב־.env, וחלוקת תפקידים נקייה.
+רוצה שאכין לך גם policy קצרה ל־routing של טלגרם (approve/reject/manage-once) + שמות intents תואמים ל־routes הקיימים?
