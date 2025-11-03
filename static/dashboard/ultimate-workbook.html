@@ -661,18 +661,18 @@
                     
                     <div className="fade-in">
                         {activeTab === 1 && <Tab1Dashboard data={data} />}
-                        {activeTab === 2 && <Tab2Finance data={data.finance_orchestrator} />}
-                        {activeTab === 3 && <Tab3WhatsNew data={data.whats_new} />}
-                        {activeTab === 4 && <Tab4Changelog data={data.changelog} />}
-                        {activeTab === 5 && <Tab5LiveFlow data={data.live_flow} />}
-                        {activeTab === 6 && <Tab6Approvals data={data.pending_approvals} />}
-                        {activeTab === 7 && <Tab7News data={data.news_feed} />}
-                        {activeTab === 8 && <Tab8Strategies data={data.strategy_performance} />}
-                        {activeTab === 9 && <Tab9AIMesh data={data.ai_mesh} />}
-                        {activeTab === 10 && <Tab10Architecture data={data.architecture} />}
-                        {activeTab === 11 && <Tab11LiveMetrics data={data.live_metrics} />}
-                        {activeTab === 12 && <Tab12ROI data={data.roi_analysis} />}
-                        {activeTab === 13 && <Tab13SystemMap data={data.system_map} />}
+                        {activeTab === 2 && data?.finance_orchestrator && <Tab2Finance data={data.finance_orchestrator} />}
+                        {activeTab === 3 && data?.whats_new && <Tab3WhatsNew data={data.whats_new} />}
+                        {activeTab === 4 && data?.changelog && <Tab4Changelog data={data.changelog} />}
+                        {activeTab === 5 && data?.live_flow && <Tab5LiveFlow data={data.live_flow} />}
+                        {activeTab === 6 && data?.pending_approvals && <Tab6Approvals data={data.pending_approvals} />}
+                        {activeTab === 7 && data?.news_feed && <Tab7News data={data.news_feed} />}
+                        {activeTab === 8 && data?.strategy_performance && <Tab8Strategies data={data.strategy_performance} />}
+                        {activeTab === 9 && data?.ai_mesh && <Tab9AIMesh data={data.ai_mesh} />}
+                        {activeTab === 10 && data?.architecture && <Tab10Architecture data={data.architecture} />}
+                        {activeTab === 11 && data?.live_metrics && <Tab11LiveMetrics data={data.live_metrics} />}
+                        {activeTab === 12 && data?.roi_analysis && <Tab12ROI data={data.roi_analysis} />}
+                        {activeTab === 13 && data?.system_map && <Tab13SystemMap data={data.system_map} />}
                         {activeTab === 14 && <Tab14Theme theme={theme} setTheme={setTheme} fontSize={fontSize} setFontSize={setFontSize} glassEffect={glassEffect} setGlassEffect={setGlassEffect} rtl={rtl} setRtl={setRtl} />}
                         {activeTab === 15 && <Tab15UserGuide />}
                         {activeTab === 16 && <Tab16Roadmap />}
