@@ -1588,41 +1588,43 @@ try:
 except Exception as e:
     logger.warning("Failed to load grid routes: %s", e)
 
-try:
-    from routes.debug_sig import router as debug_router
-    app.include_router(debug_router)
-except Exception as e:
-    logger.warning("Failed to load debug_sig routes: %s", e)
+# DISABLED: debug_sig has incompatible _canon import signature
+# try:
+#     from routes.debug_sig import router as debug_router
+#     app.include_router(debug_router)
+# except Exception as e:
+#     logger.warning("Failed to load debug_sig routes: %s", e)
 
-try:
-    from routes.mesh import router as mesh_router  # type: ignore
-    app.include_router(mesh_router)
-except Exception as e:
-    logger.warning("Failed to load mesh routes: %s", e)
+# DISABLED: The following routes do not exist in the codebase
+# try:
+#     from routes.mesh import router as mesh_router  # type: ignore
+#     app.include_router(mesh_router)
+# except Exception as e:
+#     logger.warning("Failed to load mesh routes: %s", e)
 
-try:
-    from routes.pnl_heartbeat import router as pnl_heartbeat_router  # type: ignore
-    app.include_router(pnl_heartbeat_router)
-except Exception as e:
-    logger.warning("Failed to load pnl_heartbeat routes: %s", e)
+# try:
+#     from routes.pnl_heartbeat import router as pnl_heartbeat_router  # type: ignore
+#     app.include_router(pnl_heartbeat_router)
+# except Exception as e:
+#     logger.warning("Failed to load pnl_heartbeat routes: %s", e)
 
-try:
-    from routes.ops_summary import router as ops_summary_router  # type: ignore
-    app.include_router(ops_summary_router)
-except Exception as e:
-    logger.warning("Failed to load ops_summary routes: %s", e)
+# try:
+#     from routes.ops_summary import router as ops_summary_router  # type: ignore
+#     app.include_router(ops_summary_router)
+# except Exception as e:
+#     logger.warning("Failed to load ops_summary routes: %s", e)
 
-try:
-    from routes.public_endpoints import router as public_endpoints_router  # type: ignore
-    app.include_router(public_endpoints_router)
-except Exception as e:
-    logger.warning("Failed to load public_endpoints routes: %s", e)
+# try:
+#     from routes.public_endpoints import router as public_endpoints_router  # type: ignore
+#     app.include_router(public_endpoints_router)
+# except Exception as e:
+#     logger.warning("Failed to load public_endpoints routes: %s", e)
 
-try:
-    from routes.mesh_api import router as mesh_api_router  # type: ignore
-    app.include_router(mesh_api_router)
-except Exception as e:
-    logger.warning("Failed to load mesh_api routes: %s", e)
+# try:
+#     from routes.mesh_api import router as mesh_api_router  # type: ignore
+#     app.include_router(mesh_api_router)
+# except Exception as e:
+#     logger.warning("Failed to load mesh_api routes: %s", e)
 
 try:
     from routes.n8n import router as n8n_router

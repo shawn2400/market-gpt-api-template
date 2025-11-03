@@ -241,7 +241,7 @@ def calculate_model_accuracy(
         
         perf = ModelPerformance(
             model=ai_model,
-            regime=regime or "ALL",
+            regime=regime if regime else "UNKNOWN",  # type: ignore
             timeframe_days=timeframe_days,
             total_predictions=len(predictions),
             total_outcomes=len(matched_outcomes),
@@ -275,11 +275,11 @@ def get_model_leaderboard(timeframe_days: int = 7) -> List[ModelPerformance]:
         List of ModelPerformance sorted by Win% descending
     """
     try:
-        models: List[AIModel] = ["gpt5", "deepseek", "grok", "consensus"]
+        models: List[str] = ["gpt5", "deepseek", "grok", "consensus"]
         leaderboard = []
         
         for model in models:
-            perf = calculate_model_accuracy(model, timeframe_days=timeframe_days)
+            perf = calculate_model_accuracy(model, timeframe_days=timeframe_days)  # type: ignore
             if perf:
                 leaderboard.append(perf)
         
@@ -333,7 +333,7 @@ def get_dynamic_weights(regime: MarketRegime = "UNKNOWN", timeframe_days: int = 
         
         # Normalize to sum = 1.0
         total = sum(adjusted_weights.values())
-        normalized = {k: round(v / total, 3) for k, v in adjusted_weights.items()}
+        normalized: Dict[AIModel, float] = {k: round(v / total, 3) for k, v in adjusted_weights.items()}  # type: ignore
         
         logger.info(f"⚖️ Dynamic weights ({regime}, {timeframe_days}d): {normalized}")
         

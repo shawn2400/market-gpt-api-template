@@ -15,6 +15,13 @@ import json
 
 logger = logging.getLogger("monitors.circuit_breaker")
 
+try:
+    from utils.db import save_breaker_state as db_save_breaker_state, get_latest_breaker_state
+    DB_AVAILABLE = True
+except ImportError:
+    logger.warning("Database functions not available for circuit breaker")
+    DB_AVAILABLE = False
+
 @dataclass
 class BreakerAction:
     """Circuit breaker action result"""
@@ -174,24 +181,50 @@ def _reset_daily_if_needed():
         _save_breaker_state()
 
 def _save_breaker_state():
-    """Persist breaker state (in production, use database)"""
+    """Persist breaker state to database (with JSON fallback)"""
+    if DB_AVAILABLE:
+        try:
+            db_save_breaker_state(_breaker_state)
+            logger.debug("Circuit breaker state saved to database")
+            return
+        except Exception as e:
+            logger.error(f"Failed to save breaker state to database: {e}, falling back to JSON")
+    
     try:
         state_file = os.getenv("BREAKER_STATE_FILE", "data/breaker_state.json")
         os.makedirs(os.path.dirname(state_file), exist_ok=True)
         with open(state_file, "w") as f:
             json.dump(_breaker_state, f, indent=2)
+        logger.debug("Circuit breaker state saved to JSON file")
     except Exception as e:
         logger.error(f"Failed to save breaker state: {e}")
 
 def _load_breaker_state():
-    """Load persisted breaker state"""
+    """Load persisted breaker state from database (with JSON fallback)"""
+    if DB_AVAILABLE:
+        try:
+            loaded = get_latest_breaker_state()
+            if loaded:
+                _breaker_state.update({
+                    "daily_dd": loaded.get("daily_dd", 0.0),
+                    "daily_dd_peak": loaded.get("daily_dd_peak", 0.0),
+                    "consec_losses": loaded.get("consec_losses", 0),
+                    "last_reset": loaded.get("last_reset", datetime.now().date().isoformat()),
+                    "paused": loaded.get("paused", False),
+                    "pause_reason": loaded.get("pause_reason", ""),
+                })
+                logger.info("Circuit breaker state loaded from database")
+                return
+        except Exception as e:
+            logger.warning(f"Could not load breaker state from database: {e}, falling back to JSON")
+    
     try:
         state_file = os.getenv("BREAKER_STATE_FILE", "data/breaker_state.json")
         if os.path.exists(state_file):
             with open(state_file, "r") as f:
                 loaded = json.load(f)
                 _breaker_state.update(loaded)
-                logger.info("Circuit breaker state loaded from disk")
+                logger.info("Circuit breaker state loaded from JSON file")
     except Exception as e:
         logger.warning(f"Could not load breaker state: {e}")
 
