@@ -49,6 +49,8 @@ def init_openai_client():
         return None
     
     try:
+        if AsyncOpenAI is None:
+            raise ImportError("AsyncOpenAI not available")
         _client = AsyncOpenAI(api_key=OPENAI_API_KEY)
         logger.info(f"GPT-5 orchestrator initialized with model: {GPT5_MODEL}")
         return _client

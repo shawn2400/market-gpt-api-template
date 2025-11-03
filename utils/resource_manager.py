@@ -35,7 +35,7 @@ class ResourceManager:
         
     def get_current_usage(self) -> Dict[str, Any]:
         """Get current CPU and memory usage"""
-        if not self.enabled:
+        if not self.enabled or not PSUTIL_AVAILABLE:
             return {
                 "ok": True,
                 "cpu_percent": 0.0,
@@ -45,8 +45,9 @@ class ResourceManager:
             }
         
         try:
-            cpu_pct = psutil.cpu_percent(interval=0.1)
-            mem = psutil.virtual_memory()
+            import psutil as ps
+            cpu_pct = ps.cpu_percent(interval=0.1)
+            mem = ps.virtual_memory()
             mem_pct = mem.percent
             
             return {

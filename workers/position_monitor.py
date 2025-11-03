@@ -15,16 +15,7 @@ from typing import Dict, Any, List
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-try:
-    from utils.binance_client import init_client as get_client
-except:
-    from utils.binance_client import _init_client as get_client
-
-try:
-    from utils.binance_client import get_all_positions
-except:
-    def get_all_positions(client):
-        return client.futures_position_information() if client else []
+from utils.binance_client import _init_client as get_client
 from utils.alerts import send_telegram_message
 
 logging.basicConfig(
@@ -44,7 +35,7 @@ def get_active_positions() -> List[Dict[str, Any]]:
         if not client:
             return []
         
-        all_positions = get_all_positions(client)
+        all_positions = client.futures_position_information()
         # Filter only positions with size > 0
         active = [
             p for p in all_positions 

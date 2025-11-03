@@ -5,7 +5,8 @@ from typing import Dict, Any, Optional
 import httpx
 from collections import deque
 
-from utils.telegram_notifier import notify_trade_review
+# notify_trade_review not available in telegram_notifier
+# from utils.telegram_notifier import notify_trade_review
 
 logger = logging.getLogger("algogpt.ai_reviewer")
 
@@ -118,7 +119,8 @@ async def review_trade_async(symbol: str, side: str, context: Dict[str, Any], *,
 
     if to_telegram and text:
         try:
-            await notify_trade_review(sym, text)
+            from utils.alerts import send_telegram_message
+            await send_telegram_message(f"📝 Review: {sym}\n{text}", parse_mode="HTML")
         except Exception:
             pass
 

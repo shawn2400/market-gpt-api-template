@@ -457,8 +457,7 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
         resp = cli.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{"role":"system","content":sys_prompt},{"role":"user","content":user}],
-            temperature=0.2,
-            max_tokens=300,
+            max_completion_tokens=300,
             response_format={"type":"json_object"},
         )
         content = resp.choices[0].message.content or ""
@@ -583,8 +582,13 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     # 🚀 DYNAMIC LEVERAGE & POSITION SIZING
     # Calculate optimal leverage and position size based on trade quality
     try:
-        from utils.binance import get_equity_bal  # Get account equity
-        account_equity = float(get_equity_bal()) or 10000.0  # Fallback to 10k
+        from utils.binance_client import _init_client
+        cli = _init_client()
+        if cli:
+            acc_info = cli.futures_account()
+            account_equity = float(acc_info.get("totalWalletBalance", 10000.0)) if acc_info else 10000.0
+        else:
+            account_equity = 10000.0
     except Exception:
         account_equity = 10000.0  # Safe fallback
     
@@ -594,8 +598,6 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     
     dynamic_sizing_engine = get_dynamic_sizing_engine()
     sizing = dynamic_sizing_engine.calculate_position(
-        symbol=symbol,
-        side=prop["side"],
         quality_score=quality_score,
         risk_reward=rr,
         ai_confidence=prop.get("success_pct") or 70.0,
@@ -616,7 +618,9 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     )
 
     # נזילות (סליפג')
-    lg = await liquidity_gate_safe(symbol, prop["side"], notional_usd=notional)
+    lg = liquidity_gate_safe(symbol, prop["side"], notional_usd=notional)
+    if asyncio.iscoroutine(lg):
+        lg = await lg
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
 
@@ -660,7 +664,9 @@ async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -
 
     budget = _calc_dynamic_budget(symbol, ctx)
     # נזילות לנוטיונל = budget בלבד
-    lg = await liquidity_gate_safe(symbol, "LONG", notional_usd=budget)
+    lg = liquidity_gate_safe(symbol, "LONG", notional_usd=budget)
+    if asyncio.iscoroutine(lg):
+        lg = await lg
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
         return None
 

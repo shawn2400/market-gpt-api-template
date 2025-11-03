@@ -95,11 +95,11 @@ async def _best_price(symbol: str) -> tuple[Optional[float], bool]:
     s = symbol.strip().upper()
     px = get_price(s)
     fresh = bool(px) and is_price_fresh(s, max_age_sec=60)
-    if fresh:
+    if fresh and px:
         return float(px), True
     try:
-        mp = await asyncio.to_thread(futures_mark_price, s)
-        if mp and mp > 0:
+        mp: Optional[float] = await asyncio.to_thread(futures_mark_price, s)
+        if mp is not None and isinstance(mp, (int, float)) and mp > 0:
             return float(mp), True
     except Exception:
         pass
@@ -114,9 +114,9 @@ def _quick_analysis_text(symbol: str, interval: str, reason: str = "") -> str:
 
 def _load_klines_and_indicators():
     try:
-        from utils.get_klines import aget_klines
+        from utils.get_klines import get_klines
         from utils.indicators import prepare_indicators_for_backtest
-        return aget_klines, prepare_indicators_for_backtest, None
+        return get_klines, prepare_indicators_for_backtest, None
     except Exception as e:
         return None, None, str(e)
 
@@ -175,13 +175,13 @@ async def ai_analyze_post(payload: AnalyzeRequest = Body(...)):
     return await _do_ai_analyze(payload.symbol, payload.interval)
 
 async def _do_ai_analyze(symbol: str, interval: str):
-    aget_klines, prep, imp_err = _load_klines_and_indicators()
-    if imp_err:
+    get_klines_func, prep, imp_err = _load_klines_and_indicators()
+    if imp_err or get_klines_func is None or prep is None:
         return {"symbol": symbol.upper(), "interval": interval,
-                "analysis": _quick_analysis_text(symbol, interval, imp_err),
+                "analysis": _quick_analysis_text(symbol, interval, imp_err or "imports failed"),
                 "fallback": True}
     try:
-        df = await aget_klines(symbol, interval, limit=200, market_type="futures")
+        df = await get_klines_func(symbol, interval, limit=200, market_type="futures")
         if df is None or len(df) == 0:
             return {"symbol": symbol.upper(), "interval": interval,
                     "analysis": _quick_analysis_text(symbol, interval, "no klines"),
