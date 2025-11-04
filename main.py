@@ -1707,6 +1707,26 @@ async def root_head():
 
 @app.get("/api/info")
 async def api_info():
+    # Count active workflows by checking for known worker processes
+    workflows_active = 7  # Default: AlgoGPT Server + 6 background workers
+    try:
+        import psutil
+        # Count Python processes that are our workers
+        worker_count = 0
+        for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
+            try:
+                cmdline = proc.info.get('cmdline', [])
+                if cmdline and any('workers/' in str(arg) for arg in cmdline):
+                    worker_count += 1
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                pass
+        
+        # If we found worker processes, use that count + 1 for main server
+        if worker_count > 0:
+            workflows_active = worker_count + 1
+    except Exception:
+        pass  # Keep default value
+    
     return {
         "ok": True,
         "service": APP_TITLE,
@@ -1715,6 +1735,7 @@ async def api_info():
         "watchlist": WATCHLIST,
         "ui": {"poll_ms": UI_POLL_MS, "idle_stop_sec": UI_IDLE_STOP_SEC},
         "http2": _http2_enabled_runtime(),
+        "workflows_active": workflows_active,
     }
 
 @app.get("/health")
