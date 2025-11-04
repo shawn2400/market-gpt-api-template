@@ -104,13 +104,6 @@
                         const status = typeof value === 'object' ? value.status : value;
                         const statusClass = status === 'ok' ? 'ok' : status === 'warning' ? 'warn' : 'error';
                         html += `<p><span class="font-bold">${key}:</span> <span class="status-dot status-${statusClass}"></span> ${status}</p>`;
-                        
-                        if (key === 'memory' && value.process_mb) {
-                            document.getElementById('memory-status').innerHTML = `${value.process_mb} MB`;
-                        }
-                        if (key === 'workflows' && value.count) {
-                            document.getElementById('workflows-status').innerHTML = `${value.count}/10 פעילים`;
-                        }
                     });
                 }
                 
