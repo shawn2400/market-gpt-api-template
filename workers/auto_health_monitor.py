@@ -126,13 +126,13 @@ class HealthCheck:
                 if response.status_code == 200:
                     data = response.json()
                     workflow_count = data.get("workflows_active", 0)
-                    if workflow_count >= 9:  # Expect 10+ workflows (9 workers + main server)
+                    if workflow_count >= 7:  # Expect 7 workflows (6 workers + main server)
                         return {"status": "ok", "count": workflow_count}
                     else:
                         return {
                             "status": "degraded",
                             "count": workflow_count,
-                            "message": f"Only {workflow_count} workflows running (expected 10+)"
+                            "message": f"Only {workflow_count} workflows running (expected 7+)"
                         }
                 return {"status": "error", "count": 0, "message": "API /api/info unreachable"}
         except Exception as e:
