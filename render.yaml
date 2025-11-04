@@ -59,6 +59,8 @@ services:
         sync: false
       - key: N8N_WEBHOOK_SECRET
         sync: false
+      - key: WEBHOOK_HMAC_SECRET
+        sync: false
       - key: DATABASE_URL
         fromDatabase:
           name: algogpt-db
@@ -111,7 +113,6 @@ services:
       SUGGEST_INTERVAL_SEC=60 
       CONTEXT_URL=https://algogpt-server.onrender.com
       ALERT_INGEST_URL=https://algogpt-server.onrender.com/alerts/ingest
-      WEBHOOK_HMAC_SECRET=demo_secret_change_in_production 
       ENABLE_MULTI_AI_CONSENSUS=1 
       ENABLE_OPENAI=1 
       ENABLE_DEEPSEEK=1 
@@ -129,6 +130,10 @@ services:
       - key: OPENAI_API_KEY
         sync: false
       - key: XAI_API_KEY
+        sync: false
+      - key: N8N_WEBHOOK_SECRET
+        sync: false
+      - key: WEBHOOK_HMAC_SECRET
         sync: false
       - key: DATABASE_URL
         fromDatabase:

@@ -26,28 +26,90 @@ GITHUB_REPO = os.getenv("GITHUB_REPO", "https://github.com/YOUR_USERNAME/algogpt
 BRANCH = os.getenv("GITHUB_BRANCH", "main")
 REGION = "singapore"  # Closest to crypto markets
 
-# Environment variables to set
-ENV_VARS = [
-    {"key": "BINANCE_API_KEY", "value": os.getenv("BINANCE_API_KEY", "")},
-    {"key": "BINANCE_API_SECRET", "value": os.getenv("BINANCE_API_SECRET", "")},
-    {"key": "TELEGRAM_BOT_TOKEN", "value": os.getenv("TELEGRAM_BOT_TOKEN", "")},
-    {"key": "TELEGRAM_CHAT_ID", "value": os.getenv("TELEGRAM_CHAT_ID", "")},
-    {"key": "TELEGRAM_ADMIN_IDS", "value": os.getenv("TELEGRAM_ADMIN_IDS", "")},
-    {"key": "OPENAI_API_KEY", "value": os.getenv("OPENAI_API_KEY", "")},
-    {"key": "XAI_API_KEY", "value": os.getenv("XAI_API_KEY", "")},
-    {"key": "AI_MESH_SECRET", "value": os.getenv("AI_MESH_SECRET", "")},
-    {"key": "OPS_SIGN_SECRET", "value": os.getenv("OPS_SIGN_SECRET", "")},
-    {"key": "N8N_WEBHOOK_SECRET", "value": os.getenv("N8N_WEBHOOK_SECRET", "")},
+# Required environment variables
+REQUIRED_SECRETS = [
+    "BINANCE_API_KEY",
+    "BINANCE_API_SECRET",
+    "TELEGRAM_BOT_TOKEN",
+    "TELEGRAM_CHAT_ID",
+    "OPENAI_API_KEY",
+    "N8N_WEBHOOK_SECRET",
+    "WEBHOOK_HMAC_SECRET"
 ]
+
+
+def validate_secrets():
+    """Validate that required secrets are set"""
+    missing = []
+    empty = []
+    
+    for secret in REQUIRED_SECRETS:
+        value = os.getenv(secret)
+        if not value:
+            missing.append(secret)
+        elif value.strip() == "":
+            empty.append(secret)
+    
+    if missing or empty:
+        print("\n❌ DEPLOYMENT ABORTED - Missing or empty secrets!")
+        print("="*60)
+        if missing:
+            print("\n🔴 Missing secrets:")
+            for secret in missing:
+                print(f"   - {secret}")
+        if empty:
+            print("\n🔴 Empty secrets:")
+            for secret in empty:
+                print(f"   - {secret}")
+        print("\n💡 Please set all required secrets before deploying.")
+        print("   You can add them in Replit Secrets or via environment variables.")
+        print("="*60 + "\n")
+        return False
+    
+    return True
+
+
+def build_env_vars():
+    """Build environment variables list, filtering out empty values"""
+    env_vars = []
+    secret_keys = [
+        "BINANCE_API_KEY",
+        "BINANCE_API_SECRET",
+        "TELEGRAM_BOT_TOKEN",
+        "TELEGRAM_CHAT_ID",
+        "TELEGRAM_ADMIN_IDS",
+        "OPENAI_API_KEY",
+        "XAI_API_KEY",
+        "AI_MESH_SECRET",
+        "OPS_SIGN_SECRET",
+        "N8N_WEBHOOK_SECRET",
+        "WEBHOOK_HMAC_SECRET"
+    ]
+    
+    for key in secret_keys:
+        value = os.getenv(key)
+        if value and value.strip():  # Only add non-empty secrets
+            env_vars.append({"key": key, "value": value})
+    
+    return env_vars
 
 
 async def deploy_all():
     """Deploy all services to Render"""
+    # Validate secrets first
+    if not validate_secrets():
+        return False
+    
+    # Build environment variables (filter empty values)
+    ENV_VARS = build_env_vars()
+    
     render = RenderAPI()
     
     print("\n" + "="*60)
     print("🚀 AlgoGPT Ultimate Edition - Render Deployment")
     print("="*60 + "\n")
+    print(f"✅ Validated {len(ENV_VARS)} environment variables")
+    print()
     
     # Step 1: Create PostgreSQL Database
     print("📊 Step 1/8: Creating PostgreSQL Database...")
@@ -115,7 +177,7 @@ CONSENSUS_MIN_PROVIDERS=2 PORT=10000 gunicorn -c gunicorn_conf.py main:app"""
         {
             "name": "algogpt-scanner",
             "description": "Auto Scanner (GPT Auto Suggest)",
-            "start_command": f"cd /opt/render/project/src && PYTHONPATH=/opt/render/project/src TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 SUGGEST_GRID=1 SUGGEST_INTERVAL_SEC=60 CONTEXT_URL={web_url} ALERT_INGEST_URL={web_url}/alerts/ingest WEBHOOK_HMAC_SECRET=demo_secret_change_in_production ENABLE_MULTI_AI_CONSENSUS=1 ENABLE_OPENAI=1 ENABLE_DEEPSEEK=1 ENABLE_XAI=1 python workers/gpt_auto_suggest.py"
+            "start_command": f"cd /opt/render/project/src && PYTHONPATH=/opt/render/project/src TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 SUGGEST_GRID=1 SUGGEST_INTERVAL_SEC=60 CONTEXT_URL={web_url} ALERT_INGEST_URL={web_url}/alerts/ingest ENABLE_MULTI_AI_CONSENSUS=1 ENABLE_OPENAI=1 ENABLE_DEEPSEEK=1 ENABLE_XAI=1 python workers/gpt_auto_suggest.py"
         },
         {
             "name": "algogpt-gpt5-brain",

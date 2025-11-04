@@ -70,7 +70,8 @@ class RenderAPI:
                 "paths": [],
                 "ignoredPaths": []
             },
-            "envSpecificDetails": {
+            "serviceDetails": {
+                "env": "python",
                 "buildCommand": build_command,
                 "startCommand": start_command,
                 "plan": plan,
@@ -114,7 +115,8 @@ class RenderAPI:
                 "paths": [],
                 "ignoredPaths": []
             },
-            "envSpecificDetails": {
+            "serviceDetails": {
+                "env": "python",
                 "buildCommand": build_command,
                 "startCommand": start_command,
                 "plan": plan,
