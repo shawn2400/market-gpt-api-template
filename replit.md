@@ -52,13 +52,14 @@ Includes a **Validation Pipeline** (historical backtesting with walk-forward tes
 All 38 tasks completed, including AI performance tracking (dynamic model weighting, prediction logging, outcome tracking, feedback dataset for fine-tuning, AI leaderboard), database hardening (10 tables for slippage, circuit breaker state, market states, audit logs, AI predictions, etc.), and enhanced monitoring & security (real-time P&L, tiered alerting, rate limiting, log masking, audit trail, IP throttling, comprehensive testing).
 
 ### Deployment Architecture
-The system is designed for **production deployment on Render.com** with full infrastructure-as-code configuration:
--   **render.yaml**: Defines all 7 services (1 web + 6 background workers) + PostgreSQL database
--   **Render.com Production**: Managed PostgreSQL, 2GB RAM web service, dedicated background workers
--   **Estimated Cost**: ~$74/mo ($25 web service + $7 database + $42 for 6 workers)
--   **Deployment Script**: `scripts/deploy_to_render.py` automates service creation via Render API
--   **Domain**: Primary production domain on Render.com (e.g., `algogpt-server.onrender.com`)
--   **Development Environment**: Can be developed/tested on Replit, deployed to Render for production
+The system is deployed to **Render.com** using an existing service:
+-   **Service**: algogpt-docker (existing $7/month service)
+-   **Domain**: https://algogpt-docker.onrender.com
+-   **Dashboard**: https://algogpt-docker.onrender.com/static/dashboard/index.html
+-   **Repository**: Connected to GitHub repo `market-gpt-api-template`
+-   **Auto-Deploy**: Enabled - every push to `main` triggers automatic deployment
+-   **Environment**: All 14 required secrets configured via Render dashboard
+-   **Development**: Code developed on Replit, deployed to Render for production
 
 ## External Dependencies
 
