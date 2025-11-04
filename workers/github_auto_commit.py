@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
 GitHub Auto-Commit Worker
-Automatically commits and pushes changes every 60 minutes
+Automatically commits and pushes changes at configured interval.
+Default: 10 minutes (configurable via GITHUB_AUTO_COMMIT_INTERVAL)
 """
 
 import os
@@ -21,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger("github_auto_commit")
 
 ENABLED = os.getenv("GITHUB_AUTO_COMMIT_ENABLED", "1").lower() in ("1", "true", "yes", "on")
-INTERVAL_SEC = int(os.getenv("GITHUB_AUTO_COMMIT_INTERVAL", "3600") or 3600)
+INTERVAL_SEC = int(os.getenv("GITHUB_AUTO_COMMIT_INTERVAL", "600") or 600)  # Default: 10 minutes
 REPO_PATH = os.getenv("GITHUB_REPO_PATH", "/home/runner/workspace")
 COMMIT_AUTHOR = os.getenv("GITHUB_COMMIT_AUTHOR", "AlgoGPT System")
 COMMIT_EMAIL = os.getenv("GITHUB_COMMIT_EMAIL", "algogpt@system.local")
