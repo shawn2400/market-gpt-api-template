@@ -60,6 +60,9 @@ class HealthCheck:
         # 4. Workflows Running
         workflows_ok = await self.check_workflows()
         checks["checks"]["workflows"] = workflows_ok
+        if workflows_ok.get("status") != "ok":
+            msg = workflows_ok.get("message", "Workflows not running properly")
+            checks["issues"].append(f"Workflows: {msg}")
         
         # 5. Memory Usage
         memory_ok = await self.check_memory()
@@ -115,9 +118,26 @@ class HealthCheck:
             return False
     
     async def check_workflows(self) -> Dict[str, Any]:
-        """Check workflow status"""
-        # This would check if critical workflows are running
-        return {"status": "ok", "count": 9}
+        """Check workflow status via /api/info endpoint"""
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                response = await client.get(f"{BASE_URL}/api/info")
+                if response.status_code == 200:
+                    data = response.json()
+                    workflow_count = data.get("workflows_active", 0)
+                    if workflow_count >= 9:  # Expect 10+ workflows (9 workers + main server)
+                        return {"status": "ok", "count": workflow_count}
+                    else:
+                        return {
+                            "status": "degraded",
+                            "count": workflow_count,
+                            "message": f"Only {workflow_count} workflows running (expected 10+)"
+                        }
+                return {"status": "error", "count": 0, "message": "API /api/info unreachable"}
+        except Exception as e:
+            logger.error(f"Workflow check failed: {e}")
+            return {"status": "error", "count": 0, "message": str(e)}
     
     async def check_memory(self) -> Dict[str, Any]:
         """Check memory usage"""
@@ -220,13 +240,16 @@ async def main():
                     await send_telegram_alert(alert_msg, "ERROR" if result["status"] == "critical" else "WARNING")
                     last_alert_time = current_time
                 
-                # Critical: send immediate alert
+                # Critical: send immediate alert with restart instructions
                 if consecutive_failures >= 3:
-                    await send_telegram_alert(
+                    restart_msg = (
                         f"🚨 CRITICAL: {consecutive_failures} consecutive failures!\n\n" +
-                        "\n".join(f"• {issue}" for issue in result['issues']),
-                        "CRITICAL"
+                        "\n".join(f"• {issue}" for issue in result['issues']) +
+                        "\n\n⚠️ **IMPORTANT:** All workflows may have stopped!\n" +
+                        "➡️ Please manually restart workflows or check the Replit console.\n" +
+                        "💡 Tip: Click the 'Run' button in Replit to restart all services."
                     )
+                    await send_telegram_alert(restart_msg, "CRITICAL")
                     consecutive_failures = 0  # Reset after alert
             else:
                 # System healthy
