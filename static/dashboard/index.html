@@ -6,21 +6,249 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>בס"ד - AlgoGPT Control Center</title>
+    <title>בס"ד - AlgoGPT Ultimate Edition Dashboard</title>
+    
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <script src="https://d3js.org/d3.v7.min.js"></script>
+    
     <style>
+        @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800;900&family=Rubik:wght@300;400;500;600;700;800;900&display=swap');
+        
+        :root {
+            --primary: #667eea;
+            --secondary: #764ba2;
+            --accent: #f093fb;
+            --glass-bg: rgba(31, 41, 55, 0.6);
+            --glass-border: rgba(255, 255, 255, 0.1);
+            --text-primary: #f3f4f6;
+            --text-secondary: #9ca3af;
+            --bg-dark: #0a0a1a;
+            --success: #10b981;
+            --warning: #f59e0b;
+            --error: #ef4444;
+            --info: #3b82f6;
+            --sidebar-width: 280px;
+            --sidebar-collapsed: 70px;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
         body {
-            background: linear-gradient(135deg, #0a0a1a 0%, #1a1a2e 100%);
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+            font-family: 'Heebo', 'Rubik', sans-serif;
+            background: linear-gradient(135deg, #0a0a1a 0%, #1a1a2e 50%, #16213e 100%);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
         }
-        .card {
-            background: rgba(31, 41, 55, 0.7);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
+        
+        .app-container {
+            display: flex;
+            min-height: 100vh;
+        }
+        
+        .sidebar {
+            position: fixed;
+            right: 0;
+            top: 0;
+            height: 100vh;
+            width: var(--sidebar-width);
+            background: rgba(31, 41, 55, 0.8);
+            backdrop-filter: blur(16px);
+            border-left: 1px solid var(--glass-border);
+            padding: 24px 0;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            z-index: 1000;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+        
+        .sidebar.collapsed {
+            width: var(--sidebar-collapsed);
+        }
+        
+        .sidebar-header {
+            padding: 0 20px 20px;
+            border-bottom: 1px solid var(--glass-border);
+            margin-bottom: 20px;
+        }
+        
+        .logo-container {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 12px;
+        }
+        
+        .logo-icon {
+            font-size: 2.5rem;
+            transition: all 0.3s;
+        }
+        
+        .sidebar-title {
+            font-size: 1.25rem;
+            font-weight: 700;
+            text-align: center;
+            background: linear-gradient(135deg, var(--primary), var(--secondary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            white-space: nowrap;
+            opacity: 1;
+            transition: opacity 0.3s;
+        }
+        
+        .sidebar.collapsed .sidebar-title {
+            opacity: 0;
+            display: none;
+        }
+        
+        .nav-items {
+            list-style: none;
+            padding: 0 12px;
+        }
+        
+        .nav-item {
+            margin-bottom: 8px;
+        }
+        
+        .nav-link {
+            display: flex;
+            align-items: center;
+            padding: 14px 16px;
             border-radius: 12px;
-            padding: 24px;
-            margin-bottom: 24px;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-decoration: none;
+            color: var(--text-secondary);
+            background: transparent;
+            border: 1px solid transparent;
         }
+        
+        .nav-link:hover {
+            background: rgba(102, 126, 234, 0.1);
+            border-color: var(--primary);
+            color: var(--text-primary);
+            transform: translateX(-4px);
+        }
+        
+        .nav-link.active {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-color: transparent;
+            color: white;
+            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+        }
+        
+        .nav-icon {
+            font-size: 1.5rem;
+            min-width: 32px;
+            text-align: center;
+        }
+        
+        .nav-text {
+            margin-right: 12px;
+            white-space: nowrap;
+            opacity: 1;
+            transition: opacity 0.3s;
+        }
+        
+        .sidebar.collapsed .nav-text {
+            opacity: 0;
+            display: none;
+        }
+        
+        .toggle-btn {
+            position: absolute;
+            left: -15px;
+            top: 20px;
+            width: 30px;
+            height: 30px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border: 2px solid var(--bg-dark);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.3s;
+            z-index: 1001;
+        }
+        
+        .toggle-btn:hover {
+            transform: scale(1.1);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.5);
+        }
+        
+        .toggle-icon {
+            color: white;
+            font-size: 1rem;
+            transition: transform 0.3s;
+        }
+        
+        .sidebar.collapsed .toggle-icon {
+            transform: rotate(180deg);
+        }
+        
+        .main-content {
+            flex: 1;
+            margin-right: var(--sidebar-width);
+            padding: 32px;
+            transition: margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .sidebar.collapsed + .main-content {
+            margin-right: var(--sidebar-collapsed);
+        }
+        
+        .content-section {
+            display: none;
+            animation: fadeIn 0.5s ease-out;
+        }
+        
+        .content-section.active {
+            display: block;
+        }
+        
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+        
+        .glass-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        
+        .glass-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 30px 60px -12px rgba(139, 92, 246, 0.3);
+            border-color: rgba(139, 92, 246, 0.3);
+        }
+        
+        .gradient-text {
+            background: linear-gradient(135deg, var(--primary), var(--secondary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            font-weight: 800;
+        }
+        
         .status-dot {
             width: 12px;
             height: 12px;
@@ -28,71 +256,543 @@
             display: inline-block;
             margin-left: 8px;
         }
-        .status-ok { background: #10b981; }
-        .status-warn { background: #f59e0b; }
-        .status-error { background: #ef4444; }
+        
+        .status-ok { background: var(--success); }
+        .status-warn { background: var(--warning); }
+        .status-error { background: var(--error); }
+        
+        .mobile-menu-btn {
+            display: none;
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 1002;
+            width: 50px;
+            height: 50px;
+            border-radius: 12px;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border: none;
+            color: white;
+            font-size: 1.5rem;
+            cursor: pointer;
+            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+        }
+        
+        @media (max-width: 768px) {
+            .mobile-menu-btn {
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+            
+            .sidebar {
+                transform: translateX(100%);
+            }
+            
+            .sidebar.mobile-open {
+                transform: translateX(0);
+            }
+            
+            .sidebar.collapsed {
+                width: var(--sidebar-width);
+            }
+            
+            .main-content {
+                margin-right: 0;
+                padding: 20px;
+            }
+            
+            .sidebar.collapsed + .main-content {
+                margin-right: 0;
+            }
+            
+            .toggle-btn {
+                display: none;
+            }
+        }
+        
+        .tab-button {
+            padding: 12px 20px;
+            background: transparent;
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            white-space: nowrap;
+        }
+        
+        .tab-button:hover {
+            background: rgba(102, 126, 234, 0.1);
+            border-color: var(--primary);
+            color: var(--text-primary);
+            transform: translateY(-2px);
+        }
+        
+        .tab-button.active {
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-color: transparent;
+            color: white;
+            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+        }
+        
+        .progress-bar {
+            height: 8px;
+            background: rgba(107, 114, 128, 0.3);
+            border-radius: 999px;
+            overflow: hidden;
+            position: relative;
+        }
+        
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, var(--primary), var(--secondary), var(--accent));
+            border-radius: 999px;
+            transition: width 1s ease-out;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .progress-fill::after {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
+            animation: shimmer 2s infinite;
+        }
+        
+        @keyframes shimmer {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
+        }
+        
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+        
+        .pulse {
+            animation: pulse 2s ease-in-out infinite;
+        }
+        
+        .status-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 600;
+            transition: all 0.2s;
+        }
+        
+        .status-active {
+            background: linear-gradient(135deg, var(--success), #059669);
+            box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+        }
+        
+        .status-planned {
+            background: linear-gradient(135deg, var(--warning), #d97706);
+            box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+        }
+        
+        .metric-card {
+            background: rgba(17, 24, 39, 0.8);
+            padding: 24px;
+            border-radius: 12px;
+            border: 1px solid var(--glass-border);
+            transition: all 0.3s;
+        }
+        
+        .metric-card:hover {
+            border-color: var(--primary);
+            transform: translateY(-2px);
+        }
+        
+        .metric-value {
+            font-size: 32px;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 300px;
+            margin: 20px 0;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 60px;
+            font-size: 18px;
+            color: var(--text-secondary);
+        }
+        
+        .error {
+            text-align: center;
+            padding: 60px;
+            font-size: 18px;
+            color: var(--error);
+        }
+        
+        .icon-box {
+            width: 48px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
+            border-radius: 12px;
+            font-size: 24px;
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: right;
+            border-bottom: 1px solid var(--glass-border);
+        }
+        
+        th {
+            background: rgba(102, 126, 234, 0.1);
+            font-weight: 700;
+            color: var(--primary);
+        }
+        
+        tr:hover {
+            background: rgba(102, 126, 234, 0.05);
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-track {
+            background: rgba(17, 24, 39, 0.5);
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-thumb {
+            background: var(--primary);
+            border-radius: 3px;
+        }
+        
+        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+            background: var(--secondary);
+        }
     </style>
 </head>
-<body class="text-white p-8">
-    <div class="max-w-7xl mx-auto">
-        <header class="text-center mb-12">
-            <h1 class="text-5xl font-bold mb-4">🚀 AlgoGPT Ultimate Edition</h1>
-            <p class="text-xl text-gray-400">מערכת מסחר אלגוריתמית חכמה 24/7</p>
-            <div id="time" class="text-sm text-gray-500 mt-2"></div>
-        </header>
-
-        <div id="status-card" class="card">
-            <h2 class="text-2xl font-bold mb-4">📊 סטטוס מערכת</h2>
-            <div id="system-status">
-                <p class="text-gray-400">טוען...</p>
+<body>
+    <div class="app-container">
+        <button class="mobile-menu-btn" id="mobileMenuBtn" onclick="toggleMobileMenu()">
+            ☰
+        </button>
+        
+        <aside class="sidebar" id="sidebar">
+            <div class="toggle-btn" onclick="toggleSidebar()">
+                <span class="toggle-icon">◀</span>
             </div>
-        </div>
+            
+            <div class="sidebar-header">
+                <div class="logo-container">
+                    <div class="logo-icon">🚀</div>
+                </div>
+                <h1 class="sidebar-title">AlgoGPT Ultimate</h1>
+            </div>
+            
+            <ul class="nav-items">
+                <li class="nav-item">
+                    <div class="nav-link active" onclick="switchSection('home')">
+                        <span class="nav-icon">🏠</span>
+                        <span class="nav-text">דף הבית</span>
+                    </div>
+                </li>
+                <li class="nav-item">
+                    <div class="nav-link" onclick="switchSection('ultimate')">
+                        <span class="nav-icon">📈</span>
+                        <span class="nav-text">דשבורד מלא</span>
+                    </div>
+                </li>
+                <li class="nav-item">
+                    <div class="nav-link" onclick="switchSection('complete')">
+                        <span class="nav-icon">📊</span>
+                        <span class="nav-text">Workbook מלא</span>
+                    </div>
+                </li>
+                <li class="nav-item">
+                    <div class="nav-link" onclick="switchSection('presentation')">
+                        <span class="nav-icon">🎨</span>
+                        <span class="nav-text">Presentation</span>
+                    </div>
+                </li>
+                <li class="nav-item">
+                    <div class="nav-link" onclick="switchSection('status')">
+                        <span class="nav-icon">🔍</span>
+                        <span class="nav-text">ניטור מערכת</span>
+                    </div>
+                </li>
+                <li class="nav-item">
+                    <div class="nav-link" onclick="switchSection('validation')">
+                        <span class="nav-icon">✅</span>
+                        <span class="nav-text">Validation</span>
+                    </div>
+                </li>
+                <li class="nav-item">
+                    <div class="nav-link" onclick="switchSection('workbook')">
+                        <span class="nav-icon">📝</span>
+                        <span class="nav-text">Workbook</span>
+                    </div>
+                </li>
+            </ul>
+        </aside>
+        
+        <main class="main-content">
+            <section id="home" class="content-section active">
+                <header class="glass-card p-6 mb-6">
+                    <h1 class="text-4xl font-bold gradient-text mb-2">🚀 AlgoGPT Ultimate Edition</h1>
+                    <p class="text-xl text-gray-400">מערכת מסחר אלגוריתמית חכמה 24/7</p>
+                    <div id="time" class="text-sm text-gray-500 mt-2"></div>
+                </header>
 
-        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            <a href="/static/dashboard/ultimate-workbook.html" class="card hover:bg-gray-700 transition cursor-pointer">
-                <h3 class="text-xl font-bold mb-2">📈 דשבורד מלא</h3>
-                <p class="text-gray-400">כל הנתונים והגרפים</p>
-            </a>
-            
-            <a href="/static/dashboard/complete-workbook.html" class="card hover:bg-gray-700 transition cursor-pointer">
-                <h3 class="text-xl font-bold mb-2">📊 Workbook מלא</h3>
-                <p class="text-gray-400">דוחות וניתוחים</p>
-            </a>
-            
-            <a href="/static/dashboard/presentation.html" class="card hover:bg-gray-700 transition cursor-pointer">
-                <h3 class="text-xl font-bold mb-2">🎨 Presentation</h3>
-                <p class="text-gray-400">מצגת מערכת</p>
-            </a>
-            
-            <a href="/static/dashboard/system-status.html" class="card hover:bg-gray-700 transition cursor-pointer">
-                <h3 class="text-xl font-bold mb-2">🔍 ניטור מערכת</h3>
-                <p class="text-gray-400">בדיקות אוטומטיות כל 30 שניות</p>
-            </a>
-            
-            <a href="/static/dashboard/validation-monitoring.html" class="card hover:bg-gray-700 transition cursor-pointer">
-                <h3 class="text-xl font-bold mb-2">✅ Validation</h3>
-                <p class="text-gray-400">ניטור אימות ובדיקות</p>
-            </a>
-            
-            <a href="/static/dashboard/workbook.html" class="card hover:bg-gray-700 transition cursor-pointer">
-                <h3 class="text-xl font-bold mb-2">📝 Workbook</h3>
-                <p class="text-gray-400">ניהול עבודה</p>
-            </a>
-        </div>
+                <div id="status-card" class="glass-card p-6 mb-6">
+                    <h2 class="text-2xl font-bold mb-4">📊 סטטוס מערכת</h2>
+                    <div id="system-status">
+                        <p class="text-gray-400">טוען...</p>
+                    </div>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                    <div class="glass-card p-6 cursor-pointer" onclick="switchSection('ultimate')">
+                        <h3 class="text-xl font-bold mb-2">📈 דשבורד מלא</h3>
+                        <p class="text-gray-400">כל הנתונים והגרפים</p>
+                    </div>
+                    
+                    <div class="glass-card p-6 cursor-pointer" onclick="switchSection('complete')">
+                        <h3 class="text-xl font-bold mb-2">📊 Workbook מלא</h3>
+                        <p class="text-gray-400">דוחות וניתוחים</p>
+                    </div>
+                    
+                    <div class="glass-card p-6 cursor-pointer" onclick="switchSection('presentation')">
+                        <h3 class="text-xl font-bold mb-2">🎨 Presentation</h3>
+                        <p class="text-gray-400">מצגת מערכת</p>
+                    </div>
+                    
+                    <div class="glass-card p-6 cursor-pointer" onclick="switchSection('status')">
+                        <h3 class="text-xl font-bold mb-2">🔍 ניטור מערכת</h3>
+                        <p class="text-gray-400">בדיקות אוטומטיות כל 30 שניות</p>
+                    </div>
+                    
+                    <div class="glass-card p-6 cursor-pointer" onclick="switchSection('validation')">
+                        <h3 class="text-xl font-bold mb-2">✅ Validation</h3>
+                        <p class="text-gray-400">ניטור אימות ובדיקות</p>
+                    </div>
+                    
+                    <div class="glass-card p-6 cursor-pointer" onclick="switchSection('workbook')">
+                        <h3 class="text-xl font-bold mb-2">📝 Workbook</h3>
+                        <p class="text-gray-400">ניהול עבודה</p>
+                    </div>
+                </div>
+            </section>
+
+            <section id="ultimate" class="content-section">
+                <div id="ultimate-root"></div>
+            </section>
+
+            <section id="complete" class="content-section">
+                <div id="complete-root"></div>
+            </section>
+
+            <section id="presentation" class="content-section">
+                <div id="presentation-root"></div>
+            </section>
+
+            <section id="status" class="content-section">
+                <div class="max-w-7xl mx-auto">
+                    <h1 class="text-4xl font-bold mb-8 text-center gradient-text">🔍 מערכת ניטור בזמן אמת</h1>
+                    
+                    <div id="status-container" class="space-y-6">
+                        <div class="glass-card rounded-lg p-6 text-center">
+                            <div class="text-gray-400">טוען נתונים...</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="validation" class="content-section">
+                <div class="max-w-7xl mx-auto">
+                    <div class="mb-8 text-center">
+                        <h1 class="text-4xl font-bold mb-2 gradient-text">
+                            🛡️ Validation & Safety Monitoring
+                        </h1>
+                        <p class="text-gray-400">AlgoGPT Ultimate Edition v2.0 - Production-Grade Safety Infrastructure</p>
+                    </div>
+
+                    <div class="flex gap-4 mb-6 flex-wrap">
+                        <button onclick="switchValidationTab('validation')" id="val-tab-validation" class="tab-button active">
+                            📊 Validation Results
+                        </button>
+                        <button onclick="switchValidationTab('monitoring')" id="val-tab-monitoring" class="tab-button">
+                            🔍 Live Monitoring
+                        </button>
+                        <button onclick="switchValidationTab('breaker')" id="val-tab-breaker" class="tab-button">
+                            🚨 Circuit Breaker
+                        </button>
+                        <button onclick="loadValidationData()" class="tab-button" style="margin-right: auto;">
+                            🔄 Refresh
+                        </button>
+                    </div>
+
+                    <div id="val-content-validation" class="val-tab-content">
+                        <div class="glass-card rounded-xl p-6 mb-6">
+                            <h2 class="text-2xl font-bold mb-4">🧪 Historical Backtest Validation</h2>
+                            <p class="text-gray-300 mb-4">Test your trading strategy against historical data with walk-forward testing.</p>
+                            
+                            <div class="bg-gray-800 rounded-lg p-4 mb-4">
+                                <h3 class="font-semibold mb-3">Start New Validation Run</h3>
+                                <div class="grid grid-cols-2 gap-4 mb-4">
+                                    <div>
+                                        <label class="block text-sm mb-1">Strategy</label>
+                                        <input id="val-strategy" type="text" value="gpt5_dual_gate" class="w-full px-3 py-2 bg-gray-700 rounded text-white">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm mb-1">Walk-Forward Folds</label>
+                                        <input id="val-folds" type="number" value="6" class="w-full px-3 py-2 bg-gray-700 rounded text-white">
+                                    </div>
+                                </div>
+                                <button onclick="runBacktest()" class="w-full bg-purple-600 hover:bg-purple-500 py-2 rounded font-semibold">
+                                    ▶️ Run Backtest
+                                </button>
+                            </div>
+
+                            <div id="validation-results" class="bg-gray-800 rounded-lg p-4">
+                                <p class="text-gray-400">Click "Run Backtest" to start validation...</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="val-content-monitoring" class="val-tab-content" style="display: none;">
+                        <div class="glass-card rounded-xl p-6">
+                            <h2 class="text-2xl font-bold mb-4">📈 Live Trading Health Monitor</h2>
+                            <div id="health-display" class="grid grid-cols-3 gap-4 mb-4">
+                                <div class="bg-gray-800 rounded-lg p-4">
+                                    <div class="text-sm text-gray-400">Win Rate 7d</div>
+                                    <div id="winrate-7d" class="text-3xl font-bold">--</div>
+                                </div>
+                                <div class="bg-gray-800 rounded-lg p-4">
+                                    <div class="text-sm text-gray-400">Max Drawdown</div>
+                                    <div id="max-dd" class="text-3xl font-bold">--</div>
+                                </div>
+                                <div class="bg-gray-800 rounded-lg p-4">
+                                    <div class="text-sm text-gray-400">Consecutive Losses</div>
+                                    <div id="consec-loss" class="text-3xl font-bold">--</div>
+                                </div>
+                            </div>
+                            <div id="health-raw" class="bg-gray-800 rounded-lg p-4">
+                                <pre class="text-xs text-gray-300 overflow-auto">Loading...</pre>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="val-content-breaker" class="val-tab-content" style="display: none;">
+                        <div class="glass-card rounded-xl p-6">
+                            <h2 class="text-2xl font-bold mb-4">⚡ Circuit Breaker Status</h2>
+                            
+                            <div class="grid grid-cols-3 gap-4 mb-6">
+                                <button onclick="breakerAction('pause')" class="bg-red-600 hover:bg-red-500 py-3 rounded font-semibold">
+                                    ⏸️ Manual Pause
+                                </button>
+                                <button onclick="breakerAction('reset')" class="bg-yellow-600 hover:bg-yellow-500 py-3 rounded font-semibold">
+                                    🔄 Reset Breaker
+                                </button>
+                                <button onclick="loadBreakerStatus()" class="bg-blue-600 hover:bg-blue-500 py-3 rounded font-semibold">
+                                    🔍 Check Status
+                                </button>
+                            </div>
+
+                            <div id="breaker-status" class="bg-gray-800 rounded-lg p-4">
+                                <p class="text-gray-400">Click "Check Status" to load circuit breaker info...</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <section id="workbook" class="content-section">
+                <div id="workbook-root"></div>
+            </section>
+        </main>
     </div>
 
     <script>
-        // Update time
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('collapsed');
+            
+            const savedState = !sidebar.classList.contains('collapsed');
+            localStorage.setItem('sidebar-expanded', savedState);
+        }
+        
+        function toggleMobileMenu() {
+            const sidebar = document.getElementById('sidebar');
+            sidebar.classList.toggle('mobile-open');
+        }
+        
+        function switchSection(sectionId) {
+            document.querySelectorAll('.content-section').forEach(section => {
+                section.classList.remove('active');
+            });
+            
+            document.querySelectorAll('.nav-link').forEach(link => {
+                link.classList.remove('active');
+            });
+            
+            document.getElementById(sectionId).classList.add('active');
+            
+            const activeLink = event?.currentTarget || document.querySelector(`[onclick="switchSection('${sectionId}')"]`);
+            if (activeLink) {
+                activeLink.classList.add('active');
+            }
+            
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+            
+            const sidebar = document.getElementById('sidebar');
+            if (window.innerWidth <= 768) {
+                sidebar.classList.remove('mobile-open');
+            }
+            
+            localStorage.setItem('active-section', sectionId);
+            
+            if (sectionId === 'status') {
+                loadSystemStatus();
+            } else if (sectionId === 'validation') {
+                loadValidationData();
+            }
+        }
+        
         function updateTime() {
             const now = new Date();
             const israelTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-            document.getElementById('time').textContent = israelTime.toLocaleString('he-IL');
+            const timeElement = document.getElementById('time');
+            if (timeElement) {
+                timeElement.textContent = israelTime.toLocaleString('he-IL');
+            }
         }
-        updateTime();
-        setInterval(updateTime, 1000);
-
-        // Load system status
-        async function loadStatus() {
+        
+        async function loadHomeStatus() {
             try {
                 const health = await fetch('/health/detailed').then(r => r.json());
                 
@@ -125,8 +825,277 @@
             }
         }
         
-        loadStatus();
-        setInterval(loadStatus, 5000);
+        async function loadSystemStatus() {
+            try {
+                const response = await fetch('/health/detailed');
+                if (!response.ok) throw new Error('Failed to load status');
+                
+                const data = await response.json();
+                renderSystemStatus(data);
+            } catch (error) {
+                document.getElementById('status-container').innerHTML = `
+                    <div class="glass-card rounded-lg p-6">
+                        <div class="text-2xl mb-2">🔴 שגיאה</div>
+                        <div>לא ניתן לטעון נתוני סטטוס: ${error.message}</div>
+                    </div>
+                `;
+            }
+        }
+
+        function renderSystemStatus(data) {
+            const statusColor = data.status === 'healthy' ? 'green' : 
+                               data.status === 'degraded' ? 'yellow' : 'red';
+            
+            const statusEmoji = data.status === 'healthy' ? '✅' : 
+                               data.status === 'degraded' ? '⚠️' : '🔴';
+            
+            const html = `
+                <div class="glass-card rounded-lg p-8">
+                    <div class="text-center mb-8">
+                        <div class="text-6xl mb-4">${statusEmoji}</div>
+                        <div class="text-3xl font-bold" style="color: ${statusColor}">
+                            ${data.status.toUpperCase()}
+                        </div>
+                        <div class="text-gray-400 mt-2">${new Date(data.timestamp).toLocaleString('he-IL')}</div>
+                    </div>
+                    
+                    ${data.issues && data.issues.length > 0 ? `
+                        <div class="bg-red-900 rounded-lg p-6 mb-6">
+                            <div class="text-xl font-bold mb-4">🚨 בעיות זוהו:</div>
+                            <ul class="list-disc list-inside space-y-2">
+                                ${data.issues.map(issue => `<li>${issue}</li>`).join('')}
+                            </ul>
+                        </div>
+                    ` : ''}
+                    
+                    ${data.fixes_applied && data.fixes_applied.length > 0 ? `
+                        <div class="bg-green-900 rounded-lg p-6 mb-6">
+                            <div class="text-xl font-bold mb-4">✅ תיקונים בוצעו:</div>
+                            <ul class="list-disc list-inside space-y-2">
+                                ${data.fixes_applied.map(fix => `<li>${fix}</li>`).join('')}
+                            </ul>
+                        </div>
+                    ` : ''}
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        ${Object.entries(data.checks || {}).map(([key, value]) => {
+                            const status = typeof value === 'object' ? value.status : value;
+                            const statusClass = status === 'ok' ? 'text-green-400' : 
+                                              status === 'warning' ? 'text-yellow-400' : 'text-red-400';
+                            return `
+                                <div class="bg-gray-700 rounded-lg p-4">
+                                    <div class="text-lg font-bold mb-2">${key}</div>
+                                    <div class="${statusClass}">${status}</div>
+                                    ${typeof value === 'object' && value.details ? 
+                                        `<div class="text-sm text-gray-400 mt-2">${JSON.stringify(value.details)}</div>` : ''}
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('status-container').innerHTML = html;
+        }
+        
+        function switchValidationTab(tab) {
+            document.querySelectorAll('.val-tab-content').forEach(el => el.style.display = 'none');
+            document.querySelectorAll('[id^="val-tab-"]').forEach(el => el.classList.remove('active'));
+            
+            document.getElementById('val-content-' + tab).style.display = 'block';
+            document.getElementById('val-tab-' + tab).classList.add('active');
+
+            if (tab === 'monitoring') loadHealthStatus();
+            if (tab === 'breaker') loadBreakerStatus();
+        }
+
+        async function runBacktest() {
+            const strategy = document.getElementById('val-strategy').value;
+            const folds = parseInt(document.getElementById('val-folds').value);
+            const resultsDiv = document.getElementById('validation-results');
+            
+            resultsDiv.innerHTML = '<p class="text-yellow-400">⏳ Starting backtest...</p>';
+            
+            try {
+                const response = await fetch('/validate/run', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        strategy,
+                        symbols: ['BTCUSDT', 'ETHUSDT'],
+                        start: '2024-01-01',
+                        end: '2024-12-31',
+                        folds
+                    })
+                });
+                
+                if (!response.ok) throw new Error('Backtest failed: ' + response.status);
+                const data = await response.json();
+                
+                resultsDiv.innerHTML = `
+                    <div class="text-green-400 mb-2">✅ Backtest started! Run ID: ${data.run_id}</div>
+                    <div class="text-sm text-gray-400">Status: ${data.status}</div>
+                    <div class="mt-3">
+                        <button onclick="checkBacktestStatus('${data.run_id}')" class="bg-blue-600 px-4 py-2 rounded hover:bg-blue-500">
+                            🔍 Check Status
+                        </button>
+                        <button onclick="getBacktestReport('${data.run_id}')" class="bg-purple-600 px-4 py-2 rounded ml-2 hover:bg-purple-500">
+                            📊 View Report
+                        </button>
+                    </div>
+                `;
+            } catch (err) {
+                resultsDiv.innerHTML = `<p class="text-red-400">❌ Error: ${err.message}</p>`;
+            }
+        }
+
+        async function checkBacktestStatus(runId) {
+            const resultsDiv = document.getElementById('validation-results');
+            try {
+                const response = await fetch(`/validate/status?id=${runId}`);
+                const data = await response.json();
+                resultsDiv.innerHTML = `<pre class="text-xs text-gray-300 overflow-auto">${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (err) {
+                resultsDiv.innerHTML = `<p class="text-red-400">❌ ${err.message}</p>`;
+            }
+        }
+
+        async function getBacktestReport(runId) {
+            const resultsDiv = document.getElementById('validation-results');
+            try {
+                const response = await fetch(`/validate/report?id=${runId}`);
+                const data = await response.json();
+                
+                const verdict = data.validation_pass ? 
+                    '<span class="text-green-400 font-bold">✅ APPROVED FOR PRODUCTION</span>' :
+                    '<span class="text-red-400 font-bold">❌ FAILED VALIDATION</span>';
+                
+                resultsDiv.innerHTML = `
+                    <div class="mb-4">${verdict}</div>
+                    <div class="grid grid-cols-3 gap-4 mb-4">
+                        <div class="bg-gray-700 p-3 rounded">
+                            <div class="text-sm text-gray-400">Win Rate</div>
+                            <div class="text-2xl font-bold">${(data.overall_metrics?.winrate || 0).toFixed(1)}%</div>
+                        </div>
+                        <div class="bg-gray-700 p-3 rounded">
+                            <div class="text-sm text-gray-400">Avg RR</div>
+                            <div class="text-2xl font-bold">${(data.overall_metrics?.avg_rr || 0).toFixed(2)}</div>
+                        </div>
+                        <div class="bg-gray-700 p-3 rounded">
+                            <div class="text-sm text-gray-400">Max DD</div>
+                            <div class="text-2xl font-bold">${(data.overall_metrics?.max_dd || 0).toFixed(1)}%</div>
+                        </div>
+                    </div>
+                    <details class="bg-gray-700 p-3 rounded">
+                        <summary class="cursor-pointer font-semibold">📋 Full Report</summary>
+                        <pre class="text-xs mt-2 overflow-auto">${JSON.stringify(data, null, 2)}</pre>
+                    </details>
+                `;
+            } catch (err) {
+                resultsDiv.innerHTML = `<p class="text-red-400">❌ ${err.message}</p>`;
+            }
+        }
+
+        async function loadHealthStatus() {
+            const display = document.getElementById('health-raw');
+            try {
+                const response = await fetch('/monitors/health');
+                const data = await response.json();
+                
+                document.getElementById('winrate-7d').textContent = `${(data.metrics?.winrate_7d || 0).toFixed(1)}%`;
+                document.getElementById('max-dd').textContent = `${(data.metrics?.max_dd_pct || 0).toFixed(1)}%`;
+                document.getElementById('consec-loss').textContent = data.metrics?.consecutive_losses || 0;
+                
+                display.innerHTML = `<pre class="text-xs text-gray-300">${JSON.stringify(data, null, 2)}</pre>`;
+            } catch (err) {
+                display.innerHTML = `<pre class="text-red-400">Error: ${err.message}</pre>`;
+            }
+        }
+
+        async function breakerAction(action) {
+            const statusDiv = document.getElementById('breaker-status');
+            statusDiv.innerHTML = '<p class="text-yellow-400">⏳ Processing...</p>';
+            
+            try {
+                const response = await fetch(`/monitors/breaker/${action}`, { method: 'POST' });
+                const data = await response.json();
+                statusDiv.innerHTML = `
+                    <div class="text-green-400 mb-2">✅ ${action.toUpperCase()} successful!</div>
+                    <pre class="text-xs text-gray-300">${JSON.stringify(data, null, 2)}</pre>
+                `;
+            } catch (err) {
+                statusDiv.innerHTML = `<p class="text-red-400">❌ ${err.message}</p>`;
+            }
+        }
+
+        async function loadBreakerStatus() {
+            const statusDiv = document.getElementById('breaker-status');
+            try {
+                const response = await fetch('/monitors/breaker/status');
+                const data = await response.json();
+                
+                const statusColor = data.active ? 'text-red-400' : 'text-green-400';
+                const statusText = data.active ? '🚨 BREAKER ACTIVE' : '✅ SYSTEM OPERATIONAL';
+                
+                statusDiv.innerHTML = `
+                    <div class="${statusColor} text-xl font-bold mb-4">${statusText}</div>
+                    <div class="grid grid-cols-2 gap-4 mb-4">
+                        <div class="bg-gray-700 p-3 rounded">
+                            <div class="text-sm text-gray-400">Daily DD Limit</div>
+                            <div class="text-lg">${data.config?.dd_limit_pct || 5}%</div>
+                        </div>
+                        <div class="bg-gray-700 p-3 rounded">
+                            <div class="text-sm text-gray-400">Max Consecutive SL</div>
+                            <div class="text-lg">${data.config?.consec_sl_max || 4}</div>
+                        </div>
+                    </div>
+                    <details class="bg-gray-700 p-3 rounded">
+                        <summary class="cursor-pointer font-semibold">🔍 Full Status</summary>
+                        <pre class="text-xs mt-2">${JSON.stringify(data, null, 2)}</pre>
+                    </details>
+                `;
+            } catch (err) {
+                statusDiv.innerHTML = `<p class="text-red-400">❌ ${err.message}</p>`;
+            }
+        }
+
+        function loadValidationData() {
+            const activeTab = document.querySelector('.val-tab-content:not([style*="display: none"])');
+            if (activeTab && activeTab.id === 'val-content-monitoring') {
+                loadHealthStatus();
+            } else if (activeTab && activeTab.id === 'val-content-breaker') {
+                loadBreakerStatus();
+            }
+        }
+        
+        updateTime();
+        setInterval(updateTime, 1000);
+        
+        loadHomeStatus();
+        setInterval(loadHomeStatus, 5000);
+        
+        setInterval(() => {
+            const activeSection = document.querySelector('.content-section.active');
+            if (activeSection && activeSection.id === 'status') {
+                loadSystemStatus();
+            }
+        }, 5000);
+        
+        const savedExpanded = localStorage.getItem('sidebar-expanded');
+        if (savedExpanded === 'false') {
+            document.getElementById('sidebar').classList.add('collapsed');
+        }
+        
+        const savedSection = localStorage.getItem('active-section');
+        if (savedSection && document.getElementById(savedSection)) {
+            switchSection(savedSection);
+        }
+    </script>
+    
+    <script type="text/babel">
+        const { useState, useEffect, useRef } = React;
+        
+        console.log('AlgoGPT Ultimate Edition Dashboard Loaded');
     </script>
 </body>
 </html>
