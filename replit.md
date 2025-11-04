@@ -32,12 +32,72 @@ The core application is built with FastAPI (`main.py`) and uses Gunicorn for ser
 -   Uses Bearer Token (`X-API-Key`) and HMAC Signature for secure access.
 -   Includes anti-replay protection and mandatory Telegram approval for trade execution.
 
+## 🧠 **8+ AI Brains System**
+
+AlgoGPT operates with **8+ specialized AI systems** working in harmony for superior trading decisions:
+
+### 1️⃣ **GPT-5 Central Brain** (`workers/gpt5_orchestrator.py`)
+- **Model:** GPT-5 (gpt-5-2025-08-07)
+- **Role:** Master AI orchestrator for strategic coordination
+- **Runs:** Every 30 minutes
+- **Purpose:** High-level analysis and decision coordination
+
+### 2️⃣ **GPT Auto Suggest** (`workers/gpt_auto_suggest.py`)
+- **Model:** GPT-5
+- **Role:** Autonomous market scanner (531 symbols)
+- **Runs:** Every 60 seconds
+- **Purpose:** Multi-timeframe analysis (15M/1H/4H), FUTURES + GRID trade proposals
+
+### 3️⃣ **Multi-AI Consensus Scorer** (`utils/ai_trade_scorer.py`)
+- **Models:** GPT-5 + DeepSeek + AI-X (Grok)
+- **Role:** Combines 3 AI providers for consensus scoring
+- **Purpose:** Trade quality scoring (0-100) with multi-AI agreement
+- **Status:** ✅ Active when all API keys present
+
+### 4️⃣ **DeepSeek Optimizer** (`workers/deepseek_optimizer.py`)
+- **Model:** DeepSeek-Chat
+- **Role:** Parameter optimization specialist
+- **Runs:** On-demand / Every 60 minutes
+- **Purpose:** Optimizes entry points, TP/SL levels, position sizing
+
+### 5️⃣ **AI-X (Grok) Supervisor** (`workers/aix_supervisor.py`)
+- **Model:** Grok-Beta
+- **Role:** System health monitoring and anomaly detection
+- **Runs:** Every 30 minutes
+- **Purpose:** Detects issues, provides strategic recommendations
+
+### 6️⃣ **Adaptive Prompt Engine** (`utils/adaptive_prompts.py`)
+- **Logic:** Rule-based + Market Intelligence
+- **Role:** Dynamic prompt generation per market regime
+- **Purpose:** Creates optimized AI prompts (bullish/bearish/choppy/sideways)
+
+### 7️⃣ **Market Intelligence Brain** (`utils/market_intelligence.py`)
+- **Logic:** Technical Analysis + ML
+- **Role:** Market regime detection
+- **Purpose:** Identifies regime, volatility, mood → recommends strategy
+
+### 8️⃣ **Portfolio Intelligence** (`utils/portfolio_intelligence.py`)
+- **Logic:** Risk Management + Correlation Analysis
+- **Role:** Exposure & risk guardian
+- **Purpose:** Prevents over-exposure, manages position limits, circuit breakers
+
+### 9️⃣ **News Sentiment Analyzer** (`workers/news_sentiment.py`)
+- **Model:** GPT-5
+- **Role:** News headline analysis
+- **Runs:** Every 60 minutes
+- **Purpose:** Analyzes crypto news for market sentiment impact
+
+### 🔟 **Auto-Flip System** (`utils/auto_flip.py`)
+- **Logic:** Multi-Timeframe Weighted Analysis
+- **Role:** Directional decision making
+- **Purpose:** Automatically decides LONG/SHORT based on TF alignment
+
 ## External Dependencies
 
 -   **Binance Futures API**: For market data, order execution, and account management.
 -   **OpenAI API**: GPT-5 model (gpt-5-2025-08-07) via SDK 2.6.1 for AI-powered trade proposal generation and market analysis.
--   **DeepSeek API**: Alternative AI provider for multi-AI consensus scoring.
--   **AI-X/Grok API**: Third AI provider for consensus-based decision making.
+-   **DeepSeek API**: AI provider for trade optimization and multi-AI consensus scoring.
+-   **AI-X/Grok API**: AI provider for system supervision and consensus-based decision making.
 -   **Telegram Bot API**: For notifications, approval workflows, and interactive callbacks.
 -   **N8N Workflow Automation**: For external workflow integration, news ingestion, and incident management.
 -   **Gunicorn**: Production-grade WSGI HTTP server.

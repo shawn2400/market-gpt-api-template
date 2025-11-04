@@ -43,10 +43,6 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Daily Digest"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Auto Scanner"
 
 [[workflows.workflow.tasks]]
@@ -63,10 +59,6 @@ args = "N8N Bridge"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Heartbeat Monitor"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Position Monitor"
 
 [[workflows.workflow.tasks]]
@@ -75,22 +67,7 @@ args = "Sentinel Security"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "GitHub Auto-Commit"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Auto Health Monitor"
-
-[[workflows.workflow]]
-name = "Daily Digest"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/daily_digest.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
 
 [[workflows.workflow]]
 name = "GPT-5 Central Brain"
@@ -115,17 +92,6 @@ args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python 
 outputType = "console"
 
 [[workflows.workflow]]
-name = "Heartbeat Monitor"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG BASE_URL=http://127.0.0.1:5000 HEARTBEAT_INTERVAL=600 HEARTBEAT_ALERT_LEVEL=critical python workers/system_heartbeat.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
 name = "Position Monitor"
 author = "agent"
 
@@ -143,17 +109,6 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG SENTINEL_ENABLED=1 SENTINEL_ALERT_LEVEL=critical python workers/sentinel_security.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
-name = "GitHub Auto-Commit"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG GITHUB_AUTO_COMMIT_ENABLED=1 GITHUB_AUTO_COMMIT_INTERVAL=3600 GITHUB_REPO_PATH=/home/runner/$REPL_SLUG GITHUB_COMMIT_AUTHOR=\"AlgoGPT System\" GITHUB_COMMIT_EMAIL=\"algogpt@system.local\" GITHUB_COMMIT_TELEGRAM_NOTIFY=1 python workers/github_auto_commit.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
