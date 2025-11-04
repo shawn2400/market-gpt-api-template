@@ -1866,13 +1866,8 @@ async def _on_startup():
         logger.info("ℹ️  Phase 3 AI Workers disabled (set ENABLE_LEGACY_WORKERS=1 to enable)")
     
     # ==================== Mesh Bus Ping Loop ====================
-    try:
-        logger.info("🔗 Starting Mesh Bus ping loop...")
-        from utils import mesh_bus  # type: ignore
-        asyncio.create_task(mesh_bus.ping_loop())
-        logger.info("✅ Mesh Bus ping loop started")
-    except Exception as e:
-        logger.warning("Failed to start mesh_bus.ping_loop: %s", e)
+    # Disabled (legacy Phase 3 feature - not required for Phase 1)
+    logger.info("ℹ️  Mesh Bus disabled (legacy feature, not required)")
 
 # ============= Dashboard Route =============
 @app.get('/dashboard', response_class=HTMLResponse)
