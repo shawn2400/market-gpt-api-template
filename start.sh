@@ -2,13 +2,23 @@
 # ================================================================================
 # AlgoGPT Startup Script for Render
 # ================================================================================
-# This script starts the main Gunicorn server + all 10 background workers
+# This script starts the main Gunicorn server + all 9 background workers
+# Database: Uses Replit PostgreSQL (no local installation needed)
 # ================================================================================
 
 set -e  # Exit on error
 
 echo "🚀 Starting AlgoGPT Production System..."
 echo "=========================================="
+
+# Verify DATABASE_URL is set
+if [ -z "$DATABASE_URL" ]; then
+    echo "❌ ERROR: DATABASE_URL environment variable not set!"
+    echo "   Please set it in Render dashboard to your Replit PostgreSQL URL"
+    exit 1
+fi
+
+echo "✅ Database URL configured"
 
 # Set default PORT if not set
 export PORT=${PORT:-10000}

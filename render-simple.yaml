@@ -21,10 +21,7 @@ services:
       pip install -r requirements.txt
       
       echo "🔧 Making scripts executable..."
-      chmod +x start.sh setup_db.sh migrate_db.py
-      
-      echo "🗄️ Setting up PostgreSQL..."
-      ./setup_db.sh
+      chmod +x start.sh
       
       echo "✅ Build complete!"
     
@@ -153,7 +150,7 @@ services:
       - key: USE_DB
         value: 1
       - key: DATABASE_URL
-        value: postgresql://algogpt_user:YOUR_PASSWORD@localhost/algogpt_production
+        sync: false  # Set this to your Replit DATABASE_URL in Render dashboard
       
       # === Secrets (You need to add these manually in Render Dashboard) ===
       - key: BINANCE_API_KEY
