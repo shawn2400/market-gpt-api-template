@@ -953,10 +953,15 @@
             const resultsDiv = document.getElementById('validation-results');
             try {
                 const response = await fetch(`/validate/status?id=${runId}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
                 resultsDiv.innerHTML = `<pre class="text-xs text-gray-300 overflow-auto">${JSON.stringify(data, null, 2)}</pre>`;
             } catch (err) {
-                resultsDiv.innerHTML = `<p class="text-red-400">❌ ${err.message}</p>`;
+                resultsDiv.innerHTML = `<p class="text-red-400">❌ Error: ${err.message}</p>`;
             }
         }
 
@@ -964,6 +969,11 @@
             const resultsDiv = document.getElementById('validation-results');
             try {
                 const response = await fetch(`/validate/report?id=${runId}`);
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
                 
                 const verdict = data.validation_pass ? 
@@ -1000,6 +1010,11 @@
             const display = document.getElementById('health-raw');
             try {
                 const response = await fetch('/monitors/health');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
                 
                 document.getElementById('winrate-7d').textContent = `${(data.metrics?.winrate_7d || 0).toFixed(1)}%`;
@@ -1017,7 +1032,16 @@
             statusDiv.innerHTML = '<p class="text-yellow-400">⏳ Processing...</p>';
             
             try {
-                const response = await fetch(`/monitors/breaker/${action}`, { method: 'POST' });
+                const response = await fetch(`/monitors/breaker/${action}`, { 
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ reason: `Dashboard ${action} request` })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
                 statusDiv.innerHTML = `
                     <div class="text-green-400 mb-2">✅ ${action.toUpperCase()} successful!</div>
@@ -1032,21 +1056,26 @@
             const statusDiv = document.getElementById('breaker-status');
             try {
                 const response = await fetch('/monitors/breaker/status');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
                 const data = await response.json();
                 
-                const statusColor = data.active ? 'text-red-400' : 'text-green-400';
-                const statusText = data.active ? '🚨 BREAKER ACTIVE' : '✅ SYSTEM OPERATIONAL';
+                const statusColor = data.breaker_status?.triggered ? 'text-red-400' : 'text-green-400';
+                const statusText = data.breaker_status?.triggered ? '🚨 BREAKER ACTIVE' : '✅ SYSTEM OPERATIONAL';
                 
                 statusDiv.innerHTML = `
                     <div class="${statusColor} text-xl font-bold mb-4">${statusText}</div>
                     <div class="grid grid-cols-2 gap-4 mb-4">
                         <div class="bg-gray-700 p-3 rounded">
                             <div class="text-sm text-gray-400">Daily DD Limit</div>
-                            <div class="text-lg">${data.config?.dd_limit_pct || 5}%</div>
+                            <div class="text-lg">${data.breaker_status?.config?.dd_limit_pct || 5}%</div>
                         </div>
                         <div class="bg-gray-700 p-3 rounded">
                             <div class="text-sm text-gray-400">Max Consecutive SL</div>
-                            <div class="text-lg">${data.config?.consec_sl_max || 4}</div>
+                            <div class="text-lg">${data.breaker_status?.config?.consec_sl_max || 4}</div>
                         </div>
                     </div>
                     <details class="bg-gray-700 p-3 rounded">
@@ -1055,7 +1084,7 @@
                     </details>
                 `;
             } catch (err) {
-                statusDiv.innerHTML = `<p class="text-red-400">❌ ${err.message}</p>`;
+                statusDiv.innerHTML = `<p class="text-red-400">❌ Error: ${err.message}</p>`;
             }
         }
 
