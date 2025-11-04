@@ -1,0 +1,241 @@
+databases:
+  - name: algogpt-db
+    databaseName: algogpt
+    user: algogpt_user
+    plan: starter  # Free tier, upgrade to starter ($7/mo) for better performance
+
+services:
+  # Main Web Service - AlgoGPT Server
+  - type: web
+    name: algogpt-server
+    runtime: python
+    plan: standard  # $25/mo for 2GB RAM
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      AUTO_RUN=1 
+      EXECUTE_TRADES=1 
+      TRADE_AUTO_SUGGEST=1 
+      SUGGEST_FUTURES=1 
+      ALLOW_MANAGE_OPEN_TRADES=1 
+      PAUSE_AUTO_RUN=0 
+      MANAGER_ENABLE=1 
+      TRADE_MANAGER_ENABLE=1 
+      TELEGRAM_SEND_ENABLE=1 
+      APPROVAL_ENABLED=1 
+      REQUIRE_TELEGRAM_APPROVAL=1 
+      AUTO_OPEN_ON_APPROVE=1 
+      SMART_MANAGE_ON_APPROVE=1 
+      TRAIL_ENABLE=1 
+      BE_GUARD_ENABLE=1 
+      DEBUG_SIGN=1 
+      ENABLE_MULTI_AI_CONSENSUS=1 
+      ENABLE_OPENAI=1 
+      ENABLE_DEEPSEEK=1 
+      ENABLE_XAI=1 
+      CONSENSUS_MIN_PROVIDERS=2 
+      PORT=10000 
+      gunicorn -c gunicorn_conf.py main:app
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: TELEGRAM_ADMIN_IDS
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: XAI_API_KEY
+        sync: false
+      - key: AI_MESH_SECRET
+        sync: false
+      - key: OPS_SIGN_SECRET
+        sync: false
+      - key: N8N_WEBHOOK_SECRET
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: algogpt-db
+          property: connectionString
+      - key: PUBLIC_HOST
+        fromService:
+          type: web
+          name: algogpt-server
+          property: host
+    healthCheckPath: /health
+
+  # Background Worker 1 - Auto Health Monitor
+  - type: worker
+    name: algogpt-health-monitor
+    runtime: python
+    plan: starter  # $7/mo for background workers
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      cd /opt/render/project/src &&
+      PYTHONPATH=/opt/render/project/src 
+      BASE_URL=https://algogpt-server.onrender.com
+      HEALTH_CHECK_INTERVAL=30 
+      AUTO_FIX_ENABLE=1 
+      TELEGRAM_SEND_ENABLE=1 
+      python workers/auto_health_monitor.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: algogpt-db
+          property: connectionString
+
+  # Background Worker 2 - Auto Scanner (GPT Auto Suggest)
+  - type: worker
+    name: algogpt-scanner
+    runtime: python
+    plan: starter
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      cd /opt/render/project/src &&
+      PYTHONPATH=/opt/render/project/src 
+      TRADE_AUTO_SUGGEST=1 
+      SUGGEST_FUTURES=1 
+      SUGGEST_GRID=1 
+      SUGGEST_INTERVAL_SEC=60 
+      CONTEXT_URL=https://algogpt-server.onrender.com
+      ALERT_INGEST_URL=https://algogpt-server.onrender.com/alerts/ingest
+      WEBHOOK_HMAC_SECRET=demo_secret_change_in_production 
+      ENABLE_MULTI_AI_CONSENSUS=1 
+      ENABLE_OPENAI=1 
+      ENABLE_DEEPSEEK=1 
+      ENABLE_XAI=1 
+      python workers/gpt_auto_suggest.py
+    envVars:
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: XAI_API_KEY
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: algogpt-db
+          property: connectionString
+
+  # Background Worker 3 - GPT-5 Central Brain
+  - type: worker
+    name: algogpt-gpt5-brain
+    runtime: python
+    plan: starter
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      cd /opt/render/project/src &&
+      PYTHONPATH=/opt/render/project/src 
+      python workers/gpt5_orchestrator.py
+    envVars:
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: XAI_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: algogpt-db
+          property: connectionString
+
+  # Background Worker 4 - N8N Bridge
+  - type: worker
+    name: algogpt-n8n-bridge
+    runtime: python
+    plan: starter
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      cd /opt/render/project/src &&
+      PYTHONPATH=/opt/render/project/src 
+      python workers/n8n_bridge.py
+    envVars:
+      - key: N8N_WEBHOOK_SECRET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: algogpt-db
+          property: connectionString
+
+  # Background Worker 5 - Position Monitor
+  - type: worker
+    name: algogpt-position-monitor
+    runtime: python
+    plan: starter
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      cd /opt/render/project/src &&
+      PYTHONPATH=/opt/render/project/src 
+      ENABLE_POSITION_MONITOR=1 
+      POSITION_REPORT_INTERVAL_SEC=1800 
+      POSITION_ALERT_LEVEL=critical 
+      python workers/position_monitor.py
+    envVars:
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: algogpt-db
+          property: connectionString
+
+  # Background Worker 6 - Sentinel Security
+  - type: worker
+    name: algogpt-sentinel
+    runtime: python
+    plan: starter
+    region: singapore
+    buildCommand: pip install -r requirements.txt
+    startCommand: >
+      cd /opt/render/project/src &&
+      PYTHONPATH=/opt/render/project/src 
+      SENTINEL_ENABLED=1 
+      SENTINEL_ALERT_LEVEL=critical 
+      python workers/sentinel_security.py
+    envVars:
+      - key: BINANCE_API_KEY
+        sync: false
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: AI_MESH_SECRET
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: algogpt-db
+          property: connectionString
