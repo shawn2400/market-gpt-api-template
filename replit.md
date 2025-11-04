@@ -26,7 +26,17 @@ The core application uses FastAPI (`main.py`) and Gunicorn. Functionalities are 
 -   **Dynamic Position Management**: Features ATR Trailing, Multi-level TP ladder, and Dynamic Position Sizing.
 -   **Auto-Flip**: Dynamically adapts to market conditions, proposing LONG or SHORT trades with multi-system validation.
 -   **Self-Adaptive Trading Engine**: Incorporates Market Intelligence (regime, mood, volatility detection), Adaptive AI Prompts with scalping strategies, and Portfolio Intelligence (exposure management, correlation prevention).
--   **Dynamic Capital Optimization**: Automatically calculates leverage and position sizing based on trade quality, RR, AI confidence, and market conditions.
+-   **Dynamic Budget System** (ENABLED): Each trade budget calculated in real-time based on:
+    - 1% of account equity (configurable via BUDGET_PCT_OF_EQUITY)
+    - Trade quality multiplier: 0.7x (quality 4/10) to 1.8x (quality 9+/10)
+    - Volatility adjustment: Reduces budget in high ATR markets for safety
+    - Floor: $10 USDT minimum per trade
+    - Ceiling: $100 USDT maximum per trade
+    - **Result**: No fixed position sizes - every trade sized optimally for its risk/reward profile
+-   **Dynamic SL/TP Calculation**: 
+    - Stop Loss: ATR-based (adapts to market volatility)
+    - Take Profit: RR-based (1.1-1.4x depending on market regime)
+    - **Result**: No template stops - every trade has custom risk parameters
 -   **Complete Data Persistence**: All critical data, including trade sizing, market states, and performance records, is saved to a PostgreSQL database.
 
 **Security & Authentication:**
