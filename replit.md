@@ -174,3 +174,59 @@ MAX_DRAWDOWN_PCT=12            # Maximum drawdown tolerance
 -   **AI Model Fine-Tuning**: Lightweight transformer (40M params), transfer learning from FinBERT
 -   **Market Intelligence**: HMM regime detection, GARCH volatility forecasting, real-time news sentiment
 -   **Prerequisites**: Requires 4GB RAM upgrade, extended historical data download (~500MB)
+
+---
+
+## 🚀 Render Deployment (Production Server)
+
+**Status:** ✅ **READY FOR DEPLOYMENT** (November 4, 2025)
+
+### Architecture:
+```
+Replit (Development) → GitHub (Auto-Sync) → Render (Production)
+                                ↑
+                           Every 10 minutes
+```
+
+### Cost:
+- **Render Web Service:** $25/month
+- **Replit PostgreSQL:** FREE (existing database)
+- **Total:** $25/month 🎉
+
+### Deployment Files:
+1. **render-simple.yaml** (4.5KB) - Render service configuration
+2. **start.sh** (3.0KB) - Master startup script (9 workers + Gunicorn)
+3. **.env.render.template** (2.6KB) - All secrets template
+4. **RENDER_DEPLOYMENT_GUIDE_v2.md** (7.6KB) - Step-by-step deployment guide
+5. **RENDER_FILES_SUMMARY.md** (8.8KB) - Technical documentation
+
+### Production Architecture:
+```
+┌─────────────────────────────────────────────┐
+│  Render Server ($25/month)                  │
+│  ├── Gunicorn (port 10000)                  │
+│  ├── 9 Background Workers                   │
+│  └── → Replit PostgreSQL (remote, FREE)     │
+└─────────────────────────────────────────────┘
+```
+
+### Auto-Deployment:
+- **GitHub Auto-Commit:** Every 10 minutes (configurable)
+- **Render Auto-Deploy:** On every GitHub push
+- **Total Time:** ~13 minutes from code to production
+
+### Key Benefits:
+- ✅ Zero migration needed (DB stays on Replit)
+- ✅ Auto SSL/HTTPS from Render
+- ✅ 24/7 uptime with health checks
+- ✅ All 10 workflows on single $25 server
+- ✅ Full monitoring via Telegram alerts
+
+### Quick Start:
+1. Get DATABASE_URL from Replit: `echo $DATABASE_URL`
+2. Push code to GitHub (auto-sync every 10 min)
+3. Create Render service from `render-simple.yaml`
+4. Add all secrets in Render dashboard
+5. Deploy! 🚀
+
+**Documentation:** See `RENDER_DEPLOYMENT_GUIDE_v2.md` for complete instructions.
