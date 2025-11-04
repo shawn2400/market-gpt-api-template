@@ -27,7 +27,28 @@ git commit -m "🚀 Render deployment ready - 7 services configured"
 git push origin main
 ```
 
-### שלב 2: הרצת Deployment Script
+### שלב 2: וידוא שכל ה-Secrets מוגדרים
+
+לפני deployment, ודא שיש לך את כל ה-secrets הנדרשים:
+
+**REQUIRED Secrets:**
+- ✅ BINANCE_API_KEY
+- ✅ BINANCE_API_SECRET
+- ✅ TELEGRAM_BOT_TOKEN
+- ✅ TELEGRAM_CHAT_ID
+- ✅ OPENAI_API_KEY
+- ✅ N8N_WEBHOOK_SECRET
+- ✅ WEBHOOK_HMAC_SECRET
+
+**Optional Secrets:**
+- TELEGRAM_ADMIN_IDS
+- XAI_API_KEY
+- AI_MESH_SECRET
+- OPS_SIGN_SECRET
+
+הסקריפט יבדוק אוטומטית ויפסיק אם חסרים secrets חובה.
+
+### שלב 3: הרצת Deployment Script
 
 לאחר ה-push, הרץ:
 
@@ -43,7 +64,7 @@ python3 scripts/deploy_to_render.py --deploy
 
 **סה"כ עלות: ~$74/חודש**
 
-### שלב 3: בדיקת הדומיין החדש
+### שלב 4: בדיקת הדומיין החדש
 
 לאחר שה-deployment יסתיים (5-10 דקות), הדומיין החדש יהיה:
 
