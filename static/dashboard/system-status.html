@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>מערכת ניטור - AlgoGPT</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background: linear-gradient(135deg, #0a0a1a 0%, #1a1a2e 100%); }
+        .status-ok { color: #10b981; }
+        .status-warning { color: #f59e0b; }
+        .status-error { color: #ef4444; }
+    </style>
+</head>
+<body class="text-white min-h-screen p-8">
+    <div class="max-w-7xl mx-auto">
+        <h1 class="text-4xl font-bold mb-8 text-center">🔍 מערכת ניטור בזמן אמת</h1>
+        
+        <div id="status-container" class="space-y-6">
+            <div class="bg-gray-800 rounded-lg p-6 text-center">
+                <div class="text-gray-400">טוען נתונים...</div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        async function loadStatus() {
+            try {
+                const response = await fetch('/health/detailed');
+                if (!response.ok) throw new Error('Failed to load status');
+                
+                const data = await response.json();
+                renderStatus(data);
+            } catch (error) {
+                document.getElementById('status-container').innerHTML = `
+                    <div class="bg-red-900 rounded-lg p-6">
+                        <div class="text-2xl mb-2">🔴 שגיאה</div>
+                        <div>לא ניתן לטעון נתוני סטטוס: ${error.message}</div>
+                    </div>
+                `;
+            }
+        }
+
+        function renderStatus(data) {
+            const statusColor = data.status === 'healthy' ? 'green' : 
+                               data.status === 'degraded' ? 'yellow' : 'red';
+            
+            const statusEmoji = data.status === 'healthy' ? '✅' : 
+                               data.status === 'degraded' ? '⚠️' : '🔴';
+            
+            const html = `
+                <div class="bg-gray-800 rounded-lg p-8">
+                    <div class="text-center mb-8">
+                        <div class="text-6xl mb-4">${statusEmoji}</div>
+                        <div class="text-3xl font-bold status-${statusColor}">
+                            ${data.status.toUpperCase()}
+                        </div>
+                        <div class="text-gray-400 mt-2">${new Date(data.timestamp).toLocaleString('he-IL')}</div>
+                    </div>
+                    
+                    ${data.issues.length > 0 ? `
+                        <div class="bg-red-900 rounded-lg p-6 mb-6">
+                            <div class="text-xl font-bold mb-4">🚨 בעיות זוהו:</div>
+                            <ul class="list-disc list-inside space-y-2">
+                                ${data.issues.map(issue => `<li>${issue}</li>`).join('')}
+                            </ul>
+                        </div>
+                    ` : ''}
+                    
+                    ${data.fixes_applied.length > 0 ? `
+                        <div class="bg-green-900 rounded-lg p-6 mb-6">
+                            <div class="text-xl font-bold mb-4">✅ תיקונים בוצעו:</div>
+                            <ul class="list-disc list-inside space-y-2">
+                                ${data.fixes_applied.map(fix => `<li>${fix}</li>`).join('')}
+                            </ul>
+                        </div>
+                    ` : ''}
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        ${Object.entries(data.checks).map(([key, value]) => {
+                            const status = typeof value === 'object' ? value.status : value;
+                            const statusClass = status === 'ok' ? 'status-ok' : 
+                                              status === 'warning' ? 'status-warning' : 'status-error';
+                            return `
+                                <div class="bg-gray-700 rounded-lg p-4">
+                                    <div class="text-lg font-bold mb-2">${key}</div>
+                                    <div class="${statusClass}">${status}</div>
+                                    ${typeof value === 'object' && value.details ? 
+                                        `<div class="text-sm text-gray-400 mt-2">${JSON.stringify(value.details)}</div>` : ''}
+                                </div>
+                            `;
+                        }).join('')}
+                    </div>
+                </div>
+            `;
+            
+            document.getElementById('status-container').innerHTML = html;
+        }
+
+        // Auto-refresh every 5 seconds
+        loadStatus();
+        setInterval(loadStatus, 5000);
+    </script>
+</body>
+</html>

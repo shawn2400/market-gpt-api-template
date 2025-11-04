@@ -77,6 +77,10 @@ args = "Sentinel Security"
 task = "workflow.run"
 args = "GitHub Auto-Commit"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Auto Health Monitor"
+
 [[workflows.workflow]]
 name = "Daily Digest"
 author = "agent"
@@ -154,13 +158,20 @@ args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG GITHUB_
 [workflows.workflow.metadata]
 outputType = "console"
 
+[[workflows.workflow]]
+name = "Auto Health Monitor"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG BASE_URL=http://127.0.0.1:5000 HEALTH_CHECK_INTERVAL=30 AUTO_FIX_ENABLE=1 TELEGRAM_SEND_ENABLE=1 python workers/auto_health_monitor.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 33365
-externalPort = 6000
 
 [[ports]]
 localPort = 33391
