@@ -100,10 +100,13 @@ class HealthCheck:
     async def check_database(self) -> bool:
         """Check database connection"""
         try:
-            from utils.db import get_db_connection
-            conn = get_db_connection()
-            if conn:
-                with conn.cursor() as cur:
+            from utils.db import _conn, USE_DB
+            if not USE_DB:
+                return True  # DB disabled, consider it healthy
+            
+            with _conn() as conn:
+                if conn:
+                    cur = conn.cursor()
                     cur.execute("SELECT 1")
                     return True
             return False

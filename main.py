@@ -1696,7 +1696,10 @@ except Exception as e:
 @app.get("/")
 async def root():
     from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/static/dashboard/index.html", status_code=302)
+    import time
+    # Add cache-busting version parameter
+    version = int(time.time())
+    return RedirectResponse(url=f"/static/dashboard/index.html?v={version}", status_code=302)
 
 @app.head("/")
 async def root_head():
