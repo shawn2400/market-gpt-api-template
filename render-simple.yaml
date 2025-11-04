@@ -149,37 +149,21 @@ services:
       # === Database ===
       - key: USE_DB
         value: 1
-      - key: DATABASE_URL
-        sync: false  # Set this to your Replit DATABASE_URL in Render dashboard
       
-      # === Secrets (You need to add these manually in Render Dashboard) ===
-      - key: BINANCE_API_KEY
-        sync: false
-      - key: BINANCE_API_SECRET
-        sync: false
-      - key: TELEGRAM_BOT_TOKEN
-        sync: false
-      - key: TELEGRAM_CHAT_ID
-        sync: false
-      - key: TELEGRAM_ADMIN_IDS
-        sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: XAI_API_KEY
-        sync: false
-      - key: N8N_WEBHOOK_SECRET
-        sync: false
-      - key: OPS_SIGN_SECRET
-        sync: false
-      - key: WEBHOOK_HMAC_SECRET
-        sync: false
-      - key: API_BEARER_TOKEN
-        sync: false
-      - key: PRIMARY_API_TOKEN
-        sync: false
-      - key: ALGOGPT_TOKENS
-        sync: false
-      - key: AI_MESH_SECRET
-        sync: false
-      - key: RENDER_API_KEY
-        sync: false
+      # ⚠️ NOTE: Add these secrets manually in Render Dashboard:
+      # - DATABASE_URL (copy from Replit: echo $DATABASE_URL)
+      # - BINANCE_API_KEY
+      # - BINANCE_API_SECRET
+      # - TELEGRAM_BOT_TOKEN
+      # - TELEGRAM_CHAT_ID
+      # - TELEGRAM_ADMIN_IDS
+      # - OPENAI_API_KEY
+      # - XAI_API_KEY
+      # - N8N_WEBHOOK_SECRET
+      # - OPS_SIGN_SECRET
+      # - WEBHOOK_HMAC_SECRET
+      # - API_BEARER_TOKEN
+      # - PRIMARY_API_TOKEN
+      # - ALGOGPT_TOKENS
+      # - AI_MESH_SECRET
+      # - RENDER_API_KEY
