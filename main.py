@@ -1696,7 +1696,11 @@ except Exception as e:
 @app.get("/")
 async def root():
     from fastapi.responses import RedirectResponse
-    return RedirectResponse(url="/static/dashboard/ultimate-workbook.html", status_code=302)
+    return RedirectResponse(url="/static/dashboard/index.html", status_code=302)
+
+@app.head("/")
+async def root_head():
+    return {"ok": True}
 
 @app.get("/api/info")
 async def api_info():
