@@ -1,22 +1,21 @@
 <!DOCTYPE html>
-<html lang="he" dir="rtl">
+<html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>בס"ד - AlgoGPT Ultimate Edition Dashboard</title>
+    <title>AlgoGPT Ultimate Edition - Algorithmic Trading Platform</title>
     
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-    <script src="https://d3js.org/d3.v7.min.js"></script>
     
     <style>
-        @import url('https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;600;700;800;900&family=Rubik:wght@300;400;500;600;700;800;900&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap');
         
         :root {
             --primary: #667eea;
@@ -32,7 +31,6 @@
             --error: #ef4444;
             --info: #3b82f6;
             --sidebar-width: 280px;
-            --sidebar-collapsed: 70px;
         }
         
         * {
@@ -42,7 +40,7 @@
         }
         
         body {
-            font-family: 'Heebo', 'Rubik', sans-serif;
+            font-family: 'Inter', sans-serif;
             background: linear-gradient(135deg, #0a0a1a 0%, #1a1a2e 50%, #16213e 100%);
             color: var(--text-primary);
             min-height: 100vh;
@@ -56,13 +54,13 @@
         
         .sidebar {
             position: fixed;
-            right: 0;
+            left: 0;
             top: 0;
             height: 100vh;
             width: var(--sidebar-width);
-            background: rgba(31, 41, 55, 0.8);
-            backdrop-filter: blur(16px);
-            border-left: 1px solid var(--glass-border);
+            background: rgba(31, 41, 55, 0.95);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid var(--glass-border);
             padding: 24px 0;
             transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
             z-index: 1000;
@@ -70,1059 +68,919 @@
             overflow-x: hidden;
         }
         
-        .sidebar.collapsed {
-            width: var(--sidebar-collapsed);
+        .sidebar::-webkit-scrollbar {
+            width: 6px;
         }
         
-        .sidebar-header {
+        .sidebar::-webkit-scrollbar-track {
+            background: rgba(255, 255, 255, 0.05);
+        }
+        
+        .sidebar::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 3px;
+        }
+        
+        .logo-container {
             padding: 0 20px 20px;
             border-bottom: 1px solid var(--glass-border);
             margin-bottom: 20px;
         }
         
-        .logo-container {
+        .logo-wrapper {
             display: flex;
             align-items: center;
-            justify-content: center;
-            margin-bottom: 12px;
+            gap: 12px;
         }
         
         .logo-icon {
             font-size: 2.5rem;
-            transition: all 0.3s;
+            filter: drop-shadow(0 0 20px rgba(102, 126, 234, 0.5));
         }
         
-        .sidebar-title {
+        .logo-text h1 {
             font-size: 1.25rem;
-            font-weight: 700;
-            text-align: center;
+            font-weight: 800;
             background: linear-gradient(135deg, var(--primary), var(--secondary), var(--accent));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            white-space: nowrap;
-            opacity: 1;
-            transition: opacity 0.3s;
+            margin-bottom: 2px;
         }
         
-        .sidebar.collapsed .sidebar-title {
-            opacity: 0;
-            display: none;
+        .logo-text p {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .nav-section {
+            margin-bottom: 24px;
+            padding: 0 12px;
+        }
+        
+        .nav-section-title {
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 0 16px 8px;
         }
         
         .nav-items {
             list-style: none;
-            padding: 0 12px;
         }
         
         .nav-item {
-            margin-bottom: 8px;
+            margin-bottom: 4px;
         }
         
         .nav-link {
             display: flex;
             align-items: center;
-            padding: 14px 16px;
-            border-radius: 12px;
-            cursor: pointer;
-            transition: all 0.3s;
-            text-decoration: none;
+            gap: 12px;
+            padding: 12px 16px;
+            border-radius: 10px;
             color: var(--text-secondary);
-            background: transparent;
-            border: 1px solid transparent;
+            text-decoration: none;
+            transition: all 0.2s;
+            cursor: pointer;
+            font-weight: 500;
+            font-size: 0.9rem;
         }
         
         .nav-link:hover {
             background: rgba(102, 126, 234, 0.1);
-            border-color: var(--primary);
             color: var(--text-primary);
-            transform: translateX(-4px);
+            transform: translateX(2px);
         }
         
         .nav-link.active {
-            background: linear-gradient(135deg, var(--primary), var(--secondary));
-            border-color: transparent;
-            color: white;
-            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
+            background: linear-gradient(135deg, rgba(102, 126, 234, 0.2), rgba(118, 75, 162, 0.2));
+            color: var(--text-primary);
+            border-left: 3px solid var(--primary);
         }
         
         .nav-icon {
-            font-size: 1.5rem;
-            min-width: 32px;
+            font-size: 1.4rem;
+            min-width: 24px;
             text-align: center;
         }
         
-        .nav-text {
-            margin-right: 12px;
-            white-space: nowrap;
-            opacity: 1;
-            transition: opacity 0.3s;
-        }
-        
-        .sidebar.collapsed .nav-text {
-            opacity: 0;
-            display: none;
-        }
-        
-        .toggle-btn {
-            position: absolute;
-            left: -15px;
-            top: 20px;
-            width: 30px;
-            height: 30px;
-            border-radius: 50%;
-            background: linear-gradient(135deg, var(--primary), var(--secondary));
-            border: 2px solid var(--bg-dark);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            cursor: pointer;
-            transition: all 0.3s;
-            z-index: 1001;
-        }
-        
-        .toggle-btn:hover {
-            transform: scale(1.1);
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.5);
-        }
-        
-        .toggle-icon {
-            color: white;
-            font-size: 1rem;
-            transition: transform 0.3s;
-        }
-        
-        .sidebar.collapsed .toggle-icon {
-            transform: rotate(180deg);
-        }
-        
         .main-content {
+            margin-left: var(--sidebar-width);
             flex: 1;
-            margin-right: var(--sidebar-width);
             padding: 32px;
-            transition: margin-right 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            min-height: 100vh;
         }
         
-        .sidebar.collapsed + .main-content {
-            margin-right: var(--sidebar-collapsed);
+        .page-header {
+            margin-bottom: 32px;
         }
         
-        .content-section {
-            display: none;
-            animation: fadeIn 0.5s ease-out;
-        }
-        
-        .content-section.active {
-            display: block;
-        }
-        
-        @keyframes fadeIn {
-            from {
-                opacity: 0;
-                transform: translateY(20px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        
-        .glass-card {
-            background: var(--glass-bg);
-            backdrop-filter: blur(12px);
-            border: 1px solid var(--glass-border);
-            border-radius: 16px;
-            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
-            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-        }
-        
-        .glass-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 30px 60px -12px rgba(139, 92, 246, 0.3);
-            border-color: rgba(139, 92, 246, 0.3);
-        }
-        
-        .gradient-text {
-            background: linear-gradient(135deg, var(--primary), var(--secondary), var(--accent));
+        .page-title {
+            font-size: 2rem;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--primary), var(--secondary));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
-            background-clip: text;
-            font-weight: 800;
+            margin-bottom: 8px;
         }
         
-        .status-dot {
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            display: inline-block;
-            margin-left: 8px;
-        }
-        
-        .status-ok { background: var(--success); }
-        .status-warn { background: var(--warning); }
-        .status-error { background: var(--error); }
-        
-        .mobile-menu-btn {
-            display: none;
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 1002;
-            width: 50px;
-            height: 50px;
-            border-radius: 12px;
-            background: linear-gradient(135deg, var(--primary), var(--secondary));
-            border: none;
-            color: white;
-            font-size: 1.5rem;
-            cursor: pointer;
-            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
-        }
-        
-        @media (max-width: 768px) {
-            .mobile-menu-btn {
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }
-            
-            .sidebar {
-                transform: translateX(100%);
-            }
-            
-            .sidebar.mobile-open {
-                transform: translateX(0);
-            }
-            
-            .sidebar.collapsed {
-                width: var(--sidebar-width);
-            }
-            
-            .main-content {
-                margin-right: 0;
-                padding: 20px;
-            }
-            
-            .sidebar.collapsed + .main-content {
-                margin-right: 0;
-            }
-            
-            .toggle-btn {
-                display: none;
-            }
-        }
-        
-        .tab-button {
-            padding: 12px 20px;
-            background: transparent;
-            border: 1px solid var(--glass-border);
-            border-radius: 12px;
+        .page-subtitle {
             color: var(--text-secondary);
-            font-weight: 600;
-            cursor: pointer;
+            font-size: 1rem;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 20px;
+            margin-bottom: 32px;
+        }
+        
+        .stat-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 24px;
             transition: all 0.3s;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
+        }
+        
+        .stat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        
+        .stat-icon {
+            font-size: 2rem;
+        }
+        
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 800;
+            margin-bottom: 4px;
+        }
+        
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            font-weight: 500;
+        }
+        
+        .btn {
+            padding: 12px 24px;
+            border-radius: 10px;
+            border: none;
+            font-weight: 600;
+            font-size: 0.95rem;
+            cursor: pointer;
+            transition: all 0.2s;
             display: inline-flex;
             align-items: center;
             gap: 8px;
-            font-size: 13px;
-            white-space: nowrap;
         }
         
-        .tab-button:hover {
-            background: rgba(102, 126, 234, 0.1);
-            border-color: var(--primary);
-            color: var(--text-primary);
-            transform: translateY(-2px);
-        }
-        
-        .tab-button.active {
+        .btn-primary {
             background: linear-gradient(135deg, var(--primary), var(--secondary));
-            border-color: transparent;
             color: white;
-            box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
         }
         
-        .progress-bar {
-            height: 8px;
-            background: rgba(107, 114, 128, 0.3);
-            border-radius: 999px;
-            overflow: hidden;
-            position: relative;
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(102, 126, 234, 0.4);
         }
         
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, var(--primary), var(--secondary), var(--accent));
-            border-radius: 999px;
-            transition: width 1s ease-out;
-            position: relative;
-            overflow: hidden;
+        .btn-danger {
+            background: linear-gradient(135deg, #ef4444, #dc2626);
+            color: white;
         }
         
-        .progress-fill::after {
-            content: '';
-            position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.3), transparent);
-            animation: shimmer 2s infinite;
+        .btn-danger:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(239, 68, 68, 0.4);
         }
         
-        @keyframes shimmer {
-            0% { transform: translateX(-100%); }
-            100% { transform: translateX(100%); }
+        .btn-success {
+            background: linear-gradient(135deg, #10b981, #059669);
+            color: white;
         }
         
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        
-        .pulse {
-            animation: pulse 2s ease-in-out infinite;
+        .btn-success:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 16px rgba(16, 185, 129, 0.4);
         }
         
         .status-badge {
             display: inline-flex;
             align-items: center;
             gap: 6px;
-            padding: 6px 14px;
-            border-radius: 999px;
-            font-size: 13px;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.875rem;
             font-weight: 600;
-            transition: all 0.2s;
         }
         
         .status-active {
-            background: linear-gradient(135deg, var(--success), #059669);
-            box-shadow: 0 0 12px rgba(16, 185, 129, 0.4);
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--success);
         }
         
-        .status-planned {
-            background: linear-gradient(135deg, var(--warning), #d97706);
-            box-shadow: 0 0 12px rgba(245, 158, 11, 0.4);
+        .status-paused {
+            background: rgba(245, 158, 11, 0.2);
+            color: var(--warning);
         }
         
-        .metric-card {
-            background: rgba(17, 24, 39, 0.8);
-            padding: 24px;
-            border-radius: 12px;
-            border: 1px solid var(--glass-border);
-            transition: all 0.3s;
-        }
-        
-        .metric-card:hover {
-            border-color: var(--primary);
-            transform: translateY(-2px);
-        }
-        
-        .metric-value {
-            font-size: 32px;
-            font-weight: 800;
-            background: linear-gradient(135deg, var(--primary), var(--accent));
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
-        }
-        
-        .chart-container {
-            position: relative;
-            height: 300px;
-            margin: 20px 0;
-        }
-        
-        .loading {
-            text-align: center;
-            padding: 60px;
-            font-size: 18px;
-            color: var(--text-secondary);
-        }
-        
-        .error {
-            text-align: center;
-            padding: 60px;
-            font-size: 18px;
+        .status-error {
+            background: rgba(239, 68, 68, 0.2);
             color: var(--error);
         }
         
-        .icon-box {
-            width: 48px;
-            height: 48px;
+        .content-card {
+            background: var(--glass-bg);
+            backdrop-filter: blur(16px);
+            border: 1px solid var(--glass-border);
+            border-radius: 16px;
+            padding: 32px;
+            margin-bottom: 24px;
+        }
+        
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: var(--primary);
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .controls-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-top: 24px;
+        }
+        
+        .metric-row {
             display: flex;
+            justify-content: space-between;
             align-items: center;
-            justify-content: center;
-            background: linear-gradient(135deg, var(--primary), var(--secondary));
-            border-radius: 12px;
-            font-size: 24px;
-            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-        }
-        
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        
-        th, td {
-            padding: 12px;
-            text-align: right;
+            padding: 12px 0;
             border-bottom: 1px solid var(--glass-border);
         }
         
-        th {
-            background: rgba(102, 126, 234, 0.1);
+        .metric-row:last-child {
+            border-bottom: none;
+        }
+        
+        .metric-label {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+        
+        .metric-value {
             font-weight: 700;
-            color: var(--primary);
-        }
-        
-        tr:hover {
-            background: rgba(102, 126, 234, 0.05);
-        }
-        
-        .scrollbar-thin::-webkit-scrollbar {
-            width: 6px;
-        }
-        
-        .scrollbar-thin::-webkit-scrollbar-track {
-            background: rgba(17, 24, 39, 0.5);
-        }
-        
-        .scrollbar-thin::-webkit-scrollbar-thumb {
-            background: var(--primary);
-            border-radius: 3px;
-        }
-        
-        .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-            background: var(--secondary);
+            font-size: 1.1rem;
         }
     </style>
 </head>
 <body>
-    <div class="app-container">
-        <button class="mobile-menu-btn" id="mobileMenuBtn" onclick="toggleMobileMenu()">
-            ☰
-        </button>
-        
-        <aside class="sidebar" id="sidebar">
-            <div class="toggle-btn" onclick="toggleSidebar()">
-                <span class="toggle-icon">◀</span>
-            </div>
-            
-            <div class="sidebar-header">
-                <div class="logo-container">
-                    <div class="logo-icon">🚀</div>
-                </div>
-                <h1 class="sidebar-title">AlgoGPT Ultimate</h1>
-            </div>
-            
-            <ul class="nav-items">
-                <li class="nav-item">
-                    <div class="nav-link active" onclick="switchSection('home')">
-                        <span class="nav-icon">🏠</span>
-                        <span class="nav-text">דף הבית</span>
-                    </div>
-                </li>
-                <li class="nav-item">
-                    <div class="nav-link" onclick="switchSection('ultimate')">
-                        <span class="nav-icon">📈</span>
-                        <span class="nav-text">דשבורד מלא</span>
-                    </div>
-                </li>
-                <li class="nav-item">
-                    <div class="nav-link" onclick="switchSection('complete')">
-                        <span class="nav-icon">📊</span>
-                        <span class="nav-text">Workbook מלא</span>
-                    </div>
-                </li>
-                <li class="nav-item">
-                    <div class="nav-link" onclick="switchSection('presentation')">
-                        <span class="nav-icon">🎨</span>
-                        <span class="nav-text">Presentation</span>
-                    </div>
-                </li>
-                <li class="nav-item">
-                    <div class="nav-link" onclick="switchSection('status')">
-                        <span class="nav-icon">🔍</span>
-                        <span class="nav-text">ניטור מערכת</span>
-                    </div>
-                </li>
-                <li class="nav-item">
-                    <div class="nav-link" onclick="switchSection('validation')">
-                        <span class="nav-icon">✅</span>
-                        <span class="nav-text">Validation</span>
-                    </div>
-                </li>
-                <li class="nav-item">
-                    <div class="nav-link" onclick="switchSection('workbook')">
-                        <span class="nav-icon">📝</span>
-                        <span class="nav-text">Workbook</span>
-                    </div>
-                </li>
-            </ul>
-        </aside>
-        
-        <main class="main-content">
-            <section id="home" class="content-section active">
-                <header class="glass-card p-6 mb-6">
-                    <h1 class="text-4xl font-bold gradient-text mb-2">🚀 AlgoGPT Ultimate Edition</h1>
-                    <p class="text-xl text-gray-400">מערכת מסחר אלגוריתמית חכמה 24/7</p>
-                    <div id="time" class="text-sm text-gray-500 mt-2"></div>
-                </header>
-
-                <div id="status-card" class="glass-card p-6 mb-6">
-                    <h2 class="text-2xl font-bold mb-4">📊 סטטוס מערכת</h2>
-                    <div id="system-status">
-                        <p class="text-gray-400">טוען...</p>
-                    </div>
-                </div>
-
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    <div class="glass-card p-6 cursor-pointer" onclick="switchSection('ultimate')">
-                        <h3 class="text-xl font-bold mb-2">📈 דשבורד מלא</h3>
-                        <p class="text-gray-400">כל הנתונים והגרפים</p>
-                    </div>
-                    
-                    <div class="glass-card p-6 cursor-pointer" onclick="switchSection('complete')">
-                        <h3 class="text-xl font-bold mb-2">📊 Workbook מלא</h3>
-                        <p class="text-gray-400">דוחות וניתוחים</p>
-                    </div>
-                    
-                    <div class="glass-card p-6 cursor-pointer" onclick="switchSection('presentation')">
-                        <h3 class="text-xl font-bold mb-2">🎨 Presentation</h3>
-                        <p class="text-gray-400">מצגת מערכת</p>
-                    </div>
-                    
-                    <div class="glass-card p-6 cursor-pointer" onclick="switchSection('status')">
-                        <h3 class="text-xl font-bold mb-2">🔍 ניטור מערכת</h3>
-                        <p class="text-gray-400">בדיקות אוטומטיות כל 30 שניות</p>
-                    </div>
-                    
-                    <div class="glass-card p-6 cursor-pointer" onclick="switchSection('validation')">
-                        <h3 class="text-xl font-bold mb-2">✅ Validation</h3>
-                        <p class="text-gray-400">ניטור אימות ובדיקות</p>
-                    </div>
-                    
-                    <div class="glass-card p-6 cursor-pointer" onclick="switchSection('workbook')">
-                        <h3 class="text-xl font-bold mb-2">📝 Workbook</h3>
-                        <p class="text-gray-400">ניהול עבודה</p>
-                    </div>
-                </div>
-            </section>
-
-            <section id="ultimate" class="content-section">
-                <div id="ultimate-root"></div>
-            </section>
-
-            <section id="complete" class="content-section">
-                <div id="complete-root"></div>
-            </section>
-
-            <section id="presentation" class="content-section">
-                <div id="presentation-root"></div>
-            </section>
-
-            <section id="status" class="content-section">
-                <div class="max-w-7xl mx-auto">
-                    <h1 class="text-4xl font-bold mb-8 text-center gradient-text">🔍 מערכת ניטור בזמן אמת</h1>
-                    
-                    <div id="status-container" class="space-y-6">
-                        <div class="glass-card rounded-lg p-6 text-center">
-                            <div class="text-gray-400">טוען נתונים...</div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <section id="validation" class="content-section">
-                <div class="max-w-7xl mx-auto">
-                    <div class="mb-8 text-center">
-                        <h1 class="text-4xl font-bold mb-2 gradient-text">
-                            🛡️ Validation & Safety Monitoring
-                        </h1>
-                        <p class="text-gray-400">AlgoGPT Ultimate Edition v2.0 - Production-Grade Safety Infrastructure</p>
-                    </div>
-
-                    <div class="flex gap-4 mb-6 flex-wrap">
-                        <button onclick="switchValidationTab('validation')" id="val-tab-validation" class="tab-button active">
-                            📊 Validation Results
-                        </button>
-                        <button onclick="switchValidationTab('monitoring')" id="val-tab-monitoring" class="tab-button">
-                            🔍 Live Monitoring
-                        </button>
-                        <button onclick="switchValidationTab('breaker')" id="val-tab-breaker" class="tab-button">
-                            🚨 Circuit Breaker
-                        </button>
-                        <button onclick="loadValidationData()" class="tab-button" style="margin-right: auto;">
-                            🔄 Refresh
-                        </button>
-                    </div>
-
-                    <div id="val-content-validation" class="val-tab-content">
-                        <div class="glass-card rounded-xl p-6 mb-6">
-                            <h2 class="text-2xl font-bold mb-4">🧪 Historical Backtest Validation</h2>
-                            <p class="text-gray-300 mb-4">Test your trading strategy against historical data with walk-forward testing.</p>
-                            
-                            <div class="bg-gray-800 rounded-lg p-4 mb-4">
-                                <h3 class="font-semibold mb-3">Start New Validation Run</h3>
-                                <div class="grid grid-cols-2 gap-4 mb-4">
-                                    <div>
-                                        <label class="block text-sm mb-1">Strategy</label>
-                                        <input id="val-strategy" type="text" value="gpt5_dual_gate" class="w-full px-3 py-2 bg-gray-700 rounded text-white">
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm mb-1">Walk-Forward Folds</label>
-                                        <input id="val-folds" type="number" value="6" class="w-full px-3 py-2 bg-gray-700 rounded text-white">
-                                    </div>
-                                </div>
-                                <button onclick="runBacktest()" class="w-full bg-purple-600 hover:bg-purple-500 py-2 rounded font-semibold">
-                                    ▶️ Run Backtest
-                                </button>
-                            </div>
-
-                            <div id="validation-results" class="bg-gray-800 rounded-lg p-4">
-                                <p class="text-gray-400">Click "Run Backtest" to start validation...</p>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div id="val-content-monitoring" class="val-tab-content" style="display: none;">
-                        <div class="glass-card rounded-xl p-6">
-                            <h2 class="text-2xl font-bold mb-4">📈 Live Trading Health Monitor</h2>
-                            <div id="health-display" class="grid grid-cols-3 gap-4 mb-4">
-                                <div class="bg-gray-800 rounded-lg p-4">
-                                    <div class="text-sm text-gray-400">Win Rate 7d</div>
-                                    <div id="winrate-7d" class="text-3xl font-bold">--</div>
-                                </div>
-                                <div class="bg-gray-800 rounded-lg p-4">
-                                    <div class="text-sm text-gray-400">Max Drawdown</div>
-                                    <div id="max-dd" class="text-3xl font-bold">--</div>
-                                </div>
-                                <div class="bg-gray-800 rounded-lg p-4">
-                                    <div class="text-sm text-gray-400">Consecutive Losses</div>
-                                    <div id="consec-loss" class="text-3xl font-bold">--</div>
-                                </div>
-                            </div>
-                            <div id="health-raw" class="bg-gray-800 rounded-lg p-4">
-                                <pre class="text-xs text-gray-300 overflow-auto">Loading...</pre>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div id="val-content-breaker" class="val-tab-content" style="display: none;">
-                        <div class="glass-card rounded-xl p-6">
-                            <h2 class="text-2xl font-bold mb-4">⚡ Circuit Breaker Status</h2>
-                            
-                            <div class="grid grid-cols-3 gap-4 mb-6">
-                                <button onclick="breakerAction('pause')" class="bg-red-600 hover:bg-red-500 py-3 rounded font-semibold">
-                                    ⏸️ Manual Pause
-                                </button>
-                                <button onclick="breakerAction('reset')" class="bg-yellow-600 hover:bg-yellow-500 py-3 rounded font-semibold">
-                                    🔄 Reset Breaker
-                                </button>
-                                <button onclick="loadBreakerStatus()" class="bg-blue-600 hover:bg-blue-500 py-3 rounded font-semibold">
-                                    🔍 Check Status
-                                </button>
-                            </div>
-
-                            <div id="breaker-status" class="bg-gray-800 rounded-lg p-4">
-                                <p class="text-gray-400">Click "Check Status" to load circuit breaker info...</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </section>
-
-            <section id="workbook" class="content-section">
-                <div id="workbook-root"></div>
-            </section>
-        </main>
-    </div>
-
-    <script>
-        function toggleSidebar() {
-            const sidebar = document.getElementById('sidebar');
-            sidebar.classList.toggle('collapsed');
-            
-            const savedState = !sidebar.classList.contains('collapsed');
-            localStorage.setItem('sidebar-expanded', savedState);
-        }
-        
-        function toggleMobileMenu() {
-            const sidebar = document.getElementById('sidebar');
-            sidebar.classList.toggle('mobile-open');
-        }
-        
-        function switchSection(sectionId) {
-            document.querySelectorAll('.content-section').forEach(section => {
-                section.classList.remove('active');
-            });
-            
-            document.querySelectorAll('.nav-link').forEach(link => {
-                link.classList.remove('active');
-            });
-            
-            document.getElementById(sectionId).classList.add('active');
-            
-            const activeLink = event?.currentTarget || document.querySelector(`[onclick="switchSection('${sectionId}')"]`);
-            if (activeLink) {
-                activeLink.classList.add('active');
-            }
-            
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-            
-            const sidebar = document.getElementById('sidebar');
-            if (window.innerWidth <= 768) {
-                sidebar.classList.remove('mobile-open');
-            }
-            
-            localStorage.setItem('active-section', sectionId);
-            
-            if (sectionId === 'status') {
-                loadSystemStatus();
-            } else if (sectionId === 'validation') {
-                loadValidationData();
-            }
-        }
-        
-        function updateTime() {
-            const now = new Date();
-            const israelTime = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Jerusalem' }));
-            const timeElement = document.getElementById('time');
-            if (timeElement) {
-                timeElement.textContent = israelTime.toLocaleString('he-IL');
-            }
-        }
-        
-        async function loadHomeStatus() {
-            try {
-                const health = await fetch('/health/detailed').then(r => r.json());
-                
-                let html = '<div class="space-y-2">';
-                html += `<p><span class="font-bold">סטטוס:</span> <span class="status-dot status-${health.status === 'healthy' ? 'ok' : 'warn'}"></span> ${health.status}</p>`;
-                
-                if (health.checks) {
-                    Object.entries(health.checks).forEach(([key, value]) => {
-                        const status = typeof value === 'object' ? value.status : value;
-                        const statusClass = status === 'ok' ? 'ok' : status === 'warning' ? 'warn' : 'error';
-                        html += `<p><span class="font-bold">${key}:</span> <span class="status-dot status-${statusClass}"></span> ${status}</p>`;
-                    });
-                }
-                
-                if (health.issues && health.issues.length > 0) {
-                    html += '<div class="mt-4 p-3 bg-red-900 rounded">';
-                    html += '<p class="font-bold">🚨 בעיות:</p>';
-                    health.issues.forEach(issue => {
-                        html += `<p class="text-sm">• ${issue}</p>`;
-                    });
-                    html += '</div>';
-                }
-                
-                html += '</div>';
-                document.getElementById('system-status').innerHTML = html;
-                
-            } catch (error) {
-                document.getElementById('system-status').innerHTML = 
-                    `<p class="text-red-400">שגיאה בטעינת סטטוס: ${error.message}</p>`;
-            }
-        }
-        
-        async function loadSystemStatus() {
-            try {
-                const response = await fetch('/health/detailed');
-                if (!response.ok) throw new Error('Failed to load status');
-                
-                const data = await response.json();
-                renderSystemStatus(data);
-            } catch (error) {
-                document.getElementById('status-container').innerHTML = `
-                    <div class="glass-card rounded-lg p-6">
-                        <div class="text-2xl mb-2">🔴 שגיאה</div>
-                        <div>לא ניתן לטעון נתוני סטטוס: ${error.message}</div>
-                    </div>
-                `;
-            }
-        }
-
-        function renderSystemStatus(data) {
-            const statusColor = data.status === 'healthy' ? 'green' : 
-                               data.status === 'degraded' ? 'yellow' : 'red';
-            
-            const statusEmoji = data.status === 'healthy' ? '✅' : 
-                               data.status === 'degraded' ? '⚠️' : '🔴';
-            
-            const html = `
-                <div class="glass-card rounded-lg p-8">
-                    <div class="text-center mb-8">
-                        <div class="text-6xl mb-4">${statusEmoji}</div>
-                        <div class="text-3xl font-bold" style="color: ${statusColor}">
-                            ${data.status.toUpperCase()}
-                        </div>
-                        <div class="text-gray-400 mt-2">${new Date(data.timestamp).toLocaleString('he-IL')}</div>
-                    </div>
-                    
-                    ${data.issues && data.issues.length > 0 ? `
-                        <div class="bg-red-900 rounded-lg p-6 mb-6">
-                            <div class="text-xl font-bold mb-4">🚨 בעיות זוהו:</div>
-                            <ul class="list-disc list-inside space-y-2">
-                                ${data.issues.map(issue => `<li>${issue}</li>`).join('')}
-                            </ul>
-                        </div>
-                    ` : ''}
-                    
-                    ${data.fixes_applied && data.fixes_applied.length > 0 ? `
-                        <div class="bg-green-900 rounded-lg p-6 mb-6">
-                            <div class="text-xl font-bold mb-4">✅ תיקונים בוצעו:</div>
-                            <ul class="list-disc list-inside space-y-2">
-                                ${data.fixes_applied.map(fix => `<li>${fix}</li>`).join('')}
-                            </ul>
-                        </div>
-                    ` : ''}
-                    
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        ${Object.entries(data.checks || {}).map(([key, value]) => {
-                            const status = typeof value === 'object' ? value.status : value;
-                            const statusClass = status === 'ok' ? 'text-green-400' : 
-                                              status === 'warning' ? 'text-yellow-400' : 'text-red-400';
-                            return `
-                                <div class="bg-gray-700 rounded-lg p-4">
-                                    <div class="text-lg font-bold mb-2">${key}</div>
-                                    <div class="${statusClass}">${status}</div>
-                                    ${typeof value === 'object' && value.details ? 
-                                        `<div class="text-sm text-gray-400 mt-2">${JSON.stringify(value.details)}</div>` : ''}
-                                </div>
-                            `;
-                        }).join('')}
-                    </div>
-                </div>
-            `;
-            
-            document.getElementById('status-container').innerHTML = html;
-        }
-        
-        function switchValidationTab(tab) {
-            document.querySelectorAll('.val-tab-content').forEach(el => el.style.display = 'none');
-            document.querySelectorAll('[id^="val-tab-"]').forEach(el => el.classList.remove('active'));
-            
-            document.getElementById('val-content-' + tab).style.display = 'block';
-            document.getElementById('val-tab-' + tab).classList.add('active');
-
-            if (tab === 'monitoring') loadHealthStatus();
-            if (tab === 'breaker') loadBreakerStatus();
-        }
-
-        async function runBacktest() {
-            const strategy = document.getElementById('val-strategy').value;
-            const folds = parseInt(document.getElementById('val-folds').value);
-            const resultsDiv = document.getElementById('validation-results');
-            
-            resultsDiv.innerHTML = '<p class="text-yellow-400">⏳ Starting backtest...</p>';
-            
-            try {
-                const response = await fetch('/validate/run', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        strategy,
-                        symbols: ['BTCUSDT', 'ETHUSDT'],
-                        start: '2024-01-01',
-                        end: '2024-12-31',
-                        folds
-                    })
-                });
-                
-                if (!response.ok) throw new Error('Backtest failed: ' + response.status);
-                const data = await response.json();
-                
-                resultsDiv.innerHTML = `
-                    <div class="text-green-400 mb-2">✅ Backtest started! Run ID: ${data.run_id}</div>
-                    <div class="text-sm text-gray-400">Status: ${data.status}</div>
-                    <div class="mt-3">
-                        <button onclick="checkBacktestStatus('${data.run_id}')" class="bg-blue-600 px-4 py-2 rounded hover:bg-blue-500">
-                            🔍 Check Status
-                        </button>
-                        <button onclick="getBacktestReport('${data.run_id}')" class="bg-purple-600 px-4 py-2 rounded ml-2 hover:bg-purple-500">
-                            📊 View Report
-                        </button>
-                    </div>
-                `;
-            } catch (err) {
-                resultsDiv.innerHTML = `<p class="text-red-400">❌ Error: ${err.message}</p>`;
-            }
-        }
-
-        async function checkBacktestStatus(runId) {
-            const resultsDiv = document.getElementById('validation-results');
-            try {
-                const response = await fetch(`/validate/status?id=${runId}`);
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                const data = await response.json();
-                resultsDiv.innerHTML = `<pre class="text-xs text-gray-300 overflow-auto">${JSON.stringify(data, null, 2)}</pre>`;
-            } catch (err) {
-                resultsDiv.innerHTML = `<p class="text-red-400">❌ Error: ${err.message}</p>`;
-            }
-        }
-
-        async function getBacktestReport(runId) {
-            const resultsDiv = document.getElementById('validation-results');
-            try {
-                const response = await fetch(`/validate/report?id=${runId}`);
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                const data = await response.json();
-                
-                const verdict = data.validation_pass ? 
-                    '<span class="text-green-400 font-bold">✅ APPROVED FOR PRODUCTION</span>' :
-                    '<span class="text-red-400 font-bold">❌ FAILED VALIDATION</span>';
-                
-                resultsDiv.innerHTML = `
-                    <div class="mb-4">${verdict}</div>
-                    <div class="grid grid-cols-3 gap-4 mb-4">
-                        <div class="bg-gray-700 p-3 rounded">
-                            <div class="text-sm text-gray-400">Win Rate</div>
-                            <div class="text-2xl font-bold">${(data.overall_metrics?.winrate || 0).toFixed(1)}%</div>
-                        </div>
-                        <div class="bg-gray-700 p-3 rounded">
-                            <div class="text-sm text-gray-400">Avg RR</div>
-                            <div class="text-2xl font-bold">${(data.overall_metrics?.avg_rr || 0).toFixed(2)}</div>
-                        </div>
-                        <div class="bg-gray-700 p-3 rounded">
-                            <div class="text-sm text-gray-400">Max DD</div>
-                            <div class="text-2xl font-bold">${(data.overall_metrics?.max_dd || 0).toFixed(1)}%</div>
-                        </div>
-                    </div>
-                    <details class="bg-gray-700 p-3 rounded">
-                        <summary class="cursor-pointer font-semibold">📋 Full Report</summary>
-                        <pre class="text-xs mt-2 overflow-auto">${JSON.stringify(data, null, 2)}</pre>
-                    </details>
-                `;
-            } catch (err) {
-                resultsDiv.innerHTML = `<p class="text-red-400">❌ ${err.message}</p>`;
-            }
-        }
-
-        async function loadHealthStatus() {
-            const display = document.getElementById('health-raw');
-            try {
-                const response = await fetch('/monitors/health');
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                const data = await response.json();
-                
-                document.getElementById('winrate-7d').textContent = `${(data.metrics?.winrate_7d || 0).toFixed(1)}%`;
-                document.getElementById('max-dd').textContent = `${(data.metrics?.max_dd_pct || 0).toFixed(1)}%`;
-                document.getElementById('consec-loss').textContent = data.metrics?.consecutive_losses || 0;
-                
-                display.innerHTML = `<pre class="text-xs text-gray-300">${JSON.stringify(data, null, 2)}</pre>`;
-            } catch (err) {
-                display.innerHTML = `<pre class="text-red-400">Error: ${err.message}</pre>`;
-            }
-        }
-
-        async function breakerAction(action) {
-            const statusDiv = document.getElementById('breaker-status');
-            statusDiv.innerHTML = '<p class="text-yellow-400">⏳ Processing...</p>';
-            
-            try {
-                const response = await fetch(`/monitors/breaker/${action}`, { 
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ reason: `Dashboard ${action} request` })
-                });
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                const data = await response.json();
-                statusDiv.innerHTML = `
-                    <div class="text-green-400 mb-2">✅ ${action.toUpperCase()} successful!</div>
-                    <pre class="text-xs text-gray-300">${JSON.stringify(data, null, 2)}</pre>
-                `;
-            } catch (err) {
-                statusDiv.innerHTML = `<p class="text-red-400">❌ ${err.message}</p>`;
-            }
-        }
-
-        async function loadBreakerStatus() {
-            const statusDiv = document.getElementById('breaker-status');
-            try {
-                const response = await fetch('/monitors/breaker/status');
-                
-                if (!response.ok) {
-                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-                }
-                
-                const data = await response.json();
-                
-                const statusColor = data.breaker_status?.triggered ? 'text-red-400' : 'text-green-400';
-                const statusText = data.breaker_status?.triggered ? '🚨 BREAKER ACTIVE' : '✅ SYSTEM OPERATIONAL';
-                
-                statusDiv.innerHTML = `
-                    <div class="${statusColor} text-xl font-bold mb-4">${statusText}</div>
-                    <div class="grid grid-cols-2 gap-4 mb-4">
-                        <div class="bg-gray-700 p-3 rounded">
-                            <div class="text-sm text-gray-400">Daily DD Limit</div>
-                            <div class="text-lg">${data.breaker_status?.config?.dd_limit_pct || 5}%</div>
-                        </div>
-                        <div class="bg-gray-700 p-3 rounded">
-                            <div class="text-sm text-gray-400">Max Consecutive SL</div>
-                            <div class="text-lg">${data.breaker_status?.config?.consec_sl_max || 4}</div>
-                        </div>
-                    </div>
-                    <details class="bg-gray-700 p-3 rounded">
-                        <summary class="cursor-pointer font-semibold">🔍 Full Status</summary>
-                        <pre class="text-xs mt-2">${JSON.stringify(data, null, 2)}</pre>
-                    </details>
-                `;
-            } catch (err) {
-                statusDiv.innerHTML = `<p class="text-red-400">❌ Error: ${err.message}</p>`;
-            }
-        }
-
-        function loadValidationData() {
-            const activeTab = document.querySelector('.val-tab-content:not([style*="display: none"])');
-            if (activeTab && activeTab.id === 'val-content-monitoring') {
-                loadHealthStatus();
-            } else if (activeTab && activeTab.id === 'val-content-breaker') {
-                loadBreakerStatus();
-            }
-        }
-        
-        updateTime();
-        setInterval(updateTime, 1000);
-        
-        loadHomeStatus();
-        setInterval(loadHomeStatus, 5000);
-        
-        setInterval(() => {
-            const activeSection = document.querySelector('.content-section.active');
-            if (activeSection && activeSection.id === 'status') {
-                loadSystemStatus();
-            }
-        }, 5000);
-        
-        const savedExpanded = localStorage.getItem('sidebar-expanded');
-        if (savedExpanded === 'false') {
-            document.getElementById('sidebar').classList.add('collapsed');
-        }
-        
-        const savedSection = localStorage.getItem('active-section');
-        if (savedSection && document.getElementById(savedSection)) {
-            switchSection(savedSection);
-        }
-    </script>
+    <div id="root"></div>
     
     <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect } = React;
+        
+        // Navigation Configuration
+        const navigation = [
+            {
+                section: "Overview",
+                items: [
+                    { id: "home", label: "Dashboard", icon: "🏠", page: "home" },
+                    { id: "status", label: "System Status", icon: "💚", page: "status" },
+                ]
+            },
+            {
+                section: "Trading",
+                items: [
+                    { id: "trades", label: "Active Trades", icon: "📊", page: "trades" },
+                    { id: "proposals", label: "AI Proposals", icon: "🤖", page: "proposals" },
+                    { id: "scanner", label: "Market Scanner", icon: "🔍", page: "scanner" },
+                    { id: "grid", label: "Grid Trading", icon: "📐", page: "grid" },
+                ]
+            },
+            {
+                section: "AI & Analysis",
+                items: [
+                    { id: "consensus", label: "Multi-AI Consensus", icon: "🧠", page: "consensus" },
+                    { id: "sentiment", label: "Market Sentiment", icon: "📈", page: "sentiment" },
+                    { id: "intelligence", label: "Market Intel", icon: "🎯", page: "intelligence" },
+                ]
+            },
+            {
+                section: "Risk Management",
+                items: [
+                    { id: "breaker", label: "Circuit Breaker", icon: "🛡️", page: "breaker" },
+                    { id: "health", label: "Health Monitor", icon: "💊", page: "health" },
+                    { id: "positions", label: "Position Monitor", icon: "📍", page: "positions" },
+                ]
+            },
+            {
+                section: "Validation",
+                items: [
+                    { id: "backtest", label: "Backtesting", icon: "⏮️", page: "backtest" },
+                    { id: "validation", label: "Strategy Validation", icon: "✅", page: "validation" },
+                    { id: "performance", label: "Performance", icon: "📉", page: "performance" },
+                ]
+            },
+            {
+                section: "Settings",
+                items: [
+                    { id: "config", label: "Configuration", icon: "⚙️", page: "config" },
+                    { id: "api", label: "API Settings", icon: "🔑", page: "api" },
+                ]
+            }
+        ];
+        
+        // Main App Component
+        function App() {
+            const [activePage, setActivePage] = useState('home');
+            const [systemData, setSystemData] = useState(null);
+            const [loading, setLoading] = useState(true);
+            
+            useEffect(() => {
+                loadSystemData();
+                const interval = setInterval(loadSystemData, 5000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            const loadSystemData = async () => {
+                try {
+                    const response = await fetch('/api/info');
+                    const data = await response.json();
+                    setSystemData(data);
+                    setLoading(false);
+                } catch (error) {
+                    console.error('Failed to load system data:', error);
+                    setLoading(false);
+                }
+            };
+            
+            const renderPage = () => {
+                switch(activePage) {
+                    case 'home': return <HomePage systemData={systemData} />;
+                    case 'breaker': return <CircuitBreakerPage />;
+                    case 'health': return <HealthMonitorPage />;
+                    case 'validation': return <ValidationPage />;
+                    case 'trades': return <TradesPage />;
+                    case 'status': return <StatusPage systemData={systemData} />;
+                    default: return <ComingSoonPage pageName={activePage} />;
+                }
+            };
+            
+            return (
+                <div className="app-container">
+                    <Sidebar navigation={navigation} activePage={activePage} setActivePage={setActivePage} />
+                    <div className="main-content">
+                        {renderPage()}
+                    </div>
+                </div>
+            );
+        }
+        
+        // Sidebar Component
+        function Sidebar({ navigation, activePage, setActivePage }) {
+            return (
+                <div className="sidebar">
+                    <div className="logo-container">
+                        <div className="logo-wrapper">
+                            <div className="logo-icon">🚀</div>
+                            <div className="logo-text">
+                                <h1>AlgoGPT</h1>
+                                <p>Ultimate Edition</p>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    {navigation.map((section, idx) => (
+                        <div key={idx} className="nav-section">
+                            <div className="nav-section-title">{section.section}</div>
+                            <ul className="nav-items">
+                                {section.items.map(item => (
+                                    <li key={item.id} className="nav-item">
+                                        <a
+                                            className={`nav-link ${activePage === item.page ? 'active' : ''}`}
+                                            onClick={() => setActivePage(item.page)}
+                                        >
+                                            <span className="nav-icon">{item.icon}</span>
+                                            <span>{item.label}</span>
+                                        </a>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    ))}
+                </div>
+            );
+        }
+        
+        // Home Page
+        function HomePage({ systemData }) {
+            const [stats, setStats] = useState({
+                activeTrades: 0,
+                dailyPnL: 0,
+                circuitBreaker: 'Active',
+                aiConsensus: 85
+            });
+            
+            return (
+                <div>
+                    <div className="page-header">
+                        <h1 className="page-title">🚀 Dashboard Overview</h1>
+                        <p className="page-subtitle">Real-time monitoring of your algorithmic trading system</p>
+                    </div>
+                    
+                    <div className="stats-grid">
+                        <div className="stat-card">
+                            <div className="stat-header">
+                                <div className="stat-icon">📊</div>
+                                <span className="status-badge status-active">
+                                    <span>●</span> Active
+                                </span>
+                            </div>
+                            <div className="stat-value">{stats.activeTrades}</div>
+                            <div className="stat-label">Active Trades</div>
+                        </div>
+                        
+                        <div className="stat-card">
+                            <div className="stat-header">
+                                <div className="stat-icon">💰</div>
+                                <span className={`status-badge ${stats.dailyPnL >= 0 ? 'status-active' : 'status-error'}`}>
+                                    <span>●</span> {stats.dailyPnL >= 0 ? 'Profit' : 'Loss'}
+                                </span>
+                            </div>
+                            <div className="stat-value">${stats.dailyPnL.toFixed(2)}</div>
+                            <div className="stat-label">Daily P&L</div>
+                        </div>
+                        
+                        <div className="stat-card">
+                            <div className="stat-header">
+                                <div className="stat-icon">🛡️</div>
+                                <span className="status-badge status-active">
+                                    <span>●</span> {stats.circuitBreaker}
+                                </span>
+                            </div>
+                            <div className="stat-value">0%</div>
+                            <div className="stat-label">Daily Drawdown</div>
+                        </div>
+                        
+                        <div className="stat-card">
+                            <div className="stat-header">
+                                <div className="stat-icon">🧠</div>
+                                <span className="status-badge status-active">
+                                    <span>●</span> High
+                                </span>
+                            </div>
+                            <div className="stat-value">{stats.aiConsensus}%</div>
+                            <div className="stat-label">AI Consensus</div>
+                        </div>
+                    </div>
+                    
+                    <div className="content-card">
+                        <h2 style={{marginBottom: '16px', fontSize: '1.5rem', fontWeight: '700'}}>System Information</h2>
+                        {systemData && (
+                            <div>
+                                <div className="metric-row">
+                                    <span className="metric-label">Service</span>
+                                    <span className="metric-value">{systemData.service || 'AlgoGPT'}</span>
+                                </div>
+                                <div className="metric-row">
+                                    <span className="metric-label">Version</span>
+                                    <span className="metric-value">{systemData.version || '3.6.0'}</span>
+                                </div>
+                                <div className="metric-row">
+                                    <span className="metric-label">Status</span>
+                                    <span className="metric-value">
+                                        <span className="status-badge status-active">
+                                            <span>●</span> Operational
+                                        </span>
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+        
+        // Circuit Breaker Page
+        function CircuitBreakerPage() {
+            const [breakerStatus, setBreakerStatus] = useState(null);
+            const [loading, setLoading] = useState(true);
+            
+            useEffect(() => {
+                loadBreakerStatus();
+                const interval = setInterval(loadBreakerStatus, 3000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            const loadBreakerStatus = async () => {
+                try {
+                    const response = await fetch('/monitors/breaker/status');
+                    const data = await response.json();
+                    setBreakerStatus(data);
+                    setLoading(false);
+                } catch (error) {
+                    console.error('Failed to load breaker status:', error);
+                    setLoading(false);
+                }
+            };
+            
+            const handlePause = async () => {
+                try {
+                    const response = await fetch('/monitors/breaker/pause', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ reason: 'Manual pause from dashboard' })
+                    });
+                    const data = await response.json();
+                    alert('Circuit breaker paused successfully');
+                    loadBreakerStatus();
+                } catch (error) {
+                    alert('Failed to pause circuit breaker: ' + error.message);
+                }
+            };
+            
+            const handleReset = async () => {
+                if (!confirm('Are you sure you want to reset the circuit breaker?')) return;
+                try {
+                    const response = await fetch('/monitors/breaker/reset', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ reason: 'Manual reset from dashboard' })
+                    });
+                    const data = await response.json();
+                    alert('Circuit breaker reset successfully');
+                    loadBreakerStatus();
+                } catch (error) {
+                    alert('Failed to reset circuit breaker: ' + error.message);
+                }
+            };
+            
+            if (loading) {
+                return (
+                    <div>
+                        <div className="page-header">
+                            <h1 className="page-title">🛡️ Circuit Breaker Control</h1>
+                            <p className="page-subtitle">Automated risk management and trading pause system</p>
+                        </div>
+                        <div className="content-card" style={{textAlign: 'center', padding: '60px'}}>
+                            <div className="loading"></div>
+                            <p style={{marginTop: '20px', color: 'var(--text-secondary)'}}>Loading circuit breaker status...</p>
+                        </div>
+                    </div>
+                );
+            }
+            
+            return (
+                <div>
+                    <div className="page-header">
+                        <h1 className="page-title">🛡️ Circuit Breaker Control</h1>
+                        <p className="page-subtitle">Automated risk management and trading pause system</p>
+                    </div>
+                    
+                    <div className="content-card">
+                        <h2 style={{marginBottom: '24px', fontSize: '1.5rem', fontWeight: '700'}}>Current Status</h2>
+                        
+                        {breakerStatus && (
+                            <>
+                                <div className="metric-row">
+                                    <span className="metric-label">Circuit Breaker Status</span>
+                                    <span className="metric-value">
+                                        <span className={`status-badge ${breakerStatus.paused ? 'status-paused' : 'status-active'}`}>
+                                            <span>●</span> {breakerStatus.paused ? 'PAUSED' : 'ACTIVE'}
+                                        </span>
+                                    </span>
+                                </div>
+                                
+                                <div className="metric-row">
+                                    <span className="metric-label">Daily Drawdown</span>
+                                    <span className="metric-value" style={{color: breakerStatus.metrics?.daily_dd > 5 ? 'var(--error)' : 'var(--success)'}}>
+                                        {breakerStatus.metrics?.daily_dd?.toFixed(2)}%
+                                    </span>
+                                </div>
+                                
+                                <div className="metric-row">
+                                    <span className="metric-label">Peak Drawdown</span>
+                                    <span className="metric-value">
+                                        {breakerStatus.metrics?.daily_dd_peak?.toFixed(2)}%
+                                    </span>
+                                </div>
+                                
+                                <div className="metric-row">
+                                    <span className="metric-label">Consecutive Losses</span>
+                                    <span className="metric-value" style={{color: breakerStatus.metrics?.consec_losses > 3 ? 'var(--error)' : 'var(--success)'}}>
+                                        {breakerStatus.metrics?.consec_losses || 0}
+                                    </span>
+                                </div>
+                                
+                                {breakerStatus.pause_reason && (
+                                    <div className="metric-row">
+                                        <span className="metric-label">Pause Reason</span>
+                                        <span className="metric-value">{breakerStatus.pause_reason}</span>
+                                    </div>
+                                )}
+                            </>
+                        )}
+                        
+                        <div className="controls-grid">
+                            <button className="btn btn-danger" onClick={handlePause}>
+                                ⏸️ Pause Trading
+                            </button>
+                            <button className="btn btn-success" onClick={handleReset}>
+                                🔄 Reset Breaker
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+        
+        // Health Monitor Page
+        function HealthMonitorPage() {
+            const [health, setHealth] = useState(null);
+            const [loading, setLoading] = useState(true);
+            
+            useEffect(() => {
+                loadHealth();
+                const interval = setInterval(loadHealth, 5000);
+                return () => clearInterval(interval);
+            }, []);
+            
+            const loadHealth = async () => {
+                try {
+                    const response = await fetch('/monitors/health');
+                    const data = await response.json();
+                    setHealth(data);
+                    setLoading(false);
+                } catch (error) {
+                    console.error('Failed to load health:', error);
+                    setHealth({ error: error.message });
+                    setLoading(false);
+                }
+            };
+            
+            if (loading) {
+                return (
+                    <div>
+                        <div className="page-header">
+                            <h1 className="page-title">💊 Health Monitor</h1>
+                            <p className="page-subtitle">Real-time system health and performance metrics</p>
+                        </div>
+                        <div className="content-card" style={{textAlign: 'center', padding: '60px'}}>
+                            <div className="loading"></div>
+                            <p style={{marginTop: '20px', color: 'var(--text-secondary)'}}>Loading health metrics...</p>
+                        </div>
+                    </div>
+                );
+            }
+            
+            return (
+                <div>
+                    <div className="page-header">
+                        <h1 className="page-title">💊 Health Monitor</h1>
+                        <p className="page-subtitle">Real-time system health and performance metrics</p>
+                    </div>
+                    
+                    <div className="content-card">
+                        <h2 style={{marginBottom: '24px', fontSize: '1.5rem', fontWeight: '700'}}>System Health Status</h2>
+                        
+                        {health?.error ? (
+                            <div style={{padding: '40px', textAlign: 'center'}}>
+                                <div style={{fontSize: '3rem', marginBottom: '16px'}}>⚠️</div>
+                                <h3 style={{color: 'var(--warning)', marginBottom: '8px'}}>Health Data Unavailable</h3>
+                                <p style={{color: 'var(--text-secondary)'}}>{health.error}</p>
+                                <p style={{color: 'var(--text-secondary)', marginTop: '16px', fontSize: '0.875rem'}}>
+                                    The system needs at least 7 days of trading history to display health metrics.
+                                </p>
+                            </div>
+                        ) : health ? (
+                            <>
+                                <div className="metric-row">
+                                    <span className="metric-label">Health Status</span>
+                                    <span className="metric-value">
+                                        <span className={`status-badge ${health.ok ? 'status-active' : 'status-error'}`}>
+                                            <span>●</span> {health.ok ? 'HEALTHY' : 'UNHEALTHY'}
+                                        </span>
+                                    </span>
+                                </div>
+                                
+                                <div className="metric-row">
+                                    <span className="metric-label">Recommended Action</span>
+                                    <span className="metric-value">{health.action || 'None'}</span>
+                                </div>
+                                
+                                <div className="metric-row">
+                                    <span className="metric-label">Reason</span>
+                                    <span className="metric-value">{health.reason || 'All systems operational'}</span>
+                                </div>
+                                
+                                {health.metrics && (
+                                    <>
+                                        <h3 style={{marginTop: '32px', marginBottom: '16px', fontSize: '1.25rem', fontWeight: '600'}}>Performance Metrics</h3>
+                                        {Object.entries(health.metrics).map(([key, value]) => (
+                                            <div key={key} className="metric-row">
+                                                <span className="metric-label">{key.replace(/_/g, ' ').toUpperCase()}</span>
+                                                <span className="metric-value">{typeof value === 'number' ? value.toFixed(2) : value}</span>
+                                            </div>
+                                        ))}
+                                    </>
+                                )}
+                            </>
+                        ) : null}
+                    </div>
+                </div>
+            );
+        }
+        
+        // Validation Page
+        function ValidationPage() {
+            const [validationId, setValidationId] = useState(null);
+            const [status, setStatus] = useState(null);
+            const [loading, setLoading] = useState(false);
+            
+            const runValidation = async () => {
+                setLoading(true);
+                try {
+                    const response = await fetch('/validate/run', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            symbols: ['BTCUSDT', 'ETHUSDT'],
+                            strategy: 'sop_v3',
+                            start: '-240d',
+                            end: 'now',
+                            folds: 6
+                        })
+                    });
+                    const data = await response.json();
+                    setValidationId(data.run_id);
+                    alert('Validation started! ID: ' + data.run_id);
+                } catch (error) {
+                    alert('Failed to start validation: ' + error.message);
+                } finally {
+                    setLoading(false);
+                }
+            };
+            
+            const checkStatus = async () => {
+                if (!validationId) {
+                    alert('Please start a validation run first');
+                    return;
+                }
+                try {
+                    const response = await fetch(`/validate/status?id=${validationId}`);
+                    const data = await response.json();
+                    setStatus(data);
+                } catch (error) {
+                    alert('Failed to check status: ' + error.message);
+                }
+            };
+            
+            return (
+                <div>
+                    <div className="page-header">
+                        <h1 className="page-title">✅ Strategy Validation</h1>
+                        <p className="page-subtitle">Backtest and validate trading strategies</p>
+                    </div>
+                    
+                    <div className="content-card">
+                        <h2 style={{marginBottom: '24px', fontSize: '1.5rem', fontWeight: '700'}}>Run Backtest Validation</h2>
+                        
+                        <div className="controls-grid">
+                            <button className="btn btn-primary" onClick={runValidation} disabled={loading}>
+                                {loading ? <div className="loading"></div> : '▶️'} Run Validation
+                            </button>
+                            <button className="btn btn-primary" onClick={checkStatus} disabled={!validationId}>
+                                🔍 Check Status
+                            </button>
+                        </div>
+                        
+                        {validationId && (
+                            <div style={{marginTop: '24px', padding: '16px', background: 'rgba(102, 126, 234, 0.1)', borderRadius: '8px'}}>
+                                <p style={{fontSize: '0.875rem', color: 'var(--text-secondary)'}}>Validation ID:</p>
+                                <p style={{fontWeight: '600', fontFamily: 'monospace'}}>{validationId}</p>
+                            </div>
+                        )}
+                        
+                        {status && (
+                            <div style={{marginTop: '24px'}}>
+                                <h3 style={{marginBottom: '16px', fontSize: '1.25rem', fontWeight: '600'}}>Validation Status</h3>
+                                <div className="metric-row">
+                                    <span className="metric-label">Status</span>
+                                    <span className="metric-value">
+                                        <span className={`status-badge ${status.status === 'completed' ? 'status-active' : status.status === 'failed' ? 'status-error' : 'status-paused'}`}>
+                                            <span>●</span> {status.status.toUpperCase()}
+                                        </span>
+                                    </span>
+                                </div>
+                                {status.progress && (
+                                    <div className="metric-row">
+                                        <span className="metric-label">Progress</span>
+                                        <span className="metric-value">{status.progress}%</span>
+                                    </div>
+                                )}
+                                {status.result && (
+                                    <div style={{marginTop: '16px', padding: '16px', background: 'rgba(16, 185, 129, 0.1)', borderRadius: '8px'}}>
+                                        <pre style={{fontSize: '0.875rem', overflow: 'auto'}}>{JSON.stringify(status.result, null, 2)}</pre>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+        
+        // Trades Page
+        function TradesPage() {
+            return <ComingSoonPage pageName="Active Trades" icon="📊" />;
+        }
+        
+        // Status Page
+        function StatusPage({ systemData }) {
+            return (
+                <div>
+                    <div className="page-header">
+                        <h1 className="page-title">💚 System Status</h1>
+                        <p className="page-subtitle">Comprehensive system health and worker status</p>
+                    </div>
+                    
+                    <div className="content-card">
+                        <h2 style={{marginBottom: '24px', fontSize: '1.5rem', fontWeight: '700'}}>System Information</h2>
+                        {systemData && (
+                            <div>
+                                <div className="metric-row">
+                                    <span className="metric-label">Service</span>
+                                    <span className="metric-value">{systemData.service || 'AlgoGPT'}</span>
+                                </div>
+                                <div className="metric-row">
+                                    <span className="metric-label">Version</span>
+                                    <span className="metric-value">{systemData.version || '3.6.0'}</span>
+                                </div>
+                                <div className="metric-row">
+                                    <span className="metric-label">Environment</span>
+                                    <span className="metric-value">{systemData.environment || 'production'}</span>
+                                </div>
+                                <div className="metric-row">
+                                    <span className="metric-label">Status</span>
+                                    <span className="metric-value">
+                                        <span className="status-badge status-active">
+                                            <span>●</span> Operational
+                                        </span>
+                                    </span>
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            );
+        }
+        
+        // Coming Soon Page
+        function ComingSoonPage({ pageName, icon = "🚧" }) {
+            return (
+                <div>
+                    <div className="page-header">
+                        <h1 className="page-title">{icon} {pageName}</h1>
+                        <p className="page-subtitle">Feature in development</p>
+                    </div>
+                    
+                    <div className="content-card" style={{textAlign: 'center', padding: '80px 40px'}}>
+                        <div style={{fontSize: '4rem', marginBottom: '24px'}}>🚧</div>
+                        <h2 style={{fontSize: '2rem', fontWeight: '700', marginBottom: '12px'}}>Coming Soon</h2>
+                        <p style={{color: 'var(--text-secondary)', fontSize: '1.125rem'}}>
+                            This feature is currently under development and will be available in a future update.
+                        </p>
+                    </div>
+                </div>
+            );
+        }
+        
+        // Render App
+        ReactDOM.render(<App />, document.getElementById('root'));
         
         console.log('AlgoGPT Ultimate Edition Dashboard Loaded');
     </script>
