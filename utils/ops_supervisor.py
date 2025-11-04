@@ -269,7 +269,7 @@ class Supervisor:
                 f"<code>old={_html(repr(raw))}</code>\n<code>new={_html(repr(cleaned))}</code>")
 
         # quick self-test and notify
-        if self.redis_url:
+        if self.redis_url and self.session:
             ok, reason = await _redis_self_test(self.session, self.redis_url)
             if ok:
                 await self._notify("health", "✅ Redis connectivity OK after sanitize.")
@@ -285,7 +285,7 @@ class Supervisor:
     async def _notify(self, kind: str, text: str, urgent: bool = False, keyboard: Optional[Dict[str, Any]] = None):
         if self.notifier:
             await self.notifier.send(kind, text, urgent=urgent, keyboard=keyboard)
-        else:
+        elif self.session:
             await send_telegram(self.session, text, keyboard)
 
     async def loop_digest(self):
@@ -386,6 +386,9 @@ class Supervisor:
 
     # ---------------- Health / Auto-Heal ----------------
     async def health_check(self) -> Tuple[bool, str]:
+        if not self.session:
+            return False, "no_session"
+        
         # 1) Redis
         if self.redis_url:
             ok, reason = await _redis_self_test(self.session, self.redis_url)
@@ -410,7 +413,7 @@ class Supervisor:
         return True, "ok"
 
     async def _set_env_var_http(self, service_id: str, key: str, value: str, visibility: str = "private") -> bool:
-        if not (RENDER_API_KEY and service_id):
+        if not (RENDER_API_KEY and service_id and self.session):
             return False
         headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Content-Type": "application/json"}
         base = "https://api.render.com"
@@ -429,7 +432,7 @@ class Supervisor:
         return False
 
     async def _create_deploy_http(self, service_id: str) -> bool:
-        if not (RENDER_API_KEY and service_id):
+        if not (RENDER_API_KEY and service_id and self.session):
             return False
         headers = {"Authorization": f"Bearer {RENDER_API_KEY}", "Content-Type": "application/json"}
         base = "https://api.render.com"
@@ -457,6 +460,8 @@ class Supervisor:
 
     async def _redeploy_primary(self, reason: str):
         # Only redeploy (no code mutation)
+        if not self.session:
+            return
         if DEPLOY_HOOK and "<SERVICE_ID>" not in DEPLOY_HOOK and "<KEY>" not in DEPLOY_HOOK:
             try:
                 async with self.session.post(DEPLOY_HOOK, timeout=aiohttp.ClientTimeout(total=10)) as r:
@@ -488,7 +493,7 @@ class Supervisor:
 
         if diag.startswith("redis"):
             new_clean = _clean_redis_url(os.getenv("REDIS_URL", self.redis_url))
-            if new_clean and new_clean != self.redis_url:
+            if new_clean and new_clean != self.redis_url and self.session:
                 os.environ["REDIS_URL"] = new_clean
                 self.redis_url = new_clean
                 ok, reason = await _redis_self_test(self.session, self.redis_url)
@@ -620,13 +625,13 @@ class Supervisor:
         for prov in _iter_llm_order():
             try:
                 if prov == "aix":
-                    if not AIX_API_KEY:
+                    if not (AIX_API_KEY and self.session):
                         continue
                     data = await AIXProvider(self.session, "xai").chat_json(AIX_MODEL_DEFAULT, system, user)
                     prop = self._extract_json(data)
                     if prop: return prop
                 elif prov == "openai":
-                    if not OPENAI_API_KEY:
+                    if not (OPENAI_API_KEY and self.session):
                         continue
                     data = await OpenAIProvider(self.session, "openai").chat_json(OPENAI_MODEL_MINI, system, user)
                     prop = self._extract_json(data)
@@ -648,11 +653,11 @@ class Supervisor:
         return None
 
     async def preflight_checks(self) -> Tuple[bool, str]:
-        # TODO: gates/tests/budget/security checks
+        """Future: add gates/tests/budget/security checks"""
         return True, "ok"
 
     async def run_canary(self, proposal: Dict[str, Any], pct: int) -> Tuple[bool, str]:
-        # TODO: implement real canary metrics watch
+        """Future: implement real canary metrics watch"""
         await asyncio.sleep(2)
         return True, "ok"
 
@@ -662,7 +667,7 @@ class Supervisor:
         return True, "ok"
 
     async def post_verify(self, proposal: Dict[str, Any]) -> Tuple[bool, str]:
-        # TODO: quick KPI verify
+        """Future: quick KPI verify"""
         await asyncio.sleep(1)
         return True, "ok"
 

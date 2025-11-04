@@ -7,22 +7,20 @@ from core.signal_fuser import fuse_signals, enrich_with_funding
 
 def _fetch_feeds(symbol: str, tf: str) -> dict:
     """
-    כאן חבר את המקורות שלך:
-      • delta_per_bar  – אגרגציית aggTrades -> Δ לכל נר
-      • oi_df          – DataFrame עם עמודה 'oi'
-      • df_spot        – DataFrame עם עמודה 'price'
-      • df_mark        – DataFrame עם עמודה 'markPrice'
-      • best_bid/ask   – מחיר ספר עדכני
-      • mark/index     – sanity check
+    Future: connect data sources for delta_per_bar, oi_df, df_spot, df_mark, etc.
+    Currently returns empty/None values as this is a demo stub.
     """
-    feeds = {"symbol": symbol}
-    # TODO: חבר פונקציות אמת שלך
+    from typing import Optional, Any
+    feeds: dict[str, Optional[Any]] = {"symbol": symbol}
+    # Future: integrate real data sources
     feeds["delta_per_bar"] = None
     feeds["oi_df"] = None
     feeds["df_spot"] = None
     feeds["df_mark"] = None
-    feeds["best_bid"] = None; feeds["best_ask"] = None
-    feeds["mark"] = None; feeds["index"] = None
+    feeds["best_bid"] = None
+    feeds["best_ask"] = None
+    feeds["mark"] = None
+    feeds["index"] = None
     return feeds
 
 def scan_once(symbol: str, tf: str = "15m"):
