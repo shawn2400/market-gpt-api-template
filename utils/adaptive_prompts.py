@@ -181,47 +181,67 @@ Remember: We want LARGE PROFITS, MINIMAL LOSSES. Quality over quantity!
         context: Dict,
         min_rr: float
     ) -> str:
-        """Optimized prompt for sideways/ranging markets"""
+        """Optimized prompt for sideways/ranging/choppy markets - AGGRESSIVE MODE"""
         
-        prompt = f"""You are analyzing {symbol} in a SIDEWAYS/RANGING market. Return ONLY JSON.
+        prompt = f"""You are analyzing {symbol} in a SIDEWAYS/CHOPPY market. Return ONLY JSON.
 
-**MARKET REGIME: SIDEWAYS ↔️ (Perfect for GRID Trading)**
-**STRATEGY: FUTURES GRID (profit from range-bound movement)**
-**QUALITY THRESHOLD: Strong support/resistance levels required**
+**MARKET REGIME: SIDEWAYS/CHOPPY ↔️ (MULTIPLE STRATEGIES AVAILABLE)**
+**PRIMARY STRATEGY: FUTURES GRID (profit from range-bound movement)**
+**SECONDARY STRATEGY: SCALPING / RANGE BOUNCES (RR ≥ {min_rr:.2f})**
+**QUALITY THRESHOLD: LOWERED for more opportunities**
 
 **YOUR MISSION:**
-Identify if this symbol is suitable for GRID trading.
+Find ANY profitable trading opportunity - GRID, scalping, or range bounces.
 
-**WHAT TO LOOK FOR:**
+**OPTION 1: GRID TRADING (PREFERRED)**
 ✅ Clear horizontal support and resistance zones
 ✅ Price bouncing within a defined range
-✅ Weak trend (ADX < 20)
-✅ Good liquidity and volume
-✅ Range width ≥ 3-5% for profitable grids
+✅ Weak trend (ADX < 25)
+✅ Range width ≥ 2% (LOWERED from 3-5%)  🚀 NEW
+✅ Multiple touches of support/resistance
 
-**GRID TRADING CRITERIA:**
-1. **Range Boundaries:** Clear upper and lower bounds
-2. **Range Width:** At least 3% between support/resistance
-3. **Price Behavior:** Multiple touches of support/resistance
-4. **No Breakout:** Price staying within range (not trending)
-
-**DECISION PROCESS:**
-1. Is price clearly range-bound? (YES/NO)
-2. Can you identify strong support/resistance? (YES/NO)
-3. Is range width ≥ 3%? (YES/NO)
+**DECISION PROCESS FOR GRID:**
+1. Is price range-bound? (YES/NO)
+2. Can you identify support/resistance? (YES/NO)
+3. Is range width ≥ 2%? (YES/NO)  🚀 LOWERED threshold
 4. Is ADX weak (< 25)? (YES/NO)
 
 **IF ALL "YES" → Recommend GRID trading setup**
-**IF ANY "NO" → Return {{"proposal": false}} - suggest waiting for clear trend or range**
-
-**FOR GRID SETUPS:**
 - Specify: range_low, range_high, grid_levels (5-10)
-- Success probability for range-bound: 60-75%
+- Success probability: 60-75%
 
-**ALTERNATIVELY:** If you see a strong directional setup forming (breakout imminent), 
-you can propose a regular LONG/SHORT trade instead with RR ≥ {min_rr:.2f}.
+**OPTION 2: SCALPING / RANGE BOUNCES (IF GRID NOT SUITABLE)**
+If range is too narrow for GRID (<2%) OR you see a quick bounce setup:
 
-Remember: GRID works best in stable ranges. If market is choppy or about to break out, WAIT!
+**SCALPING CRITERIA:**
+✅ Price near support/resistance level
+✅ Clear bounce pattern forming (hammer, engulfing, etc.)
+✅ Tight stop loss possible (0.5-1.5% max)
+✅ Quick target at next resistance/support
+✅ RR ≥ {min_rr:.2f} (LOWERED threshold for scalping)  🚀 NEW
+
+**SCALPING SETUP EXAMPLE:**
+- Entry: 100.0 (at support bounce)
+- SL: 99.2 (0.8% below support)
+- TP: 101.0 (1.0% at resistance)
+- RR: 1.25 ✅ ACCEPTABLE
+
+**DECISION PROCESS FOR SCALPING:**
+1. Is price at strong support/resistance? (YES/NO)
+2. Is there a bounce signal (candle pattern, RSI divergence)? (YES/NO)
+3. Can you place tight SL (≤1.5%)? (YES/NO)
+4. Is there clear nearby target? (YES/NO)
+5. Does RR ≥ {min_rr:.2f}? (YES/NO)
+
+**IF ALL "YES" → Propose SCALP/BOUNCE trade**
+
+**IMPORTANT:**
+- In CHOPPY markets, we want MULTIPLE SMALL WINS
+- Accept lower RR ({min_rr:.2f}) for frequent opportunities
+- Tight stops + quick targets = consistent profits
+- Quality over single large RR (1.1-1.5 RR is EXCELLENT for scalping)
+
+**DO NOT WAIT** - If you see ANY setup (GRID or SCALP), propose it!
 """
         return prompt
     

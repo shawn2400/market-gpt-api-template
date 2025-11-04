@@ -323,42 +323,50 @@ class MarketIntelligence:
         Returns:
             (min_rr_threshold, quality_threshold)
             
-        Threshold Logic:
-        - Strong markets: Lower RR acceptable (easy to find setups)
-        - Weak markets: Higher RR required (fewer opportunities)
-        - High volatility: Higher RR (bigger stops needed)
+        Threshold Logic - FULLY ADAPTIVE FOR ALL MARKET CONDITIONS:
+        - CHOPPY/SIDEWAYS: Very low RR (1.1-1.15) - scalping & range trading
+        - TRENDING: Moderate RR (1.2-1.3) - breakout trades
+        - VOLATILE: Higher RR (1.4+) - wider stops needed
+        
+        🎯 GOAL: Generate trades in ALL market conditions (big, small, intermediate)
         """
-        base_rr = 1.3
-        base_quality = 5.0
-        
-        # Regime adjustments
-        if regime == "trending":
-            base_rr -= 0.1  # Trends easier to trade
-            base_quality -= 0.5
-        elif regime == "choppy":
-            # CHOPPY should use GRID, not high RR regular trades
-            # Keep RR low to allow GRID proposals
-            base_rr -= 0.1  # GRID trading has different RR logic
-            base_quality += 0.5  # Slightly higher quality needed
+        # 🚀 NEW ADAPTIVE BASE - Much lower for more opportunities
+        if regime == "choppy":
+            # CHOPPY = Perfect for scalping & small range trades
+            base_rr = 1.1  # ✅ LOWERED from 1.3 to 1.1
+            base_quality = 4.0  # Accept more setups
         elif regime == "sideways":
-            base_rr -= 0.2  # GRID trades have different RR logic
-            base_quality -= 0.3
+            # SIDEWAYS = GRID trading + range bounces
+            base_rr = 1.15  # ✅ LOWERED from 1.3 to 1.15
+            base_quality = 4.2
+        elif regime == "trending":
+            # TRENDING = Traditional breakout trades
+            base_rr = 1.25  # ✅ LOWERED from 1.3 to 1.25
+            base_quality = 4.5
+        elif regime == "volatile":
+            # VOLATILE = Need higher RR due to wider stops
+            base_rr = 1.4
+            base_quality = 5.0
+        else:
+            # Fallback
+            base_rr = 1.2
+            base_quality = 4.5
         
-        # Mood adjustments
+        # Mood adjustments - SMALLER impact now
         if mood in ["bullish", "bearish"]:
             base_rr -= 0.05  # Clear direction helps
         else:
-            base_rr += 0.1  # Neutral = uncertain
+            base_rr += 0.05  # ✅ Reduced penalty for neutral (was 0.1)
         
         # Volatility adjustments
         if volatility == "high":
-            base_rr += 0.2  # Wider stops = need better RR
+            base_rr += 0.15  # ✅ Reduced from 0.2
         elif volatility == "low":
             base_rr -= 0.05  # Tighter stops possible
         
-        # Floor values for safety
-        min_rr = max(1.2, base_rr)
-        quality = max(4.0, base_quality)
+        # 🚨 CRITICAL: Lower floor values to allow more trades
+        min_rr = max(1.05, base_rr)  # ✅ LOWERED from 1.2 to 1.05
+        quality = max(3.5, base_quality)  # ✅ LOWERED from 4.0 to 3.5
         
         return (min_rr, quality)
     

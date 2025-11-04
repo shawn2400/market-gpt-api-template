@@ -15,16 +15,17 @@ The dashboard UI is located in `static/dashboard/`. Telegram notifications are e
 The core application uses FastAPI (`main.py`) and Gunicorn. Functionalities are modularized into `routes/` for API endpoints and `utils/` for common functions. Policies are managed via YAML files in `policies/`.
 
 **Core Features:**
--   **Automated Trading Modes**: Supports MARKET, HYBRID, and AUTO execution.
+-   **Automated Trading Modes**: Supports MARKET, HYBRID, and FULL AUTO execution (Telegram approval DISABLED for instant trades).
 -   **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, and ATR-based trailing stops.
 -   **Market Scanner**: Autonomous worker performs multi-timeframe technical analysis every 60 seconds across 531 Binance Futures markets.
--   **AI-Powered Proposals**: OpenAI GPT-5 generates trade proposals with mandatory Risk/Reward (RR) ≥ 1.3. Multi-AI consensus is available via DeepSeek and AI-X/Grok.
--   **GRID Trading**: Integrated FUTURES GRID trading for choppy/sideways markets.
+-   **AI-Powered Proposals**: OpenAI GPT-5 generates trade proposals with **ADAPTIVE Risk/Reward thresholds** - CHOPPY=1.1, SIDEWAYS=1.15, TRENDING=1.25, VOLATILE=1.4. Multi-AI consensus via DeepSeek and AI-X/Grok.
+-   **GRID Trading**: Integrated FUTURES GRID trading for choppy/sideways markets (**minimum range ≥2%**, lowered from 4% for more opportunities).
+-   **Scalping & Range-Bounce Strategies**: NEW - Aggressive short-term trades in CHOPPY markets with tight stops and RR≥1.1 for frequent small wins.
 -   **Risk Management**: Implements quality filters, dynamic filters, liquidity checks, cooldown periods, daily trade caps, and a circuit breaker for daily loss limits.
--   **Telegram Approval Workflow**: Interactive approval for trade proposals.
+-   **FULL AUTO MODE**: Telegram notifications ONLY (no approval required). System executes trades instantly based on AI analysis.
 -   **Dynamic Position Management**: Features ATR Trailing, Multi-level TP ladder, and Dynamic Position Sizing.
 -   **Auto-Flip**: Dynamically adapts to market conditions, proposing LONG or SHORT trades with multi-system validation.
--   **Self-Adaptive Trading Engine**: Incorporates Market Intelligence (regime, mood, volatility detection), Adaptive AI Prompts, and Portfolio Intelligence (exposure management, correlation prevention).
+-   **Self-Adaptive Trading Engine**: Incorporates Market Intelligence (regime, mood, volatility detection), Adaptive AI Prompts with scalping strategies, and Portfolio Intelligence (exposure management, correlation prevention).
 -   **Dynamic Capital Optimization**: Automatically calculates leverage and position sizing based on trade quality, RR, AI confidence, and market conditions.
 -   **Complete Data Persistence**: All critical data, including trade sizing, market states, and performance records, is saved to a PostgreSQL database.
 

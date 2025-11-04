@@ -52,6 +52,14 @@ def build_grid_plan(
     half_range_pct = (step_pct * (levels - 1)) / 100.0 * RANGE_MULT
     gmin = price * (1.0 - half_range_pct)
     gmax = price * (1.0 + half_range_pct)
+    
+    # Check minimum range width - LOWERED from 4% to 2% for more opportunities
+    range_width_pct = ((gmax - gmin) / price) * 100.0
+    min_range_pct = float(os.getenv("GRID_MIN_RANGE_PCT", "2.0"))  # ✅ LOWERED from 4% to 2%
+    
+    if range_width_pct < min_range_pct:
+        # Range too narrow - GRID not profitable
+        return None
 
     return {
         "symbol": symbol.upper(),
@@ -61,7 +69,7 @@ def build_grid_plan(
         "grid_step_pct": float(step_pct),
         "grid_take_profit_pct": float(TP_PER_FILL_PCT),
         "grid_side": "LONG",
-        "reason": f"grid by vol={vol}, levels={levels}, step={step_pct:.2f}%, chop={chop}",
+        "reason": f"grid by vol={vol}, levels={levels}, step={step_pct:.2f}%, chop={chop}, range={range_width_pct:.1f}%",
         "budget_usd": float(budget_usd),
     }
 
