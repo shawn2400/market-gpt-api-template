@@ -190,7 +190,17 @@ class RenderAPI:
                 json={"clearCache": "do_not_clear"},
                 timeout=60.0
             )
+            
             response.raise_for_status()
+            
+            # Render returns 202 Accepted with empty body for successful deploy trigger
+            if response.status_code == 202:
+                return {
+                    "status": "accepted",
+                    "message": "Deployment triggered successfully",
+                    "service_id": service_id
+                }
+            
             return response.json()
     
     async def get_deploy_status(self, service_id: str, deploy_id: str) -> Dict:
