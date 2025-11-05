@@ -55,6 +55,9 @@ CANCEL_PREFIX_OVERRIDE = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
 SL_LIMIT_OFFSET_BPS = float(os.getenv("SL_LIMIT_OFFSET_BPS", "8"))
 TP_LIMIT_OFFSET_BPS = float(os.getenv("TP_LIMIT_OFFSET_BPS", "8"))
 
+# NEW: respect LADDER_TP_KIND for modify_take_profit behavior
+LADDER_TP_KIND = os.getenv("LADDER_TP_KIND", "TAKE_PROFIT_MARKET").upper()
+
 _TRAIL_FREEZE_ENABLE = os.getenv("TRAIL_FREEZE_ENABLE", "0").lower() in ("1", "true", "yes", "on")
 _TRAIL_FREEZE_MIN_SEC = int(os.getenv("TRAIL_FREEZE_MIN_SEC", "60"))
 _TRAIL_FREEZE_MAX_SEC = int(os.getenv("TRAIL_FREEZE_MAX_SEC", "180"))
@@ -215,7 +218,7 @@ def _list_open_stop_orders(symbol: str) -> List[Dict[str, Any]]:
     return out
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Create/modify orders (legacy)
+# Create/modify orders
 # ──────────────────────────────────────────────────────────────────────────────
 def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
     """
@@ -255,12 +258,19 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
         return {"ok": False, "error": str(e)}
 
 def modify_take_profit(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Respects LADDER_TP_KIND:
+      - TAKE_PROFIT:   trigger at stopPrice + LIMIT price (offset by TP_LIMIT_OFFSET_BPS)
+      - TAKE_PROFIT_MARKET: trigger at stopPrice, market execution (no price)
+    """
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
     _cancel_closing_orders(sym, ("TAKE_PROFIT", "TAKE_PROFIT_MARKET"))
+
+    # quantize trigger (stopPrice)
     stop_str, stop_px = _q_price(sym, float(new_price))
-    limit_px = _offset_bps(stop_px, TP_LIMIT_OFFSET_BPS, +1 if close_side == "SELL" else -1)
-    price_str, _ = _q_price(sym, float(limit_px))
+
+    # detect qty
     qty = qty_hint
     if not qty or qty <= 0:
         try:
@@ -274,18 +284,33 @@ def modify_take_profit(symbol: str, new_price: float, *, position_side: str = "L
     if not qty or qty <= 0:
         return {"ok": False, "error": "qty_missing_for_modify_tp"}
     qty_str, _ = _q_qty(sym, float(qty))
+
     try:
-        resp = futures_create_order(
-            symbol=sym,
-            side=close_side,
-            type="TAKE_PROFIT",
-            reduceOnly=True,
-            stopPrice=stop_str,
-            price=price_str,
-            quantity=qty_str,
-            timeInForce="GTC",
-            workingType="MARK_PRICE",
-        )
+        if LADDER_TP_KIND == "TAKE_PROFIT":  # LIMIT TP
+            limit_px = _offset_bps(stop_px, TP_LIMIT_OFFSET_BPS, +1 if close_side == "SELL" else -1)
+            price_str, _ = _q_price(sym, float(limit_px))
+            resp = futures_create_order(
+                symbol=sym,
+                side=close_side,
+                type="TAKE_PROFIT",
+                reduceOnly=True,
+                stopPrice=stop_str,
+                price=price_str,
+                quantity=qty_str,
+                timeInForce="GTC",
+                workingType="MARK_PRICE",
+            )
+        else:  # default: TAKE_PROFIT_MARKET
+            resp = futures_create_order(
+                symbol=sym,
+                side=close_side,
+                type="TAKE_PROFIT_MARKET",
+                reduceOnly=True,
+                stopPrice=stop_str,
+                quantity=qty_str,
+                workingType="MARK_PRICE",
+                timeInForce="GTC",
+            )
         return {"ok": True, "response": resp}
     except Exception as e:
         return {"ok": False, "error": str(e)}
@@ -351,7 +376,6 @@ def _compute_safe_sl(symbol: str, position_side: str, last_price: float, atr_now
         upper_bound = last_price - raw_buf
         candidate = min(desired_sl, upper_bound)
         safe = _round_to_tick(candidate, tick, up=False)
-        # hard guard: ensure strictly below
         if safe >= last_price:
             safe = _round_to_tick(last_price - raw_buf, tick, up=False)
     elif position_side.upper() == "SHORT":
@@ -364,9 +388,8 @@ def _compute_safe_sl(symbol: str, position_side: str, last_price: float, atr_now
     else:
         raise ValueError(f"unknown position_side: {position_side}")
 
-    # format to precision
     decs = _decimals(str(f.get("tickSize") or DEFAULT_TICK))
-    return float(f"{safe:.{decs}f}")
+    return float(f"{safe:.{decs}f()}".replace("()", ""))  # safe format
 
 def _detect_position_qty(symbol: str) -> Optional[float]:
     try:
@@ -398,7 +421,6 @@ def safe_replace_sl(symbol: str, position_side: str, last_price: float, atr_now:
     qty_str, _ = _q_qty(sym, float(qty))
     stop_str, _ = _q_price(sym, float(new_stop))
 
-    # place NEW stop (do NOT cancel old yet)
     try:
         place_res = futures_create_order(
             symbol=sym,
@@ -414,12 +436,10 @@ def safe_replace_sl(symbol: str, position_side: str, last_price: float, atr_now:
     except Exception as e:
         return {"ok": False, "kept_old": True, "error": f"place_failed: {e}"}
 
-    # cancel older STOPs excluding the newly placed id
     try:
         exclude = {int(new_oid)} if new_oid else set()
         _cancel_closing_orders(sym, ("STOP", "STOP_MARKET"), exclude_ids=exclude)
     except Exception as e:
-        # still protected with the new stop; warn only
         logger.warning("[tm.safe_replace_sl] cancel old stops failed %s: %s", sym, e)
 
     return {"ok": True, "new_sl": float(stop_str), "order": place_res}
@@ -454,10 +474,8 @@ async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> N
                 entry = float(prev.get("entryPrice") or 0.0) or 0.0
                 side = "LONG" if float(prev.get("positionAmt") or 0) > 0 else "SHORT"
                 exit_px = _price_now(s) or entry
-                
-                # 📊 AI PERFORMANCE TRACKING: Log trade outcome
+
                 try:
-                    # Calculate P&L
                     qty = abs(float(prev.get("positionAmt") or 0.0))
                     if side == "LONG":
                         pnl_usd = (exit_px - entry) * qty
@@ -465,15 +483,9 @@ async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> N
                     else:
                         pnl_usd = (entry - exit_px) * qty
                         pnl_pct = ((entry / exit_px) - 1.0) * 100.0
-                    
-                    # Determine exit reason and success
                     was_successful = pnl_usd > 0
                     exit_reason = "tp" if was_successful else "sl"
-                    
-                    # Approx RR based on 2% risk assumption
                     rr_achieved = abs(pnl_pct) / 2.0 if abs(pnl_pct) > 0 else 0.0
-                    
-                    # Time in trade (approx)
                     time_in_trade_minutes = 0
                     try:
                         update_time = prev.get("updateTime", 0)
@@ -481,7 +493,6 @@ async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> N
                             time_in_trade_minutes = int((time.time() * 1000 - update_time) / 60000)
                     except:
                         pass
-                    
                     prediction_id = prev.get("prediction_id", "")
                     if prediction_id and log_outcome:
                         success = log_outcome(
@@ -498,9 +509,8 @@ async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> N
                             logger.info(f"✅ Logged AI outcome for {s}: P&L=${pnl_usd:.2f}, RR={rr_achieved:.2f}")
                 except Exception as e:
                     logger.warning(f"[ai_outcome] Failed to log outcome for {s}: {e}")
-                
-                # Continue with AI review
-                ctx = {"entry": entry, "exit": exit_px, "pnl_usd": pnl_usd if 'pnl_usd' in locals() else None, "rr": None, "indicators": {}, "reasons": ["auto_detected_closure"]}
+
+                ctx = {"entry": entry, "exit": exit_px}
                 try:
                     await review_trade_async(s, side, ctx, to_telegram=True)
                 except Exception as e:
@@ -671,7 +681,6 @@ async def manage_open_trades():
                         thresh = 0.25 * current_atr
                         need_update = (abs(target_sl - float(cur_stop)) >= thresh)
                         if need_update:
-                            # 🔒 Atomic replace with safety buffer & tick rounding
                             res = safe_replace_sl(
                                 symbol=sym,
                                 position_side=side,
@@ -687,7 +696,7 @@ async def manage_open_trades():
                 except Exception as e:
                     logger.error("[manage] trailing update failed for %s: %s", sym, e)
 
-                # Opportunistic TP refresh (optional)
+                # Opportunistic TP refresh (respects LADDER_TP_KIND)
                 try:
                     if current_adx > 25 and macd_now > 0:
                         new_tp = (price + 4.5 * current_atr) if side == "LONG" else (price - 4.5 * current_atr)
