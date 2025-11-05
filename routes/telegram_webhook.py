@@ -216,6 +216,48 @@ async def commands(req: Request, x_telegram_bot_api_secret_token: str | None = H
             await _tg_answer_callback(TG_TOKEN, cbq_id, "פורמט לא תקין")
             return {"ok": True}
         kind, action, cid = parts
+        
+        # טיפול בכפתורי הגדרות AUTO
+        if kind == "SETTINGS" and action == "AUTO":
+            try:
+                from routes.telegram_bot import set_approval_mode
+                if cid == "ON":
+                    # הפעל מצב אוטומטי מלא
+                    if set_approval_mode(False):
+                        response_text = "✅ <b>מצב FULL AUTO הופעל</b>\n\n🟢 הצעות יבוצעו מיידית ללא אישור"
+                    else:
+                        response_text = "❌ שגיאה בשמירת ההגדרות"
+                elif cid == "OFF":
+                    # הפעל מצב אישור
+                    if set_approval_mode(True):
+                        response_text = "✅ <b>מצב APPROVAL הופעל</b>\n\n🔴 הצעות ידרשו אישור ידני"
+                    else:
+                        response_text = "❌ שגיאה בשמירת ההגדרות"
+                else:
+                    response_text = "❓ אופציה לא מזוהה"
+                
+                # עדכן את ההודעה
+                if TG_TOKEN:
+                    try:
+                        async with httpx.AsyncClient(timeout=8.0) as cli:
+                            await cli.post(
+                                f"https://api.telegram.org/bot{TG_TOKEN}/editMessageText",
+                                json={
+                                    "chat_id": chat_id,
+                                    "message_id": message_id,
+                                    "text": response_text,
+                                    "parse_mode": "HTML"
+                                }
+                            )
+                            await _tg_answer_callback(TG_TOKEN, cbq_id, "✅ הגדרה עודכנה")
+                    except Exception as e:
+                        logger.error(f"Failed to update settings message: {e}")
+                        await _tg_answer_callback(TG_TOKEN, cbq_id, "❌ שגיאה")
+            except Exception as e:
+                logger.error(f"Settings callback failed: {e}")
+                await _tg_answer_callback(TG_TOKEN, cbq_id, f"❌ {e}")
+            return {"ok": True}
+        
         if kind != "CONFIRM":
             await _tg_answer_callback(TG_TOKEN, cbq_id, "לא נתמך")
             return {"ok": True}
@@ -278,6 +320,58 @@ async def commands(req: Request, x_telegram_bot_api_secret_token: str | None = H
 
     if cmd == "/explain_off":
         set_explain_enabled(False); await _reply(chat_id, "⚪️ Explain-Trade: OFF", html=False); return {"ok": True}
+
+    if cmd == "/auto":
+        # הצג את מצב האישור הנוכחי עם כפתורי שינוי
+        try:
+            from routes.telegram_bot import get_approval_mode
+            current_mode = get_approval_mode()
+            mode_text = "🔴 <b>APPROVAL MODE</b> (דורש אישור)" if current_mode else "🟢 <b>FULL AUTO MODE</b> (ביצוע מיידי)"
+            
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🟢 AUTO ON", "callback_data": "SETTINGS:AUTO:ON"},
+                        {"text": "🔴 AUTO OFF", "callback_data": "SETTINGS:AUTO:OFF"}
+                    ]
+                ]
+            }
+            
+            msg = f"""
+⚙️ <b>הגדרות מצב ביצוע</b>
+
+מצב נוכחי: {mode_text}
+
+<b>🟢 AUTO ON (FULL AUTO):</b>
+• הצעות מבוצעות מיידית ללא אישור
+• קבלת התראה בלבד
+• מהיר ואוטונומי לחלוטין
+
+<b>🔴 AUTO OFF (APPROVAL MODE):</b>
+• הצעות מחכות לאישור שלך
+• כפתורים ✅/❌ בכל הודעה
+• שליטה ידנית מלאה
+
+בחר מצב:
+"""
+            
+            if TG_TOKEN:
+                try:
+                    async with httpx.AsyncClient(timeout=8.0) as cli:
+                        await cli.post(
+                            f"https://api.telegram.org/bot{TG_TOKEN}/sendMessage",
+                            json={
+                                "chat_id": chat_id,
+                                "text": msg,
+                                "parse_mode": "HTML",
+                                "reply_markup": keyboard
+                            }
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to send /auto message: {e}")
+        except Exception as e:
+            await _reply(chat_id, f"❌ שגיאה: {e}", html=False)
+        return {"ok": True}
 
     await _reply(chat_id, "❓ פקודה לא מזוהה. /help לתפריט.", html=False)
     return {"ok": True}

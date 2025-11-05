@@ -1093,3 +1093,69 @@ async def execute_trade_live(
 
 
 
+
+# ─────────── Plan Wrapper (for alerts/ingest auto-execution) ───────────
+async def auto_execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Wrapper שמקבל plan (מ-/alerts/ingest) ומבצע את הטרייד באמצעות execute_trade_live.
+    מחזיר תוצאה עם ok/error + פרטי הביצוע.
+    """
+    try:
+        symbol = str(plan.get("symbol", "")).upper()
+        side = str(plan.get("side", "")).upper()
+        
+        # המר LONG/SHORT ל-BUY/SELL
+        if side == "LONG":
+            side = "BUY"
+        elif side == "SHORT":
+            side = "SELL"
+        
+        if not symbol or side not in ("BUY", "SELL"):
+            return {"ok": False, "error": "invalid_symbol_or_side"}
+        
+        # חלץ פרמטרים
+        leverage = int(plan.get("leverage", 5))
+        budget = float(plan.get("budget_usd") or 0) or None
+        qty = float(plan.get("qty") or 0) or None
+        entry = float(plan.get("entry") or 0) or None
+        
+        # חלץ TP/SL
+        tp_list = plan.get("tp", [])
+        sl_dict = plan.get("sl", {})
+        
+        # TP ראשון
+        tp1 = None
+        if tp_list and len(tp_list) > 0:
+            if isinstance(tp_list[0], dict):
+                tp1 = float(tp_list[0].get("price", 0)) or None
+            elif isinstance(tp_list[0], (int, float)):
+                tp1 = float(tp_list[0]) or None
+        
+        # SL
+        sl = None
+        if isinstance(sl_dict, dict):
+            sl = float(sl_dict.get("stopPrice", 0)) or None
+        elif isinstance(sl_dict, (int, float)):
+            sl = float(sl_dict) or None
+        
+        # בצע את הטרייד
+        dry_run = os.getenv("DRY_RUN", "0").lower() in ("1", "true", "yes", "on")
+        result = await execute_trade_live(
+            symbol=symbol,
+            side=side,
+            leverage=leverage,
+            budget=budget,
+            quantity=qty,
+            entry=entry,
+            sl=sl,
+            tp=tp1,
+            dry_run=dry_run,
+            confirm_first=False,  # לא צריך אישור - אנחנו כבר ב-FULL AUTO
+            reduce_only=False
+        )
+        
+        return result
+        
+    except Exception as e:
+        log.error(f"auto_execute_plan failed: {e}", exc_info=True)
+        return {"ok": False, "error": str(e)}

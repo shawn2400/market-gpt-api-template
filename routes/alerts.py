@@ -50,6 +50,77 @@ if not _HAS_CONFIRM:
             cls._items[str(req.get("ticket_id","TKT"))] = {"req": dict(req), "ts": time.time()}
     _HAS_CONFIRM = True
 
+# ===== Auto-execution notification (ללא כפתורים) =====
+async def _tg_send_auto_notification(plan: Dict[str, Any], result: Dict[str, Any]) -> None:
+    """שולח התראה על ביצוע אוטומטי - ללא כפתורי אישור"""
+    with suppress(Exception):
+        from utils.alerts import send_telegram_message  # type: ignore
+        from utils.trade_reports import get_israel_time_str  # type: ignore
+        
+        sym = plan.get("symbol", "")
+        side = plan.get("side", "")
+        lev = plan.get("leverage", "")
+        qty = plan.get("qty", "")
+        
+        # חלץ TP/SL מהנתונים
+        tp_list = plan.get("tp", [])
+        sl_dict = plan.get("sl", {})
+        
+        # בנה הודעה עשירה
+        emoji_side = "🟢" if side == "BUY" else "🔴"
+        israel_time = get_israel_time_str()
+        
+        lines = [
+            f"🤖 <b>FULL AUTO - EXECUTED</b>",
+            f"🕐 <b>שעון ישראל:</b> {israel_time}",
+            f"",
+            f"{emoji_side} <b>{sym}</b>",
+            f"📊 Direction: <b>{side}</b> (Leverage: x{lev})",
+            f"💰 Quantity: <code>{qty:.6f}</code>",
+        ]
+        
+        if plan.get("budget_usd"):
+            lines.append(f"💵 Budget: <code>${plan['budget_usd']:.2f}</code>")
+        
+        # הוסף Entry/SL/TP
+        entry = plan.get("entry")
+        if entry:
+            lines.append(f"🎯 Entry: <code>{entry:.2f}</code>")
+        
+        if sl_dict and sl_dict.get("stopPrice"):
+            lines.append(f"🛑 Stop Loss: <code>{sl_dict['stopPrice']:.2f}</code>")
+        
+        if tp_list:
+            lines.append(f"🎯 Take Profit:")
+            for i, tp in enumerate(tp_list[:3], 1):
+                if isinstance(tp, dict) and tp.get("price"):
+                    lines.append(f"   TP{i}: <code>{tp['price']:.2f}</code>")
+        
+        # Quality Score
+        if plan.get("score"):
+            lines.append(f"⭐ Quality Score: <code>{plan['score']:.1f}/10</code>")
+        
+        # תוצאת הביצוע
+        if result.get("ok"):
+            lines.append(f"")
+            lines.append(f"✅ <b>Status: LIVE POSITION OPENED</b>")
+            if result.get("order_id"):
+                lines.append(f"🆔 Order ID: <code>{result['order_id']}</code>")
+        else:
+            lines.append(f"")
+            lines.append(f"❌ <b>Status: EXECUTION FAILED</b>")
+            if result.get("error"):
+                lines.append(f"⚠️ Error: {result['error']}")
+        
+        lines.append(f"")
+        lines.append(f"<i>🤖 Auto-executed without approval</i>")
+        
+        await send_telegram_message(
+            "\n".join(lines), 
+            parse_mode="HTML", 
+            disable_preview=True
+        )
+
 # ===== Telegram send helper (משופר עם כפתורים ופרטים מלאים) =====
 async def _tg_send_plan(plan: Dict[str, Any]) -> None:
     with suppress(Exception):
@@ -344,6 +415,20 @@ async def alerts_ingest(
         smart_lev = base_lev
         smart_budget = float(req.budget_usd or 0)
     
+    # קרא את מצב האישור מהמסד נתונים (או ENV כברירת מחדל)
+    require_approval_default = True
+    try:
+        from utils.db import get_db_conn
+        conn = get_db_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM system_settings WHERE key = 'approval_mode'")
+            row = cur.fetchone()
+            if row:
+                require_approval_default = str(row[0]).lower() in ("true", "1", "yes", "on")
+    except Exception:
+        # אם אין מסד נתונים או שגיאה - קרא מ-ENV
+        require_approval_default = os.getenv("APPROVAL_ENABLED", "1").lower() in ("1", "true", "yes", "on")
+    
     plan: Dict[str, Any] = {
         "symbol": sym,
         "side": side,
@@ -365,7 +450,7 @@ async def alerts_ingest(
         "grid_take_profit_pct": req.grid_take_profit_pct,
         "budget_usd": smart_budget,  # Smart budget allocation
         "order_type": "MARKET",
-        "require_approval": bool(req.require_approval if req.require_approval is not None else True),
+        "require_approval": bool(req.require_approval if req.require_approval is not None else require_approval_default),
         "entry": _to_float(req.entry),
         "success_pct": _to_float(req.success_pct) if req.success_pct else score,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -383,6 +468,35 @@ async def alerts_ingest(
                 "require_approval": bool(plan["require_approval"]), "ts": int(time.time()),
             })
 
+    # אם במצב FULL AUTO - בצע מיידית
+    if not plan["require_approval"]:
+        try:
+            from utils.auto_executor import auto_execute_plan
+            logger.info(f"[FULL AUTO] Executing {sym} {side} immediately (no approval required)")
+            result = await auto_execute_plan(plan)
+            
+            # שלח התראה לטלגרם (ללא כפתורים)
+            try:
+                await _tg_send_auto_notification(plan, result)
+            except Exception as notif_err:
+                logger.warning(f"Failed to send auto-execution notification: {notif_err}")
+            
+            return {
+                "ok": True, 
+                "ticket_id": tid, 
+                "symbol": sym, 
+                "qty": float(req.qty or 0), 
+                "leverage": int(plan["leverage"]),
+                "auto_executed": True,
+                "execution_result": result
+            }
+        except Exception as exec_err:
+            logger.error(f"[FULL AUTO] Execution failed for {sym}: {exec_err}", exc_info=True)
+            # אם הביצוע נכשל - נשלח לאישור במקום
+            plan["require_approval"] = True
+            logger.info(f"Falling back to approval mode due to execution error")
+    
+    # מצב APPROVAL - שלח לטלגרם עם כפתורים
     try:
         await _tg_send_plan(plan)  # רך: אם נכשל לא מפיל
     except Exception as e:

@@ -335,6 +335,160 @@ async def telegram_webhook(request: Request) -> Dict[str, Any]:
     return {"ok": True, "status": "executed", "result": res}
 
 
+# ===================== Settings Helper =====================
+def get_approval_mode() -> bool:
+    """קורא את מצב האישור מהמסד נתונים. True = דורש אישור, False = אוטומטי מלא"""
+    try:
+        from utils.db import get_db_conn
+        conn = get_db_conn()
+        with conn.cursor() as cur:
+            cur.execute("SELECT value FROM system_settings WHERE key = 'approval_mode'")
+            row = cur.fetchone()
+            if row:
+                return str(row[0]).lower() in ("true", "1", "yes", "on")
+    except Exception as e:
+        logger.warning(f"Failed to read approval_mode from DB: {e}")
+    # ברירת מחדל: אם אין הגדרה או שגיאה - נשתמש ב-ENV
+    return os.getenv("APPROVAL_ENABLED", "1").lower() in ("1", "true", "yes", "on")
+
+
+def set_approval_mode(enabled: bool) -> bool:
+    """שומר את מצב האישור במסד נתונים"""
+    try:
+        from utils.db import get_db_conn
+        conn = get_db_conn()
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO system_settings (key, value, updated_at) VALUES (%s, %s, NOW()) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()",
+                ("approval_mode", "true" if enabled else "false")
+            )
+            conn.commit()
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save approval_mode to DB: {e}")
+        return False
+
+
+@router.post("/commands/auto")
+async def telegram_command_auto(request: Request) -> Dict[str, Any]:
+    """
+    פקודת /auto מטלגרם - מציגה מצב נוכחי ומאפשרת החלפה
+    """
+    _validate_webhook_secret(request)
+    
+    try:
+        payload: Dict[str, Any] = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+    
+    # בדוק אם זו פקודה או callback
+    message = payload.get("message", {})
+    callback_query = payload.get("callback_query", {})
+    
+    chat_id = None
+    if message:
+        chat_id = message.get("chat", {}).get("id")
+        text = message.get("text", "").strip()
+        
+        # אם זו הפקודה /auto - הצג את המצב הנוכחי
+        if text.startswith("/auto"):
+            current_mode = get_approval_mode()
+            mode_text = "🔴 <b>APPROVAL MODE</b> (דורש אישור)" if current_mode else "🟢 <b>FULL AUTO MODE</b> (ביצוע מיידי)"
+            
+            keyboard = {
+                "inline_keyboard": [
+                    [
+                        {"text": "🟢 AUTO ON", "callback_data": "SETTINGS:AUTO:ON"},
+                        {"text": "🔴 AUTO OFF", "callback_data": "SETTINGS:AUTO:OFF"}
+                    ]
+                ]
+            }
+            
+            msg = f"""
+⚙️ <b>הגדרות מצב ביצוע</b>
+
+מצב נוכחי: {mode_text}
+
+<b>🟢 AUTO ON (FULL AUTO):</b>
+• הצעות מבוצעות מיידית ללא אישור
+• קבלת התראה בלבד
+• מהיר ואוטונומי לחלוטין
+
+<b>🔴 AUTO OFF (APPROVAL MODE):</b>
+• הצעות מחכות לאישור שלך
+• כפתורים ✅/❌ בכל הודעה
+• שליטה ידנית מלאה
+
+בחר מצב:
+"""
+            
+            if chat_id and BOT_TOKEN:
+                try:
+                    async with httpx.AsyncClient(timeout=8.0) as cli:
+                        await cli.post(
+                            f"{API_BASE}/sendMessage",
+                            json={
+                                "chat_id": chat_id,
+                                "text": msg,
+                                "parse_mode": "HTML",
+                                "reply_markup": keyboard
+                            }
+                        )
+                except Exception as e:
+                    logger.error(f"Failed to send /auto message: {e}")
+            
+            return {"ok": True}
+    
+    elif callback_query:
+        chat_id = callback_query.get("message", {}).get("chat", {}).get("id")
+        message_id = callback_query.get("message", {}).get("message_id")
+        data = callback_query.get("data", "")
+        
+        if data == "SETTINGS:AUTO:ON":
+            # הפעל מצב אוטומטי מלא
+            if set_approval_mode(False):
+                response_text = "✅ <b>מצב FULL AUTO הופעל</b>\n\n🟢 הצעות יבוצעו מיידית ללא אישור"
+            else:
+                response_text = "❌ שגיאה בשמירת ההגדרות"
+                
+        elif data == "SETTINGS:AUTO:OFF":
+            # הפעל מצב אישור
+            if set_approval_mode(True):
+                response_text = "✅ <b>מצב APPROVAL הופעל</b>\n\n🔴 הצעות ידרשו אישור ידני"
+            else:
+                response_text = "❌ שגיאה בשמירת ההגדרות"
+        else:
+            return {"ok": True, "noop": True}
+        
+        # עדכן את ההודעה
+        if chat_id and message_id and BOT_TOKEN:
+            try:
+                async with httpx.AsyncClient(timeout=8.0) as cli:
+                    await cli.post(
+                        f"{API_BASE}/editMessageText",
+                        json={
+                            "chat_id": chat_id,
+                            "message_id": message_id,
+                            "text": response_text,
+                            "parse_mode": "HTML"
+                        }
+                    )
+                    # שלח callback answer
+                    callback_id = callback_query.get("id")
+                    if callback_id:
+                        await cli.post(
+                            f"{API_BASE}/answerCallbackQuery",
+                            json={"callback_query_id": callback_id, "text": "✅ הגדרה עודכנה"}
+                        )
+            except Exception as e:
+                logger.error(f"Failed to update message: {e}")
+        
+        return {"ok": True}
+    
+    return {"ok": True, "noop": True}
+
+
 
 
 
