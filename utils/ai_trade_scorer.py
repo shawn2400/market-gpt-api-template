@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 # utils/ai_trade_scorer.py
 """
-Multi-AI Trade Scorer - Consensus-based trade scoring with 3 AI providers
-Supports OpenAI (GPT-5), DeepSeek, and AI-X (Grok) with budget tracking and fallbacks
+Multi-AI Trade Scorer - Consensus-based trade scoring with 5 AI providers
+Supports OpenAI (GPT-5), DeepSeek, AI-X (Grok), and Gemini 2 Pro
 Includes dynamic weighting based on historical AI performance
 """
 import os
@@ -22,10 +22,22 @@ except ImportError:
     logger.warning("AI tracker not available, using static weights")
     AI_TRACKER_AVAILABLE = False
 
+# Import Gemini client
+try:
+    from utils.gemini_client import call_gemini, ENABLE_GEMINI as GEMINI_ENABLED, GEMINI_MODEL
+    GEMINI_CLIENT_AVAILABLE = True
+except ImportError:
+    logger.warning("Gemini client not available")
+    GEMINI_CLIENT_AVAILABLE = False
+    GEMINI_ENABLED = False
+    GEMINI_MODEL = "gemini-2.0-flash-exp"
+    call_gemini = None  # type: ignore
+
 # API Keys
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 XAI_API_KEY = os.getenv("XAI_API_KEY", "").strip()
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
 # Models
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-2025-08-07")
@@ -41,6 +53,7 @@ XAI_BASE_URL = "https://api.x.ai/v1"
 OPENAI_BUDGET = float(os.getenv("OPENAI_BUDGET", "40.0"))
 DEEPSEEK_BUDGET = float(os.getenv("DEEPSEEK_BUDGET", "10.0"))
 XAI_BUDGET = float(os.getenv("XAI_BUDGET", "-15.0"))  # Can have credit/debit
+GEMINI_BUDGET = float(os.getenv("GEMINI_BUDGET", "0.0"))  # Free tier
 
 # Feature flags
 ENABLE_MULTI_AI_CONSENSUS = os.getenv("ENABLE_MULTI_AI_CONSENSUS", "1").lower() in ("1", "true", "yes")
@@ -48,8 +61,9 @@ CONSENSUS_MIN_PROVIDERS = int(os.getenv("CONSENSUS_MIN_PROVIDERS", "2"))
 ENABLE_OPENAI = os.getenv("ENABLE_OPENAI", "1").lower() in ("1", "true", "yes") and bool(OPENAI_API_KEY)
 ENABLE_DEEPSEEK = os.getenv("ENABLE_DEEPSEEK", "1").lower() in ("1", "true", "yes") and bool(DEEPSEEK_API_KEY)
 ENABLE_XAI = os.getenv("ENABLE_XAI", "1").lower() in ("1", "true", "yes") and bool(XAI_API_KEY)
+ENABLE_GEMINI = GEMINI_CLIENT_AVAILABLE and GEMINI_ENABLED and bool(GEMINI_API_KEY)
 
-AIProvider = Literal["openai", "deepseek", "xai"]
+AIProvider = Literal["openai", "deepseek", "xai", "gemini"]
 
 @dataclass
 class AIResponse:
@@ -72,19 +86,22 @@ class MultiAIScorer:
         self.providers_enabled = {
             "openai": ENABLE_OPENAI,
             "deepseek": ENABLE_DEEPSEEK,
-            "xai": ENABLE_XAI
+            "xai": ENABLE_XAI,
+            "gemini": ENABLE_GEMINI
         }
         self.budgets = {
             "openai": OPENAI_BUDGET,
             "deepseek": DEEPSEEK_BUDGET,
-            "xai": XAI_BUDGET
+            "xai": XAI_BUDGET,
+            "gemini": GEMINI_BUDGET
         }
         self.usage_tracking: Dict[AIProvider, float] = {
             "openai": 0.0,
             "deepseek": 0.0,
-            "xai": 0.0
+            "xai": 0.0,
+            "gemini": 0.0
         }
-        logger.info(f"Multi-AI Scorer initialized: OpenAI={ENABLE_OPENAI}, DeepSeek={ENABLE_DEEPSEEK}, XAI={ENABLE_XAI}")
+        logger.info(f"Multi-AI Scorer initialized: OpenAI={ENABLE_OPENAI}, DeepSeek={ENABLE_DEEPSEEK}, XAI={ENABLE_XAI}, Gemini={ENABLE_GEMINI}")
     
     async def _call_openai(self, prompt: str, max_tokens: int = 500) -> AIResponse:
         """Call OpenAI GPT-5 API"""
@@ -215,6 +232,32 @@ class MultiAIScorer:
             logger.error(f"XAI API error: {e}")
             return AIResponse("xai", 0, 0, "", False, str(e))
     
+    async def _call_gemini(self, prompt: str, max_tokens: int = 500) -> AIResponse:
+        """Call Google Gemini API"""
+        if not ENABLE_GEMINI:
+            return AIResponse("gemini", 0, 0, "", False, "Gemini disabled")
+        
+        try:
+            if not GEMINI_CLIENT_AVAILABLE or not call_gemini:
+                return AIResponse("gemini", 0, 0, "", False, "Gemini client not available")
+            
+            system_msg = "You are an expert trading analyst. Provide numerical scores 0-100."
+            content = await call_gemini(prompt, system=system_msg, max_tokens=max_tokens)
+            
+            if not content:
+                return AIResponse("gemini", 0, 0, "", False, "Empty response")
+            
+            score, confidence, reasoning = self._parse_ai_response(content)
+            
+            # Track usage (estimate: $0.0001 per 1K tokens for free tier)
+            self.usage_tracking["gemini"] += 0.0
+            
+            return AIResponse("gemini", score, confidence, reasoning, True)
+        
+        except Exception as e:
+            logger.error(f"Gemini API error: {e}")
+            return AIResponse("gemini", 0, 0, "", False, str(e))
+    
     def _parse_ai_response(self, content: str) -> tuple[float, float, str]:
         """Parse score, confidence, and reasoning from AI response"""
         try:
@@ -290,6 +333,8 @@ class MultiAIScorer:
             tasks.append(self._call_deepseek(prompt))
         if use_providers and "xai" in use_providers and ENABLE_XAI:
             tasks.append(self._call_xai(prompt))
+        if use_providers and "gemini" in use_providers and ENABLE_GEMINI:
+            tasks.append(self._call_gemini(prompt))
         
         responses: List[AIResponse] = await asyncio.gather(*tasks) if tasks else []
         
@@ -328,15 +373,17 @@ class MultiAIScorer:
         if AI_TRACKER_AVAILABLE:
             try:
                 dynamic_weights = get_dynamic_weights(regime=regime_str, timeframe_days=7)  # type: ignore
-                # Map provider names to model names
-                provider_to_model = {
+                # Map provider names to model names (AIModel type)
+                from utils.ai_tracker import AIModel
+                provider_to_model: Dict[str, AIModel] = {
                     "openai": "gpt5",
                     "deepseek": "deepseek",
-                    "xai": "grok"
+                    "xai": "grok",
+                    "gemini": "gemini"  # type: ignore
                 }
                 weights_dict = {}
                 for r in successful:
-                    model_name = provider_to_model.get(r.provider, "gpt5")
+                    model_name: AIModel = provider_to_model.get(r.provider, "gpt5")  # type: ignore
                     weights_dict[r.provider] = dynamic_weights.get(model_name, 1.0)
                 
                 logger.info(f"🎯 Dynamic weights for {regime_str}: {weights_dict}")
@@ -347,9 +394,10 @@ class MultiAIScorer:
         else:
             # Static weights fallback
             weights_dict = {
-                "openai": 0.50,
-                "deepseek": 0.30,
-                "xai": 0.20
+                "openai": 0.40,
+                "deepseek": 0.25,
+                "xai": 0.20,
+                "gemini": 0.15
             }
             # Only use weights for providers that responded
             weights_dict = {k: v for k, v in weights_dict.items() if any(r.provider == k for r in successful)}
@@ -466,6 +514,12 @@ Reasoning: [2-3 sentences explaining your score]
                 "used": self.usage_tracking["xai"],
                 "remaining": XAI_BUDGET - self.usage_tracking["xai"],
                 "enabled": ENABLE_XAI
+            },
+            "gemini": {
+                "budget": GEMINI_BUDGET,
+                "used": self.usage_tracking["gemini"],
+                "remaining": GEMINI_BUDGET - self.usage_tracking["gemini"],
+                "enabled": ENABLE_GEMINI
             }
         }
 

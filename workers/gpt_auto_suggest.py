@@ -24,6 +24,7 @@ from utils.multi_tf_manager import MultiTFContextManager  # ← Multi-Timeframe 
 from utils.auto_flip import analyze_multi_tf_weighted  # ← Weighted Multi-TF Analysis
 from utils.db import insert_tf_snapshot  # ← TF Snapshot Persistence
 from utils.ai_tracker import log_prediction, MarketRegime, AIModel  # ← AI Performance Tracking
+from utils.ai_trade_scorer import get_multi_ai_scorer  # ← Multi-AI Consensus (5 providers)
 
 # Grid helper
 try:
@@ -328,11 +329,19 @@ async def _emit(payload: Dict[str, Any]) -> bool:
         return False
 
 # ---------------- Proposers ----------------
-def _min_rr_for(symbol: str, ctx_filters: Dict[str, Any]) -> float:
-    # אם קיים min_rr מה-Context – נשתמש בו; אחרת Top10/Alt
+def _min_rr_for(symbol: str, ctx_filters: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> float:
+    # 🎯 ADAPTIVE MinRR: Use dynamic filters instead of static values
+    # Priority: 1) ctx min_rr, 2) dynamic filters, 3) static fallback
     if ctx_filters and isinstance(ctx_filters.get("min_rr"), (int, float)):
         return float(ctx_filters["min_rr"])
-    return MIN_RR_TOP10 if is_top10(symbol) else MIN_RR_ALT
+    
+    # Get dynamic thresholds based on market conditions
+    try:
+        dynamic_filters = get_dynamic_thresholds(symbol, ctx)
+        return dynamic_filters["rr_top10_min"] if is_top10(symbol) else dynamic_filters["rr_alt_min"]
+    except Exception:
+        # Fallback to static values if dynamic fails
+        return MIN_RR_TOP10 if is_top10(symbol) else MIN_RR_ALT
 
 async def _apply_funding_bias_req(side: str, symbol: str, min_rr: float, success_min: float) -> Tuple[float, float, str]:
     fb = float(await funding_bias_for_symbol(symbol))
@@ -688,7 +697,7 @@ async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -
         return None
 
     rr = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
-    min_rr = _min_rr_for(symbol, (ctx or {}).get("filters") or {})
+    min_rr = _min_rr_for(symbol, (ctx or {}).get("filters") or {}, ctx)  # 🎯 Pass ctx for dynamic filters
     # SPOT תמיד LONG; funding חיובי עוזר, שלילי מחמיר
     min_rr, success_req, fb_note = await _apply_funding_bias_req("LONG", symbol, min_rr, success_floor)
 

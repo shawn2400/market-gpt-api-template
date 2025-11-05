@@ -18,7 +18,7 @@ The core application uses FastAPI (`main.py`) and Gunicorn. Functionalities are 
 -   **Automated Trading Modes**: Supports MARKET, HYBRID, and FULL AUTO execution (Telegram approval DISABLED for instant trades).
 -   **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, and ATR-based trailing stops.
 -   **Market Scanner**: Autonomous worker performs multi-timeframe technical analysis every 60 seconds across 531 Binance Futures markets.
--   **AI-Powered Proposals**: OpenAI GPT-5 generates trade proposals with **ADAPTIVE Risk/Reward thresholds** - CHOPPY=1.1, SIDEWAYS=1.15, TRENDING=1.25, VOLATILE=1.4. Multi-AI consensus via DeepSeek and AI-X/Grok.
+-   **AI-Powered Proposals**: **5 AI providers** (GPT-5, Gemini 2 Pro, DeepSeek, Grok, Claude) generate trade proposals with **ADAPTIVE Risk/Reward thresholds** - CHOPPY=1.1, SIDEWAYS=1.15, TRENDING=1.25, VOLATILE=1.4. Multi-AI consensus with dynamic weighting based on performance.
 -   **GRID Trading**: Integrated FUTURES GRID trading for choppy/sideways markets (**minimum range ≥2%**, lowered from 4% for more opportunities).
 -   **Scalping & Range-Bounce Strategies**: NEW - Aggressive short-term trades in CHOPPY markets with tight stops and RR≥1.1 for frequent small wins.
 -   **Risk Management**: Implements quality filters, dynamic filters, liquidity checks, cooldown periods, daily trade caps, and a circuit breaker for daily loss limits.
@@ -43,18 +43,24 @@ The core application uses FastAPI (`main.py`) and Gunicorn. Functionalities are 
 -   Uses Bearer Token (`X-API-Key`) and HMAC Signature.
 -   Includes anti-replay protection and mandatory Telegram approval.
 
-### AI Brains System
-AlgoGPT integrates 8+ specialized AI systems:
--   **GPT-5 Central Brain**: Master AI orchestrator for high-level analysis and coordination.
--   **GPT Auto Suggest**: Autonomous market scanner for multi-timeframe analysis and trade proposals.
--   **Multi-AI Consensus Scorer**: Combines GPT-5, DeepSeek, and AI-X (Grok) for trade quality scoring.
--   **DeepSeek Optimizer**: Specializes in parameter optimization for entry points, TP/SL, and position sizing.
--   **AI-X (Grok) Supervisor**: Monitors system health and detects anomalies.
--   **Adaptive Prompt Engine**: Generates dynamic AI prompts based on market regime.
--   **Market Intelligence Brain**: Detects market regime, volatility, and mood.
--   **Portfolio Intelligence**: Manages exposure, position limits, and correlation.
--   **News Sentiment Analyzer**: Analyzes crypto news headlines for market sentiment.
--   **Auto-Flip System**: Makes directional decisions (LONG/SHORT) based on multi-timeframe analysis.
+### AI Brains System (MetaBrain v7.5)
+AlgoGPT integrates 9+ specialized AI systems with **5 AI providers** for consensus-based decisions:
+
+**Multi-AI Consensus Engine (5 Providers):**
+-   **OpenAI GPT-5** (gpt-5-2025-08-07): Master AI orchestrator, high-level analysis
+-   **Google Gemini 2 Pro** (gemini-2.0-flash-exp): Fast reasoning, multi-modal analysis
+-   **DeepSeek Chat**: Parameter optimization, entry/TP/SL refinement
+-   **AI-X Grok**: System health monitoring, anomaly detection
+-   **Claude Sonnet 3.5** (optional): Additional consensus validation
+
+**Specialized AI Systems:**
+-   **GPT Auto Suggest**: Autonomous market scanner with multi-timeframe analysis (15M/1H/4H) and trade proposals
+-   **Multi-AI Consensus Scorer**: Combines 5 AI providers with dynamic weighting based on historical performance per market regime
+-   **Adaptive Prompt Engine**: Generates dynamic AI prompts optimized for current market regime (CHOPPY/SIDEWAYS/TRENDING/VOLATILE)
+-   **Market Intelligence Brain**: Real-time market regime detection, volatility analysis, mood assessment
+-   **Portfolio Intelligence**: Exposure management, position limits, correlation prevention
+-   **News Sentiment Analyzer**: Crypto news headline analysis for market sentiment
+-   **Auto-Flip System**: Directional decisions (LONG/SHORT) using multi-timeframe weighted analysis
 
 ### Validation & Safety Infrastructure (v2.0)
 Includes a **Validation Pipeline** (historical backtesting with walk-forward testing), **Fail-Closed Decision Gates** (Dual Confirmation: Quant ∧ AI ∧ Risk), **Data-Driven Monte Carlo** simulations, a **Live Health Monitor**, and **Circuit Breakers** (daily drawdown, consecutive loss limits).
@@ -76,8 +82,10 @@ The system is deployed to **Render.com** using an existing service:
 
 -   **Binance Futures API**: Market data, order execution, account management.
 -   **OpenAI API**: GPT-5 (gpt-5-2025-08-07) for AI trade proposals and market analysis.
+-   **Google Gemini API**: Gemini 2 Pro (gemini-2.0-flash-exp) for fast multi-modal reasoning.
 -   **DeepSeek API**: AI provider for trade optimization and multi-AI consensus.
 -   **AI-X/Grok API**: AI provider for system supervision and consensus.
+-   **Anthropic Claude API** (optional): Claude Sonnet 3.5 for additional consensus validation.
 -   **Telegram Bot API**: Notifications, approval workflows, interactive callbacks.
 -   **N8N Workflow Automation**: External workflow integration, news ingestion.
 -   **Gunicorn**: Production-grade WSGI HTTP server.
