@@ -1,0 +1,158 @@
+
+Search
+
+Live tail
+GMT+2
+
+Menu
+
+[2025-11-05 18:09:27 +0200] [1409] [INFO] Application shutdown complete.
+[2025-11-05 18:09:27 +0200] [1409] [INFO] Finished server process [1409]
+[2025-11-05 18:09:27 +0200] [1409] [INFO] Worker exiting (pid: 1409)
+[2025-11-05 18:09:27 +0200] [1452] [INFO] Booting worker with pid: 1452
+INFO:algogpt.main:✅ Static files mounted at /static with no-cache headers
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 0, 'tokens': []}
+INFO:algogpt.redis:{'event': 'redis.disabled', 'reason': 'REDIS_URL missing'}
+WARNING:algogpt.main:Failed to load context routes: No module named 'utils.multi_tf_manager'
+WARNING:algogpt.main:Failed to load n8n routes: No module named 'routes.n8n'
+WARNING:algogpt.main:Failed to load validation routes: No module named 'utils.validation'
+INFO:monitors.circuit_breaker:Circuit breaker state loaded from database
+[2025-11-05 18:09:31 +0200] [1452] [INFO] Started server process [1452]
+[2025-11-05 18:09:31 +0200] [1452] [INFO] Waiting for application startup.
+INFO:algogpt.main:✅ N8N_WEBHOOK_SECRET configured - webhook security enabled
+INFO:algogpt.main:🛡️ Circuit Breaker System Status:
+INFO:algogpt.main:  ✅ Daily Loss Limit: $150.00 USD
+INFO:algogpt.main:  ✅ Panic Close: Enabled (triggers at loss cap)
+INFO:algogpt.main:  ✅ Auto-Run Disable: Enabled (on circuit breaker trigger)
+INFO:algogpt.main:  ✅ Health Killswitch: 3 consecutive failures
+INFO:algogpt.main:  ℹ️  Circuit breakers enforced in utils/trade_manager.py::manage_open_trades()
+INFO:algogpt.main:ℹ️  Phase 3 AI Workers disabled (set ENABLE_LEGACY_WORKERS=1 to enable)
+INFO:algogpt.main:ℹ️  Mesh Bus disabled (legacy feature, not required)
+[2025-11-05 18:09:31 +0200] [1452] [INFO] Application startup complete.
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+[2025-11-05 18:43:37 +0200] [1452] [INFO] Shutting down
+[2025-11-05 18:43:37 +0200] [1452] [INFO] Error while closing socket [Errno 9] Bad file descriptor
+[2025-11-05 18:43:37 +0200] [1452] [INFO] Waiting for application shutdown.
+[2025-11-05 18:43:37 +0200] [1452] [INFO] Application shutdown complete.
+[2025-11-05 18:43:37 +0200] [1452] [INFO] Finished server process [1452]
+[2025-11-05 18:43:37 +0200] [1452] [INFO] Worker exiting (pid: 1452)
+[2025-11-05 18:43:37 +0200] [1487] [INFO] Booting worker with pid: 1487
+INFO:algogpt.main:✅ Static files mounted at /static with no-cache headers
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 0, 'tokens': []}
+INFO:algogpt.redis:{'event': 'redis.disabled', 'reason': 'REDIS_URL missing'}
+WARNING:algogpt.main:Failed to load context routes: No module named 'utils.multi_tf_manager'
+WARNING:algogpt.main:Failed to load n8n routes: No module named 'routes.n8n'
+WARNING:algogpt.main:Failed to load validation routes: No module named 'utils.validation'
+INFO:monitors.circuit_breaker:Circuit breaker state loaded from database
+[2025-11-05 18:43:41 +0200] [1487] [INFO] Started server process [1487]
+[2025-11-05 18:43:41 +0200] [1487] [INFO] Waiting for application startup.
+INFO:algogpt.main:✅ N8N_WEBHOOK_SECRET configured - webhook security enabled
+INFO:algogpt.main:🛡️ Circuit Breaker System Status:
+INFO:algogpt.main:  ✅ Daily Loss Limit: $150.00 USD
+INFO:algogpt.main:  ✅ Panic Close: Enabled (triggers at loss cap)
+INFO:algogpt.main:  ✅ Auto-Run Disable: Enabled (on circuit breaker trigger)
+INFO:algogpt.main:  ✅ Health Killswitch: 3 consecutive failures
+INFO:algogpt.main:  ℹ️  Circuit breakers enforced in utils/trade_manager.py::manage_open_trades()
+INFO:algogpt.main:ℹ️  Phase 3 AI Workers disabled (set ENABLE_LEGACY_WORKERS=1 to enable)
+INFO:algogpt.main:ℹ️  Mesh Bus disabled (legacy feature, not required)
+[2025-11-05 18:43:41 +0200] [1487] [INFO] Application startup complete.
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+     ==> Deploying...
+[2025-11-05 19:07:43 +0200] [7] [INFO] Handling signal: term
+[2025-11-05 19:07:43 +0200] [1487] [INFO] Shutting down
+[2025-11-05 19:07:43 +0200] [1487] [INFO] Error while closing socket [Errno 9] Bad file descriptor
+[2025-11-05 19:07:43 +0200] [1487] [INFO] Waiting for application shutdown.
+[2025-11-05 19:07:43 +0200] [1487] [INFO] Application shutdown complete.
+[2025-11-05 19:07:43 +0200] [1487] [INFO] Finished server process [1487]
+[2025-11-05 19:07:43 +0200] [7] [ERROR] Worker (pid:1487) was sent SIGTERM!
+[2025-11-05 19:07:43 +0200] [7] [INFO] Shutting down: Master
+[2025-11-05 19:08:14 +0200] [7] [INFO] Starting gunicorn 22.0.0
+[2025-11-05 19:08:14 +0200] [7] [INFO] Listening at: http://0.0.0.0:10000 (7)
+[2025-11-05 19:08:14 +0200] [7] [INFO] Using worker: uvicorn.workers.UvicornWorker
+[2025-11-05 19:08:14 +0200] [39] [INFO] Booting worker with pid: 39
+INFO:algogpt.main:✅ Static files mounted at /static with no-cache headers
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 0, 'tokens': []}
+INFO:algogpt.redis:{'event': 'redis.disabled', 'reason': 'REDIS_URL missing'}
+WARNING:algogpt.main:Failed to load context routes: No module named 'utils.multi_tf_manager'
+WARNING:algogpt.main:Failed to load n8n routes: No module named 'routes.n8n'
+WARNING:algogpt.main:Failed to load validation routes: No module named 'utils.validation'
+INFO:monitors.circuit_breaker:Circuit breaker state loaded from database
+[2025-11-05 19:08:18 +0200] [39] [INFO] Started server process [39]
+[2025-11-05 19:08:18 +0200] [39] [INFO] Waiting for application startup.
+INFO:algogpt.main:✅ N8N_WEBHOOK_SECRET configured - webhook security enabled
+INFO:algogpt.main:🛡️ Circuit Breaker System Status:
+INFO:algogpt.main:  ✅ Daily Loss Limit: $150.00 USD
+INFO:algogpt.main:  ✅ Panic Close: Enabled (triggers at loss cap)
+INFO:algogpt.main:  ✅ Auto-Run Disable: Enabled (on circuit breaker trigger)
+INFO:algogpt.main:  ✅ Health Killswitch: 3 consecutive failures
+INFO:algogpt.main:  ℹ️  Circuit breakers enforced in utils/trade_manager.py::manage_open_trades()
+INFO:algogpt.main:ℹ️  Phase 3 AI Workers disabled (set ENABLE_LEGACY_WORKERS=1 to enable)
+INFO:algogpt.main:ℹ️  Mesh Bus disabled (legacy feature, not required)
+[2025-11-05 19:08:18 +0200] [39] [INFO] Application startup complete.
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+     ==> Your service is live 🎉
+     ==> 
+     ==> ///////////////////////////////////////////////////////////
+     ==> 
+     ==> Available at your primary URL https://algogpt-docker.onrender.com
+     ==> 
+     ==> ///////////////////////////////////////////////////////////
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limiter'
+ERROR:algogpt.main:Rate limiting middleware error: No module named 'utils.rate_limit
