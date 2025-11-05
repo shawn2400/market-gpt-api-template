@@ -100,15 +100,19 @@ class _TradeManagerThread(threading.Thread):
     daemon = True
 
     def run(self):
+        print("🔧 [TradeManagerThread] Started - will manage open trades every 60s")
         log.info("[TradeManagerThread] Started - will manage open trades every 60s")
         while True:
             try:
+                print(f"🔧 [TradeManagerThread] Running manage_open_trades() at {time.strftime('%H:%M:%S')}")
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 loop.run_until_complete(manage_open_trades())
                 loop.close()
+                print(f"✅ [TradeManagerThread] Completed manage_open_trades() at {time.strftime('%H:%M:%S')}")
             except Exception as e:
-                log.debug("[TradeManagerThread] manage_open_trades failed: %s", e)
+                print(f"❌ [TradeManagerThread] manage_open_trades failed: {e}")
+                log.error("[TradeManagerThread] manage_open_trades failed: %s", e)
             time.sleep(60)
 
 
@@ -118,10 +122,14 @@ class _Worker(threading.Thread):
         # Start dedicated trade manager thread (independent of WATCHLIST)
         mgmt = _TradeManagerThread()
         mgmt.start()
+        print("✅ [fills_watcher] Trade manager thread started")
         log.info("[fills_watcher] Trade manager thread started")
 
         if not WATCHLIST:
-            log.warning("[fills_watcher] WATCHLIST empty; set FILLS_WATCHLIST or WATCHLIST")
+            log.info("[fills_watcher] WATCHLIST empty (optional) - TradeManager runs independently on all open positions")
+        else:
+            log.info("[fills_watcher] Monitoring %d symbols for metrics", len(WATCHLIST))
+        
         while True:
             if not ENABLED:
                 time.sleep(INTERVAL)
