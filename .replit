@@ -99,12 +99,12 @@ outputType = "console"
 name = "Position Monitor"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_POSITION_MONITOR=1 POSITION_REPORT_INTERVAL_SEC=1800 POSITION_ALERT_LEVEL=critical python workers/position_monitor.py"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_POSITION_MONITOR=1 POSITION_REPORT_INTERVAL_SEC=1800 POSITION_ALERT_LEVEL=all python workers/position_monitor.py"
 
 [[workflows.workflow]]
 name = "Sentinel Security"
