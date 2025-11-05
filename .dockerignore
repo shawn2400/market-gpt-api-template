@@ -6,10 +6,16 @@
 
 # === Python cache / compiled ===
 __pycache__/
+**/__pycache__/
 *.py[cod]
+**/*.pyc
 *.pyo
 *.pyd
+.mypy_cache/
+.ruff_cache/
 .cache/
+*.egg-info/
+pip-wheel-metadata/
 *.sqlite3
 
 # === Logs ===
@@ -17,7 +23,7 @@ __pycache__/
 logs/
 !logs/.gitkeep
 
-# === Runtime data (לא לבונדל לבילד) ===
+# === Runtime data (לא לבנדל) ===
 data/*
 !data/.gitkeep
 
@@ -28,11 +34,15 @@ static/snapshots/
 # === Node / frontend ===
 node_modules/
 *.map
+.next/
+dist/
+build/
 
 # === Tests / debug ===
 .pytest_cache/
 tests/
 test_*.py
+coverage/
 
 # === Virtual environments ===
 .venv/
@@ -50,8 +60,6 @@ Thumbs.db
 *.tar
 *.lock
 *.bak
-dist/
-build/
 *.spec
 
 
