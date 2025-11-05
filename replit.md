@@ -14,6 +14,12 @@ The dashboard UI is located in `static/dashboard/`. Telegram notifications are e
 ### Technical Implementations
 The core application uses FastAPI (`main.py`) and Gunicorn. Functionalities are modularized into `routes/` for API endpoints and `utils/` for common functions. Policies are managed via YAML files in `policies/`.
 
+**Recent Upgrades (MetaBrain v8.0 - Nov 2025):**
+-   **Lowered Filtering Thresholds**: MIN_RR reduced from 1.45 to 1.15, Quality scores from 0.70 to 0.50, enabling more trades in all market conditions
+-   **Strategy Orchestrator**: Intelligent auto-selection of GRID/Scalping/Momentum/Range-Bounce based on real-time market regime (CHOPPY/SIDEWAYS/TRENDING/VOLATILE)
+-   **Adaptive RR Thresholds**: Dynamic Risk/Reward requirements per strategy - GRID=1.10, Scalping=1.10, Range-Bounce=1.15, Momentum=1.25, Breakout=1.40
+-   **Permissive Fallbacks**: System now allows trading with incomplete data (DISABLE_PERMISSIVE_FALLBACKS=0) instead of blocking everything
+
 **Core Features:**
 -   **Automated Trading Modes**: Supports MARKET, HYBRID, and FULL AUTO execution (Telegram approval DISABLED for instant trades).
 -   **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, and ATR-based trailing stops.

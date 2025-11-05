@@ -25,6 +25,7 @@ from utils.auto_flip import analyze_multi_tf_weighted  # ← Weighted Multi-TF A
 from utils.db import insert_tf_snapshot  # ← TF Snapshot Persistence
 from utils.ai_tracker import log_prediction, MarketRegime, AIModel  # ← AI Performance Tracking
 from utils.ai_trade_scorer import get_multi_ai_scorer  # ← Multi-AI Consensus (5 providers)
+from utils.strategy_orchestrator import get_strategy_orchestrator  # ← Strategy Orchestrator (Auto-select strategy)
 
 # Grid helper
 try:
@@ -100,8 +101,8 @@ SUGGEST_GRID      = os.getenv("SUGGEST_GRID","0").strip().lower() in ("1","true"
 
 DEFAULT_INTERVAL  = os.getenv("DEFAULT_INTERVAL","15m")
 
-MIN_RR_TOP10 = float(os.getenv("MIN_RR_TOP10", "1.01"))
-MIN_RR_ALT   = float(os.getenv("MIN_RR_ALT", "1.01"))
+MIN_RR_TOP10 = float(os.getenv("MIN_RR_TOP10", "1.10"))  # 🎯 Lowered for more trades (Top10 symbols)
+MIN_RR_ALT   = float(os.getenv("MIN_RR_ALT", "1.15"))  # 🎯 Lowered for more trades (Altcoins)
 
 # גג מינוף להצעות GPT (ביטחון)
 SUGGEST_MAX_LEVERAGE = int(os.getenv("SUGGEST_MAX_LEVERAGE","10"))
@@ -550,10 +551,19 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
         LOGGER.info(f"REJECTED {symbol}: entry_gap_ok failed (price={price}, entry={prop['entry']})")
         return None
 
-    # ✨ סינונים דינמיים לפי תנאי השוק
-    dynamic_filters = get_dynamic_thresholds(symbol, ctx)
-    min_rr = dynamic_filters["rr_top10_min"] if is_top10(symbol) else dynamic_filters["rr_alt_min"]
-    success_req = dynamic_filters["success_pct_min"]
+    # 🎯 STRATEGY ORCHESTRATOR: Auto-select optimal strategy based on market conditions
+    market_condition = ctx.get("_market_condition")  # Stored by _gpt_suggest
+    orchestrator = get_strategy_orchestrator()
+    strategy_config = orchestrator.select_strategy(market_condition, symbol, ctx)
+    
+    # Use strategy-specific thresholds instead of generic dynamic filters
+    min_rr = strategy_config.min_rr
+    success_req = max(success_floor, strategy_config.min_success_pct)
+    
+    LOGGER.info(
+        f"🎯 {symbol}: Strategy=[{strategy_config.strategy_type.upper()}] "
+        f"MinRR={min_rr:.2f}, MinSuccess={success_req:.1f}%, MaxLev={strategy_config.max_leverage}x"
+    )
     
     # דרישת RR + funding bias
     rr = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
@@ -915,30 +925,90 @@ async def process_cycle():
     async def handle_symbol(sym: str):
         ctx = ctx_map.get(sym) or {}
         success_floor = SUCCESS_PCT_MIN
-
-        # FUTURES
-        if SUGGEST_FUTURES:
-            try:
-                p = await propose_futures(sym, ctx, success_floor)
-                await maybe_emit("FUTURES", p)
-            except Exception as e:
-                LOGGER.exception(f"propose_futures error {sym}: {e}")
-
-        # SPOT
-        if SUGGEST_SPOT:
-            try:
-                p = await propose_spot(sym, ctx, success_floor)
-                await maybe_emit("SPOT", p)
-            except Exception as e:
-                LOGGER.debug("propose_spot error %s: %s", sym, e)
-
-        # GRID
-        if SUGGEST_GRID:
-            try:
-                p = await propose_grid(sym, ctx)
-                await maybe_emit("GRID", p)
-            except Exception as e:
-                LOGGER.info(f"propose_grid ERROR {sym}: {e}")
+        
+        # 🎯 STRATEGY ORCHESTRATOR: Decide which strategy to use
+        # First, analyze market to get market_condition
+        try:
+            from utils.market_intelligence import get_market_intelligence
+            mi_engine = get_market_intelligence()
+            
+            # Quick market analysis to determine strategy
+            if "multi_tf" in ctx and ctx["multi_tf"]:
+                multi_tf_contexts = {}
+                for tf_name, tf_data in ctx["multi_tf"].items():
+                    multi_tf_contexts[tf_name] = tf_data
+                market_condition = mi_engine.analyze_multi_tf(multi_tf_contexts)
+            else:
+                market_condition = mi_engine.analyze_market(ctx)
+            
+            # Get strategy recommendation
+            orchestrator = get_strategy_orchestrator()
+            strategy_config = orchestrator.select_strategy(market_condition, sym, ctx)
+            
+            # 🚀 EXECUTE STRATEGY BASED ON ORCHESTRATOR DECISION
+            if strategy_config.grid_mode and SUGGEST_GRID:
+                # Try GRID Strategy first
+                try:
+                    LOGGER.info(f"🎯 {sym}: Attempting GRID strategy (range required ≥2%)")
+                    p = await propose_grid(sym, ctx)
+                    if p:
+                        await maybe_emit("GRID", p)
+                    else:
+                        # 🔄 FALLBACK: GRID failed, try Scalping/Futures instead
+                        LOGGER.info(f"🔄 {sym}: GRID unavailable (no range), falling back to FUTURES")
+                        if SUGGEST_FUTURES:
+                            try:
+                                p = await propose_futures(sym, ctx, success_floor)
+                                await maybe_emit("FUTURES", p)
+                            except Exception as e:
+                                LOGGER.exception(f"propose_futures fallback error {sym}: {e}")
+                except Exception as e:
+                    LOGGER.info(f"propose_grid ERROR {sym}: {e}")
+                    # Fallback to FUTURES on error
+                    if SUGGEST_FUTURES:
+                        try:
+                            p = await propose_futures(sym, ctx, success_floor)
+                            await maybe_emit("FUTURES", p)
+                        except Exception as e2:
+                            LOGGER.exception(f"propose_futures fallback error {sym}: {e2}")
+            
+            elif strategy_config.strategy_type == "wait":
+                # WAIT Mode - very selective
+                LOGGER.info(f"⏸️ {sym}: WAIT mode - market uncertain, skipping for now")
+                # Still try futures but with very high thresholds (handled by strategy_config)
+                if SUGGEST_FUTURES:
+                    try:
+                        p = await propose_futures(sym, ctx, success_floor)
+                        await maybe_emit("FUTURES", p)
+                    except Exception as e:
+                        LOGGER.exception(f"propose_futures error {sym}: {e}")
+            
+            else:
+                # FUTURES strategies (Scalping, Momentum, Range-Bounce, Breakout)
+                if SUGGEST_FUTURES:
+                    try:
+                        p = await propose_futures(sym, ctx, success_floor)
+                        await maybe_emit("FUTURES", p)
+                    except Exception as e:
+                        LOGGER.exception(f"propose_futures error {sym}: {e}")
+                
+                # SPOT (if enabled)
+                if SUGGEST_SPOT:
+                    try:
+                        p = await propose_spot(sym, ctx, success_floor)
+                        await maybe_emit("SPOT", p)
+                    except Exception as e:
+                        LOGGER.debug("propose_spot error %s: %s", sym, e)
+        
+        except Exception as e:
+            LOGGER.exception(f"Strategy orchestration error for {sym}: {e}")
+            # Fallback to original behavior if orchestrator fails
+            if SUGGEST_FUTURES:
+                try:
+                    p = await propose_futures(sym, ctx, success_floor)
+                    await maybe_emit("FUTURES", p)
+                except Exception as e2:
+                    LOGGER.exception(f"propose_futures fallback error {sym}: {e2}")
 
     async def worker(sym: str):
         async with sem:

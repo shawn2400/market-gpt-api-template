@@ -25,10 +25,10 @@ class DualGateConfig:
     @classmethod
     def from_env(cls) -> "DualGateConfig":
         return cls(
-            quant_min_score=float(os.getenv("QUANT_MIN_SCORE", "0.70")),
-            ai_min_score=float(os.getenv("AI_MIN_SCORE", "0.70")),
-            min_rr=float(os.getenv("MIN_EXPECTED_RR", "1.45")),
-            require_all_data=os.getenv("DISABLE_PERMISSIVE_FALLBACKS", "1") == "1",
+            quant_min_score=float(os.getenv("QUANT_MIN_SCORE", "0.50")),  # 🎯 Lowered from 0.70 to allow more trades
+            ai_min_score=float(os.getenv("AI_MIN_SCORE", "0.50")),  # 🎯 Lowered from 0.70 to allow more trades
+            min_rr=float(os.getenv("MIN_EXPECTED_RR", "1.15")),  # 🎯 Lowered from 1.45 to allow more trades
+            require_all_data=os.getenv("DISABLE_PERMISSIVE_FALLBACKS", "0") == "1",  # 🎯 Changed default to 0 (permissive)
         )
 
 class CriticalDataMissing(Exception):
