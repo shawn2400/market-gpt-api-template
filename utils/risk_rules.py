@@ -109,6 +109,8 @@ def gate_trade(
     success_pct: Optional[float] = None,
     leverage: Optional[int] = None,
     min_rr_override: Optional[float] = None,
+    strategy_type: Optional[str] = None,
+    win_rate_expected: Optional[float] = None,
 ) -> Dict[str, Any]:
     errors: List[str] = []
     warnings: List[str] = []
@@ -155,7 +157,13 @@ def gate_trade(
     if rr is None:
         errors.append("rr can't be computed")
     else:
-        rr_min = float(min_rr_override) if isinstance(min_rr_override, (int, float)) else _rr_threshold(vol_regime, symbol)
+        # Special case: Mean-Reversion strategy with high win rate
+        # Allow RR ≥ 1.05 when win rate ≥ 70% (high win rate compensates for lower RR)
+        if strategy_type == "mean_reversion" and win_rate_expected and win_rate_expected >= 70.0:
+            rr_min = max(1.05, float(min_rr_override) if isinstance(min_rr_override, (int, float)) else 1.05)
+        else:
+            rr_min = float(min_rr_override) if isinstance(min_rr_override, (int, float)) else _rr_threshold(vol_regime, symbol)
+        
         if rr < rr_min:
             errors.append(f"rr too low: {rr:.2f} < {rr_min:.2f}")
 

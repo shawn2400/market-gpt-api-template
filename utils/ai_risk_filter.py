@@ -8,7 +8,8 @@ from typing import Dict, Any
 def quick_risk_gate(tp: Dict[str, Any]) -> Dict[str, Any]:
     """
     tp: {
-      "symbol","side","entry","sl","tp1","leverage","spread_bps","funding_bps","vol_usdt","adx","atr","rsi","macd_hist"
+      "symbol","side","entry","sl","tp1","leverage","spread_bps","funding_bps","vol_usdt","adx","atr","rsi","macd_hist",
+      "strategy","win_rate_expected"  # Optional: for mean-reversion with high win rate
     }
     """
     res = {"ok": True, "reasons": []}
@@ -37,7 +38,17 @@ def quick_risk_gate(tp: Dict[str, Any]) -> Dict[str, Any]:
                 rr = (tp1 - entry) / (entry - sl) if (entry - sl)!=0 else 0
             else:
                 rr = (entry - tp1) / (sl - entry) if (sl - entry)!=0 else 0
-            if rr < float(os.getenv("APPROVAL_RR_MIN","1.30")):
+            
+            # Special handling for mean-reversion: Allow lower RR with high win rate
+            strategy = tp.get("strategy", "").lower()
+            win_rate = float(tp.get("win_rate_expected", 0))
+            
+            if strategy == "mean_reversion" and win_rate >= 70.0:
+                min_rr = 1.05  # Lower RR acceptable for high win rate strategies
+            else:
+                min_rr = float(os.getenv("APPROVAL_RR_MIN","1.30"))
+            
+            if rr < min_rr:
                 res["ok"] = False
                 res["reasons"].append("rr_low")
 
