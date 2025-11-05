@@ -841,32 +841,45 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
         LOGGER.info(f"propose_mean_reversion SKIPPED {symbol}: no price")
         return None
     
-    # Get OHLCV data for VWAP calculation
+    # Get OHLCV data for VWAP calculation - fetch directly from Binance
     try:
-        # Build DataFrame from multi-TF context (prefer 15m for mean-reversion)
         import pandas as pd
+        import httpx
         from utils.indicators import atr as calculate_atr_series
         
-        # Try to get real OHLCV data from multi_tf context
+        # Fetch real OHLCV data from Binance for accurate VWAP calculations
         df = None
-        if "multi_tf" in ctx and ctx["multi_tf"]:
-            # Use 15m timeframe for mean-reversion calculations
-            tf_15m = ctx["multi_tf"].get("15m")
-            if tf_15m and "data" in tf_15m:
-                data = tf_15m["data"]
-                if isinstance(data, pd.DataFrame) and len(data) > 20:
-                    df = data[["high", "low", "close", "volume"]].copy()
-                    LOGGER.info(f"propose_mean_reversion {symbol}: Using real 15m data ({len(df)} candles)")
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    "https://fapi.binance.com/fapi/v1/klines",
+                    params={"symbol": symbol, "interval": "15m", "limit": 180}
+                )
+                if resp.status_code == 200:
+                    klines = resp.json()
+                    if len(klines) >= 60:
+                        df_data = []
+                        for k in klines:
+                            df_data.append({
+                                "open": float(k[1]),
+                                "high": float(k[2]),
+                                "low": float(k[3]),
+                                "close": float(k[4]),
+                                "volume": float(k[5])
+                            })
+                        df = pd.DataFrame(df_data)
+                        LOGGER.info(f"propose_mean_reversion {symbol}: Using real 15m OHLCV data ({len(df)} candles)")
+                    else:
+                        LOGGER.warning(f"propose_mean_reversion {symbol}: Insufficient candles from Binance ({len(klines)})")
+                else:
+                    LOGGER.warning(f"propose_mean_reversion {symbol}: Binance API returned {resp.status_code}")
+        except Exception as e:
+            LOGGER.error(f"propose_mean_reversion {symbol}: Failed to fetch OHLCV data: {e}")
         
-        # Fallback: Use current price data (less ideal but works)
-        if df is None or len(df) < 20:
-            LOGGER.info(f"propose_mean_reversion {symbol}: Using fallback price data")
-            df = pd.DataFrame({
-                "high": [price * (1 + 0.01 * (i % 5) / 10) for i in range(50)],
-                "low": [price * (1 - 0.01 * (i % 5) / 10) for i in range(50)],
-                "close": [price * (1 + 0.005 * ((i % 10) - 5) / 10) for i in range(50)],
-                "volume": [1000000 * (1 + 0.1 * (i % 3)) for i in range(50)]
-            })
+        # CRITICAL: No synthetic fallback - if we can't get real data, skip the trade
+        if df is None or len(df) < 60:
+            LOGGER.info(f"propose_mean_reversion SKIPPED {symbol}: No real OHLCV data available")
+            return None
         
         # Calculate ATR directly from OHLCV data
         atr_series = calculate_atr_series(df, period=14)

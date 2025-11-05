@@ -85,37 +85,57 @@ def calculate_mean_reversion_levels(
         deviation_pct = ((price - current_vwap) / current_vwap) * 100.0
         deviation_atr = (price - current_vwap) / atr_val
         
+        # For mean-reversion in CHOPPY markets, we trade smaller deviations
+        # Use 0.3x ATR minimum deviation (very sensitive for CHOPPY conditions)
+        MIN_DEVIATION_ATR = 0.3  # Minimum deviation to consider a trade
+        
         # Determine side based on deviation
         if side is None:
-            if deviation_atr < -ENTRY_ATR_MULT:
+            if deviation_atr < -MIN_DEVIATION_ATR:
                 side = "LONG"  # Price below VWAP → expect reversion up
-            elif deviation_atr > ENTRY_ATR_MULT:
+            elif deviation_atr > MIN_DEVIATION_ATR:
                 side = "SHORT"  # Price above VWAP → expect reversion down
             else:
-                logger.debug(f"Price too close to VWAP (deviation: {deviation_atr:.2f} ATR)")
+                logger.debug(f"Price too close to VWAP (deviation: {deviation_atr:.2f} ATR, min: {MIN_DEVIATION_ATR})")
                 return None
         
-        # Calculate levels
+        # Calculate levels - Mean-reversion ATR-based TP/SL
+        # TP: Target VWAP ± (0.2-0.3)×ATR for mean-reversion
+        # SL: Entry ± 0.7×ATR
         if side == "LONG":
+            # Price is BELOW VWAP → Buy low, sell at VWAP
             entry = price
-            tp1 = current_vwap + (EXIT_ATR_MULT * atr_val * 0.5)  # Partial at 50% to VWAP
-            tp2 = current_vwap + (EXIT_ATR_MULT * atr_val)  # Full at VWAP + buffer
+            tp1 = current_vwap - (0.2 * atr_val)  # Conservative TP
+            tp2 = current_vwap + (0.3 * atr_val)  # Full profit above VWAP
             sl = entry - (SL_ATR_MULT * atr_val)
             
-            # Validate setup
-            if sl >= entry or tp1 <= entry:
-                logger.debug(f"Invalid LONG levels: entry={entry}, tp1={tp1}, sl={sl}")
+            # Validate setup - ensure monotonic levels
+            if sl >= entry:
+                logger.debug(f"Invalid LONG SL: entry={entry}, sl={sl}")
+                return None
+            if tp1 <= entry:
+                logger.debug(f"Invalid LONG TP1: entry={entry}, tp1={tp1}")
+                return None
+            if tp2 <= tp1:
+                logger.debug(f"Invalid LONG TP2: tp1={tp1}, tp2={tp2}")
                 return None
             
         else:  # SHORT
+            # Price is ABOVE VWAP → Sell high, buy at VWAP
             entry = price
-            tp1 = current_vwap - (EXIT_ATR_MULT * atr_val * 0.5)
-            tp2 = current_vwap - (EXIT_ATR_MULT * atr_val)
+            tp1 = current_vwap + (0.2 * atr_val)  # Conservative TP
+            tp2 = current_vwap - (0.3 * atr_val)  # Full profit below VWAP
             sl = entry + (SL_ATR_MULT * atr_val)
             
-            # Validate setup
-            if sl <= entry or tp1 >= entry:
-                logger.debug(f"Invalid SHORT levels: entry={entry}, tp1={tp1}, sl={sl}")
+            # Validate setup - ensure monotonic levels
+            if sl <= entry:
+                logger.debug(f"Invalid SHORT SL: entry={entry}, sl={sl}")
+                return None
+            if tp1 >= entry:
+                logger.debug(f"Invalid SHORT TP1: entry={entry}, tp1={tp1}")
+                return None
+            if tp2 >= tp1:
+                logger.debug(f"Invalid SHORT TP2: tp1={tp1}, tp2={tp2}")
                 return None
         
         # Calculate R:R
