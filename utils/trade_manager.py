@@ -8,7 +8,7 @@ import json
 import logging
 import asyncio
 from pathlib import Path
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Set
 from contextlib import suppress
 
 import pandas as pd
@@ -105,6 +105,9 @@ from utils.telegram_notifier import (
 DEFAULT_QTY_STEP = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
 DEFAULT_TICK = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers: filters / quantization
+# ──────────────────────────────────────────────────────────────────────────────
 def _decimals(step_str: str) -> int:
     if "." not in step_str:
         return 0
@@ -134,7 +137,22 @@ def _q_qty(symbol: str, qty: float) -> Tuple[str, float]:
 def _offset_bps(base: float, bps: float, sign: int) -> float:
     return base * (1.0 + sign * (bps / 10000.0))
 
-def _cancel_closing_orders(symbol: str, types: Tuple[str, ...]) -> int:
+def _round_to_tick(price: float, tick: float, *, up: bool) -> float:
+    if tick <= 0:
+        return price
+    steps = price / tick
+    if up:
+        return math.ceil(steps) * tick
+    return math.floor(steps) * tick
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Helpers: order management
+# ──────────────────────────────────────────────────────────────────────────────
+def _cancel_closing_orders(symbol: str, types: Tuple[str, ...], exclude_ids: Optional[Set[int]] = None) -> int:
+    """
+    Cancel open orders of given types; if exclude_ids provided, don't cancel those.
+    Respects CANCEL_ONLY_PREFIXED_ORDERS when enabled.
+    """
     try:
         orders = get_open_orders(symbol) or []
     except Exception:
@@ -156,6 +174,8 @@ def _cancel_closing_orders(symbol: str, types: Tuple[str, ...]) -> int:
                 continue
         oid = o.get("orderId")
         if oid is None:
+            continue
+        if exclude_ids and oid in exclude_ids:
             continue
         try:
             futures_cancel_order(symbol, oid)
@@ -181,7 +201,27 @@ def _current_stop(symbol: str, side: str) -> Optional[float]:
         return None
     return max(stops) if side.upper() == "LONG" else min(stops)
 
+def _list_open_stop_orders(symbol: str) -> List[Dict[str, Any]]:
+    """Return all open STOP/STOP_MARKET orders for symbol."""
+    try:
+        orders = get_open_orders(symbol) or []
+    except Exception:
+        return []
+    out = []
+    for o in orders:
+        typ = (o.get("type") or "").upper()
+        if "STOP" in typ:
+            out.append(o)
+    return out
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Create/modify orders (legacy)
+# ──────────────────────────────────────────────────────────────────────────────
 def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Legacy behavior: cancels existing STOP(s) first, then places a new one.
+    NOTE: manage_open_trades() now prefers safe_replace_sl() to avoid window with no SL.
+    """
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
     _cancel_closing_orders(sym, ("STOP", "STOP_MARKET"))
@@ -290,6 +330,103 @@ def _is_finite_number(x: Any) -> bool:
     except Exception:
         return False
 
+# ──────────────────────────────────────────────────────────────────────────────
+# New: Safe SL computation + atomic replace (fixes "would trigger immediately")
+# ──────────────────────────────────────────────────────────────────────────────
+def _compute_safe_sl(symbol: str, position_side: str, last_price: float, atr_now: float, desired_sl: float) -> float:
+    """
+    Returns a *legal* stop price:
+      - LONG: strictly below last_price by a safety buffer
+      - SHORT: strictly above last_price by a safety buffer
+    Uses max(0.3*ATR, 0.1% price, 3*tick) as buffer; rounds to tick (down for long, up for short).
+    """
+    f = _filters(symbol)
+    tick = float(f.get("tickSize") or DEFAULT_TICK) or DEFAULT_TICK
+    # dynamic buffer
+    pct_buf = max(0.001 * last_price, 0.3 * atr_now)  # 0.1% or 0.3*ATR
+    raw_buf = max(pct_buf, 3.0 * tick)
+
+    if position_side.upper() == "LONG":
+        # must be < price - buffer
+        upper_bound = last_price - raw_buf
+        candidate = min(desired_sl, upper_bound)
+        safe = _round_to_tick(candidate, tick, up=False)
+        # hard guard: ensure strictly below
+        if safe >= last_price:
+            safe = _round_to_tick(last_price - raw_buf, tick, up=False)
+    elif position_side.upper() == "SHORT":
+        # must be > price + buffer
+        lower_bound = last_price + raw_buf
+        candidate = max(desired_sl, lower_bound)
+        safe = _round_to_tick(candidate, tick, up=True)
+        if safe <= last_price:
+            safe = _round_to_tick(last_price + raw_buf, tick, up=True)
+    else:
+        raise ValueError(f"unknown position_side: {position_side}")
+
+    # format to precision
+    decs = _decimals(str(f.get("tickSize") or DEFAULT_TICK))
+    return float(f"{safe:.{decs}f}")
+
+def _detect_position_qty(symbol: str) -> Optional[float]:
+    try:
+        for p in get_open_positions(symbol):
+            amt = float(p.get("positionAmt") or 0.0)
+            if abs(amt) > 0:
+                return abs(amt)
+    except Exception:
+        pass
+    return None
+
+def safe_replace_sl(symbol: str, position_side: str, last_price: float, atr_now: float, desired_sl: float, qty_hint: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Atomic SL replace:
+      1) compute safe stop price
+      2) place NEW STOP first (reduceOnly, MARK_PRICE)
+      3) if success → cancel older STOPs (excluding new one)
+      If place fails → keep old orders, return kept_old=True.
+    """
+    sym = symbol.upper()
+    close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
+
+    new_stop = _compute_safe_sl(sym, position_side, last_price, atr_now, desired_sl)
+
+    qty = qty_hint if qty_hint and qty_hint > 0 else _detect_position_qty(sym)
+    if not qty or qty <= 0:
+        return {"ok": False, "kept_old": True, "error": "qty_missing_for_safe_replace"}
+
+    qty_str, _ = _q_qty(sym, float(qty))
+    stop_str, _ = _q_price(sym, float(new_stop))
+
+    # place NEW stop (do NOT cancel old yet)
+    try:
+        place_res = futures_create_order(
+            symbol=sym,
+            side=close_side,
+            type="STOP_MARKET",
+            reduceOnly=True,
+            stopPrice=stop_str,
+            quantity=qty_str,
+            workingType="MARK_PRICE",
+            timeInForce="GTC",
+        )
+        new_oid = place_res.get("orderId")
+    except Exception as e:
+        return {"ok": False, "kept_old": True, "error": f"place_failed: {e}"}
+
+    # cancel older STOPs excluding the newly placed id
+    try:
+        exclude = {int(new_oid)} if new_oid else set()
+        _cancel_closing_orders(sym, ("STOP", "STOP_MARKET"), exclude_ids=exclude)
+    except Exception as e:
+        # still protected with the new stop; warn only
+        logger.warning("[tm.safe_replace_sl] cancel old stops failed %s: %s", sym, e)
+
+    return {"ok": True, "new_sl": float(stop_str), "order": place_res}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Review & closure detection
+# ──────────────────────────────────────────────────────────────────────────────
 async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> None:
     global _prev_open_positions
     try:
@@ -331,16 +468,12 @@ async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> N
                     
                     # Determine exit reason and success
                     was_successful = pnl_usd > 0
-                    if was_successful:
-                        exit_reason = "tp"  # Assume TP if profitable
-                    else:
-                        exit_reason = "sl"  # Assume SL if not profitable
+                    exit_reason = "tp" if was_successful else "sl"
                     
-                    # Calculate RR achieved (approximate based on P&L %)
-                    # Assuming standard risk of ~2%, RR = profit% / 2%
+                    # Approx RR based on 2% risk assumption
                     rr_achieved = abs(pnl_pct) / 2.0 if abs(pnl_pct) > 0 else 0.0
                     
-                    # Calculate time in trade (if we have updateTime)
+                    # Time in trade (approx)
                     time_in_trade_minutes = 0
                     try:
                         update_time = prev.get("updateTime", 0)
@@ -349,29 +482,20 @@ async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> N
                     except:
                         pass
                     
-                    # Try to get prediction_id from trade metadata
-                    # For now, we'll construct it from symbol and approximate timestamp
-                    # This is a workaround - ideally prediction_id should be stored in trade metadata
                     prediction_id = prev.get("prediction_id", "")
-                    if not prediction_id:
-                        # Fallback: try to match based on symbol and recent time
-                        # This won't link to specific predictions but allows outcome logging
-                        logger.debug(f"[ai_outcome] No prediction_id found for {s}, outcome not linked")
-                    else:
-                        # Log outcome with ai_tracker
-                        if log_outcome:
-                            success = log_outcome(
-                                prediction_id=prediction_id,
-                                symbol=s,
-                                pnl_usd=pnl_usd,
-                                pnl_pct=pnl_pct,
-                                rr_achieved=rr_achieved,
-                                time_in_trade_minutes=max(1, time_in_trade_minutes),
-                                exit_reason=exit_reason,
-                                was_successful=was_successful
-                            )
-                            if success:
-                                logger.info(f"✅ Logged AI outcome for {s}: P&L=${pnl_usd:.2f}, RR={rr_achieved:.2f}")
+                    if prediction_id and log_outcome:
+                        success = log_outcome(
+                            prediction_id=prediction_id,
+                            symbol=s,
+                            pnl_usd=pnl_usd,
+                            pnl_pct=pnl_pct,
+                            rr_achieved=rr_achieved,
+                            time_in_trade_minutes=max(1, time_in_trade_minutes),
+                            exit_reason=exit_reason,
+                            was_successful=was_successful
+                        )
+                        if success:
+                            logger.info(f"✅ Logged AI outcome for {s}: P&L=${pnl_usd:.2f}, RR={rr_achieved:.2f}")
                 except Exception as e:
                     logger.warning(f"[ai_outcome] Failed to log outcome for {s}: {e}")
                 
@@ -386,6 +510,9 @@ async def _detect_closures_and_review(curr_positions: List[Dict[str, Any]]) -> N
     except Exception as e:
         logger.debug("[ai_review] closure detect error: %s", e)
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Trailing "freeze" guard on spikes
+# ──────────────────────────────────────────────────────────────────────────────
 def _maybe_freeze_trailing(symbol: str, df: pd.DataFrame, atr_now: float, adx_now: float, macd_diff_now: float) -> bool:
     if not _TRAIL_FREEZE_ENABLE:
         return False
@@ -414,6 +541,9 @@ def _maybe_freeze_trailing(symbol: str, df: pd.DataFrame, atr_now: float, adx_no
         return True
     return False
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Core manager loop
+# ──────────────────────────────────────────────────────────────────────────────
 async def manage_open_trades():
     global _daily_pnl, _cap_triggered
     if not ALLOW_MANAGE_OPEN_TRADES or _cap_triggered:
@@ -463,6 +593,7 @@ async def manage_open_trades():
 
                 profit_pct = abs((price - entry) / entry) * 100.0
 
+                # Breakeven move (optional)
                 be_trigger = float(os.getenv("TM_BE_MIN_PROFIT_PCT", "1.5"))
                 if (profit_pct >= be_trigger) and (macd_now > 0 or current_adx > 20):
                     if not TP_BE_ONLY_AFTER_TP1:
@@ -479,12 +610,14 @@ async def manage_open_trades():
                             except Exception as e:
                                 logger.error("[manage] BE fallback failed: %s", e)
 
+                # Freeze trailing on spikes
                 if _maybe_freeze_trailing(sym, df, current_atr, current_adx, macd_now):
                     _last_update[sym] = now
                     with suppress(Exception):
                         ensure_protective_stop(sym, prefer_mode="native")
                     continue
 
+                # Baseline SL from swing ± 0.6ATR
                 try:
                     if side == "LONG":
                         recent_low = float(df["low"].iloc[-3:].min())
@@ -499,6 +632,7 @@ async def manage_open_trades():
                         ensure_protective_stop(sym, prefer_mode="native")
                     continue
 
+                # Breathing logic
                 target_sl = baseline_sl
                 try:
                     if SL_BREATH_ALLOW and profit_pct >= BREATH_COND_MIN_PROFIT_PCT:
@@ -522,6 +656,7 @@ async def manage_open_trades():
                 except Exception as e:
                     logger.debug("[manage] breathing compute failed %s: %s", sym, e)
 
+                # Entry-protection clamp
                 cur_stop = _current_stop(sym, side) or entry
                 if side == "LONG":
                     if (cur_stop >= entry) and (target_sl < entry):
@@ -530,16 +665,29 @@ async def manage_open_trades():
                     if (cur_stop <= entry) and (target_sl > entry):
                         target_sl = min(entry, target_sl)
 
+                # Update decision (threshold vs current stop)
                 try:
                     if _is_finite_number(target_sl) and _is_finite_number(cur_stop):
                         thresh = 0.25 * current_atr
                         need_update = (abs(target_sl - float(cur_stop)) >= thresh)
                         if need_update:
-                            modify_stop_loss(sym, target_sl, position_side=side)
-                            await notify_sl_tp_update(sym, side, "trailing", target_sl)
+                            # 🔒 Atomic replace with safety buffer & tick rounding
+                            res = safe_replace_sl(
+                                symbol=sym,
+                                position_side=side,
+                                last_price=price,
+                                atr_now=current_atr,
+                                desired_sl=float(target_sl),
+                                qty_hint=None
+                            )
+                            if not res.get("ok"):
+                                logger.warning("[manage] kept old SL %s: %s", sym, res)
+                            else:
+                                await notify_sl_tp_update(sym, side, "trailing", res["new_sl"])
                 except Exception as e:
                     logger.error("[manage] trailing update failed for %s: %s", sym, e)
 
+                # Opportunistic TP refresh (optional)
                 try:
                     if current_adx > 25 and macd_now > 0:
                         new_tp = (price + 4.5 * current_atr) if side == "LONG" else (price - 4.5 * current_atr)
@@ -549,7 +697,7 @@ async def manage_open_trades():
                 except Exception as e:
                     logger.error("[manage] TP update failed for %s: %s", sym, e)
 
-                # חוק-על: ודא SL מגן פעיל ואטומי
+                # Rule of rules: ensure protective stop exists
                 with suppress(Exception):
                     ensure_protective_stop(sym, prefer_mode="native")
 
@@ -579,6 +727,9 @@ async def manage_open_trades():
         logger.error(f"[manage] Error: {e}")
         await notify_error(f"⚠️ TradeManager Error: {e}")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Loops & utilities
+# ──────────────────────────────────────────────────────────────────────────────
 async def manage_open_trades_loop(interval: int = 20):
     while True:
         await manage_open_trades()
@@ -617,6 +768,9 @@ def record_health(ok: bool):
         asyncio.create_task(panic_close_all())
         logger.error("🚨 KillSwitch triggered — too many /health fails")
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Event handlers
+# ──────────────────────────────────────────────────────────────────────────────
 async def handle_order_filled(event: Dict[str, Any]):
     try:
         clid = (event.get("clientOrderId") or "").upper()
@@ -723,6 +877,7 @@ async def _be_guard_tick():
             logger.info("[tm.be_guard] %s BE set", symbol)
         except Exception as e:
             logger.error("[tm.be_guard] error: %s", e)
+
 
 
 
