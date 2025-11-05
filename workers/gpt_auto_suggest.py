@@ -971,10 +971,11 @@ async def process_cycle():
                 available = float(a.get("availableBalance") or a.get("available") or 0.0)
                 break
         
-        min_budget = float(os.getenv("BUDGET_MIN_USDT", "10.0"))
-        if available < min_budget:
+        # Use MAX budget to ensure we have enough for at least 1 trade
+        max_budget = float(os.getenv("BUDGET_MAX_USDT", "100.0"))
+        if available < max_budget:
             LOGGER.warning(
-                f"⏸️ CYCLE PAUSED: Insufficient free margin (${available:.2f} < ${min_budget:.2f}). "
+                f"⏸️ CYCLE PAUSED: Insufficient free margin (${available:.2f} < ${max_budget:.2f}). "
                 f"Skipping entire scan cycle to avoid proposal spam. "
                 f"Will resume when funds available."
             )
@@ -1033,10 +1034,11 @@ async def process_cycle():
                     available = float(a.get("availableBalance") or a.get("available") or 0.0)
                     break
             
-            min_budget = float(os.getenv("BUDGET_MIN_USDT", "10.0"))
-            if available < min_budget:
+            # Use MAX budget to ensure we have enough for at least 1 trade
+            max_budget = float(os.getenv("BUDGET_MAX_USDT", "100.0"))
+            if available < max_budget:
                 LOGGER.warning(
-                    f"⏸️ Insufficient margin (${available:.2f} < ${min_budget:.2f}) - skipping proposals temporarily"
+                    f"⏸️ Insufficient margin (${available:.2f} < ${max_budget:.2f}) - skipping proposals temporarily"
                 )
                 return
         except Exception as e:
