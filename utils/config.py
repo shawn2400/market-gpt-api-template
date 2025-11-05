@@ -107,6 +107,9 @@ class Settings:
 
     ORDER_ID_PREFIX: str = os.getenv("ORDER_ID_PREFIX", "").strip()
     CANCEL_ONLY_PREFIXED_ORDERS: bool = _env_bool("CANCEL_ONLY_PREFIXED_ORDERS", False)
+    
+    ALLOW_MANAGE_OPEN_TRADES: bool = _env_bool("ALLOW_MANAGE_OPEN_TRADES", True)
+    AUTO_RUN: bool = _env_bool("AUTO_RUN", True)
 
     def as_dict(self) -> Dict[str, object]:
         return {

@@ -417,11 +417,13 @@ def _maybe_freeze_trailing(symbol: str, df: pd.DataFrame, atr_now: float, adx_no
 async def manage_open_trades():
     global _daily_pnl, _cap_triggered
     if not ALLOW_MANAGE_OPEN_TRADES or _cap_triggered:
-        logger.debug("[manage] Disabled or cap triggered, skipping")
+        print(f"⚠️ [manage_open_trades] BLOCKED: ALLOW_MANAGE={ALLOW_MANAGE_OPEN_TRADES}, cap_triggered={_cap_triggered}")
+        logger.info(f"[manage] Disabled or cap triggered, skipping (ALLOW={ALLOW_MANAGE_OPEN_TRADES}, cap={_cap_triggered})")
         return
 
     try:
         positions = get_open_positions() or []
+        print(f"📊 [manage_open_trades] Found {len(positions)} open positions")
         logger.info(f"[manage] Found {len(positions)} open positions")
         now = time.time()
         for pos in positions:
@@ -429,18 +431,22 @@ async def manage_open_trades():
                 sym = (pos.get("symbol") or "").upper()
                 qty = float(pos.get("positionAmt") or 0)
                 entry = float(pos.get("entryPrice") or 0)
+                print(f"🔍 [manage] Processing {sym}: qty={qty}, entry={entry}")
                 logger.info(f"[manage] Processing {sym}: qty={qty}, entry={entry}")
                 if not sym or entry <= 0 or abs(qty) <= 0:
-                    logger.warning(f"[manage] Skipping {sym}: invalid data (qty={qty}, entry={entry})")
+                    print(f"❌ [manage] Skipping {sym}: invalid data (qty={qty}, entry={entry})")
+                    logger.info(f"[manage] Skipping {sym}: invalid data (qty={qty}, entry={entry})")
                     continue
                 side = "LONG" if qty > 0 else "SHORT"
                 price = _price_now(sym)
                 if price <= 0:
-                    logger.warning(f"[manage] Skipping {sym}: no price")
+                    print(f"❌ [manage] Skipping {sym}: no price")
+                    logger.info(f"[manage] Skipping {sym}: no price")
                     continue
 
                 if now - _last_update.get(sym, 0) < _COOLDOWN:
-                    logger.debug(f"[manage] Skipping {sym}: cooldown active")
+                    print(f"⏭️ [manage] Skipping {sym}: cooldown active ({_COOLDOWN}s)")
+                    logger.info(f"[manage] Skipping {sym}: cooldown active")
                     continue
 
                 df = get_klines_df(sym, interval="5m", limit=50)
