@@ -11,7 +11,7 @@ from dataclasses import dataclass
 
 logger = logging.getLogger("strategy_orchestrator")
 
-StrategyType = Literal["grid", "scalping", "momentum", "range_bounce", "wait", "futures_long", "futures_short"]
+StrategyType = Literal["grid", "scalping", "momentum", "range_bounce", "wait", "mean_reversion", "futures_long", "futures_short"]
 
 @dataclass
 class StrategyConfig:
@@ -60,6 +60,16 @@ class StrategyOrchestrator:
                 min_success_pct=65.0,  # Scalping needs high win rate
                 max_leverage=8,  # Medium leverage
                 description="Scalping - Quick in/out trades in choppy markets",
+                tight_stops=True
+            ),
+            
+            "mean_reversion_choppy": StrategyConfig(
+                strategy_type="mean_reversion",
+                min_rr=1.05,  # Lower RR acceptable (high win rate 70%+)
+                min_quality=5.0,  # Medium quality
+                min_success_pct=70.0,  # High win rate expected
+                max_leverage=6,  # Conservative leverage
+                description="Mean-Reversion - VWAP deviation trades in low-range choppy markets (<2% range)",
                 tight_stops=True
             ),
             
@@ -150,15 +160,19 @@ class StrategyOrchestrator:
         
         # ==================== DECISION TREE ====================
         
-        # 1. CHOPPY Markets → GRID or Scalping
+        # 1. CHOPPY Markets → GRID, Mean-Reversion, or Scalping
         if regime == "CHOPPY":
-            # Check if GRID is viable (need sufficient range)
+            # Check if GRID is viable (need sufficient range ≥2%)
             if ctx and self._is_grid_viable(ctx):
                 strategy_key = "grid_choppy"
-                logger.info(f"{symbol}: CHOPPY → GRID Trading (range detected)")
+                logger.info(f"{symbol}: CHOPPY → GRID Trading (range ≥2%)")
+            # Check if Mean-Reversion is viable (range <2%, low volatility)
+            elif ctx and self._is_mean_reversion_viable(ctx):
+                strategy_key = "mean_reversion_choppy"
+                logger.info(f"{symbol}: CHOPPY → Mean-Reversion (range <2%, deterministic VWAP)")
             else:
                 strategy_key = "scalping_choppy"
-                logger.info(f"{symbol}: CHOPPY → Scalping (no range or range too small)")
+                logger.info(f"{symbol}: CHOPPY → Scalping (fallback)")
         
         # 2. SIDEWAYS Markets → Range Bounce or GRID
         elif regime == "SIDEWAYS":
@@ -238,6 +252,51 @@ class StrategyOrchestrator:
             
         except Exception as e:
             logger.debug(f"Grid viability check failed: {e}")
+            return False
+    
+    def _is_mean_reversion_viable(self, ctx: Dict[str, Any]) -> bool:
+        """
+        Check if Mean-Reversion strategy is viable
+        
+        Args:
+            ctx: Market context with price/range data
+            
+        Returns:
+            True if Mean-Reversion is viable (range <2%, low volatility)
+        """
+        try:
+            filters = ctx.get("filters", {})
+            
+            # Calculate range percentage
+            range_pct = filters.get("range_pct")
+            if range_pct is None:
+                high_24h = ctx.get("high_24h") or filters.get("high_24h")
+                low_24h = ctx.get("low_24h") or filters.get("low_24h")
+                
+                if high_24h and low_24h:
+                    high_24h = float(high_24h)
+                    low_24h = float(low_24h)
+                    if low_24h > 0:
+                        range_pct = ((high_24h - low_24h) / low_24h) * 100.0
+            
+            # Mean-reversion needs range <2% (too small for GRID)
+            if range_pct is None or float(range_pct) >= 2.0:
+                return False
+            
+            # Check volatility - avoid high volatility
+            volatility = filters.get("volatility", "").lower()
+            if volatility == "high":
+                return False
+            
+            # ATR check - prefer low to mid volatility
+            atr_pct = ctx.get("atr_pct") or filters.get("atr_pct")
+            if atr_pct and float(atr_pct) > 3.0:  # Too volatile
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logger.debug(f"Mean-reversion viability check failed: {e}")
             return False
     
     def get_strategy_stats(self) -> Dict[str, Any]:
