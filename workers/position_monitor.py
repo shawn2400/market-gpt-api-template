@@ -144,11 +144,14 @@ def detect_significant_changes(positions: List[Dict[str, Any]]) -> tuple[bool, s
     return should_alert, reason
 
 async def send_position_report():
-    """Send consolidated position report to Telegram"""
+    """Send consolidated position report to Telegram every 30 minutes"""
     try:
         positions = get_active_positions()
         
-        if POSITION_ALERT_LEVEL == "critical":
+        # שליחה אוטומטית כל 30 דקות - אין תלות ברמת ההתראה
+        if POSITION_ALERT_LEVEL == "all":
+            logger.info(f"Sending scheduled report: {len(positions)} positions")
+        elif POSITION_ALERT_LEVEL == "critical":
             should_alert, reason = detect_significant_changes(positions)
             if not should_alert:
                 logger.info(f"Skipping notification: {reason}")

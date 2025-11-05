@@ -34,7 +34,14 @@ with suppress(Exception):
 with suppress(Exception):
     from utils.ai_tracker import log_outcome  # type: ignore
 
+# Telegram notifications
+with suppress(Exception):
+    from utils.alerts import send_telegram_message  # type: ignore
+
 logger = logging.getLogger("algogpt.trade_manager")
+
+# Enable real-time Telegram notifications for all management actions
+TELEGRAM_NOTIFY_TRADES = os.getenv("TELEGRAM_SEND_ENABLE", "1").lower() in ("1", "true", "yes", "on")
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV / Flags
