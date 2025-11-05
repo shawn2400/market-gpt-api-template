@@ -130,6 +130,7 @@ HELP_TEXT_HTML = (
     "• /ping — פינג\n"
     "• /status — סטטוס מערכת (WS+Executor)\n"
     "• /positions — פוזיציות פתוחות (תמצית)\n"
+    "• /auto — החלף בין מצב אישור ל-FULL AUTO ⚙️\n"
     "• /explain_on — הפעלת הסברי טריידים\n"
     "• /explain_off — כיבוי הסברי טריידים\n"
 )
