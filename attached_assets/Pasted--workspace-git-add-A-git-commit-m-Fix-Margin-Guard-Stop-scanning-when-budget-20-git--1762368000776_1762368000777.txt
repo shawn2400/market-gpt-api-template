@@ -1,0 +1,62 @@
+~/workspace$ git add -A
+git commit -m "🛡️ Fix Margin Guard: Stop scanning when budget < $20"
+git push origin main
+[main b1e6611] 🛡️ Fix Margin Guard: Stop scanning when budget < 0
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (non-fast-forward)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the tip of your current branch is behind
+hint: its remote counterpart. If you want to integrate the remote changes,
+hint: use 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ git pull --rebase origin main
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+~/workspace$ git pull origin main
+git push origin main
+From https://github.com/shawn2400/market-gpt-api-template
+ * branch            main       -> FETCH_HEAD
+hint: You have divergent branches and need to specify how to reconcile them.
+hint: You can do so by running one of the following commands sometime before
+hint: your next pull:
+hint:
+hint:   git config pull.rebase false  # merge
+hint:   git config pull.rebase true   # rebase
+hint:   git config pull.ff only       # fast-forward only
+hint:
+hint: You can replace "git config" with "git config --global" to set a default
+hint: preference for all repositories. You can also pass --rebase, --no-rebase,
+hint: or --ff-only on the command line to override the configured default per
+hint: invocation.
+fatal: Need to specify how to reconcile divergent branches.
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (non-fast-forward)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the tip of your current branch is behind
+hint: its remote counterpart. If you want to integrate the remote changes,
+hint: use 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ git config pull.rebase true
+git pull origin main
+git push origin main
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (non-fast-forward)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the tip of your current branch is behind
+hint: its remote counterpart. If you want to integrate the remote changes,
+hint: use 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ git push --force-with-lease origin main
+Enumerating objects: 1044, done.
+Counting objects: 100% (1010/1010), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (903/903), done.
+Writing objects: 100% (925/925), 1.62 MiB | 4.33 MiB/s, done.
+Total 925 (delta 722), reused 21 (delta 21), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (722/722), completed with 60 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+ + d9cbad7...b1e6611 main -> main (forced update)
+~/workspace$ 
