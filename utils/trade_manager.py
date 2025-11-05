@@ -184,7 +184,15 @@ def _current_stop(symbol: str, side: str) -> Optional[float]:
 def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
-    _cancel_closing_orders(sym, ("STOP", "STOP_MARKET"))
+    
+    print(f"📍 [modify_stop_loss] {sym} {position_side}: Attempting to set SL @ {new_price:.4f}")
+    logger.info(f"[modify_stop_loss] {sym} {position_side} - target SL: {new_price}")
+    
+    cancelled = _cancel_closing_orders(sym, ("STOP", "STOP_MARKET"))
+    if cancelled > 0:
+        print(f"🗑️ [modify_stop_loss] Cancelled {cancelled} existing SL orders for {sym}")
+        logger.info(f"[modify_stop_loss] Cancelled {cancelled} existing SL orders")
+    
     stop_str, _ = _q_price(sym, float(new_price))
     qty = qty_hint
     if not qty or qty <= 0:
@@ -197,21 +205,32 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
         except Exception:
             pass
     if not qty or qty <= 0:
+        print(f"❌ [modify_stop_loss] {sym} - FAILED: No position quantity found")
+        logger.error(f"[modify_stop_loss] {sym} - qty missing")
         return {"ok": False, "error": "qty_missing_for_modify_sl"}
+    
     qty_str, _ = _q_qty(sym, float(qty))
+    print(f"🎯 [modify_stop_loss] {sym} placing {close_side} STOP_MARKET: qty={qty_str}, stopPrice={stop_str}, positionSide={position_side}")
+    
     try:
         resp = futures_create_order(
             symbol=sym,
             side=close_side,
             type="STOP_MARKET",
-            reduceOnly=True,
+            positionSide=position_side.upper(),  # CRITICAL: Hedge Mode requires this!
+            # reduceOnly NOT needed in Hedge Mode (implicit from positionSide)
             stopPrice=stop_str,
             quantity=qty_str,
             workingType="MARK_PRICE",
             timeInForce="GTC",
         )
+        order_id = resp.get("orderId", "unknown")
+        print(f"✅ [modify_stop_loss] {sym} SL placed successfully! OrderID: {order_id}")
+        logger.info(f"[modify_stop_loss] {sym} SL order created: {order_id}")
         return {"ok": True, "response": resp}
     except Exception as e:
+        print(f"❌ [modify_stop_loss] {sym} placement FAILED: {e}")
+        logger.error(f"[modify_stop_loss] {sym} failed: {e}")
         return {"ok": False, "error": str(e)}
 
 def modify_take_profit(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
@@ -239,7 +258,8 @@ def modify_take_profit(symbol: str, new_price: float, *, position_side: str = "L
             symbol=sym,
             side=close_side,
             type="TAKE_PROFIT",
-            reduceOnly=True,
+            positionSide=position_side.upper(),  # CRITICAL: Hedge Mode requires this!
+            # reduceOnly NOT needed in Hedge Mode (implicit from positionSide)
             stopPrice=stop_str,
             price=price_str,
             quantity=qty_str,
@@ -544,10 +564,17 @@ async def manage_open_trades():
                     print(f"🚨 [manage] {sym} has NO protective SL - setting initial stop at {target_sl:.4f}")
                     logger.info(f"[manage] {sym} missing SL - setting initial stop")
                     try:
-                        modify_stop_loss(sym, target_sl, position_side=side)
-                        await notify_sl_tp_update(sym, side, "initial_sl", target_sl)
-                        cur_stop = target_sl
-                        initial_sl_set = True  # דגל שהוגדר כעת
+                        result = modify_stop_loss(sym, target_sl, position_side=side)
+                        if result.get("ok"):
+                            print(f"✅ [manage] {sym} initial SL placement confirmed by Binance")
+                            await notify_sl_tp_update(sym, side, "initial_sl", target_sl)
+                            cur_stop = target_sl
+                            initial_sl_set = True  # דגל שהוגדר כעת
+                        else:
+                            error = result.get("error", "unknown")
+                            print(f"❌ [manage] {sym} initial SL placement REJECTED by Binance: {error}")
+                            logger.error(f"[manage] {sym} SL placement rejected: {error}")
+                            cur_stop = entry  # fallback
                     except Exception as e:
                         logger.error("[manage] initial SL placement failed for %s: %s", sym, e)
                         cur_stop = entry  # fallback
