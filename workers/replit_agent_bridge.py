@@ -22,9 +22,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger("replit_agent_bridge")
 
-REPLIT_AGENT_ENABLED = os.getenv("REPLIT_AGENT_ENABLED", "1").lower() in ("1", "true", "yes")
-BRIDGE_INTERVAL_SEC = int(os.getenv("REPLIT_BRIDGE_INTERVAL_SEC", "3600"))
 REPLIT_ENVIRONMENT = os.getenv("REPL_SLUG") is not None
+REPLIT_AGENT_ENABLED = REPLIT_ENVIRONMENT and os.getenv("REPLIT_AGENT_ENABLED", "0").lower() in ("1", "true", "yes")
+BRIDGE_INTERVAL_SEC = int(os.getenv("REPLIT_BRIDGE_INTERVAL_SEC", "3600"))
 REPLIT_BRIDGE_NOTIFICATIONS = os.getenv("REPLIT_BRIDGE_NOTIFICATIONS", "0").lower() in ("1", "true", "yes")
 
 async def check_replit_environment() -> Dict[str, Any]:

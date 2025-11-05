@@ -80,14 +80,32 @@ Includes a **Validation Pipeline** (historical backtesting with walk-forward tes
 All 38 tasks completed, including AI performance tracking (dynamic model weighting, prediction logging, outcome tracking, feedback dataset for fine-tuning, AI leaderboard), database hardening (10 tables for slippage, circuit breaker state, market states, audit logs, AI predictions, etc.), and enhanced monitoring & security (real-time P&L, tiered alerting, rate limiting, log masking, audit trail, IP throttling, comprehensive testing).
 
 ### Deployment Architecture
-The system is deployed to **Render.com** using an existing service:
--   **Service**: algogpt-docker (existing $7/month service)
+
+**Production Environment (PRIMARY - 24/7):**
+The system runs on **Render.com** - this is the REAL production environment:
+-   **Service**: algogpt-docker ($7/month Web Service)
+-   **Workers**: 7 background workers configured in Procfile (scanner, health, gpt5, n8n, positions, sentinel)
 -   **Domain**: https://algogpt-docker.onrender.com
 -   **Dashboard**: https://algogpt-docker.onrender.com/static/dashboard/index.html
 -   **Repository**: Connected to GitHub repo `market-gpt-api-template`
--   **Auto-Deploy**: Enabled - every push to `main` triggers automatic deployment
+-   **Auto-Deploy**: Every push to `main` triggers automatic deployment
 -   **Environment**: All 14 required secrets configured via Render dashboard
--   **Development**: Code developed on Replit, deployed to Render for production
+-   **Database**: Managed PostgreSQL on Render (production data)
+-   **Uptime**: 24/7 continuous operation - THIS IS WHERE REAL TRADING HAPPENS
+
+**Development Environment (Replit - Dev Tool Only):**
+Replit is used ONLY for development and testing:
+-   **Purpose**: IDE, code editing, debugging, testing changes
+-   **Database**: Separate development PostgreSQL (NOT production data)
+-   **Workers**: Run locally for testing only
+-   **Important**: Changes made on Replit do NOT affect production until pushed to GitHub and deployed to Render
+-   **Workflow**: Edit code on Replit → Push to GitHub → Auto-deploy to Render → Production updated
+
+**Independence from Replit:**
+-   All code is platform-agnostic and runs on any Python environment
+-   No dependency on Replit-specific features (REPL_SLUG, etc. are optional)
+-   System fully functional on Render without any Replit infrastructure
+-   Replit Agent Bridge worker disabled on non-Replit environments
 
 ## External Dependencies
 
