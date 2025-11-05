@@ -93,6 +93,60 @@ def bollinger_bands(series: pd.Series, period: int = 20, std_factor: float = 2.0
     std = s.rolling(window=period, min_periods=period).std(ddof=ddof)
     return sma, sma + std_factor*std, sma - std_factor*std
 
+def vwap(df: pd.DataFrame, period: Optional[int] = None) -> pd.Series:
+    """
+    Calculate Volume Weighted Average Price (VWAP)
+    
+    Args:
+        df: DataFrame with 'high', 'low', 'close', 'volume' columns
+        period: Rolling window period (None = cumulative from start)
+    
+    Returns:
+        VWAP series
+    """
+    if df is None or df.empty:
+        return pd.Series(dtype=float)
+    
+    h = _to_float_series(df.get("high", np.nan))
+    l = _to_float_series(df.get("low", np.nan))
+    c = _to_float_series(df.get("close", np.nan))
+    v = _to_float_series(df.get("volume", np.nan))
+    
+    typical_price = (h + l + c) / 3.0
+    pv = typical_price * v
+    
+    if period is None:
+        return (pv.cumsum() / v.cumsum()).fillna(method='ffill')
+    else:
+        return (pv.rolling(window=period, min_periods=1).sum() / 
+                v.rolling(window=period, min_periods=1).sum()).fillna(method='ffill')
+
+def keltner_bands(df: pd.DataFrame, period: int = 20, atr_period: int = 14, multiplier: float = 2.0):
+    """
+    Calculate Keltner Bands (EMA-based volatility bands)
+    
+    Args:
+        df: DataFrame with 'high', 'low', 'close' columns
+        period: EMA period for basis line
+        atr_period: ATR period for band width
+        multiplier: ATR multiplier for bands
+    
+    Returns:
+        Tuple of (basis, upper, lower) Series
+    """
+    if df is None or df.empty or period <= 0 or atr_period <= 0:
+        empty = pd.Series(index=df.index if df is not None else [], dtype=float)
+        return empty, empty, empty
+    
+    c = _to_float_series(df.get("close", np.nan))
+    basis = ema(c, period)
+    atr_val = atr(df, atr_period)
+    
+    upper = basis + (multiplier * atr_val)
+    lower = basis - (multiplier * atr_val)
+    
+    return basis, upper, lower
+
 def prepare_indicators_for_backtest(df: pd.DataFrame) -> pd.DataFrame:
     cols = ["open","high","low","close","volume",
             "ema_21","ema_50","rsi","atr","adx",
@@ -117,7 +171,7 @@ def prepare_indicators_for_backtest(df: pd.DataFrame) -> pd.DataFrame:
     return base[cols]
 
 __all__ = [
-    "ema","rsi","atr","adx","macd","bollinger_bands","prepare_indicators_for_backtest"
+    "ema","rsi","atr","adx","macd","bollinger_bands","vwap","keltner_bands","prepare_indicators_for_backtest"
 ]
 
 # ===================== eval_regime – שפת כללים =====================
