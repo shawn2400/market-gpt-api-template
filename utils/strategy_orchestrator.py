@@ -26,6 +26,7 @@ class StrategyConfig:
     # Strategy-specific settings
     tight_stops: bool = False  # Use tight stops (scalping)
     grid_mode: bool = False  # GRID trading mode
+    mean_reversion_mode: bool = False  # Mean-Reversion trading mode (VWAP-based)
     trend_following: bool = False  # Trend-following mode
     defensive: bool = False  # Defensive/conservative mode
 
@@ -70,7 +71,8 @@ class StrategyOrchestrator:
                 min_success_pct=70.0,  # High win rate expected
                 max_leverage=6,  # Conservative leverage
                 description="Mean-Reversion - VWAP deviation trades in low-range choppy markets (<2% range)",
-                tight_stops=True
+                tight_stops=True,
+                mean_reversion_mode=True
             ),
             
             # ==================== SIDEWAYS MARKETS ====================
@@ -279,20 +281,21 @@ class StrategyOrchestrator:
                     if low_24h > 0:
                         range_pct = ((high_24h - low_24h) / low_24h) * 100.0
             
-            # Mean-reversion needs range <2% (too small for GRID)
-            if range_pct is None or float(range_pct) >= 2.0:
+            # If range_pct is available and ≥2%, GRID is better - skip mean-reversion
+            if range_pct is not None and float(range_pct) >= 2.0:
                 return False
             
-            # Check volatility - avoid high volatility
+            # Check volatility - avoid only VERY high volatility
             volatility = filters.get("volatility", "").lower()
-            if volatility == "high":
+            if volatility == "extreme":  # Only block extreme volatility
                 return False
             
-            # ATR check - prefer low to mid volatility
+            # ATR check - prefer low to mid volatility (but allow up to 5% for more opportunities)
             atr_pct = ctx.get("atr_pct") or filters.get("atr_pct")
-            if atr_pct and float(atr_pct) > 3.0:  # Too volatile
+            if atr_pct and float(atr_pct) > 5.0:  # Very high volatility
                 return False
             
+            # If range <2% OR range unknown in CHOPPY market → Mean-Reversion viable
             return True
             
         except Exception as e:

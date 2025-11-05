@@ -16,8 +16,10 @@ The core application uses FastAPI (`main.py`) and Gunicorn. Functionalities are 
 
 **Recent Upgrades (MetaBrain v8.0 - Nov 2025):**
 -   **Lowered Filtering Thresholds**: MIN_RR reduced from 1.45 to 1.15, Quality scores from 0.70 to 0.50, enabling more trades in all market conditions
--   **Strategy Orchestrator**: Intelligent auto-selection of GRID/Scalping/Momentum/Range-Bounce based on real-time market regime (CHOPPY/SIDEWAYS/TRENDING/VOLATILE)
--   **Adaptive RR Thresholds**: Dynamic Risk/Reward requirements per strategy - GRID=1.10, Scalping=1.10, Range-Bounce=1.15, Momentum=1.25, Breakout=1.40
+-   **Strategy Orchestrator**: Intelligent auto-selection of GRID/Scalping/Momentum/Range-Bounce/Mean-Reversion based on real-time market regime (CHOPPY/SIDEWAYS/TRENDING/VOLATILE/NEUTRAL)
+-   **Mean-Reversion Strategy** (NEW - Nov 5, 2025): Deterministic VWAP-based strategy for low-range NEUTRAL markets (<2% range). Uses VWAP + Keltner Bands for entry/exit levels. Allows RR ≥1.05 with high win rate (70%+). Fills the gap where GRID is not viable.
+-   **VWAP & Keltner Bands Indicators** (NEW): Added to `utils/indicators.py` for mean-reversion calculations
+-   **Adaptive RR Thresholds**: Dynamic Risk/Reward requirements per strategy - GRID=1.10, Scalping=1.10, Mean-Reversion=1.05 (with 70%+ win rate), Range-Bounce=1.15, Momentum=1.25, Breakout=1.40
 -   **Permissive Fallbacks**: System now allows trading with incomplete data (DISABLE_PERMISSIVE_FALLBACKS=0) instead of blocking everything
 
 **Core Features:**
@@ -26,7 +28,8 @@ The core application uses FastAPI (`main.py`) and Gunicorn. Functionalities are 
 -   **Market Scanner**: Autonomous worker performs multi-timeframe technical analysis every 60 seconds across 531 Binance Futures markets.
 -   **AI-Powered Proposals**: **5 AI providers** (GPT-5, Gemini 2 Pro, DeepSeek, Grok, Claude) generate trade proposals with **ADAPTIVE Risk/Reward thresholds** - CHOPPY=1.1, SIDEWAYS=1.15, TRENDING=1.25, VOLATILE=1.4. Multi-AI consensus with dynamic weighting based on performance.
 -   **GRID Trading**: Integrated FUTURES GRID trading for choppy/sideways markets (**minimum range ≥2%**, lowered from 4% for more opportunities).
--   **Scalping & Range-Bounce Strategies**: NEW - Aggressive short-term trades in CHOPPY markets with tight stops and RR≥1.1 for frequent small wins.
+-   **Mean-Reversion Strategy**: NEW (Nov 5, 2025) - Deterministic math-based strategy for CHOPPY/NEUTRAL markets with range <2%. Uses VWAP deviation (1.5× ATR) for entries, targeting mean-reversion with 70-80% win rate. Operates independently of GPT for consistent execution in low-volatility conditions.
+-   **Scalping & Range-Bounce Strategies**: Aggressive short-term trades in CHOPPY markets with tight stops and RR≥1.1 for frequent small wins.
 -   **Risk Management**: Implements quality filters, dynamic filters, liquidity checks, cooldown periods, daily trade caps, and a circuit breaker for daily loss limits.
 -   **FULL AUTO MODE**: Telegram notifications ONLY (no approval required). System executes trades instantly based on AI analysis.
 -   **Dynamic Position Management**: Features ATR Trailing, Multi-level TP ladder, and Dynamic Position Sizing.

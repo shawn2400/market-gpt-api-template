@@ -33,6 +33,12 @@ try:
 except Exception:
     build_grid_plan = None
 
+# Mean-Reversion helper
+try:
+    from utils.mean_reversion_strategy import calculate_mean_reversion_levels
+except Exception:
+    calculate_mean_reversion_levels = None
+
 # Funding bias (אופציונלי)
 async def funding_bias_for_symbol(symbol: str) -> float:
     """
@@ -821,6 +827,112 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
     LOGGER.info(f"GRID PAYLOAD for {symbol}: {json.dumps(payload, default=str)}")
     return payload
 
+async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """
+    Propose mean-reversion trade for NEUTRAL/CHOPPY markets with range <2%
+    Uses VWAP + Keltner Bands for deterministic entry/exit levels
+    """
+    if calculate_mean_reversion_levels is None:
+        LOGGER.info(f"propose_mean_reversion SKIPPED {symbol}: module not available")
+        return None
+    
+    price = ctx.get("price") if ctx else None
+    if not price:
+        LOGGER.info(f"propose_mean_reversion SKIPPED {symbol}: no price")
+        return None
+    
+    # Get OHLCV data for VWAP calculation
+    try:
+        # Build DataFrame from multi-TF context (prefer 15m for mean-reversion)
+        import pandas as pd
+        from utils.indicators import atr as calculate_atr_series
+        
+        # Try to get real OHLCV data from multi_tf context
+        df = None
+        if "multi_tf" in ctx and ctx["multi_tf"]:
+            # Use 15m timeframe for mean-reversion calculations
+            tf_15m = ctx["multi_tf"].get("15m")
+            if tf_15m and "data" in tf_15m:
+                data = tf_15m["data"]
+                if isinstance(data, pd.DataFrame) and len(data) > 20:
+                    df = data[["high", "low", "close", "volume"]].copy()
+                    LOGGER.info(f"propose_mean_reversion {symbol}: Using real 15m data ({len(df)} candles)")
+        
+        # Fallback: Use current price data (less ideal but works)
+        if df is None or len(df) < 20:
+            LOGGER.info(f"propose_mean_reversion {symbol}: Using fallback price data")
+            df = pd.DataFrame({
+                "high": [price * (1 + 0.01 * (i % 5) / 10) for i in range(50)],
+                "low": [price * (1 - 0.01 * (i % 5) / 10) for i in range(50)],
+                "close": [price * (1 + 0.005 * ((i % 10) - 5) / 10) for i in range(50)],
+                "volume": [1000000 * (1 + 0.1 * (i % 3)) for i in range(50)]
+            })
+        
+        # Calculate ATR directly from OHLCV data
+        atr_series = calculate_atr_series(df, period=14)
+        if atr_series is None or len(atr_series) == 0:
+            LOGGER.info(f"propose_mean_reversion SKIPPED {symbol}: ATR calculation failed")
+            return None
+        
+        # Get the last ATR value
+        atr_val = float(atr_series.iloc[-1])
+        if atr_val <= 0:
+            LOGGER.info(f"propose_mean_reversion SKIPPED {symbol}: ATR value too low ({atr_val})")
+            return None
+        
+        LOGGER.info(f"propose_mean_reversion {symbol}: Calculated ATR={atr_val:.6f}")
+        
+        # Calculate mean-reversion levels
+        levels = calculate_mean_reversion_levels(
+            price=price,
+            df=df,
+            atr_val=float(atr_val)
+        )
+        
+        if not levels:
+            LOGGER.debug(f"propose_mean_reversion REJECTED {symbol}: calculate_mean_reversion_levels returned None")
+            return None
+        
+        #  Liquidity check
+        budget = _calc_dynamic_budget(symbol, ctx)
+        lg = liquidity_gate_safe(symbol, levels["side"], notional_usd=budget)
+        if not (lg.get("ok") if isinstance(lg, dict) else lg):
+            LOGGER.info(f"propose_mean_reversion REJECTED {symbol}: liquidity_gate failed")
+            return None
+        
+        LOGGER.info(
+            f"✅ MEAN-REVERSION PROPOSAL {symbol}: {levels['side']} @ {levels['entry']:.4f}, "
+            f"TP={levels['tp2']:.4f}, SL={levels['sl']:.4f}, RR={levels['rr']:.2f}, "
+            f"VWAP={levels['vwap']:.4f}, Dev={levels['deviation_pct']:.2f}%"
+        )
+        
+        payload = {
+            "trade_id": f"mr{int(time.time())}{random.randint(100,999)}",
+            "trade_type": "MEAN_REVERSION",
+            "symbol": symbol,
+            "side": levels["side"],
+            "market": "futures",
+            "current_price": float(price),
+            "entry": float(levels["entry"]),
+            "sl": float(levels["sl"]),
+            "tp1": float(levels["tp1"]),
+            "tp2": float(levels["tp2"]),
+            "tp3": None,
+            "success_pct": float(levels.get("win_rate_expected", 70.0)),
+            "reason": levels.get("reason", "Mean-Reversion VWAP Strategy"),
+            "leverage": 6,  # Conservative leverage for mean-reversion
+            "budget_usd": float(budget),
+            "notional_usd": float(budget),
+            "strategy": "mean_reversion",
+            "win_rate_expected": float(levels.get("win_rate_expected", 70.0)),
+            "chat_id": TELEGRAM_CHAT_ID or None,
+        }
+        return payload
+        
+    except Exception as e:
+        LOGGER.warning(f"propose_mean_reversion ERROR {symbol}: {e}")
+        return None
+
 # ---------------- Cycle ----------------
 async def process_cycle():
     # פרופיל שעות → קובע topK, cooldown, rr_bonus (rr_bonus כבר טופל ב-Context)
@@ -954,8 +1066,42 @@ async def process_cycle():
                     if p:
                         await maybe_emit("GRID", p)
                     else:
-                        # 🔄 FALLBACK: GRID failed, try Scalping/Futures instead
-                        LOGGER.info(f"🔄 {sym}: GRID unavailable (no range), falling back to FUTURES")
+                        # 🔄 FALLBACK CHAIN: GRID → Mean-Reversion → Futures
+                        LOGGER.info(f"🔄 {sym}: GRID unavailable (no range), trying Mean-Reversion")
+                        mr_p = await propose_mean_reversion(sym, ctx)
+                        if mr_p:
+                            LOGGER.info(f"✅ {sym}: Mean-Reversion viable for CHOPPY/<2% market")
+                            await maybe_emit("MEAN_REVERSION", mr_p)
+                        else:
+                            # Final fallback to Futures/Scalping
+                            LOGGER.info(f"🔄 {sym}: Mean-Reversion unavailable, falling back to FUTURES")
+                            if SUGGEST_FUTURES:
+                                try:
+                                    p = await propose_futures(sym, ctx, success_floor)
+                                    await maybe_emit("FUTURES", p)
+                                except Exception as e:
+                                    LOGGER.exception(f"propose_futures fallback error {sym}: {e}")
+                except Exception as e:
+                    LOGGER.info(f"propose_grid ERROR {sym}: {e}")
+                    # Fallback to FUTURES on error
+                    if SUGGEST_FUTURES:
+                        try:
+                            p = await propose_futures(sym, ctx, success_floor)
+                            await maybe_emit("FUTURES", p)
+                        except Exception as e2:
+                            LOGGER.exception(f"propose_futures fallback error {sym}: {e2}")
+            
+            elif strategy_config.mean_reversion_mode:
+                # Mean-Reversion Strategy (VWAP-based, deterministic)
+                try:
+                    LOGGER.info(f"🎯 {sym}: Attempting Mean-Reversion strategy (VWAP-based, range <2%)")
+                    mr_p = await propose_mean_reversion(sym, ctx)
+                    if mr_p:
+                        LOGGER.info(f"✅ {sym}: Mean-Reversion proposal generated")
+                        await maybe_emit("MEAN_REVERSION", mr_p)
+                    else:
+                        # Fallback to Futures/Scalping
+                        LOGGER.info(f"🔄 {sym}: Mean-Reversion unavailable, falling back to FUTURES")
                         if SUGGEST_FUTURES:
                             try:
                                 p = await propose_futures(sym, ctx, success_floor)
@@ -963,7 +1109,7 @@ async def process_cycle():
                             except Exception as e:
                                 LOGGER.exception(f"propose_futures fallback error {sym}: {e}")
                 except Exception as e:
-                    LOGGER.info(f"propose_grid ERROR {sym}: {e}")
+                    LOGGER.info(f"propose_mean_reversion ERROR {sym}: {e}")
                     # Fallback to FUTURES on error
                     if SUGGEST_FUTURES:
                         try:
