@@ -134,7 +134,8 @@ def _q_qty(symbol: str, qty: float) -> Tuple[str, float]:
 def _offset_bps(base: float, bps: float, sign: int) -> float:
     return base * (1.0 + sign * (bps / 10000.0))
 
-def _cancel_closing_orders(symbol: str, types: Tuple[str, ...]) -> int:
+def _cancel_closing_orders(symbol: str, types: Tuple[str, ...], position_side: Optional[str] = None) -> int:
+    """Cancel closing orders for a symbol, optionally filtered by positionSide for Hedge Mode."""
     try:
         orders = get_open_orders(symbol) or []
     except Exception:
@@ -150,6 +151,11 @@ def _cancel_closing_orders(symbol: str, types: Tuple[str, ...]) -> int:
         typ = (o.get("type") or o.get("origType") or "").upper()
         if typ not in tset:
             continue
+        # CRITICAL: In Hedge Mode, only cancel orders matching this position side
+        if position_side:
+            order_pos_side = (o.get("positionSide") or "").upper()
+            if order_pos_side and order_pos_side != position_side.upper():
+                continue
         if only_pref:
             coid = str(o.get("clientOrderId") or o.get("origClientOrderId") or "")
             if not coid.startswith(pref):
@@ -188,25 +194,30 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
     print(f"📍 [modify_stop_loss] {sym} {position_side}: Attempting to set SL @ {new_price:.4f}")
     logger.info(f"[modify_stop_loss] {sym} {position_side} - target SL: {new_price}")
     
-    cancelled = _cancel_closing_orders(sym, ("STOP", "STOP_MARKET"))
+    # CRITICAL: In Hedge Mode, only cancel orders matching this position side
+    cancelled = _cancel_closing_orders(sym, ("STOP", "STOP_MARKET"), position_side=position_side)
     if cancelled > 0:
-        print(f"🗑️ [modify_stop_loss] Cancelled {cancelled} existing SL orders for {sym}")
-        logger.info(f"[modify_stop_loss] Cancelled {cancelled} existing SL orders")
+        print(f"🗑️ [modify_stop_loss] Cancelled {cancelled} existing {position_side} SL orders for {sym}")
+        logger.info(f"[modify_stop_loss] Cancelled {cancelled} existing {position_side} SL orders")
     
     stop_str, _ = _q_price(sym, float(new_price))
     qty = qty_hint
     if not qty or qty <= 0:
+        # CRITICAL: Filter positions by positionSide in Hedge Mode
         try:
             for p in get_open_positions(sym):
+                pos_side = (p.get("positionSide") or "BOTH").upper()
                 amt = float(p.get("positionAmt") or 0.0)
-                if abs(amt) > 0:
-                    qty = abs(amt)
-                    break
+                # Match position side (or use BOTH for One-way mode)
+                if pos_side == position_side.upper() or pos_side == "BOTH":
+                    if abs(amt) > 0:
+                        qty = abs(amt)
+                        break
         except Exception:
             pass
     if not qty or qty <= 0:
-        print(f"❌ [modify_stop_loss] {sym} - FAILED: No position quantity found")
-        logger.error(f"[modify_stop_loss] {sym} - qty missing")
+        print(f"❌ [modify_stop_loss] {sym} {position_side} - FAILED: No position quantity found")
+        logger.error(f"[modify_stop_loss] {sym} {position_side} - qty missing")
         return {"ok": False, "error": "qty_missing_for_modify_sl"}
     
     qty_str, _ = _q_qty(sym, float(qty))
@@ -236,18 +247,25 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
 def modify_take_profit(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
-    _cancel_closing_orders(sym, ("TAKE_PROFIT", "TAKE_PROFIT_MARKET"))
+    
+    # CRITICAL: In Hedge Mode, only cancel orders matching this position side
+    _cancel_closing_orders(sym, ("TAKE_PROFIT", "TAKE_PROFIT_MARKET"), position_side=position_side)
+    
     stop_str, stop_px = _q_price(sym, float(new_price))
     limit_px = _offset_bps(stop_px, TP_LIMIT_OFFSET_BPS, +1 if close_side == "SELL" else -1)
     price_str, _ = _q_price(sym, float(limit_px))
     qty = qty_hint
     if not qty or qty <= 0:
+        # CRITICAL: Filter positions by positionSide in Hedge Mode
         try:
             for p in get_open_positions(sym):
+                pos_side = (p.get("positionSide") or "BOTH").upper()
                 amt = float(p.get("positionAmt") or 0.0)
-                if abs(amt) > 0:
-                    qty = abs(amt)
-                    break
+                # Match position side (or use BOTH for One-way mode)
+                if pos_side == position_side.upper() or pos_side == "BOTH":
+                    if abs(amt) > 0:
+                        qty = abs(amt)
+                        break
         except Exception:
             pass
     if not qty or qty <= 0:
