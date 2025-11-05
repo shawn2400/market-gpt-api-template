@@ -15,6 +15,7 @@ The dashboard UI is located in `static/dashboard/`. Telegram notifications are e
 The core application uses FastAPI (`main.py`) and Gunicorn. Functionalities are modularized into `routes/` for API endpoints and `utils/` for common functions. Policies are managed via YAML files in `policies/`.
 
 **Recent Upgrades (MetaBrain v8.0 - Nov 2025):**
+-   **Telegram Auto-Execution Toggle** (✅ PRODUCTION-READY - Nov 5, 2025): One-click toggle between APPROVAL mode and FULL AUTO mode via Telegram `/auto` command. Settings persist in database, no restart needed. In FULL AUTO mode, all trade proposals execute immediately without approval buttons.
 -   **Lowered Filtering Thresholds**: MIN_RR reduced from 1.45 to 1.15, Quality scores from 0.70 to 0.50, enabling more trades in all market conditions
 -   **Strategy Orchestrator**: Intelligent auto-selection of GRID/Scalping/Momentum/Range-Bounce/Mean-Reversion based on real-time market regime (CHOPPY/SIDEWAYS/TRENDING/VOLATILE/NEUTRAL)
 -   **Mean-Reversion Strategy** (PRODUCTION-READY - Nov 5, 2025): ✅ Fully operational deterministic VWAP-based strategy for CHOPPY/NEUTRAL markets with range <2%. Uses real Binance OHLCV data (180 candles @ 15m) for accurate VWAP + Keltner Bands calculations. Entry at VWAP ± 0.3×ATR (lowered from 1.5×), TP at VWAP ± 0.2-0.3×ATR, SL at entry ± 0.7×ATR. Achieves RR ≥1.47-3.67 (well above minimum 1.05 threshold). Successfully generating 7+ proposals per scan cycle.
