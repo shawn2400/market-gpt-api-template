@@ -451,6 +451,8 @@ async def manage_open_trades():
 
                 df = get_klines_df(sym, interval="5m", limit=50)
                 if df is None or getattr(df, "empty", False):
+                    print(f"❌ [manage] Skipping {sym}: failed to get klines data")
+                    logger.info(f"[manage] Skipping {sym}: failed to get klines data")
                     continue
 
                 atr_series = atr(df)
@@ -461,10 +463,16 @@ async def manage_open_trades():
                 macd_now = float(macd_line.iloc[-1] - macd_signal.iloc[-1])
 
                 if not (_is_finite_number(current_atr) and current_atr > 0):
+                    print(f"❌ [manage] Skipping {sym}: invalid ATR (atr={current_atr})")
+                    logger.info(f"[manage] Skipping {sym}: invalid ATR")
                     continue
                 if not _is_finite_number(current_adx):
+                    print(f"❌ [manage] Skipping {sym}: invalid ADX (adx={current_adx})")
+                    logger.info(f"[manage] Skipping {sym}: invalid ADX")
                     continue
                 if not _is_finite_number(macd_now):
+                    print(f"❌ [manage] Skipping {sym}: invalid MACD (macd={macd_now})")
+                    logger.info(f"[manage] Skipping {sym}: invalid MACD")
                     continue
 
                 profit_pct = abs((price - entry) / entry) * 100.0
@@ -528,7 +536,23 @@ async def manage_open_trades():
                 except Exception as e:
                     logger.debug("[manage] breathing compute failed %s: %s", sym, e)
 
-                cur_stop = _current_stop(sym, side) or entry
+                cur_stop = _current_stop(sym, side)
+                
+                # אם אין SL כלל - הגדר אחד מיד
+                initial_sl_set = False
+                if cur_stop is None or not _is_finite_number(cur_stop):
+                    print(f"🚨 [manage] {sym} has NO protective SL - setting initial stop at {target_sl:.4f}")
+                    logger.info(f"[manage] {sym} missing SL - setting initial stop")
+                    try:
+                        modify_stop_loss(sym, target_sl, position_side=side)
+                        await notify_sl_tp_update(sym, side, "initial_sl", target_sl)
+                        cur_stop = target_sl
+                        initial_sl_set = True  # דגל שהוגדר כעת
+                    except Exception as e:
+                        logger.error("[manage] initial SL placement failed for %s: %s", sym, e)
+                        cur_stop = entry  # fallback
+                
+                # שמירה על SL מעל entry אם כבר ב-BE
                 if side == "LONG":
                     if (cur_stop >= entry) and (target_sl < entry):
                         target_sl = max(entry, target_sl)
@@ -536,15 +560,23 @@ async def manage_open_trades():
                     if (cur_stop <= entry) and (target_sl > entry):
                         target_sl = min(entry, target_sl)
 
-                try:
-                    if _is_finite_number(target_sl) and _is_finite_number(cur_stop):
-                        thresh = 0.25 * current_atr
-                        need_update = (abs(target_sl - float(cur_stop)) >= thresh)
-                        if need_update:
-                            modify_stop_loss(sym, target_sl, position_side=side)
-                            await notify_sl_tp_update(sym, side, "trailing", target_sl)
-                except Exception as e:
-                    logger.error("[manage] trailing update failed for %s: %s", sym, e)
+                # דלג על trailing update אם זה זה עתה הוגדר initial SL
+                if not initial_sl_set:
+                    try:
+                        if _is_finite_number(target_sl) and _is_finite_number(cur_stop):
+                            thresh = 0.25 * current_atr
+                            need_update = (abs(target_sl - float(cur_stop)) >= thresh)
+                            if need_update:
+                                print(f"🔄 [manage] {sym} trailing SL: {cur_stop:.4f} → {target_sl:.4f} (Δ={abs(target_sl-cur_stop):.4f}, thresh={thresh:.4f})")
+                                logger.info(f"[manage] {sym} trailing SL update: {cur_stop} → {target_sl}")
+                                modify_stop_loss(sym, target_sl, position_side=side)
+                                await notify_sl_tp_update(sym, side, "trailing", target_sl)
+                            else:
+                                print(f"⏭️ [manage] {sym} SL delta too small (Δ={abs(target_sl-cur_stop):.4f} < {thresh:.4f}), skipping update")
+                    except Exception as e:
+                        logger.error("[manage] trailing update failed for %s: %s", sym, e)
+                else:
+                    print(f"✅ [manage] {sym} initial SL successfully placed, skipping trailing logic this cycle")
 
                 try:
                     if current_adx > 25 and macd_now > 0:
