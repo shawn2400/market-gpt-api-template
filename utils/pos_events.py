@@ -98,8 +98,11 @@ async def emit(sym: str, op: str, **fields: Any) -> Dict[str, Any]:
             pipe.ltrim(_POS_EVENTS_KEY, 0, max(0, _POS_EVENTS_MAX - 1))
             pipe.publish(_POS_EVENTS_CHAN, js)
             await pipe.execute()
-        except Exception:
-            pass
+        except Exception as e:
+            # Log the error instead of silently swallowing it
+            import logging
+            logger = logging.getLogger("algogpt.pos_events")
+            logger.warning(f"emit failed for {sym}/{op}: {e}")
 
     if _should_tg(op):
         asyncio.create_task(_send_tg(_render_tg_text(evt)))

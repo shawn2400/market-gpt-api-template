@@ -316,10 +316,10 @@ def _to_int(x, default=None) -> Optional[int]:
 # ---------------- Emit ----------------
 async def _emit(payload: Dict[str, Any]) -> bool:
     if not WEBHOOK_HMAC_SECRET:
-        LOGGER.error("WEBHOOK_HMAC_SECRET not set")
+        LOGGER.error("❌ emit failed: WEBHOOK_HMAC_SECRET not set")
         return False
     if not ALERT_INGEST_URL:
-        LOGGER.error("ALERT_INGEST_URL not set")
+        LOGGER.error("❌ emit failed: ALERT_INGEST_URL not set")
         return False
     try:
         body, headers = build_signed_outbound(
@@ -332,7 +332,13 @@ async def _emit(payload: Dict[str, Any]) -> bool:
             r.raise_for_status()
             return True
     except Exception as e:
-        LOGGER.warning("emit failed: %s", e)
+        sym = payload.get("symbol", "UNKNOWN")
+        side = payload.get("side", "")
+        LOGGER.error(
+            f"❌ emit failed for {sym} {side}: {type(e).__name__}: {e}\n"
+            f"   URL: {ALERT_INGEST_URL}\n"
+            f"   Payload keys: {list(payload.keys())}"
+        )
         return False
 
 # ---------------- Proposers ----------------
@@ -953,6 +959,28 @@ async def process_cycle():
     topk = max(1, int(hp.get("topk", 12)))
     cooldown_min = max(3, int(hp.get("cooldown_min", 12)))
     cooldown_sec = cooldown_min * 60
+
+    # 💰 MARGIN GUARD: Check available balance BEFORE scanning
+    # This prevents generating proposals when funds are locked
+    try:
+        from utils.binance_client import futures_balance
+        bals = futures_balance() or []
+        available = 0.0
+        for a in bals:
+            if str(a.get("asset", "")).upper() == "USDT":
+                available = float(a.get("availableBalance") or a.get("available") or 0.0)
+                break
+        
+        min_budget = float(os.getenv("BUDGET_MIN_USDT", "10.0"))
+        if available < min_budget:
+            LOGGER.warning(
+                f"⏸️ CYCLE PAUSED: Insufficient free margin (${available:.2f} < ${min_budget:.2f}). "
+                f"Skipping entire scan cycle to avoid proposal spam. "
+                f"Will resume when funds available."
+            )
+            return  # Skip entire cycle
+    except Exception as e:
+        LOGGER.debug(f"Margin check failed (proceeding anyway): {e}")
 
     # בנה Pool חכם (משקלול איכות+היסטוריית winrate)
     try:
