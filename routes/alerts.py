@@ -266,7 +266,7 @@ class IngestReq(BaseModel):
     timeframe: Optional[str] = "15m"
     score: Optional[float] = 0.0
     reason: Optional[str] = ""
-    require_approval: Optional[bool] = True
+    require_approval: Optional[bool] = None
     tp1: Optional[dict] | Optional[float] = None
     tp2: Optional[dict] | Optional[float] = None
     tp3: Optional[dict] | Optional[float] = None
@@ -418,16 +418,26 @@ async def alerts_ingest(
     # קרא את מצב האישור מהמסד נתונים (או ENV כברירת מחדל)
     require_approval_default = True
     try:
-        from utils.db import get_db_conn
-        conn = get_db_conn()
-        with conn.cursor() as cur:
-            cur.execute("SELECT value FROM system_settings WHERE key = 'approval_mode'")
-            row = cur.fetchone()
-            if row:
-                require_approval_default = str(row[0]).lower() in ("true", "1", "yes", "on")
-    except Exception:
+        import psycopg2
+        DATABASE_URL = os.getenv("DATABASE_URL")
+        if DATABASE_URL:
+            conn = psycopg2.connect(DATABASE_URL)
+            with conn.cursor() as cur:
+                cur.execute("SELECT value FROM system_settings WHERE key = 'approval_mode'")
+                row = cur.fetchone()
+                if row:
+                    require_approval_default = str(row[0]).lower() in ("true", "1", "yes", "on")
+                    logger.info(f"[APPROVAL MODE] DB value: {row[0]}, require_approval_default={require_approval_default}")
+            conn.close()
+        else:
+            raise Exception("DATABASE_URL not set")
+    except Exception as e:
         # אם אין מסד נתונים או שגיאה - קרא מ-ENV
-        require_approval_default = os.getenv("APPROVAL_ENABLED", "1").lower() in ("1", "true", "yes", "on")
+        require_approval_default = os.getenv("APPROVAL_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+        logger.info(f"[APPROVAL MODE] DB read failed ({e}), using ENV: require_approval_default={require_approval_default}")
+    
+    final_require_approval = bool(req.require_approval if req.require_approval is not None else require_approval_default)
+    logger.info(f"[APPROVAL MODE] {sym} {side}: req.require_approval={req.require_approval}, require_approval_default={require_approval_default}, final={final_require_approval}")
     
     plan: Dict[str, Any] = {
         "symbol": sym,
@@ -450,7 +460,7 @@ async def alerts_ingest(
         "grid_take_profit_pct": req.grid_take_profit_pct,
         "budget_usd": smart_budget,  # Smart budget allocation
         "order_type": "MARKET",
-        "require_approval": bool(req.require_approval if req.require_approval is not None else require_approval_default),
+        "require_approval": final_require_approval,
         "entry": _to_float(req.entry),
         "success_pct": _to_float(req.success_pct) if req.success_pct else score,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
