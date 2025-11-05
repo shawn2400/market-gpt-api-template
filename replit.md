@@ -14,7 +14,10 @@ The dashboard UI is located in `static/dashboard/`. Telegram notifications are e
 ### Technical Implementations
 The core application uses FastAPI (`main.py`) and Gunicorn. Functionalities are modularized into `routes/` for API endpoints and `utils/` for common functions. Policies are managed via YAML files in `policies/`.
 
-**Recent Upgrades (MetaBrain v8.0 - Nov 2025):**
+**Recent Upgrades (MetaBrain v8.0 - Nov 5, 2025):**
+-   **Fills Watcher Worker** (✅ PRODUCTION-READY - Nov 5, 2025): Automated SL/TP/BE/Trailing management for all open positions. Dedicated _TradeManagerThread runs manage_open_trades() every 60 seconds independently of WATCHLIST. Worker monitors fills, sets protective stops, manages BE Guard, and profit locking. Now running 24/7 in Procfile.
+-   **Budget Optimization** (✅ PRODUCTION-READY - Nov 5, 2025): BUDGET_MAX_USDT reduced from $150 to $30 per trade, enabling 5-6 simultaneous positions with $166 equity (vs. 1 trade previously). Dynamic budget system still active with quality multipliers.
+-   **Margin Guard** (✅ PRODUCTION-READY - Nov 5, 2025): Auto-scanner now checks available balance before sending proposals. If available < BUDGET_MIN_USDT, scanner pauses temporarily to prevent spam notifications when funds locked in open positions.
 -   **Telegram Auto-Execution Toggle** (✅ PRODUCTION-READY - Nov 5, 2025): One-click toggle between APPROVAL mode and FULL AUTO mode via Telegram `/auto` command. Settings persist in database, no restart needed. In FULL AUTO mode, all trade proposals execute immediately without approval buttons.
 -   **Lowered Filtering Thresholds**: MIN_RR reduced from 1.45 to 1.15, Quality scores from 0.70 to 0.50, enabling more trades in all market conditions
 -   **Strategy Orchestrator**: Intelligent auto-selection of GRID/Scalping/Momentum/Range-Bounce/Mean-Reversion based on real-time market regime (CHOPPY/SIDEWAYS/TRENDING/VOLATILE/NEUTRAL)
@@ -84,7 +87,7 @@ All 38 tasks completed, including AI performance tracking (dynamic model weighti
 **Production Environment (PRIMARY - 24/7):**
 The system runs on **Render.com** - this is the REAL production environment:
 -   **Service**: algogpt-docker ($7/month Web Service)
--   **Workers**: 7 background workers configured in Procfile (scanner, health, gpt5, n8n, positions, sentinel)
+-   **Workers**: 8 background workers configured in Procfile (scanner, health, gpt5, n8n, positions, sentinel, fills)
 -   **Domain**: https://algogpt-docker.onrender.com
 -   **Dashboard**: https://algogpt-docker.onrender.com/static/dashboard/index.html
 -   **Repository**: Connected to GitHub repo `market-gpt-api-template`

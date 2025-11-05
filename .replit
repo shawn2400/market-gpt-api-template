@@ -69,6 +69,10 @@ args = "Sentinel Security"
 task = "workflow.run"
 args = "Auto Health Monitor"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Fills Watcher"
+
 [[workflows.workflow]]
 name = "GPT-5 Central Brain"
 author = "agent"
@@ -120,6 +124,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG BASE_URL=http://127.0.0.1:5000 HEALTH_CHECK_INTERVAL=30 AUTO_FIX_ENABLE=1 TELEGRAM_SEND_ENABLE=1 python workers/auto_health_monitor.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Fills Watcher"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG FILLS_WATCH_ENABLE=1 FILLS_WATCH_INTERVAL_SEC=15 python workers/fills_watcher.py"
 
 [workflows.workflow.metadata]
 outputType = "console"

@@ -191,7 +191,7 @@ def get_trade_budget_usdt(
 
     # רצפה/תקרה
     floor_usdt = _f("BUDGET_MIN_USDT", 5.0)
-    ceil_usdt  = _f("BUDGET_MAX_USDT", 150.0)  # תקרה רכה
+    ceil_usdt  = _f("BUDGET_MAX_USDT", 30.0)  # תקרה רכה - הורד מ-150 ל-30 כדי לאפשר 5-6 trades בו-זמנית
     hard_cap   = _f("BUDGET_HARD_CAP_USDT", 0.0)  # 0=כבוי
     if hard_cap > 0:
         ceil_usdt = min(ceil_usdt, hard_cap)

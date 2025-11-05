@@ -995,6 +995,25 @@ async def process_cycle():
         if not payload:
             return
         
+        # 💰 CHECK AVAILABLE MARGIN: Skip proposals if insufficient funds
+        try:
+            from utils.binance_client import futures_balance
+            bals = futures_balance() or []
+            available = 0.0
+            for a in bals:
+                if str(a.get("asset", "")).upper() == "USDT":
+                    available = float(a.get("availableBalance") or a.get("available") or 0.0)
+                    break
+            
+            min_budget = float(os.getenv("BUDGET_MIN_USDT", "10.0"))
+            if available < min_budget:
+                LOGGER.warning(
+                    f"⏸️ Insufficient margin (${available:.2f} < ${min_budget:.2f}) - skipping proposals temporarily"
+                )
+                return
+        except Exception as e:
+            LOGGER.debug(f"Margin check failed (proceeding anyway): {e}")
+        
         # 🛡️ PORTFOLIO INTELLIGENCE: Check exposure limits before emitting
         portfolio_intel = get_portfolio_intelligence()
         symbol = payload.get("symbol", "")

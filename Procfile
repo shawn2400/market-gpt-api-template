@@ -12,6 +12,7 @@ gpt5: python workers/gpt5_orchestrator.py
 n8n: python workers/n8n_bridge.py
 positions: python workers/position_monitor.py
 sentinel: python workers/sentinel_security.py
+fills: python workers/fills_watcher.py
 
 
 
