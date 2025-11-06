@@ -92,7 +92,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && DATABASE_URL='postgresql://neondb_owner:npg_8zKsmVwMLZ0u@ep-spring-silence-ag9wyuvd-pooler.c-2.eu-central-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require' PYTHONPATH=/home/runner/$REPL_SLUG SUGGEST_FUTURES=1 SUGGEST_SPOT=1 SUGGEST_GRID=1 AUTO_RUN=1 TRADE_AUTO_SUGGEST=1 SUGGEST_INTERVAL_SEC=120 python workers/gpt_auto_suggest.py"
+args = "cd /home/runner/$REPL_SLUG && CONTEXT_URL=http://127.0.0.1:5000 DATABASE_URL='postgresql://neondb_owner:npg_8zKsmVwMLZ0u@ep-spring-silence-ag9wyuvd-pooler.c-2.eu-central-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require' PYTHONPATH=/home/runner/$REPL_SLUG SUGGEST_FUTURES=1 SUGGEST_SPOT=1 SUGGEST_GRID=1 AUTO_RUN=1 TRADE_AUTO_SUGGEST=1 SUGGEST_INTERVAL_SEC=120 python workers/gpt_auto_suggest.py"
 
 [[workflows.workflow]]
 name = "GPT-5 Central Brain"
@@ -157,6 +157,10 @@ externalPort = 3001
 [[ports]]
 localPort = 45313
 externalPort = 3003
+
+[[ports]]
+localPort = 45453
+externalPort = 3000
 
 # === Deployment (VM Target) ===
 [deployment]

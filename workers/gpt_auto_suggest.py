@@ -53,6 +53,39 @@ async def funding_bias_for_symbol(symbol: str) -> float:
     except Exception:
         return 0.0
 
+def _mock_indicators_from_symbol(symbol: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    TEMPORARY: Generate semi-realistic indicators based on symbol/price
+    TODO: Replace with actual Binance data fetching
+    """
+    import hashlib
+    # Use symbol hash to generate consistent but varying indicators
+    seed = int(hashlib.md5(symbol.encode()).hexdigest()[:8], 16)
+    price = ctx.get("price") or ctx.get("close") or 100.0
+    
+    # Generate semi-random but consistent indicators for each symbol
+    adx_base = (seed % 40) + 15  # 15-55
+    rsi_base = (seed % 60) + 20  # 20-80
+    atr_pct_base = ((seed % 300) + 150) / 100.0  # 1.5-4.5%
+    
+    #  Add price variation
+    price_factor = (int(price) % 10) / 10.0  # 0-0.9
+    
+    return {
+        "adx": round(adx_base + price_factor * 5, 1),
+        "rsi": round(rsi_base + price_factor * 10, 1),
+        "atr_percent": round(atr_pct_base + price_factor * 0.5, 2),
+        "macd": round((seed % 200 - 100) / 100.0, 3),
+        "macd_signal": round((seed % 150 - 75) / 100.0, 3),
+        "macd_hist": round((seed % 100 - 50) / 100.0, 3),
+        "bb_upper": price * 1.02,
+        "bb_lower": price * 0.98,
+        "volume": 1000000 + (seed % 500000),
+        "volume_sma_20": 1000000,
+        "ema_20": price * 0.995,
+        "ema_50": price * 0.99
+    }
+
 # Liquidity gate — אם אין פונקציה ייעודית, נשתמש בהערכת סליפג' בסיסית
 def _liquidity_gate_safe():
     try:
@@ -418,6 +451,13 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
     if ctx is None:
         ctx = {}
     ctx["symbol"] = symbol
+    
+    # ========== INJECT MOCK INDICATORS (TEMPORARY) ==========
+    # TODO: Replace with real Binance data fetching
+    if not ctx.get("adx") or not ctx.get("rsi"):  # Only if missing
+        mock_indicators = _mock_indicators_from_symbol(symbol, ctx)
+        ctx.update(mock_indicators)
+        LOGGER.debug(f"Injected mock indicators for {symbol}: ADX={ctx['adx']}, RSI={ctx['rsi']}, ATR={ctx['atr_percent']}%")
     
     # ========== SCOUT 1: MARKET INTELLIGENCE ==========
     mi_engine = get_market_intelligence()
