@@ -88,13 +88,19 @@ The production environment runs on Render.com with 8 background workers and a Ne
 
 ## Recent Changes (2025-11-06)
 
-**MetaBrain v8.0 Hotfix - Critical Fixes:**
+**MetaBrain v8.0 Hotfix #1 - Critical Fixes:**
 1. ✅ **Neon Auto-Resume**: `utils/neon_resume.py` - Prevents database downtime
 2. ✅ **Hedge Mode Fix**: `utils/position_mode.py` + `utils/order_params.py` - Eliminates APIError -4061
 3. ✅ **TP Ladder Fix**: `utils/price_math.py` - No more negative prices, proper tick quantization
 4. ✅ **Telegram Digest**: Enhanced `utils/telegram_digest.py` - Spam prevention with 30-min batching
 5. ✅ **ENV Validation**: `utils/env_validate.py` - Clear logging of missing providers
 6. ✅ **Main Integration**: Updated `main.py` with all hotfix modules on startup
+
+**MetaBrain v8.0 Hotfix #2 (2025-11-06) - Telegram Spam Fix + SPOT Trading:**
+1. ✅ **Auto Health Monitor Fix**: Now sends alerts to Digest Queue instead of direct Telegram (prevents 200+ daily spam messages)
+2. ✅ **Position Monitor Fix**: Sends position reports to Digest Queue (batched every 30 min or at scheduled health digests)
+3. ✅ **SPOT Trading Enabled**: Added `SUGGEST_SPOT=1` to `.env.example` - Auto Scanner will now scan both FUTURES + SPOT markets
+4. ⚠️ **Auto Scanner Workflow**: Due to workflow management cache issues, Auto Scanner workflow needs manual update to include `SUGGEST_SPOT=1` environment variable
 
 **Post-Trade AI Review System:**
 - All 5 AI brains analyze completed trades independently
