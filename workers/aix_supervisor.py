@@ -23,7 +23,7 @@ logging.basicConfig(
 logger = logging.getLogger("aix_supervisor")
 
 XAI_API_KEY = os.getenv("XAI_API_KEY", "").strip()
-XAI_MODEL = os.getenv("XAI_MODEL", "grok-beta").strip()
+XAI_MODEL = os.getenv("XAI_MODEL", "grok-2-latest").strip()
 XAI_BASE_URL = os.getenv("XAI_BASE_URL", "https://api.x.ai/v1")
 SUPERVISOR_INTERVAL_SEC = int(os.getenv("AIX_SUPERVISOR_INTERVAL", "1800"))
 SUPERVISOR_ENABLED = os.getenv("AIX_SUPERVISOR_ENABLED", "1").lower() in ("1", "true", "yes")

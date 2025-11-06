@@ -727,26 +727,53 @@ def get_latest_breaker_state() -> Optional[Dict[str, Any]]:
     if not USE_DB: return None
     is_pg = _is_postgres(DB_URL)
     
-    with _conn() as con:
-        cur = con.cursor()
-        cur.execute("""
-            SELECT id, daily_dd, daily_dd_peak, consec_losses, last_reset, paused, pause_reason, created_at, updated_at
-            FROM breaker_state
-            ORDER BY id DESC
-            LIMIT 1
-        """)
-        
-        row = cur.fetchone()
-        if row:
-            return {
-                "id": row[0],
-                "daily_dd": row[1],
-                "daily_dd_peak": row[2],
-                "consec_losses": row[3],
-                "last_reset": row[4],
-                "paused": bool(row[5]) if is_pg else bool(row[5]),
-                "pause_reason": row[6] or "",
-                "created_at": row[7],
-                "updated_at": row[8]
-            }
+    try:
+        with _conn() as con:
+            cur = con.cursor()
+            try:
+                cur.execute("""
+                    SELECT id, daily_dd, daily_dd_peak, consec_losses, last_reset, paused, pause_reason, created_at, updated_at
+                    FROM breaker_state
+                    ORDER BY id DESC
+                    LIMIT 1
+                """)
+            except Exception as e:
+                logger.debug(f"Breaker state query with all columns failed: {e}, trying without paused column")
+                cur.execute("""
+                    SELECT id, daily_dd, daily_dd_peak, consec_losses, last_reset, created_at, updated_at
+                    FROM breaker_state
+                    ORDER BY id DESC
+                    LIMIT 1
+                """)
+                row = cur.fetchone()
+                if row:
+                    return {
+                        "id": row[0],
+                        "daily_dd": row[1],
+                        "daily_dd_peak": row[2],
+                        "consec_losses": row[3],
+                        "last_reset": row[4],
+                        "paused": False,
+                        "pause_reason": "",
+                        "created_at": row[5],
+                        "updated_at": row[6]
+                    }
+                return None
+            
+            row = cur.fetchone()
+            if row:
+                return {
+                    "id": row[0],
+                    "daily_dd": row[1],
+                    "daily_dd_peak": row[2],
+                    "consec_losses": row[3],
+                    "last_reset": row[4],
+                    "paused": bool(row[5]) if is_pg else bool(row[5]),
+                    "pause_reason": row[6] or "",
+                    "created_at": row[7],
+                    "updated_at": row[8]
+                }
+            return None
+    except Exception as e:
+        logger.debug(f"Failed to get breaker state from database: {e}")
         return None

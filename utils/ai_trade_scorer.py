@@ -42,7 +42,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 # Models
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-2025-08-07")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
-XAI_MODEL = os.getenv("XAI_MODEL", "grok-beta")
+XAI_MODEL = os.getenv("XAI_MODEL", "grok-2-latest")
 
 # API Endpoints
 OPENAI_BASE_URL = "https://api.openai.com/v1"

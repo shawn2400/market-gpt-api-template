@@ -213,7 +213,7 @@ class GrokBrain(AIBrain):
     """Grok (XAI) - Contrarian analysis."""
     
     def __init__(self):
-        super().__init__("Grok", "xai", "grok-beta")
+        super().__init__("Grok", "xai", "grok-2-latest")
         self.api_key = os.getenv("XAI_API_KEY")
     
     async def vote(self, scout_data, market_data, wallet_state) -> Dict[str, Any]:
