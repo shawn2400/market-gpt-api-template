@@ -60,16 +60,25 @@ class ZeroGapSLManager:
 
             # Step 1: Place new SL
             log.info(f"[ZeroGapSL] {symbol} placing new SL @ {new_stop_price} ({side})")
-            new_order = self.client.futures_create_order(
-                symbol=symbol,
-                side=order_side,
-                type="STOP_MARKET",
-                quantity=qty,
-                stopPrice=new_stop_price,
-                positionSide=position_side,
-                reduceOnly=True,
-                newClientOrderId=f"SL_{symbol}_{int(time.time())}",
-            )
+            print(f"[DEBUG SLManager] About to call self.client.futures_create_order, client type: {type(self.client)}")
+            print(f"[DEBUG SLManager] positionSide={position_side!r}")
+            
+            # Build order kwargs, only include positionSide if it's not None
+            order_kwargs = {
+                "symbol": symbol,
+                "side": order_side,
+                "type": "STOP_MARKET",
+                "quantity": qty,
+                "stopPrice": new_stop_price,
+                "reduceOnly": True,
+                "newClientOrderId": f"SL_{symbol}_{int(time.time())}",
+            }
+            
+            # Only add positionSide if it's explicitly set (not None)
+            if position_side is not None:
+                order_kwargs["positionSide"] = position_side
+            
+            new_order = self.client.futures_create_order(**order_kwargs)
 
             if not new_order or "orderId" not in new_order:
                 return {"success": False, "error": "Failed to place new SL", "new_order_id": None, "cancelled_count": 0}

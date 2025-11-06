@@ -744,11 +744,13 @@ async def manage_open_trades():
                                         print(f"🚀 [DynPath ENFORCE] {sym} {r.regime} (conf={r.confidence:.3f}) → SL={sl_p:.4f}, TP={tp_p:.4f}")
                                         
                                         # Execute Zero-Gap SL update
+                                        # For hedge mode, we must send positionSide=side
                                         ok1 = _sl_manager.safe_replace_sl(
                                             symbol=context["symbol"],
                                             new_stop_price=sl_p,
                                             qty=qtz,
-                                            side=side
+                                            side=side,
+                                            position_side=side  # For hedge mode: LONG/SHORT
                                         )
                                         if ok1:
                                             sl_changes.labels(symbol=context["symbol"]).inc()
@@ -770,7 +772,8 @@ async def manage_open_trades():
                                             entry,
                                             qtz,
                                             side,
-                                            tp_prices
+                                            tp_prices,
+                                            position_side=side  # For hedge mode: LONG/SHORT
                                         )
                                         if ok2:
                                             tp_sets.labels(symbol=context["symbol"]).inc()

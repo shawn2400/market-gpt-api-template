@@ -4,6 +4,9 @@ from __future__ import annotations
 import os, time, math, logging, threading
 from contextlib import suppress
 from typing import Any, Dict, List, Optional, Tuple, cast
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from utils.metrics_tracker import observe_http, observe_http_ctx  # מדידת לטנסי/HTTP
 
@@ -477,11 +480,9 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
         kwargs["newClientOrderId"] = coid
     elif ORDER_ID_PREFIX:
         kwargs["newClientOrderId"] = f"{ORDER_ID_PREFIX}_{int(_ms() % 10 ** 9)}"
-    try:
-        if HEDGE_MODE_OVERRIDE in ("0", "false", "no", "off", "oneway"):
-            kwargs.pop("positionSide", None)
-    except Exception:
-        pass
+    
+    # DEBUG: Print to console to verify function is called
+    print(f"[DEBUG futures_create_order] positionSide={kwargs.get('positionSide')!r}")
     last: Optional[Exception] = None
     for attempt in range(1, max(1, BINANCE_MAX_RETRIES) + 1):
         try:
