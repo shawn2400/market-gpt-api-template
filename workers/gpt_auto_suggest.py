@@ -53,38 +53,69 @@ async def funding_bias_for_symbol(symbol: str) -> float:
     except Exception:
         return 0.0
 
-def _mock_indicators_from_symbol(symbol: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
+async def _fetch_real_indicators(symbol: str, interval: str = "15m", limit: int = 200) -> Dict[str, Any]:
     """
-    TEMPORARY: Generate semi-realistic indicators based on symbol/price
-    TODO: Replace with actual Binance data fetching
+    🎯 LIVE BINANCE DATA - Fetch real klines and calculate all indicators
     """
-    import hashlib
-    # Use symbol hash to generate consistent but varying indicators
-    seed = int(hashlib.md5(symbol.encode()).hexdigest()[:8], 16)
-    price = ctx.get("price") or ctx.get("close") or 100.0
-    
-    # Generate semi-random but consistent indicators for each symbol
-    adx_base = (seed % 40) + 15  # 15-55
-    rsi_base = (seed % 60) + 20  # 20-80
-    atr_pct_base = ((seed % 300) + 150) / 100.0  # 1.5-4.5%
-    
-    #  Add price variation
-    price_factor = (int(price) % 10) / 10.0  # 0-0.9
-    
-    return {
-        "adx": round(adx_base + price_factor * 5, 1),
-        "rsi": round(rsi_base + price_factor * 10, 1),
-        "atr_percent": round(atr_pct_base + price_factor * 0.5, 2),
-        "macd": round((seed % 200 - 100) / 100.0, 3),
-        "macd_signal": round((seed % 150 - 75) / 100.0, 3),
-        "macd_hist": round((seed % 100 - 50) / 100.0, 3),
-        "bb_upper": price * 1.02,
-        "bb_lower": price * 0.98,
-        "volume": 1000000 + (seed % 500000),
-        "volume_sma_20": 1000000,
-        "ema_20": price * 0.995,
-        "ema_50": price * 0.99
-    }
+    try:
+        from utils.get_klines import get_klines
+        from utils.indicators import rsi, adx, atr, macd, bollinger_bands, ema
+        
+        # Fetch real klines from Binance
+        df = await get_klines(symbol, interval=interval, limit=limit, market_type="futures")
+        
+        if df.empty or len(df) < 50:
+            LOGGER.warning(f"⚠️ {symbol}: Insufficient klines data ({len(df)} candles)")
+            return {}
+        
+        close = df["close"]
+        price = float(close.iloc[-1])
+        
+        # Calculate all indicators from REAL data
+        rsi_val = rsi(close, period=14)
+        adx_val = adx(df, period=14)
+        atr_val = atr(df, period=14)
+        macd_line, macd_signal, macd_hist = macd(close, fast=12, slow=26, signal=9)
+        bb_mid, bb_upper, bb_lower = bollinger_bands(close, period=20, std_factor=2.0)
+        ema20 = ema(close, period=20)
+        ema50 = ema(close, period=50)
+        
+        # Calculate volume averages
+        volume_sma_20 = df["volume"].rolling(window=20, min_periods=1).mean()
+        
+        # ATR as percentage of price
+        atr_pct = (float(atr_val.iloc[-1]) / price * 100.0) if not atr_val.empty else 2.0
+        
+        indicators = {
+            "price": price,
+            "close": price,
+            "rsi": round(float(rsi_val.iloc[-1]), 2) if not rsi_val.empty else 50.0,
+            "adx": round(float(adx_val.iloc[-1]), 2) if not adx_val.empty else 25.0,
+            "atr": round(float(atr_val.iloc[-1]), 6),
+            "atr_percent": round(atr_pct, 2),
+            "macd": round(float(macd_line.iloc[-1]), 6) if not macd_line.empty else 0.0,
+            "macd_signal": round(float(macd_signal.iloc[-1]), 6) if not macd_signal.empty else 0.0,
+            "macd_hist": round(float(macd_hist.iloc[-1]), 6) if not macd_hist.empty else 0.0,
+            "bb_upper": round(float(bb_upper.iloc[-1]), 6) if not bb_upper.empty else price * 1.02,
+            "bb_mid": round(float(bb_mid.iloc[-1]), 6) if not bb_mid.empty else price,
+            "bb_lower": round(float(bb_lower.iloc[-1]), 6) if not bb_lower.empty else price * 0.98,
+            "ema_20": round(float(ema20.iloc[-1]), 6) if not ema20.empty else price,
+            "ema_50": round(float(ema50.iloc[-1]), 6) if not ema50.empty else price,
+            "volume": float(df["volume"].iloc[-1]),
+            "volume_sma_20": round(float(volume_sma_20.iloc[-1]), 2) if not volume_sma_20.empty else 1000000
+        }
+        
+        LOGGER.info(
+            f"📊 LIVE Indicators [{symbol}]: "
+            f"RSI={indicators['rsi']:.1f}, ADX={indicators['adx']:.1f}, "
+            f"ATR={indicators['atr_percent']:.2f}%, MACD={indicators['macd']:.4f}"
+        )
+        
+        return indicators
+        
+    except Exception as e:
+        LOGGER.error(f"❌ Failed to fetch real indicators for {symbol}: {e}")
+        return {}
 
 # Liquidity gate — אם אין פונקציה ייעודית, נשתמש בהערכת סליפג' בסיסית
 def _liquidity_gate_safe():
@@ -452,12 +483,15 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
         ctx = {}
     ctx["symbol"] = symbol
     
-    # ========== INJECT MOCK INDICATORS (TEMPORARY) ==========
-    # TODO: Replace with real Binance data fetching
-    if not ctx.get("adx") or not ctx.get("rsi"):  # Only if missing
-        mock_indicators = _mock_indicators_from_symbol(symbol, ctx)
-        ctx.update(mock_indicators)
-        LOGGER.debug(f"Injected mock indicators for {symbol}: ADX={ctx['adx']}, RSI={ctx['rsi']}, ATR={ctx['atr_percent']}%")
+    # ========== FETCH LIVE BINANCE INDICATORS ==========
+    # If indicators missing, fetch REAL data from Binance
+    if not ctx.get("adx") or not ctx.get("rsi"):
+        real_indicators = await _fetch_real_indicators(symbol, interval="15m", limit=200)
+        if real_indicators:
+            ctx.update(real_indicators)
+        else:
+            LOGGER.warning(f"⚠️ {symbol}: Failed to fetch live indicators, skipping")
+            return None
     
     # ========== SCOUT 1: MARKET INTELLIGENCE ==========
     mi_engine = get_market_intelligence()
