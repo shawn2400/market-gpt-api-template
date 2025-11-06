@@ -485,10 +485,22 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
     # ========== BUILD SCOUT DATA ==========
     from utils.scout_data_builder import build_scout_data
     
+    # ========== CALCULATE DYNAMIC SCORES ==========
+    # Market Intelligence quality score (based on ADX/ATR/RSI/MACD)
+    mi_quality_score = mi_engine.calculate_quality_score(ctx)
+    
+    # Strategy Orchestrator setup score (based on RSI/MACD/BB/Volume)
+    so_setup_score = orchestrator.calculate_setup_score(ctx)
+    
+    LOGGER.info(
+        f"📊 Dynamic Scores [{symbol}]: MI={mi_quality_score:.1f}/10, SO={so_setup_score:.1f}/10, "
+        f"AVG={(mi_quality_score + so_setup_score) / 2:.1f}/10"
+    )
+    
     # Create market intelligence result
     mi_result = {
         "regime": market_condition.regime,
-        "quality_score": market_condition.quality_threshold,  # Use quality_threshold from MarketCondition
+        "quality_score": mi_quality_score,  # ← DYNAMIC score from indicators!
         "reasoning": f"Regime={market_condition.regime}, Mood={market_condition.mood}",
         "timestamp": time.time()
     }
@@ -496,7 +508,7 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
     # Create strategy orchestrator result
     so_result = {
         "strategy": strategy_config.strategy_type,
-        "score": strategy_config.min_quality,
+        "score": so_setup_score,  # ← DYNAMIC score from technical signals!
         "min_rr": strategy_config.min_rr,
         "leverage": strategy_config.max_leverage,
         "sl_atr_mult": 1.5,  # Default, will be overridden by brains
