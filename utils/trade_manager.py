@@ -38,6 +38,23 @@ with suppress(Exception):
 with suppress(Exception):
     from utils.alerts import send_telegram_message  # type: ignore
 
+# Dynamic Trading System (MetaBrain v8.0)
+with suppress(Exception):
+    from utils.regime_glue import RegimeAdapter
+    from utils.sl_manager import ZeroGapSLManager
+    from utils.tp_ladder import TPLadder
+    import utils.binance_client as _binance_client_module
+    
+    _regime_adapter = RegimeAdapter()
+    _sl_manager = ZeroGapSLManager(_binance_client_module)
+    _tp_ladder = TPLadder(_binance_client_module)
+    _DYNAMIC_TRADING_AVAILABLE = True
+except Exception as _e:
+    _regime_adapter = None  # type: ignore
+    _sl_manager = None  # type: ignore
+    _tp_ladder = None  # type: ignore
+    _DYNAMIC_TRADING_AVAILABLE = False
+
 logger = logging.getLogger("algogpt.trade_manager")
 
 # Enable real-time Telegram notifications for all management actions
