@@ -2,6 +2,7 @@
 """
 Auto Health Monitor - 100% System Reliability
 בודק הכל כל 30 שניות ומתקן בעיות אוטומטית
+Uses Telegram Digest System - sends alerts to digest queue instead of immediate spam
 """
 import os, sys, time, logging, asyncio, json
 from datetime import datetime
@@ -12,6 +13,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("auto_health_monitor")
+
+# Import digest system
+try:
+    from utils.telegram_digest import get_digest
+except Exception:
+    def get_digest():  # type: ignore
+        class MockDigest:
+            def add_health_alert(self, *args, **kwargs):
+                pass
+        return MockDigest()
 
 # === Configuration ===
 CHECK_INTERVAL = int(os.getenv("HEALTH_CHECK_INTERVAL", "30"))  # 30 seconds

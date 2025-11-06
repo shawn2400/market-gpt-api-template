@@ -23,6 +23,23 @@ except Exception:
         log.debug("trade_manager unavailable")
         pass
 
+# Import AI post-trade review and consensus improver
+try:
+    from utils.ai_post_trade_review import review_completed_trade
+    from utils.ai_consensus_improver import analyze_and_apply_improvements
+    from utils.telegram_digest import get_digest
+except Exception as e:
+    log.warning(f"AI review modules unavailable: {e}")
+    async def review_completed_trade(trade_data: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore
+        return {}
+    async def analyze_and_apply_improvements(reviews: List[Dict[str, Any]]) -> Dict[str, Any]:  # type: ignore
+        return {}
+    def get_digest():  # type: ignore
+        class MockDigest:
+            def add_trade_completion(self, *args, **kwargs):
+                pass
+        return MockDigest()
+
 # ייבוא עדין של לקוח הבורסה
 try:
     from utils.binance_client import get_price, get_position_info
@@ -45,6 +62,10 @@ WATCHLIST = [s.strip().upper() for s in (os.getenv("FILLS_WATCHLIST", os.getenv(
 _entry_ts: Dict[str, float] = {}
 _tp1_done: Dict[str, bool] = {}
 _last_manage_ts: float = 0.0  # Track last time we called manage_open_trades
+
+# Track active positions for trade completion detection
+_active_positions: Dict[str, Dict[str, Any]] = {}  # symbol -> {entry, qty, side, entry_time, ...}
+_completed_trades_buffer: List[Dict[str, Any]] = []  # Buffer for batch AI review
 
 def _position_snapshot(symbol: str) -> Tuple[Optional[float], Optional[float]]:
     """
@@ -69,11 +90,28 @@ def _tick_symbol(symbol: str):
     if ep and qty and symbol not in _entry_ts:
         _entry_ts[symbol] = now
         _tp1_done[symbol] = False
+        
+        # Track new position
+        current_price = float(get_price(symbol) or ep)
+        _active_positions[symbol] = {
+            "entry_price": ep,
+            "quantity": qty,
+            "side": "LONG" if current_price >= ep else "SHORT",
+            "entry_time": now,
+            "sl_price": None,
+            "tp_prices": [],
+            "regime": "UNKNOWN"
+        }
 
     if not (ep and qty):
-        # אין פוזיציה → איפוס
+        # אין פוזיציה → איפוס + detect trade completion
+        if symbol in _active_positions:
+            # Position closed - trigger AI review
+            _on_trade_completion(symbol, now)
+        
         _entry_ts.pop(symbol, None)
         _tp1_done.pop(symbol, None)
+        _active_positions.pop(symbol, None)
         return
 
     # חישוב RR ועידכון Gauge
@@ -96,6 +134,71 @@ def _tick_symbol(symbol: str):
 
     except Exception as e:
         log.debug("tick_symbol_failed %s: %s", symbol, e)
+
+
+def _on_trade_completion(symbol: str, exit_time: float):
+    """Handle trade completion - send to AI review"""
+    try:
+        pos_data = _active_positions.get(symbol)
+        if not pos_data:
+            return
+        
+        exit_price = float(get_price(symbol) or pos_data["entry_price"])
+        entry_price = pos_data["entry_price"]
+        side = pos_data["side"]
+        
+        # Calculate PnL
+        if side == "LONG":
+            pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+        else:
+            pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+        
+        pnl_usd = pnl_pct * 10  # Rough estimate
+        
+        trade_data = {
+            "trade_id": f"{symbol}_{int(exit_time)}",
+            "symbol": symbol,
+            "side": side,
+            "entry_price": entry_price,
+            "exit_price": exit_price,
+            "entry_time": pos_data["entry_time"],
+            "exit_time": exit_time,
+            "pnl_usd": pnl_usd,
+            "pnl_pct": pnl_pct,
+            "quantity": pos_data["quantity"],
+            "leverage": 4,  # Default
+            "exit_reason": "MANUAL_CLOSE",  # Could be enhanced to detect SL/TP
+            "sl_price": pos_data.get("sl_price"),
+            "tp_prices": pos_data.get("tp_prices", []),
+            "regime": pos_data.get("regime", "UNKNOWN")
+        }
+        
+        # Add to digest for immediate summary
+        digest = get_digest()
+        digest.add_trade_completion(
+            symbol=symbol,
+            side=side,
+            entry_price=entry_price,
+            exit_price=exit_price,
+            entry_time=pos_data["entry_time"],
+            exit_time=exit_time,
+            pnl_usd=pnl_usd,
+            pnl_pct=pnl_pct,
+            quantity=pos_data["quantity"],
+            leverage=4,
+            exit_reason="MANUAL_CLOSE",
+            sl_price=pos_data.get("sl_price"),
+            tp_prices=pos_data.get("tp_prices", []),
+            regime=pos_data.get("regime", "UNKNOWN")
+        )
+        
+        # Add to buffer for batch AI review
+        _completed_trades_buffer.append(trade_data)
+        
+        log.info(f"Trade completion detected: {symbol} - PnL: ${pnl_usd:.2f} ({pnl_pct:.2f}%)")
+        
+    except Exception as e:
+        log.error(f"Error processing trade completion for {symbol}: {e}")
 
 
 class _TradeManagerThread(threading.Thread):

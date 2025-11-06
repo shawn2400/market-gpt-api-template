@@ -73,6 +73,14 @@ args = "Auto Health Monitor"
 task = "workflow.run"
 args = "Fills Watcher"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Telegram Digest Reporter"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "DB Keepalive"
+
 [[workflows.workflow]]
 name = "GPT-5 Central Brain"
 author = "agent"
@@ -135,6 +143,28 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG FILLS_WATCH_ENABLE=1 FILLS_WATCH_INTERVAL_SEC=15 python workers/fills_watcher.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Telegram Digest Reporter"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/telegram_digest_reporter.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "DB Keepalive"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG DB_KEEPALIVE_ENABLE=1 DB_KEEPALIVE_INTERVAL_SEC=300 python workers/db_keepalive.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
