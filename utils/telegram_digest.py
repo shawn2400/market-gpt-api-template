@@ -160,7 +160,7 @@ class TelegramDigest:
         
         logger.info(f"Health alert queued: {level} - {message}")
     
-    def add_trade_event(self, symbol: str, event_type: str, pnl_usd: Optional[float] = None, 
+    def add_trade_event(self, symbol: str, event_type: Literal["SL_HIT", "TP1_HIT", "TP2_HIT", "TP3_HIT", "TP4_HIT", "PARTIAL_FILL", "MANUAL_CLOSE"], pnl_usd: Optional[float] = None, 
                        pnl_pct: Optional[float] = None, price: Optional[float] = None, 
                        details: Optional[Dict[str, Any]] = None):
         """Add trade event to queue"""
