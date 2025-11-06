@@ -48,6 +48,37 @@ except Exception as e:
     periodic_health_and_resync = None  # type: ignore
     _DB_RESILIENCE_AVAILABLE = False
 
+# ======== MetaBrain v8.0 Hotfix: Neon Auto-Resume ========
+try:
+    from utils.neon_resume import ensure_neon_running
+    _neon_result = ensure_neon_running()
+    if not _neon_result.get("ok"):
+        logging.warning(f"⚠️ Neon auto-resume: {_neon_result.get('message')}")
+    else:
+        logging.info(f"✅ Neon auto-resume: {_neon_result.get('message')}")
+except Exception as e:
+    logging.warning(f"Neon auto-resume not available: {e}")
+
+# ======== MetaBrain v8.0 Hotfix: ENV Validation ========
+try:
+    from utils.env_validate import validate_env
+    validate_env(strict=False)  # Warning only, don't exit
+except Exception as e:
+    logging.warning(f"ENV validation not available: {e}")
+
+# ======== MetaBrain v8.0 Hotfix: Binance Hedge Mode Enforcement ========
+try:
+    from utils.position_mode import ensure_hedge_mode
+    BINANCE_FORCE_HEDGE_MODE = os.getenv("BINANCE_FORCE_HEDGE_MODE", "1") == "1"
+    if BINANCE_FORCE_HEDGE_MODE:
+        _hedge_success = ensure_hedge_mode()
+        if _hedge_success:
+            logging.info("✅ Binance Hedge Mode enforced")
+        else:
+            logging.warning("⚠️ Binance Hedge Mode enforcement failed (will retry on first order)")
+except Exception as e:
+    logging.warning(f"Hedge Mode enforcement not available: {e}")
+
 # ======== Utility: safe string headers ========
 def _to_str_header(val: Any) -> str:
     try:

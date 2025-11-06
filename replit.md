@@ -34,6 +34,14 @@ The core application is built with FastAPI and Gunicorn, featuring modularized f
 -   **TP Ladder System**: Multi-level take profits with configurable weights.
 -   **Daily Trading Reports**: Comprehensive Telegram reports with PnL, Win Rate, and trade summaries.
 
+**MetaBrain v8.0 Hotfix (2025-11-06):**
+-   **Neon Auto-Resume**: Automatically resumes Neon PostgreSQL endpoint via API when it auto-pauses, preventing database unavailability.
+-   **Binance Hedge Mode Enforcement**: Ensures `dualSidePosition=true` is set before trading, preventing APIError -4061 (position side mismatch).
+-   **Dynamic TP Ladder Fix**: Prevents negative TP prices with proper tick size quantization and price validation.
+-   **Order Params Safety**: Intelligent order parameter building that prevents -4061 and -1106 errors by correctly managing `positionSide` and `reduceOnly`.
+-   **Telegram Digest Consolidation**: All non-critical notifications batched into 30-minute digests (health: 3x daily at 08:00, 16:00, 00:00 Israel; trades: every 30 min if significant events).
+-   **ENV Validation**: Fail-fast validation of critical API keys and configuration with clear logging of missing providers.
+
 **Security & Authentication:**
 -   Uses Bearer Token (`X-API-Key`) and HMAC Signature, with anti-replay protection and mandatory Telegram approval.
 
@@ -48,30 +56,88 @@ The system integrates 9+ specialized AI systems with 5 AI providers for consensu
 Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates (Dual Confirmation), Data-Driven Monte Carlo simulations, a Live Health Monitor, and Circuit Breakers.
 
 ### Telegram Digest System
-Consolidated notification system with batched reports:
--   **Health Digests**: Three daily reports on system status and summaries.
--   **Trade/PnL Digests**: Sent every 30 minutes for significant events, including closed trades, PnL summaries, and active positions.
--   **Critical Alerts**: Immediate notifications for system failures, trade execution errors, and security breaches.
--   **AI Trade Reviews**: Sent upon trade completion, summarizing multi-brain analysis and improvement proposals.
+Consolidated notification system with batched reports (Hotfix 2025-11-06):
+-   **Health Digests**: Three daily reports (08:00, 16:00, 00:00 Israel time) on system status, worker health, and daily summaries.
+-   **Trade/PnL Digests**: Sent every 30 minutes ONLY if there are significant events (SL/TP hits, closed trades, position updates). No spam!
+-   **Critical Alerts**: Immediate notifications ONLY for true emergencies (system failures, circuit breaker, security breaches). Everything else queued to digest.
+-   **AI Trade Reviews**: Sent immediately upon trade completion, summarizing 5-brain analysis with consensus scores and auto-applied improvements.
+-   **Rate Limiting**: Maximum 3 immediate messages per 30-minute window; overflow automatically queued to next digest.
 
 ### Deployment Architecture
 The production environment runs on Render.com with 8 background workers and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used solely for development and testing. The system supports a 3-phase progressive rollout for dynamic regime trading, currently in full production (Phase 3).
 
 ## External Dependencies
 
--   **Binance Futures API**: Market data, order execution, account management.
--   **OpenAI API**: GPT-5 for AI trade proposals and market analysis.
--   **Google Gemini API**: Gemini 2 Pro for fast multi-modal reasoning.
--   **DeepSeek API**: AI provider for trade optimization.
--   **AI-X/Grok API**: AI provider for system supervision.
--   **Anthropic Claude API**: Claude Sonnet 3.5 for consensus validation.
--   **Telegram Bot API**: Notifications, approval workflows, interactive callbacks.
+-   **Binance Futures API**: Market data, order execution, account management (Hedge Mode enforced).
+-   **Neon PostgreSQL API**: Auto-resume endpoint management to prevent database auto-pause.
+-   **OpenAI API**: GPT-5 for AI trade proposals, market analysis, and post-trade reviews.
+-   **Google Gemini API**: Gemini 2 Pro for fast multi-modal reasoning and trade scoring.
+-   **DeepSeek API**: AI provider for trade optimization and post-trade analysis.
+-   **AI-X/Grok API**: AI provider for system supervision and trade reviews.
+-   **Anthropic Claude API**: Claude Sonnet 3.5 for consensus validation and post-trade scoring.
+-   **GitHub API**: Auto-commit system improvements when AI consensus reached (3+ brains, 60%+ agreement).
+-   **Telegram Bot API**: Notifications, approval workflows, interactive callbacks, digest reports.
 -   **N8N Workflow Automation**: External workflow integration, news ingestion.
 -   **Gunicorn**: Production-grade WSGI HTTP server.
--   **PostgreSQL**: Persistent data storage.
--   **SQLAlchemy**: ORM for database interaction.
--   **Psycopg2**: PostgreSQL adapter.
+-   **PostgreSQL (Neon)**: Persistent data storage with auto-resume capability.
+-   **psycopg[binary]>=3.2.0**: Modern PostgreSQL adapter (replaces psycopg2).
 -   **psutil**: System and process monitoring.
 -   **httpx**: Async HTTP client for AI provider API calls.
 -   **scipy**: Scientific computing for statistical analysis.
 -   **numpy**: Numerical computing for simulations and metrics.
+
+## Recent Changes (2025-11-06)
+
+**MetaBrain v8.0 Hotfix - Critical Fixes:**
+1. ✅ **Neon Auto-Resume**: `utils/neon_resume.py` - Prevents database downtime
+2. ✅ **Hedge Mode Fix**: `utils/position_mode.py` + `utils/order_params.py` - Eliminates APIError -4061
+3. ✅ **TP Ladder Fix**: `utils/price_math.py` - No more negative prices, proper tick quantization
+4. ✅ **Telegram Digest**: Enhanced `utils/telegram_digest.py` - Spam prevention with 30-min batching
+5. ✅ **ENV Validation**: `utils/env_validate.py` - Clear logging of missing providers
+6. ✅ **Main Integration**: Updated `main.py` with all hotfix modules on startup
+
+**Post-Trade AI Review System:**
+- All 5 AI brains analyze completed trades independently
+- Scores: Entry Quality, SL/TP Placement, Position Management, Exit Timing (0-100 each)
+- Consensus engine identifies improvements when 3+ brains agree (60%+ threshold)
+- Auto-improvement: Updates `config/trading_params.yaml`, commits to GitHub, triggers deployment
+- Full implementation in `utils/ai_post_trade_review.py` + `utils/ai_consensus_improver.py`
+
+**Files Created:**
+- `utils/neon_resume.py` - Neon API integration
+- `utils/position_mode.py` - Hedge Mode enforcement
+- `utils/order_params.py` - Safe order building
+- `utils/price_math.py` - Dynamic TP/SL calculation
+- `utils/env_validate.py` - ENV validation
+- `scripts/neon_resume.sh` - Manual resume script
+
+**Files Updated:**
+- `main.py` - Startup hooks for all hotfix modules
+- `.env.example` - Added all new environment variables
+- `requirements.txt` - Already has `psycopg[binary]>=3.2.0`
+
+**Environment Variables Required:**
+```bash
+# Neon Auto-Resume (Optional but recommended)
+NEON_API_KEY=
+NEON_PROJECT_ID=
+NEON_ENDPOINT_ID=
+
+# Binance Hedge Mode (Default: enabled)
+BINANCE_FORCE_HEDGE_MODE=1
+
+# Telegram Digest (Default: enabled, 30-min intervals)
+TELEGRAM_DIGEST_ENABLED=1
+TELEGRAM_DIGEST_INTERVAL_SEC=1800
+TELEGRAM_IMMEDIATE_SEVERITIES=CRITICAL
+
+# AI Providers for Post-Trade Review
+ANTHROPIC_API_KEY=  # Claude Sonnet 3.5 (1 of 5 brains)
+DEEPSEEK_API_KEY=   # Optional
+# OpenAI, Gemini, XAI already configured
+
+# GitHub Auto-Commit (for AI consensus improvements)
+GITHUB_TOKEN=
+GITHUB_REPO=shawn2400/market-gpt-api-template
+AUTO_IMPROVE_ENABLE=1
+```
