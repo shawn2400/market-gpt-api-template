@@ -100,7 +100,15 @@ The production environment runs on Render.com with 8 background workers and a Ne
 1. ✅ **Auto Health Monitor Fix**: Now sends alerts to Digest Queue instead of direct Telegram (prevents 200+ daily spam messages)
 2. ✅ **Position Monitor Fix**: Sends position reports to Digest Queue (batched every 30 min or at scheduled health digests)
 3. ✅ **SPOT Trading Enabled**: Added `SUGGEST_SPOT=1` to `.env.example` - Auto Scanner will now scan both FUTURES + SPOT markets
-4. ⚠️ **Auto Scanner Workflow**: Due to workflow management cache issues, Auto Scanner workflow needs manual update to include `SUGGEST_SPOT=1` environment variable
+4. ✅ **Auto Scanner Workflow**: Successfully added workflow with FUTURES + SPOT + GRID enabled
+
+**MetaBrain v8.0 Hotfix #3 (2025-11-06) - Auto Scanner + LIMIT→MARKET Fallback:**
+1. ✅ **Auto Scanner Workflow**: Added dedicated workflow for `workers/gpt_auto_suggest.py` with FUTURES + SPOT + GRID enabled
+2. ✅ **LIMIT→MARKET Fallback**: New `utils/order_timeout_monitor.py` - automatically converts unfilled LIMIT orders to MARKET after 60s timeout
+3. ✅ **Thread-Safe Monitoring**: Background thread tracks all LIMIT orders with configurable timeout and retry logic
+4. ✅ **Telegram Integration**: Sends digest notifications when LIMIT→MARKET conversion occurs
+5. ✅ **Enhanced .env.example**: Added all new environment variables with detailed documentation
+6. ✅ **Production Ready**: Zero dependencies on Replit, all 10 workflows running successfully
 
 **Post-Trade AI Review System:**
 - All 5 AI brains analyze completed trades independently
@@ -115,12 +123,25 @@ The production environment runs on Render.com with 8 background workers and a Ne
 - `utils/order_params.py` - Safe order building
 - `utils/price_math.py` - Dynamic TP/SL calculation
 - `utils/env_validate.py` - ENV validation
+- `utils/order_timeout_monitor.py` - LIMIT→MARKET fallback system (Hotfix #3)
 - `scripts/neon_resume.sh` - Manual resume script
 
 **Files Updated:**
 - `main.py` - Startup hooks for all hotfix modules
-- `.env.example` - Added all new environment variables
+- `.env.example` - Added LIMIT→MARKET fallback, Neon Auto-Resume, and SPOT trading settings (Hotfix #3)
 - `requirements.txt` - Already has `psycopg[binary]>=3.2.0`
+
+**Workflows Configured (10 total):**
+1. **AlgoGPT Server** - Main Gunicorn server on port 5000
+2. **Auto Scanner** - FUTURES + SPOT + GRID market scanning (Hotfix #3)
+3. **Auto Health Monitor** - System health checks with digest notifications
+4. **DB Keepalive** - Database connection maintenance
+5. **Fills Watcher** - Order fill monitoring
+6. **GPT-5 Central Brain** - AI orchestration and consensus
+7. **N8N Bridge** - External workflow integration
+8. **Position Monitor** - Live position tracking with digest reports
+9. **Sentinel Security** - Security monitoring and alerting
+10. **Telegram Digest Reporter** - Consolidated notification system
 
 **Environment Variables Required:**
 ```bash
@@ -128,9 +149,22 @@ The production environment runs on Render.com with 8 background workers and a Ne
 NEON_API_KEY=
 NEON_PROJECT_ID=
 NEON_ENDPOINT_ID=
+NEON_AUTO_RESUME_ENABLE=1
+NEON_RESUME_RETRY_MAX=3
 
 # Binance Hedge Mode (Default: enabled)
 BINANCE_FORCE_HEDGE_MODE=1
+
+# LIMIT→MARKET Fallback (Hotfix #3)
+LIMIT_TO_MARKET_ENABLE=1
+LIMIT_ORDER_TIMEOUT_SEC=60
+LIMIT_TIMEOUT_CHECK_INTERVAL=5
+LIMIT_TO_MARKET_MAX_RETRIES=3
+
+# Auto Scanner (Hotfix #3)
+SUGGEST_FUTURES=1  # Scan Binance Futures
+SUGGEST_SPOT=1     # Scan Binance Spot
+SUGGEST_GRID=1     # Enable GRID trading
 
 # Telegram Digest (Default: enabled, 30-min intervals)
 TELEGRAM_DIGEST_ENABLED=1
