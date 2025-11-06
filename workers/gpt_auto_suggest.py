@@ -242,7 +242,7 @@ def _get_regime_quality_threshold(ctx: Dict[str, Any]) -> float:
         }
         
         regime_key = regime_map.get(regime, "CHOPPY")  # Default to CHOPPY (most conservative)
-        protection = protection_manager.get_base_protection(regime_key)
+        protection = protection_manager.get_base_protection(regime_key)  # type: ignore
         
         return protection.get("entry_quality_min", 6.0)
     except Exception as e:
@@ -405,72 +405,61 @@ async def _apply_funding_bias_req(side: str, symbol: str, min_rr: float, success
     
     return (min_rr, success_min, reason)  # אין שינוי בסף!
 
-async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Optional[Dict[str, Any]]:
+async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Optional[Dict[str, Any]]:
+    """
+    🧠 AI CONSENSUS ENGINE - 5 Brains vote on trade proposal
+    Workflow: Market Intelligence + Strategy Orchestrator → 5 AI Brains → ≥3 APPROVE = Execute
+    """
     if not OPENAI_API_KEY:
         LOGGER.error("OPENAI_API_KEY missing")
         return None
     
-    # 🧠 SELF-ADAPTIVE ENGINE: Analyze market conditions
-    # Ensure symbol is in ctx for database persistence
+    # Ensure symbol is in ctx
     if ctx is None:
         ctx = {}
     ctx["symbol"] = symbol
     
+    # ========== SCOUT 1: MARKET INTELLIGENCE ==========
     mi_engine = get_market_intelligence()
     
-    # 📊 Enhanced Multi-TF Analysis with Weighted Priority (4H=50%, 1H=30%, 15M=20%)
+    # 📊 Enhanced Multi-TF Analysis
     if "multi_tf" in ctx and ctx["multi_tf"]:
-        # Build multi-TF contexts for market intelligence
         multi_tf_contexts = {}
         for interval, tf_data in ctx["multi_tf"].items():
-            # Extract indicators from each timeframe
-            # NOTE: Data is in 'indicators' not 'filters'!
             indicators = tf_data.get("indicators", {})
             filters = tf_data.get("filters", {})
             
             multi_tf_contexts[interval] = {
                 "symbol": symbol,
                 "close": tf_data.get("price"),
-                # Indicators are the numeric values
                 "adx": indicators.get("adx"),
                 "atr_percent": indicators.get("atr_pct"),
                 "rsi": indicators.get("rsi"),
                 "ema_20": indicators.get("ema21"),
                 "ema_50": indicators.get("ema50"),
-                # Filters contain derived flags
                 "macd": filters.get("macd", 0.0),
                 "bb_width_pct": filters.get("bb_width", 5.0),
             }
             
-            # 💾 Save TF snapshot to database for historical analysis
             try:
                 insert_tf_snapshot({
                     "symbol": symbol,
                     "interval": interval,
                     "timestamp": time.time(),
                     "indicators": indicators,
-                    "alignment_status": "PENDING"  # Will be updated below
+                    "alignment_status": "PENDING"
                 })
             except Exception as e:
                 LOGGER.debug(f"Failed to save TF snapshot: {e}")
         
-        # 🎯 Weighted Multi-TF Analysis (Sniper-Grade)
-        # 4H = 50% (Trend Direction), 1H = 30% (Confirmation), 15M = 20% (Entry Timing)
         weighted_analysis = analyze_multi_tf_weighted(multi_tf_contexts)
-        
-        # Log weighted analysis with all details
         LOGGER.info(
             f"🎯 Weighted Multi-TF [{symbol}]: "
             f"Dominant={weighted_analysis.dominant_timeframe.upper()}, "
             f"Trend={weighted_analysis.trend_direction}, "
-            f"Confidence={weighted_analysis.weighted_confidence:.1f}%, "
-            f"Alignment={weighted_analysis.alignment_status}, "
-            f"TF Scores: 4H={weighted_analysis.tf_scores.get('4h', 0):.0f}% (50% weight), "
-            f"1H={weighted_analysis.tf_scores.get('1h', 0):.0f}% (30%), "
-            f"15M={weighted_analysis.tf_scores.get('15m', 0):.0f}% (20%)"
+            f"Confidence={weighted_analysis.weighted_confidence:.1f}%"
         )
         
-        # Update TF snapshots with alignment status
         try:
             for interval in multi_tf_contexts.keys():
                 insert_tf_snapshot({
@@ -483,19 +472,149 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
         except Exception as e:
             LOGGER.debug(f"Failed to update TF alignment: {e}")
         
-        # Use market intelligence for final decision
         market_condition = mi_engine.analyze_multi_tf(multi_tf_contexts)
-        LOGGER.info(
-            f"Market Intel [{symbol}]: "
-            f"TF-Alignment={market_condition.tf_alignment}, "
-            f"Strategy={market_condition.recommended_strategy}"
-        )
     else:
-        # Fallback to single-TF analysis
         market_condition = mi_engine.analyze_market(ctx)
     
-    # Store market_condition in ctx for later use (Dynamic Sizing, Flip Intelligence)
     ctx["_market_condition"] = market_condition
+    
+    # ========== SCOUT 2: STRATEGY ORCHESTRATOR ==========
+    orchestrator = get_strategy_orchestrator()
+    strategy_config = orchestrator.select_strategy(market_condition, symbol, ctx)
+    
+    # ========== BUILD SCOUT DATA ==========
+    from utils.scout_data_builder import build_scout_data
+    
+    # Create market intelligence result
+    mi_result = {
+        "regime": market_condition.regime,
+        "quality_score": market_condition.quality_threshold,  # Use quality_threshold from MarketCondition
+        "reasoning": f"Regime={market_condition.regime}, Mood={market_condition.mood}",
+        "timestamp": time.time()
+    }
+    
+    # Create strategy orchestrator result
+    so_result = {
+        "strategy": strategy_config.strategy_type,
+        "score": strategy_config.min_quality,
+        "min_rr": strategy_config.min_rr,
+        "leverage": strategy_config.max_leverage,
+        "sl_atr_mult": 1.5,  # Default, will be overridden by brains
+        "tp_rr": strategy_config.min_rr,
+        "reasoning": strategy_config.description,
+        "signals": [],
+        "timestamp": time.time()
+    }
+    
+    scout_data = build_scout_data(symbol, mi_result, so_result, ctx)
+    
+    # ========== 5 AI BRAINS CONSENSUS ==========
+    from utils.ai_decision_maker import AIConsensusEngine
+    
+    consensus_engine = AIConsensusEngine()
+    wallet_state = {"available_balance": 1000.0}  # Placeholder, will be replaced with real balance
+    
+    LOGGER.info(f"🧠 Requesting consensus from 5 AI Brains for {symbol}...")
+    
+    consensus_result = await consensus_engine.get_consensus(
+        scout_data=scout_data,
+        market_data=ctx,
+        wallet_state=wallet_state
+    )
+    
+    # Log consensus
+    LOGGER.info(
+        f"🗳️ CONSENSUS [{symbol}]: {consensus_result['votes_approve']}/{consensus_result['total_votes']} APPROVE | "
+        f"Decision: {consensus_result['decision']} | "
+        f"Avg Score: {consensus_result['consensus_score']:.1f}/10"
+    )
+    
+    for vote in consensus_result["votes"]:
+        LOGGER.info(
+            f"  {vote['brain']}: {vote['vote']} ({vote['score']:.1f}/10) - {vote['reasoning'][:60]}..."
+        )
+    
+    # If REJECT, stop here
+    if consensus_result["decision"] == "REJECT":
+        LOGGER.info(f"❌ REJECTED by consensus: {symbol}")
+        return None
+    
+    # ========== GENERATE TRADE PROPOSAL (GPT-5) ==========
+    # If ≥3 APPROVE, generate actual entry/SL/TP using GPT-5
+    LOGGER.info(f"✅ CONSENSUS APPROVED - Generating trade proposal for {symbol}")
+    
+    # Generate adaptive prompt
+    prompt_engine = get_adaptive_prompt_engine()
+    
+    if for_spot:
+        sys_prompt = PROMPT_SYS_SPOT
+    else:
+        sys_prompt = prompt_engine.generate_prompt(market_condition, symbol, ctx or {})
+    
+    cli = _get_client()
+    user = _build_user_ctx(symbol, ctx or {})
+    
+    try:
+        resp = cli.chat.completions.create(
+            model=OPENAI_MODEL,
+            messages=[{"role":"system","content":sys_prompt},{"role":"user","content":user}],
+            max_completion_tokens=300,
+            response_format={"type":"json_object"},
+        )
+        content = resp.choices[0].message.content or ""
+        data = _parse_json_safe(content) or {}
+        side = str(data.get("side","")).upper()
+        if for_spot and side != "LONG":
+            side = "LONG"
+        lev = _to_int(data.get("leverage"), default=10) or 10
+        lev = max(SUGGEST_MIN_LEVERAGE, min(SUGGEST_MAX_LEVERAGE, lev))
+        prop = {
+            "symbol": symbol,
+            "side": side if side in ("LONG","SHORT") else None,
+            "entry": _to_float(data.get("entry")),
+            "sl": _to_float(data.get("sl")),
+            "tp1": _to_float(data.get("tp1")),
+            "tp2": _to_float(data.get("tp2")),
+            "tp3": _to_float(data.get("tp3")),
+            "leverage": (1 if for_spot else lev),
+            "success_pct": _to_float(data.get("success_pct")),
+            "reason": data.get("reason") or "",
+        }
+        if prop["side"] not in ("LONG","SHORT"):
+            return None
+        if prop["entry"] is None or prop["sl"] is None or prop["tp1"] is None:
+            return None
+        
+        # Validate RR
+        rr_check = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
+        MIN_AI_RR = market_condition.min_rr_threshold
+        
+        if rr_check is not None and rr_check < MIN_AI_RR:
+            LOGGER.info(
+                f"AI_REJECTED {symbol}: RR={rr_check:.3f} < {MIN_AI_RR:.2f} "
+                f"(regime={market_condition.regime}, mood={market_condition.mood})"
+            )
+            return None
+        
+        # Validate success_pct
+        if prop.get("success_pct") is not None:
+            if prop["success_pct"] < 35 or prop["success_pct"] > 95:
+                LOGGER.info(f"AI_REJECTED {symbol}: unrealistic success_pct={prop['success_pct']}")
+                return None
+        
+        LOGGER.info(f"✅ Trade proposal generated for {symbol}: {prop['side']} @ {prop['entry']}, SL={prop['sl']}, TP={prop['tp1']}")
+        return prop
+    except Exception as e:
+        LOGGER.warning(f"GPT-5 generation error for {symbol}: {e}")
+        return None
+
+
+async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Optional[Dict[str, Any]]:
+    """
+    LEGACY FUNCTION - Calls _ai_consensus_suggest
+    Kept for backward compatibility
+    """
+    return await _ai_consensus_suggest(symbol, ctx, for_spot)
     
     # 📝 Generate adaptive prompt based on market regime
     prompt_engine = get_adaptive_prompt_engine()
