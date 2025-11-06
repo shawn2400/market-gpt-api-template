@@ -964,7 +964,7 @@ async def process_cycle():
     # This prevents generating proposals when funds are locked
     try:
         from utils.binance_client import futures_balance
-        bals = futures_balance() or []
+        bals = await futures_balance() or []
         available = 0.0
         for a in bals:
             if str(a.get("asset", "")).upper() == "USDT":
@@ -1028,7 +1028,7 @@ async def process_cycle():
         # 💰 CHECK AVAILABLE MARGIN: Skip proposals if insufficient funds
         try:
             from utils.binance_client import futures_balance
-            bals = futures_balance() or []
+            bals = await futures_balance() or []
             available = 0.0
             for a in bals:
                 if str(a.get("asset", "")).upper() == "USDT":

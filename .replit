@@ -31,19 +31,7 @@ author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "GPT-5 Central Brain"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "AlgoGPT Server"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Position Monitor"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Sentinel Security"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
@@ -53,38 +41,21 @@ args = "Auto Health Monitor"
 task = "workflow.run"
 args = "Fills Watcher"
 
-[[workflows.workflow]]
-name = "GPT-5 Central Brain"
-author = "agent"
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Auto Scanner"
 
 [[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/gpt5_orchestrator.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
-name = "Position Monitor"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "console"
+task = "workflow.run"
+args = "GPT-5 Central Brain"
 
 [[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_POSITION_MONITOR=1 POSITION_REPORT_INTERVAL_SEC=1800 POSITION_ALERT_LEVEL=all python workers/position_monitor.py"
-
-[[workflows.workflow]]
-name = "Sentinel Security"
-author = "agent"
+task = "workflow.run"
+args = "Position Monitor"
 
 [[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG SENTINEL_ENABLED=1 SENTINEL_ALERT_LEVEL=critical python workers/sentinel_security.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
+task = "workflow.run"
+args = "Sentinel Security"
 
 [[workflows.workflow]]
 name = "Auto Health Monitor"
@@ -104,6 +75,50 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG FILLS_WATCH_ENABLE=1 FILLS_WATCH_INTERVAL_SEC=15 python workers/fills_watcher.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Auto Scanner"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG SUGGEST_FUTURES=1 SUGGEST_SPOT=1 SUGGEST_GRID=1 AUTO_RUN=1 TRADE_AUTO_SUGGEST=1 SUGGEST_INTERVAL_SEC=120 python workers/gpt_auto_suggest.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "GPT-5 Central Brain"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/gpt5_orchestrator.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Position Monitor"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_POSITION_MONITOR=1 POSITION_REPORT_INTERVAL_SEC=1800 POSITION_ALERT_LEVEL=all python workers/position_monitor.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Sentinel Security"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG SENTINEL_ENABLED=1 SENTINEL_ALERT_LEVEL=critical python workers/sentinel_security.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
