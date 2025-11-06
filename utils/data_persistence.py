@@ -101,6 +101,7 @@ class DataPersistence:
                         symbol, regime, mood, volatility, trend_strength, 
                         strategy, min_rr, min_quality, indicators_json
                     ))
+                    con.commit()
                 else:
                     # SQLite - INSERT OR REPLACE to prevent duplicate key errors
                     cur.execute("""
@@ -246,6 +247,7 @@ class DataPersistence:
                         ON CONFLICT (symbol, analysis_type) 
                         DO UPDATE SET data = EXCLUDED.data, updated_at = NOW()
                     """, (symbol, analysis_type, data_json))
+                    con.commit()
                 else:
                     cur.execute("""
                         INSERT OR REPLACE INTO trade_analysis 
