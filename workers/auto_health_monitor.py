@@ -20,7 +20,7 @@ try:
 except Exception:
     def get_digest():  # type: ignore
         class MockDigest:
-            def add_health_alert(self, *args, **kwargs):
+            def add_health_alert(self, *args, **kwargs):  # type: ignore
                 pass
         return MockDigest()
 
