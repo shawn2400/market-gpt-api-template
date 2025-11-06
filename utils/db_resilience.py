@@ -45,15 +45,39 @@ class DB:
     """
 
     def __init__(self):
-        # Use DATABASE_URL from environment - no override needed
-        log.info("📊 Using DATABASE_URL and PG* credentials from environment")
+        # Use NEON_DATABASE_URL if available, parse connection params from it
+        neon_url = _get("NEON_DATABASE_URL")
         
-        # Neon Database connection params
-        self.host = _get("DB_HOST") or _get("PGHOST")
-        self.port = _geti("DB_PORT", 5432) or _geti("PGPORT", 5432)
-        self.user = _get("DB_USER") or _get("PGUSER")
-        self.password = _get("DB_PASSWORD") or _get("PGPASSWORD")
-        self.dbname = _get("DB_NAME") or _get("PGDATABASE")
+        if neon_url:
+            # Parse NEON_DATABASE_URL (postgresql://user:pass@host/dbname)
+            log.info("📊 Using NEON_DATABASE_URL from environment (active endpoint)")
+            try:
+                import re
+                match = re.match(r'postgresql://([^:]+):([^@]+)@([^:/]+)(?::(\d+))?/([^?]+)', neon_url)
+                if match:
+                    self.user = match.group(1)
+                    self.password = match.group(2)
+                    self.host = match.group(3)
+                    self.port = int(match.group(4)) if match.group(4) else 5432
+                    self.dbname = match.group(5)
+                else:
+                    raise ValueError("Could not parse NEON_DATABASE_URL")
+            except Exception as e:
+                log.error(f"Failed to parse NEON_DATABASE_URL: {e}, falling back to PG* vars")
+                self.host = _get("DB_HOST") or _get("PGHOST")
+                self.port = _geti("DB_PORT", 5432) or _geti("PGPORT", 5432)
+                self.user = _get("DB_USER") or _get("PGUSER")
+                self.password = _get("DB_PASSWORD") or _get("PGPASSWORD")
+                self.dbname = _get("DB_NAME") or _get("PGDATABASE")
+        else:
+            # Fallback to individual PG* environment variables
+            log.info("📊 Using PG* credentials from environment")
+            self.host = _get("DB_HOST") or _get("PGHOST")
+            self.port = _geti("DB_PORT", 5432) or _geti("PGPORT", 5432)
+            self.user = _get("DB_USER") or _get("PGUSER")
+            self.password = _get("DB_PASSWORD") or _get("PGPASSWORD")
+            self.dbname = _get("DB_NAME") or _get("PGDATABASE")
+        
         self.sslmode = _get("DB_SSLMODE", "require")
 
         # Connection & retry settings

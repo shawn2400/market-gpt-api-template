@@ -6,9 +6,9 @@ import logging
 
 logger = logging.getLogger("algogpt.db")
 
-# Use DATABASE_URL from environment - no override needed
-DB_URL = os.getenv("DATABASE_URL", "sqlite:////app/data/algogpt.db")
-logger.info(f"📊 Using DATABASE_URL from environment")
+# Use NEON_DATABASE_URL first (active endpoint), fallback to DATABASE_URL
+DB_URL = os.getenv("NEON_DATABASE_URL") or os.getenv("DATABASE_URL", "sqlite:////app/data/algogpt.db")
+logger.info(f"📊 Using {'NEON_DATABASE_URL' if os.getenv('NEON_DATABASE_URL') else 'DATABASE_URL'} from environment: {DB_URL[:50]}...")
 
 USE_DB = os.getenv("USE_DB","1").lower() in ("1","true","yes","on")
 
