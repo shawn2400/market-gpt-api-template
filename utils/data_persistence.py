@@ -80,23 +80,34 @@ class DataPersistence:
                 indicators_json = json.dumps(indicators) if indicators else None
                 
                 if is_pg:
-                    # PostgreSQL - INSERT with timestamp for backward compatibility
+                    # PostgreSQL - UPSERT to prevent duplicate key errors
                     cur.execute("""
                         INSERT INTO market_states 
-                        (timestamp, symbol, regime, mood, volatility, trend_strength, strategy, 
+                        (symbol, regime, mood, volatility, trend_strength, strategy, 
                          min_rr, min_quality, indicators, created_at, updated_at)
-                        VALUES (NOW(), %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+                        ON CONFLICT (symbol) 
+                        DO UPDATE SET 
+                            regime = EXCLUDED.regime,
+                            mood = EXCLUDED.mood,
+                            volatility = EXCLUDED.volatility,
+                            trend_strength = EXCLUDED.trend_strength,
+                            strategy = EXCLUDED.strategy,
+                            min_rr = EXCLUDED.min_rr,
+                            min_quality = EXCLUDED.min_quality,
+                            indicators = EXCLUDED.indicators,
+                            updated_at = NOW()
                     """, (
                         symbol, regime, mood, volatility, trend_strength, 
                         strategy, min_rr, min_quality, indicators_json
                     ))
                 else:
-                    # SQLite - INSERT with timestamp for backward compatibility
+                    # SQLite - INSERT OR REPLACE to prevent duplicate key errors
                     cur.execute("""
-                        INSERT INTO market_states 
-                        (timestamp, symbol, regime, mood, volatility, trend_strength, strategy, 
+                        INSERT OR REPLACE INTO market_states 
+                        (symbol, regime, mood, volatility, trend_strength, strategy, 
                          min_rr, min_quality, indicators, created_at, updated_at)
-                        VALUES (strftime('%s', 'now'), ?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, strftime('%s', 'now'), strftime('%s', 'now'))
                     """, (
                         symbol, regime, mood, volatility, trend_strength, 
                         strategy, min_rr, min_quality, indicators_json
