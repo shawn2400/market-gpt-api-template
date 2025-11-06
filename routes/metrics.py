@@ -2,7 +2,8 @@
 from __future__ import annotations
 import os
 from fastapi import APIRouter, Header, HTTPException, Response
-from utils.metrics_tracker import render_prometheus_text  # מייצר את ה-Exposition Text
+from prometheus_client import REGISTRY, generate_latest
+from utils.metrics_tracker import render_prometheus_text  # Legacy metrics (kept for compatibility)
 
 router = APIRouter(prefix="", tags=["metrics"])
 
@@ -29,7 +30,20 @@ def _auth_ok(auth_header: str) -> bool:
 async def metrics(authorization: str = Header(default="")):
     if not _auth_ok(authorization):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    body = render_prometheus_text()
+    
+    # Combine legacy metrics with Prometheus client registry (includes all Counter/Gauge/Histogram from prometheus_client)
+    legacy = render_prometheus_text()
+    
+    # Get all metrics from Prometheus client registry (includes metrics_dyn.py and others)
+    try:
+        prom_bytes = generate_latest(REGISTRY)
+        prom_text = prom_bytes.decode("utf-8") if isinstance(prom_bytes, bytes) else str(prom_bytes)
+    except Exception:
+        prom_text = ""
+    
+    # Merge both (legacy first, then Prometheus client)
+    body = f"{legacy}\n\n# === Prometheus Client Metrics ===\n{prom_text}"
+    
     # הפורמט התקני של Prometheus exposition
     return Response(content=body, media_type="text/plain; version=0.0.4; charset=utf-8")
 
