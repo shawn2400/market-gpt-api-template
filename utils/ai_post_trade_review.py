@@ -37,7 +37,7 @@ OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-2025-08-07")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 XAI_MODEL = os.getenv("XAI_MODEL", "grok-2-latest")
-CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20240620")
+CLAUDE_MODEL = os.getenv("CLAUDE_MODEL", "claude-3-5-sonnet-20241022")
 
 REVIEW_DIR = Path("data/ai_reviews")
 REVIEW_DIR.mkdir(parents=True, exist_ok=True)
