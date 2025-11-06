@@ -1,0 +1,302 @@
+רעיון מצוין. הנה מימוש תכל’ס, Production-Grade, בשלוש שכבות — עם פקודה אחת שמוסיפה את כל הקבצים, ENV, ונעיצת הלוגיקה בלופר שלך.
+
+---
+
+### מה מקבלים בפועל
+
+* **Auto-pause OFF** (ברמת Neon) – אין השעיה אוטומטית.
+* **Auto-wake חכם** (קוד) – ניסיון התחברות עם backoff, ולא “נופל” על השאילתה הראשונה.
+* **Fallback Queue** (JSON) – אם ה-DB לא זמין, ממשיכים לעבוד, כותבים לתור מקומי ומסתנכרנים כשחוזר.
+
+---
+
+### צעד 0 (חד-פעמי ב-Neon Console)
+
+ב־Neon Dashboard:
+
+1. בחר את ה-Project → ה-Branch/Endpoint של הפרודקשן.
+2. בטל **Auto-Suspend/Auto-Pause** (Always On / Suspend: Never).
+3. ודא **Connection Pooler ON** (אם קיים) כדי למנוע קוצים ב-connections.
+
+> טיפ: Neon בדרך כלל “יקיץ” אוטומטית על ניסיון התחברות; הבעיה היא timeouts/latency בפעם הראשונה. אנחנו מטפלים בזה בקוד.
+
+---
+
+### פקודה אחת — מתקין הכל (קבצי wake/backoff + fallback + אינטגרציה)
+
+הדבק כפי שהוא ב־Shell של הפרויקט (Replit/Render/Local):
+
+```bash
+set -Eeuo pipefail
+
+python -m pip install --upgrade pip >/dev/null
+# אם אתם על psycopg (מומלץ ל-Neon/Postgres)
+grep -q "^psycopg" requirements.txt || echo "psycopg[binary]>=3.2.1" >> requirements.txt
+
+# ========= ENV (דוגמה, בלי סודות) =========
+cat >> .env.example << 'EOF'
+
+# ==== Neon DB ====
+DB_HOST=ep-XXXXX.neon.tech
+DB_PORT=5432
+DB_USER=algogpt
+DB_PASSWORD=          # שים ב-Secrets בלבד
+DB_NAME=algogpt_prod
+DB_SSLMODE=require
+DB_CONNECT_TIMEOUT_SEC=8
+DB_FIRST_QUERY_TIMEOUT_SEC=12
+DB_STARTUP_RETRIES=8
+DB_STARTUP_BACKOFF_MS=400
+DB_POOL_MIN=1
+DB_POOL_MAX=8
+
+# ==== Fallback Queue ====
+DB_FALLBACK_ENABLE=1
+DB_FALLBACK_PATH=static/cache/db_offline_queue.jsonl
+DB_RESYNC_BATCH=500
+DB_RESYNC_INTERVAL_SEC=45
+
+# ==== Health ====
+DB_PING_INTERVAL_SEC=120
+DB_PANIC_LATENCY_MS=3500
+EOF
+[ -f .env ] || cp .env.example .env
+
+mkdir -p utils static/cache
+
+# ========= utils/db_resilience.py =========
+cat > utils/db_resilience.py << 'PY'
+from __future__ import annotations
+import os, time, json, logging, pathlib, threading
+from typing import Optional, Callable, Any, Iterable
+
+import psycopg  # psycopg3
+from psycopg.rows import dict_row
+
+log = logging.getLogger(__name__)
+
+def _get(name:str, default:str=""): return os.getenv(name, default)
+def _geti(name:str, default:int) -> int:
+    try: return int(os.getenv(name, default))
+    except: return default
+def _getf(name:str, default:float) -> float:
+    try: return float(os.getenv(name, default))
+    except: return default
+
+class DB:
+    def __init__(self):
+        self.host = _get("DB_HOST")
+        self.port = _geti("DB_PORT", 5432)
+        self.user = _get("DB_USER")
+        self.password = _get("DB_PASSWORD")
+        self.dbname = _get("DB_NAME")
+        self.sslmode = _get("DB_SSLMODE", "require")
+
+        self.connect_timeout = _geti("DB_CONNECT_TIMEOUT_SEC", 8)
+        self.first_query_timeout = _geti("DB_FIRST_QUERY_TIMEOUT_SEC", 12)
+        self.startup_retries = _geti("DB_STARTUP_RETRIES", 8)
+        self.startup_backoff_ms = _geti("DB_STARTUP_BACKOFF_MS", 400)
+
+        self.pool_min = _geti("DB_POOL_MIN", 1)
+        self.pool_max = _geti("DB_POOL_MAX", 8)
+
+        # fallback
+        self.fb_enable = _get("DB_FALLBACK_ENABLE", "1") not in ("0","false","False","")
+        self.fb_path = _get("DB_FALLBACK_PATH", "static/cache/db_offline_queue.jsonl")
+        pathlib.Path(self.fb_path).parent.mkdir(parents=True, exist_ok=True)
+
+        # internal
+        self._conn: Optional[psycopg.Connection] = None
+        self._lock = threading.Lock()
+
+    def dsn(self) -> str:
+        return (
+            f"host={self.host} port={self.port} dbname={self.dbname} "
+            f"user={self.user} password={self.password} sslmode={self.sslmode} "
+            f"connect_timeout={self.connect_timeout}"
+        )
+
+    def connect_with_backoff(self) -> psycopg.Connection:
+        """
+        ניהול התחברות “איטית” ל-Neon כשהוא מתעורר: רטריי + backoff כדי לא להפיל את האפליקציה.
+        """
+        last_err: Optional[Exception] = None
+        for i in range(self.startup_retries):
+            try:
+                conn = psycopg.connect(self.dsn(), autocommit=True, row_factory=dict_row)
+                # first ping (עשוי לקחת יותר זמן כשה-endpoint מתעורר)
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1;")
+                self._conn = conn
+                return conn
+            except Exception as e:
+                last_err = e
+                delay = (self.startup_backoff_ms * (i+1)) / 1000.0
+                log.warning(f"DB connect retry {i+1}/{self.startup_retries}: {e} (sleep {delay:.2f}s)")
+                time.sleep(delay)
+        raise RuntimeError(f"DB connection failed after retries: {last_err}")
+
+    def get_conn(self) -> psycopg.Connection:
+        with self._lock:
+            if self._conn is None or self._conn.closed:
+                self.connect_with_backoff()
+            return self._conn
+
+    # === minimal helpers ===
+    def exec(self, sql:str, params:Optional[Iterable[Any]]=None) -> int:
+        try:
+            conn = self.get_conn()
+            with conn.cursor() as cur:
+                cur.execute(sql, params or [])
+                return cur.rowcount or 0
+        except Exception as e:
+            if self.fb_enable:
+                self._enqueue_fallback({"sql": sql, "params": list(params or [])})
+                log.error(f"DB offline → queued fallback ({self.fb_path}). err={e}")
+                return 0
+            raise
+
+    def query(self, sql:str, params:Optional[Iterable[Any]]=None) -> list[dict]:
+        conn = self.get_conn()
+        with conn.cursor() as cur:
+            cur.execute(sql, params or [])
+            return list(cur.fetchall())
+
+    # === fallback queue ===
+    def _enqueue_fallback(self, item:dict) -> None:
+        with self._lock:
+            with open(self.fb_path, "a", encoding="utf-8") as f:
+                f.write(json.dumps(item, ensure_ascii=False)+"\n")
+
+    def resync_fallback(self, batch:int=500) -> int:
+        """
+        מנסה לשפוך מהתור המקומי אל ה-DB (best-effort, לא transactional ל-N שונים).
+        """
+        path = pathlib.Path(self.fb_path)
+        if not path.exists() or path.stat().st_size == 0:
+            return 0
+        applied = 0
+        tmp = path.with_suffix(".jsonl.tmp")
+        path.replace(tmp)
+        with open(tmp, "r", encoding="utf-8") as f:
+            for i, line in enumerate(f):
+                if not line.strip(): continue
+                try:
+                    item = json.loads(line)
+                    self.exec(item["sql"], item.get("params"))
+                    applied += 1
+                except Exception as e:
+                    # החזר לקובץ אם נכשל – לא נאבד דאטה
+                    with open(self.fb_path, "a", encoding="utf-8") as w:
+                        w.write(line)
+                if applied >= batch:
+                    break
+        # שרידי tmp יימחקו אוטומטית בהרצה הבאה
+        try: tmp.unlink(missing_ok=True)
+        except: pass
+        return applied
+
+DB_SINGLETON = DB()
+
+def periodic_health_and_resync():
+    """
+    להריץ בלופר קיים כל X שניות:
+    - מוודא חיבור (יעיר את Neon אם יש auto-suspend כלשהו)
+    - מבצע resync לתור מקומי
+    """
+    from threading import Event
+    stop = Event()
+    interval = _geti("DB_RESYNC_INTERVAL_SEC", 45)
+    while not stop.wait(interval):
+        try:
+            DB_SINGLETON.get_conn()
+            applied = DB_SINGLETON.resync_fallback(batch=_geti("DB_RESYNC_BATCH", 500))
+            if applied:
+                log.info(f"DB resync applied {applied} queued ops")
+        except Exception as e:
+            log.warning(f"DB health/resync loop: {e}")
+PY
+
+# ========= utils/db_bootstrap.py (טבלת בריאות/פינג) =========
+cat > utils/db_bootstrap.py << 'PY'
+import logging
+from .db_resilience import DB_SINGLETON
+
+log = logging.getLogger(__name__)
+
+DDL_HEARTBEAT = """
+CREATE TABLE IF NOT EXISTS app_heartbeat(
+  id BIGSERIAL PRIMARY KEY,
+  at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  note TEXT
+);
+"""
+
+def bootstrap_schema():
+    db = DB_SINGLETON
+    db.exec(DDL_HEARTBEAT)
+    db.exec("INSERT INTO app_heartbeat(note) VALUES (%s)", ["boot"])
+    log.info("DB bootstrap OK (heartbeat ready)")
+PY
+
+# ========= הזרקה ללופר/אתחול (main.py או auto_executor/manager) =========
+python - <<'PY'
+import re, io, sys
+
+candidates = ["main.py", "utils/auto_executor.py", "utils/trade_manager.py"]
+target = None
+for p in candidates:
+    try:
+        s = open(p, "r", encoding="utf-8").read()
+        target = p; break
+    except FileNotFoundError:
+        continue
+
+if not target:
+    print("NOTE: add manual import to your main loop later: db_bootstrap + periodic_health_and_resync")
+    sys.exit(0)
+
+s = open(target, "r", encoding="utf-8").read()
+if "db_resilience" not in s:
+    s = "from utils.db_bootstrap import bootstrap_schema\nfrom utils.db_resilience import periodic_health_and_resync\n" + s
+
+# הזרק קריאה לאתחול (פעם אחת ב-startup)
+if "bootstrap_schema()" not in s:
+    s = s.replace("def startup", "def startup") if "def startup" in s else s
+    s = s.replace("app = ", "bootstrapped = False\napp = ")
+    s = s.replace("app = ", "app = ", 1)
+    s += """
+
+# == DB bootstrap at process start ==
+try:
+    bootstrap_schema()
+except Exception as _e:
+    import logging; logging.getLogger(__name__).warning(f"DB bootstrap failed: {_e}")
+
+# == start periodic DB health/resync in background ==
+import threading
+threading.Thread(target=periodic_health_and_resync, daemon=True).start()
+"""
+open(target, "w", encoding="utf-8").write(s)
+print("patched", target)
+PY
+
+echo "✅ Neon auto-pause hardening installed: backoff connect + first-query warmup + fallback queue + periodic resync."
+```
+
+---
+
+### איך זה עובד (בקצרה)
+
+* **connect_with_backoff()**: מנסה להתחבר במספר ניסיונות עם עליית המתנה (400ms, 800ms, …) כדי לחצות את חלון ה-wake-up של Neon בלי “לשבור” בקשה ראשונה.
+* **first ping** (`SELECT 1`) אחרי ההתחברות – זה מחמם את החיבור.
+* **fallback queue**: כל פעולה כתיבה שנכשלה נרשמת ל-`.jsonl` ומסונכרנת ברקע ברגע שה-DB חוזר.
+* **periodic_health_and_resync()**: שרץ כל 45 שניות (ניתן לשינוי ב-ENV), מאמת חיבור ומרוקן את התור.
+
+---
+
+### שאלת “למה לא API של Neon כדי להעיר?”
+
+אפשר, אבל לא חובה. רוב המקרים נפתרים ע״י **ניסיון התחברות עם backoff** (Neon מתעורר מעצמו). אם תרצה API-Wake נוסף, אוסיף hook ייעודי עם קריאת HTTP (צריך Project/Endpoint IDs ו-API Key של Neon).
+
+רוצה שאחבר גם **מדד לטנציה** ל-Kill-Switch שכבר בנינו (אם ה-DB איטי מדי → Pause זמני)?

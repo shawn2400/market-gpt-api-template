@@ -1,0 +1,320 @@
+bash -lc '
+set -Eeuo pipefail
+
+echo "== 0) הכנות ותלויות =="
+python -m pip install -q --upgrade pip
+touch requirements.txt
+grep -q "^python-dotenv" requirements.txt || echo "python-dotenv>=1.0.1" >> requirements.txt
+grep -q "^pydantic"      requirements.txt || echo "pydantic>=2.8.0"      >> requirements.txt
+
+mkdir -p utils static/cache
+
+echo "== 1) .env.example מינימלי + העתקה ל-.env אם חסר =="
+if [ ! -f .env.example ]; then
+  cat > .env.example << "EOF"
+# ===== Core =====
+APP_VERSION=3.6.0
+PORT=5000
+BASE_URL=http://127.0.0.1:5000
+
+# ===== Trading Switches =====
+AUTO_RUN=1
+EXECUTE_TRADES=1
+ALLOW_MANAGE_OPEN_TRADES=1
+TM_UPDATE_COOLDOWN_SEC=20
+
+# ===== Dynamic Manager / BE / Trail =====
+TP_BE_ONLY_AFTER_TP1=1
+TP_BE_OFFSET_BPS=8
+FORCE_REGIME=
+LOG_REGIME_CHANGES=1
+
+# ===== API Security =====
+# API_BEARER_TOKEN=
+# METRICS_BEARER=
+WEBHOOK_HMAC_SECRET=CHANGE_ME
+
+# ===== Telegram (ללא סודות) =====
+TELEGRAM_SEND_ENABLE=1
+# TELEGRAM_BOT_TOKEN=
+# TELEGRAM_CHAT_ID=
+
+# ===== Binance (ללא סודות) =====
+# BINANCE_API_KEY=
+# BINANCE_API_SECRET=
+# BINANCE_FUTURES_URL=https://fapi.binance.com
+EOF
+fi
+[ -f .env ] || cp .env.example .env
+
+echo "== 2) config.py – טעינת ENV אוניברסלית (נוצר רק אם חסר) =="
+if [ ! -f config.py ]; then
+cat > config.py << "EOF"
+from pydantic import BaseSettings
+from dotenv import load_dotenv
+load_dotenv()
+class Settings(BaseSettings):
+    APP_VERSION:str="3.6.0"
+    PORT:int=5000
+    BASE_URL:str="http://127.0.0.1:5000"
+    AUTO_RUN:int=1
+    EXECUTE_TRADES:int=1
+    ALLOW_MANAGE_OPEN_TRADES:int=1
+    TM_UPDATE_COOLDOWN_SEC:int=20
+    TP_BE_ONLY_AFTER_TP1:int=1
+    TP_BE_OFFSET_BPS:int=8
+    FORCE_REGIME:str=""
+    LOG_REGIME_CHANGES:int=1
+    WEBHOOK_HMAC_SECRET:str="CHANGE_ME"
+    API_BEARER_TOKEN:str=""
+    METRICS_BEARER:str=""
+    TELEGRAM_SEND_ENABLE:int=1
+    TELEGRAM_BOT_TOKEN:str=""
+    TELEGRAM_CHAT_ID:str=""
+    BINANCE_API_KEY:str=""
+    BINANCE_API_SECRET:str=""
+    BINANCE_FUTURES_URL:str="https://fapi.binance.com"
+    class Config: env_file=".env"; env_file_encoding="utf-8"
+settings = Settings()
+EOF
+fi
+
+echo "== 3) ניקוי ENV מתוך .replit (אם הופיעו inline ENV ב-args) =="
+if [ -f ".replit" ]; then
+  python - << "PY"
+import re
+p=".replit"
+s=open(p,"r",encoding="utf-8").read()
+def strip_env(cmd):
+    parts=cmd.strip().split()
+    out=[]; started=False
+    for t in parts:
+        if not started and "=" in t and not t.startswith(("python","gunicorn","uvicorn","bash","sh","cd")):
+            continue
+        started=True; out.append(t)
+    return " ".join(out)
+def repl(m): 
+    before,val,after=m.group(1),m.group(2),m.group(3)
+    return f'{before}{strip_env(val)}{after}'
+s2=re.sub(r'(\bargs\s*=\s*")([^"]*)(")',repl,s)
+if s!=s2:
+    open(p,"w",encoding="utf-8").write(s2)
+    print("updated .replit (removed inline ENV from args)")
+else:
+    print("no inline ENV found in .replit args")
+PY
+fi
+
+echo "== 4) דיוקי Binance: tick/step helpers =="
+cat > utils/precision_utils.py << "EOF"
+from __future__ import annotations
+def clamp_to_step(value: float, step: float) -> float:
+    if not step: return value
+    return (int(value/step))*step
+def round_to_tick(price: float, tick: float) -> float:
+    if not tick: return price
+    return (int(price/tick))*tick
+EOF
+
+echo "== 5) Zero-Gap SL: מציב חדש -> מאמת -> מבטל ישנים =="
+cat > utils/sl_manager.py << "EOF"
+import logging
+from typing import Any, Dict
+from utils.precision_utils import round_to_tick
+logger = logging.getLogger(__name__)
+class ZeroGapSLManager:
+    @staticmethod
+    async def safe_replace_sl(symbol:str, position_side:str, current_price:float,
+                              atr_value:float, desired_sl:float, client:Any,
+                              tick_size:float=0.0) -> Dict:
+        sl = round_to_tick(desired_sl, tick_size or 0.0)
+        try:
+            new = await client.futures_create_order(
+                symbol=symbol,
+                side="SELL" if position_side=="LONG" else "BUY",
+                type="STOP_MARKET",
+                stopPrice=sl,
+                reduceOnly=True,
+                timeInForce="GTC"
+            )
+            new_id = new["orderId"]
+            ok=False
+            for _ in range(3):
+                info = await client.futures_get_order(symbol=symbol, orderId=new_id)
+                if info and info.get("status") in ("NEW","PARTIALLY_FILLED"):
+                    ok=True; break
+            if not ok:
+                await client.futures_cancel_order(symbol,symbol) if False else None
+                await client.futures_cancel_order(symbol=symbol, orderId=new_id)
+                return {"ok":False,"error":"new SL not active"}
+            cancelled=0
+            for o in await client.futures_get_open_orders(symbol=symbol):
+                if o.get("orderId")==new_id: continue
+                if o.get("reduceOnly") and o.get("type") in ("STOP","STOP_MARKET") and o.get("positionSide")==position_side:
+                    await client.futures_cancel_order(symbol=symbol, orderId=o["orderId"]); cancelled+=1
+            return {"ok":True,"new_order_id":new_id,"desired_sl":sl,"old_cancelled":cancelled}
+        except Exception as e:
+            logger.error(f"safe_replace_sl failed {symbol}: {e}")
+            return {"ok":False,"error":str(e)}
+EOF
+
+echo "== 6) TP Ladder דינמי (TP1..TP4) + חלוקה 50/30/20 =="
+cat > utils/tp_ladder.py << "EOF"
+import logging
+from typing import List, Any
+from utils.precision_utils import round_to_tick, clamp_to_step
+logger = logging.getLogger(__name__)
+async def set_tp_ladder(symbol:str, side:str, tp_prices:List[float], qty:float, client:Any,
+                        price_tick:float=0.0, qty_step:float=0.0):
+    try:
+        for o in await client.futures_get_open_orders(symbol=symbol):
+            if o.get("type") in ("TAKE_PROFIT","TAKE_PROFIT_MARKET") and o.get("reduceOnly"):
+                await client.futures_cancel_order(symbol=symbol, orderId=o["orderId"])
+    except Exception as e:
+        logger.debug(f"cancel existing TPs failed: {e}")
+    weights = [0.5, 0.3, 0.2, 0.0][:len(tp_prices)]
+    if len(tp_prices)==4: weights=[0.4,0.3,0.2,0.1]
+    wsum = sum(weights) or 1.0
+    weights=[w/wsum for w in weights]
+    for i,(tp,w) in enumerate(zip(tp_prices, weights), start=1):
+        price = round_to_tick(tp, price_tick or 0.0)
+        q = clamp_to_step(qty*w, qty_step or 0.0) if qty_step else qty*w
+        try:
+            await client.futures_create_order(
+                symbol=symbol,
+                side="SELL" if side=="LONG" else "BUY",
+                type="TAKE_PROFIT_LIMIT",
+                price=price, stopPrice=price,
+                quantity=q, timeInForce="GTC", reduceOnly=True
+            )
+        except Exception as e:
+            logger.error(f"TP{i} place failed {symbol}: {e}")
+EOF
+
+echo "== 7) פרופילי Regime + התאמות Quality =="
+cat > utils/regime_glue.py << "EOF"
+from typing import Literal
+RegimeType = Literal["TRENDING","CHOPPY","VOLATILE","SIDEWAYS"]
+BASE = {
+  "TRENDING": {"sl_mult":2.0, "tps":[2.5,4.0,6.0,8.0]},
+  "CHOPPY":   {"sl_mult":0.8, "tps":[1.5,2.5]},
+  "VOLATILE": {"sl_mult":3.0, "tps":[4.0,7.0]},
+  "SIDEWAYS": {"sl_mult":1.2, "tps":[2.0,3.2]},
+}
+def pick_params(regime:RegimeType, quality:float):
+    p = dict(BASE.get(regime, BASE["TRENDING"]))
+    if quality >= 8.5:
+        p["sl_mult"] *= 1.10
+        p["tps"] = [x*1.20 for x in p["tps"]]
+    elif quality <= 7.5:
+        p["sl_mult"] *= 0.90
+        p["tps"] = [x*0.85 for x in p["tps"]]
+    return p
+EOF
+
+echo "== 8) הזרקה עדינה ל-trade_manager.py (Hook דינמי לא הורס) =="
+if [ -f utils/trade_manager.py ]; then
+  cp utils/trade_manager.py utils/trade_manager.py.bak
+  python - << "PY"
+import re,logging
+p="utils/trade_manager.py"
+s=open(p,"r",encoding="utf-8").read()
+
+# הוספת imports רק אם חסרים
+def add_once(block):
+    global s
+    if block not in s:
+        s=block+"\n"+s
+
+add_once("from config import settings")
+add_once("import asyncio, logging")
+add_once("from utils.sl_manager import ZeroGapSLManager")
+add_once("from utils.tp_ladder import set_tp_ladder")
+add_once("from utils.regime_glue import pick_params")
+if "market_intelligence" not in s:
+    add_once("try:\n    from utils.market_intelligence import detect_regime\nexcept Exception:\n    detect_regime=None  # optional\n")
+if "get_binance_client" not in s:
+    add_once("try:\n    from utils.binance_client import get_binance_client\nexcept Exception:\n    get_binance_client=None  # optional\n")
+
+# פונקציית עזר לביצוע מנה אחת דינמית לפוזיציה
+helper = r"""
+async def _mini_dynamic_manage(position, client, exch_filters:dict|None=None):
+    logger = logging.getLogger(__name__)
+    symbol = position["symbol"]
+    side   = "LONG" if float(position.get("positionAmt",0))>0 else "SHORT"
+    qs     = float(position.get("quality_score", 8.0))
+    # regime
+    regime = "TRENDING"
+    try:
+        if detect_regime:
+            rc = detect_regime(symbol)
+            regime = getattr(rc,"regime",None) or getattr(rc,"name",None) or str(rc) or "TRENDING"
+            regime = str(regime).upper()
+    except Exception as e:
+        logger.debug(f"regime detect failed {symbol}: {e}")
+    params = pick_params(regime, qs)
+    atr = float(position.get("atr", 50.0))
+    price = float(position.get("markPrice", position.get("entryPrice", 0))) or 0.0
+    swing = float(position.get("swing", price)) or price
+    sl_price = swing - params["sl_mult"]*atr if side=="LONG" else swing + params["sl_mult"]*atr
+    tps = [(price + m*atr) if side=="LONG" else (price - m*atr) for m in params["tps"]]
+    tick = float(exch_filters.get("tickSize",0)) if exch_filters else 0.0
+    step = float(exch_filters.get("stepSize",0)) if exch_filters else 0.0
+    try:
+        sl_res = await ZeroGapSLManager.safe_replace_sl(symbol, side, price, atr, sl_price, client, tick_size=tick)
+        if not sl_res.get("ok"):
+            logger.error(f"SL replace failed {symbol}: {sl_res.get('error')}")
+    except Exception as e:
+        logger.error(f"SL error {symbol}: {e}")
+    try:
+        qty = abs(float(position.get("positionAmt",0)))
+        await set_tp_ladder(symbol, side, tps, qty, client, price_tick=tick, qty_step=step)
+    except Exception as e:
+        logger.error(f"TP ladder error {symbol}: {e}")
+    await asyncio.sleep(int(getattr(settings, "TM_UPDATE_COOLDOWN_SEC", 20)))
+"""
+
+if "_mini_dynamic_manage(" not in s:
+    s += "\n"+helper+"\n"
+
+# הזרקת קריאה בתוך manage_open_trades (אם קיימת)
+pat = re.compile(r"async\s+def\s+manage_open_trades\s*\([^)]*\):")
+if pat.search(s) and "_mini_dynamic_manage(" not in s:
+    s = pat.sub(lambda m: m.group(0)+
+        "\n    # dynamic-manage hook (non-destructive)\n"
+        "    try:\n"
+        "        _client = get_binance_client() if callable(get_binance_client) else globals().get(\"binance_client\")\n"
+        "        _filters = globals().get(\"SYMBOL_FILTERS\", {})  # {symbol: {tickSize, stepSize}}\n"
+        "        _positions = globals().get(\"OPEN_POSITIONS\", [])\n"
+        "        for _pos in _positions:\n"
+        "            await _mini_dynamic_manage(_pos, _client, _filters.get(_pos.get(\"symbol\",\"\"), {}))\n"
+        "    except Exception as _e:\n"
+        "        logging.getLogger(__name__).warning(f\"dynamic hook skipped: {_e}\")\n"
+    , s, count=1)
+
+open(p,"w",encoding="utf-8").write(s)
+print("patched trade_manager.py")
+PY
+else
+  echo "SKIP: utils/trade_manager.py not found (ההוק ניתן להדבקה ידנית)"
+fi
+
+echo "== 9) gunicorn_conf.py (אם חסר) =="
+if [ ! -f gunicorn_conf.py ]; then
+cat > gunicorn_conf.py << "EOF"
+import multiprocessing, os
+bind = f"0.0.0.0:{os.environ.get('PORT','5000')}"
+workers = int(os.environ.get("WEB_CONCURRENCY", multiprocessing.cpu_count()*2+1))
+threads = int(os.environ.get("GTHREADS", 1))
+timeout = int(os.environ.get("TIMEOUT", 120))
+graceful_timeout = int(os.environ.get("GRACEFUL_TIMEOUT", 30))
+keepalive = int(os.environ.get("KEEPALIVE", 5))
+EOF
+fi
+
+echo "== 10) Git snapshot (ללא סודות) =="
+git add -A || true
+git commit -m "feat: dynamic SL/TP (Zero-Gap + TP1..TP4) + .replit→.env migration + secrets hygiene" || echo "nothing to commit"
+
+echo "== ✅ DONE =="
+'

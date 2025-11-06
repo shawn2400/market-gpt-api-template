@@ -1,0 +1,215 @@
+יאללה—מאשר ומתחיל ✅
+הנה הודעה אחת (פקודה אחת, “העתק-הדבק”) לסוכן ה-DevOps (“Rider”/Replit Agent) שמבצעת את **גישה 2 – שילוב מינימלי, אולטרה-מחוזק**: יוצרת 3 קבצים חדשים, מעדכנת ‎requirements‎, מוסיפה משתני ‎ENV‎ אוניברסליים, ומשלבת הגיונות ב-`trade_manager.py` בלי לדרוס קוד. הכל עם גיבויים וקומיט מסכם.
+
+---
+
+**TASK NAME:** AlgoGPT – Minimal Merge (Regime Dynamic + Atomic SL + Precision + Backoff), non-breaking
+
+**DO:** Run the following bash script in repo root.
+
+```bash
+bash -lc '
+set -Eeuo pipefail
+
+echo "== guard: repo root =="
+test -f main.py || test -d utils || { echo "Run in project root"; exit 1; }
+
+echo "== 0) create dirs =="
+mkdir -p utils
+
+echo "== 1) add requirements (idempotent) =="
+touch requirements.txt
+grep -qE "^pydantic(>|=|$)" requirements.txt || echo "pydantic>=2.5" >> requirements.txt
+grep -qE "^tenacity(>|=|$)" requirements.txt || echo "tenacity>=8.2" >> requirements.txt
+
+echo "== 2) create new utils files =="
+# utils/precision.py
+cat > utils/precision.py << "PY"
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import math
+
+def floor_to_step(value: float, step: float) -> float:
+    if step <= 0: return value
+    return math.floor(value / step) * step
+
+def round_tick(price: float, tick_size: float) -> float:
+    if tick_size <= 0: return price
+    return floor_to_step(price, tick_size)
+
+def round_qty(qty: float, step_size: float) -> float:
+    if step_size <= 0: return qty
+    return floor_to_step(qty, step_size)
+PY
+
+# utils/regime_manager.py
+cat > utils/regime_manager.py << "PY"
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class RegimeTuning:
+    tp_multipliers: tuple[float, ...]
+    trail_atr_mult: float
+    be_offset_bps: int
+    allow_aggressive_trail: bool
+    freeze_after_tp1: bool
+
+PROFILES: dict[str, RegimeTuning] = {
+    "TRENDING": RegimeTuning((1.8, 3.0, 4.5), 0.55, 5,  True,  False),
+    "CHOPPY":   RegimeTuning((1.4, 2.2, 3.2), 0.85, 8,  False, True),
+    "VOLATILE": RegimeTuning((2.0, 3.6, 5.0), 0.70, 6,  True,  False),
+    "SIDEWAYS": RegimeTuning((1.6, 2.6, 3.6), 0.95, 9,  False, True),
+}
+
+def choose_profile(regime: str) -> RegimeTuning:
+    return PROFILES.get((regime or "SIDEWAYS").upper(), PROFILES["SIDEWAYS"])
+PY
+
+# utils/sl_manager.py
+cat > utils/sl_manager.py << "PY"
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import time, uuid
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter
+
+def _cid(prefix: str) -> str:
+    return f"{prefix}_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential_jitter(0.1, 1.0))
+def safe_replace_sl(binance, symbol: str, position_side: str, qty: float, new_sl_price: float) -> dict:
+    """
+    1) Place new SL (ReduceOnly) with unique clientOrderId (idempotent-ish)
+    2) Verify it is Working
+    3) Cancel old STOP orders
+    Avoids window without SL and common -2021 errors.
+    """
+    side = "SELL" if position_side.upper() == "LONG" else "BUY"
+    new_params = dict(
+        symbol=symbol,
+        side=side,
+        type="STOP_MARKET",
+        stopPrice=str(new_sl_price),
+        reduceOnly=True,
+        quantity=str(qty),
+        newClientOrderId=_cid("SLNEW"),
+        workingType="MARK_PRICE",
+    )
+    placed = binance.create_futures_order(**new_params)
+
+    time.sleep(0.2)
+    open_orders = binance.futures_get_open_orders(symbol=symbol)
+    new_id = placed.get("orderId")
+    if not any(o.get("orderId") == new_id for o in open_orders):
+        raise RuntimeError("New SL not found/working")
+
+    for o in open_orders:
+        if o.get("orderId") != new_id and str(o.get("type","")).upper().startswith("STOP"):
+            try: binance.futures_cancel_order(symbol=symbol, orderId=o["orderId"])
+            except Exception: pass
+
+    return placed
+PY
+
+echo "== 3) ensure .env.example with universal toggles =="
+touch .env.example
+add_env () { grep -q "^$1=" .env.example || echo "$1=$2" >> .env.example; }
+add_env FORCE_REGIME ""
+add_env TRAIL_FREEZE_AFTER_TP1 "1"
+add_env TRAIL_ATR_MULT ""
+add_env BE_OFFSET_BPS ""
+add_env PRECISION_GUARD_ENABLE "1"
+add_env ORDER_BACKOFF_MAX_ATTEMPTS "3"
+add_env ORDER_BACKOFF_BASE_SEC "0.2"
+add_env MANAGER_ENABLE "1"
+add_env TRAIL_ENABLE "1"
+add_env BE_GUARD_ENABLE "1"
+add_env TP_BE_ONLY_AFTER_TP1 "1"
+add_env TP_BE_OFFSET_BPS "5"
+add_env AUTO_RUN "1"
+add_env EXECUTE_TRADES "1"
+add_env DRY_RUN_DEFAULT "0"
+
+echo "== 4) patch trade_manager.py minimally (imports + inline hooks) =="
+TM="utils/trade_manager.py"
+test -f "$TM" || { echo "WARN: $TM not found, skipping hook (files still added)."; goto_commit=1; }
+
+if [ -f "$TM" ]; then
+  cp "$TM" "${TM}.bak.$(date +%s)"
+
+  # add imports if missing
+  grep -q "from utils.market_intelligence import detect_regime" "$TM" || \
+    sed -i "1s;^;from utils.market_intelligence import detect_regime\n;" "$TM"
+
+  for imp in \
+    "from utils.regime_manager import choose_profile" \
+    "from utils.sl_manager import safe_replace_sl" \
+    "from utils.precision import round_tick, round_qty" \
+    "import os, math, time"
+  do
+    grep -qF "$imp" "$TM" || sed -i "1s;^;${imp}\n;" "$TM"
+  done
+
+  # insert regime block right after def manage_open_trades(...):
+  if grep -nE "def +manage_open_trades *\(" "$TM" >/dev/null; then
+    awk '\''{
+      print $0
+      if ($0 ~ /def +manage_open_trades *\(/ && seen==0) {
+        print "    # === REGIME DYNAMIC START (auto-insert) ==="
+        print "    mc = detect_regime(symbol)  # expects .regime"
+        print "    profile = choose_profile(getattr(mc, \"regime\", \"SIDEWAYS\"))"
+        print "    force_regime = os.getenv(\"FORCE_REGIME\", \"\").strip().upper()"
+        print "    if force_regime: profile = choose_profile(force_regime)"
+        print "    _ovr_t = os.getenv(\"TRAIL_ATR_MULT\", \"\").strip()"
+        print "    _ovr_b = os.getenv(\"BE_OFFSET_BPS\", \"\").strip()"
+        print "    trail_atr_mult = float(_ovr_t) if _ovr_t else profile.trail_atr_mult"
+        print "    be_offset_bps  = int(_ovr_b) if _ovr_b else profile.be_offset_bps"
+        print "    freeze_after_tp1 = os.getenv(\"TRAIL_FREEZE_AFTER_TP1\",\"1\") == \"1\""
+        print "    # === REGIME DYNAMIC END ==="
+        seen=1
+      }
+    }'\'' "$TM" > "${TM}.tmp" && mv "${TM}.tmp" "$TM"
+  else
+    echo "WARN: manage_open_trades() not found; left imports only."
+  fi
+
+  # add helper comments (non-breaking): TP rounding / BE guard / atomic SL examples at EOF if not present
+  grep -q "### AUTO-INSERT: examples" "$TM" || cat >> "$TM" << "PY"
+# ===
+# ### AUTO-INSERT: examples (non-executed unless you call them) ###
+# Use in your TP calc:
+#   tp = round_tick(raw_tp, tick_size)
+# Use in BE guard:
+#   be_price = entry_price * (1 + (be_offset_bps/10000.0)) if side=="LONG" else entry_price * (1 - (be_offset_bps/10000.0))
+#   be_price = round_tick(be_price, tick_size)
+# Use for atomic SL replace when you decide to advance SL:
+#   _qty = round_qty(current_qty, step_size)
+#   safe_replace_sl(binance_client, symbol, position_side=side, qty=_qty, new_sl_price=round_tick(new_sl, tick_size))
+# For trailing callback:
+#   trail_callback = trail_atr_mult * atr_val
+PY
+fi
+
+echo "== 5) install deps local (optional) =="
+python -m pip install --upgrade pip >/dev/null 2>&1 || true
+pip install -r requirements.txt
+
+echo "== 6) git commit =="
+git add requirements.txt .env.example utils/precision.py utils/regime_manager.py utils/sl_manager.py || true
+git add utils/trade_manager.py || true
+git commit -m "feat(manage): add dynamic Regime tuning + atomic SL replace + precision/backoff guards (minimal merge, non-breaking)" || true
+
+echo "== DONE =="
+'
+```
+
+**מה קיבלת עכשיו (בלי לשבור כלום):**
+
+* `utils/precision.py` (עיגון ל-tick/step ⇒ סוף לשגיאות ‎-2021‎).
+* `utils/regime_manager.py` (פרופילים TRENDING/CHOPPY/VOLATILE/SIDEWAYS).
+* `utils/sl_manager.py` (החלפת SL אטומית + Idempotency + Retry/Backoff).
+* הרחבות ‎ENV‎ אוניברסליות ב-`.env.example` (רץ גם בלי Replit).
+* הזרקת בלוק ‎Regime Dynamic‎ לתוך `manage_open_trades()` אם נמצא (אחרת, נוספו רק ה-imports והערות שימוש בטוחות).
+
+רוצה שאמיר את דוגמאות השימוש (TP/BE/Trail/SL) לקריאות בפועל במיקומים המדויקים של הקוד שלך? תגיד “כן” ואני אעשה פאצ’ חכם לפי החתימות/העוגנים שיש אצלך, בלי סיכון.

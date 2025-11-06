@@ -1,0 +1,341 @@
+הנה הודעה אחת, “העתק-הדבק” לסוכן (Replit/“Rider”/DevOps Agent) שמבצע **גישה B — שילוב מינימלי אבל אולטרה-מחוזק, דינמי ואוטומטי**. ההוראה בטוחה, לא שוברת תאימות, מוסיפה הגנות/דיוק/ניהול דינמי, ושומרת שהכול ירוץ גם בלי Replit (ENV אוניברסלי, Render/Docker/GitHub).
+
+---
+
+**TASK NAME:** AlgoGPT — גישת B מורחבת (Regime דינמי, SL אטומי, Precision, Backoff/Idempotency, ENV אוניברסלי)
+
+**מטרה:**
+לשלב ניהול דינמי לפי Regime בתוך `trade_manager.py`, להוסיף `safe_replace_sl()` אטומי, להגן על דיוקים (tick/step), להוסיף Backoff/Jitter/Idempotency מינימליים להזמנות, להרחיב ENV אוניברסלי (שאינו תלוי Replit), ולעשות קומיט מסכם. בלי לשבור כלום.
+
+**אל תשנה/אל תמחק:** אימות/Bearer/HMAC/anti-replay, מסלולי API קיימים, טלגרם, DRY-RUN, Gunicorn/Render, מפתחות/ENV סודיים.
+
+---
+
+## 0) דרישות בסיס (אם חסר — הוסף, לא ליצור כפילויות)
+
+* Python ≥ 3.11
+* תלות Pydantic v2 (אם אצלך כבר יש — דלג): `pydantic>=2`
+* ספריית binance שלך כמו כיום (אל תשנה Provider)
+
+בצע:
+
+1. **עדכון requirements.txt** (רק אם חסר):
+
+   * הוסף (אם לא קיים):
+
+     ```
+     pydantic>=2.5
+     tenacity>=8.2
+     ```
+   * אחרי עדכון: `pip install -r requirements.txt` (בסביבתך)
+
+---
+
+## 1) קבצים חדשים (מינימליים, עצמאיים)
+
+### `utils/precision.py`  ✅ חדש
+
+```python
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import math
+
+def floor_to_step(value: float, step: float) -> float:
+    if step <= 0: return value
+    return math.floor(value / step) * step
+
+def round_tick(price: float, tick_size: float) -> float:
+    if tick_size <= 0: return price
+    # נוודא התאמה למדרגת tick לפני עיגול
+    return floor_to_step(price, tick_size)
+
+def round_qty(qty: float, step_size: float) -> float:
+    if step_size <= 0: return qty
+    return floor_to_step(qty, step_size)
+```
+
+### `utils/regime_manager.py`  ✅ חדש
+
+```python
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+from dataclasses import dataclass
+
+@dataclass(frozen=True)
+class RegimeTuning:
+    tp_multipliers: tuple[float, ...]
+    trail_atr_mult: float
+    be_offset_bps: int
+    allow_aggressive_trail: bool
+    freeze_after_tp1: bool
+
+PROFILES: dict[str, RegimeTuning] = {
+    "TRENDING": RegimeTuning((1.8, 3.0, 4.5), 0.55, 5,  True,  False),
+    "CHOPPY":   RegimeTuning((1.4, 2.2, 3.2), 0.85, 8,  False, True),
+    "VOLATILE": RegimeTuning((2.0, 3.6, 5.0), 0.70, 6,  True,  False),
+    "SIDEWAYS": RegimeTuning((1.6, 2.6, 3.6), 0.95, 9,  False, True),
+}
+
+def choose_profile(regime: str) -> RegimeTuning:
+    return PROFILES.get((regime or "SIDEWAYS").upper(), PROFILES["SIDEWAYS"])
+```
+
+### `utils/sl_manager.py`  ✅ חדש (אטומי + Idempotency קל)
+
+```python
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import time, uuid
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter
+
+def _cid(prefix: str) -> str:
+    return f"{prefix}_{int(time.time()*1000)}_{uuid.uuid4().hex[:8]}"
+
+@retry(stop=stop_after_attempt(3), wait=wait_exponential_jitter(0.1, 1.0))
+def safe_replace_sl(binance, symbol: str, position_side: str, qty: float, new_sl_price: float) -> dict:
+    """
+    1) מציב SL חדש ReduceOnly עם clientOrderId ייחודי (Idempotent-ish).
+    2) מוודא 'Working'.
+    3) מבטל SL ישנים.
+    מונע חלון בלי SL וגם -2021.
+    """
+    side = "SELL" if position_side.upper() == "LONG" else "BUY"
+    new_params = dict(
+        symbol=symbol,
+        side=side,
+        type="STOP_MARKET",
+        stopPrice=str(new_sl_price),
+        reduceOnly=True,
+        quantity=str(qty),
+        newClientOrderId=_cid("SLNEW"),
+        workingType="MARK_PRICE",
+    )
+    placed = binance.create_futures_order(**new_params)
+
+    time.sleep(0.2)
+    open_orders = binance.futures_get_open_orders(symbol=symbol)
+    new_id = placed.get("orderId")
+    if not any(o.get("orderId") == new_id for o in open_orders):
+        raise RuntimeError("New SL not found/working")
+
+    for o in open_orders:
+        if o.get("orderId") != new_id and str(o.get("type","")).upper().startswith("STOP"):
+            try:
+                binance.futures_cancel_order(symbol=symbol, orderId=o["orderId"])
+            except Exception:
+                pass
+
+    return placed
+```
+
+---
+
+## 2) הרחבות ENV אוניברסליות (לא תלויות Replit)
+
+ערוך/הוסף `.env.example` (אל תשים סודות אמיתיים כאן):
+
+```
+# ==== Regime Dynamic (overrides) ====
+FORCE_REGIME=
+TRAIL_FREEZE_AFTER_TP1=1
+TRAIL_ATR_MULT=
+BE_OFFSET_BPS=
+
+# ==== Precision / Risk Guards ====
+PRECISION_GUARD_ENABLE=1
+ORDER_BACKOFF_MAX_ATTEMPTS=3
+ORDER_BACKOFF_BASE_SEC=0.2
+
+# ==== Manager feature toggles (ללא שבירת תאימות) ====
+MANAGER_ENABLE=1
+TRAIl_ENABLE=1
+BE_GUARD_ENABLE=1
+TP_BE_ONLY_AFTER_TP1=1
+TP_BE_OFFSET_BPS=5
+
+# ==== Universal mode toggles (רצים גם בלי Replit) ====
+AUTO_RUN=1
+EXECUTE_TRADES=1
+DRY_RUN_DEFAULT=0
+```
+
+> אם יש לך `config.py` עם Pydantic Settings — הוסף שם פרופרטיס אופציונליים לשדות הללו (אם חסר). אם אין — אפשר בשלב הבא.
+
+---
+
+## 3) חיבור דינמי בתוך `utils/trade_manager.py` (פאץ’ מינימלי)
+
+ב־imports למעלה הוסף:
+
+```python
+from utils.market_intelligence import detect_regime
+from utils.regime_manager import choose_profile
+from utils.sl_manager import safe_replace_sl
+from utils.precision import round_tick, round_qty
+import os, math, time
+```
+
+**בתוך** `manage_open_trades()` (או הלולאה שמנהלת פוזיציות), תחילת המחזור:
+
+```python
+# === Regime dynamic profile ===
+mc = detect_regime(symbol)              # קיים אצלך; מחזיר אובייקט עם mc.regime
+profile = choose_profile(mc.regime)
+
+force_regime = os.getenv("FORCE_REGIME", "").strip().upper()
+if force_regime:
+    profile = choose_profile(force_regime)
+
+# overrides (אם הוגדרו ב-ENV)
+ovr_trail_mult = os.getenv("TRAIL_ATR_MULT", "").strip()
+ovr_be_bps = os.getenv("BE_OFFSET_BPS", "").strip()
+trail_atr_mult = float(ovr_trail_mult) if ovr_trail_mult else profile.trail_atr_mult
+be_offset_bps  = int(ovr_be_bps) if ovr_be_bps else profile.be_offset_bps
+freeze_after_tp1 = os.getenv("TRAIL_FREEZE_AFTER_TP1","1") == "1"
+```
+
+**חישוב TP דינמי** (שמור את הלוגיקה שלך, רק את המקדמים החלף):
+
+```python
+# entry_price, side, atr_val, tick_size, step_size קיימים אצלך
+tp_prices = []
+for mult in profile.tp_multipliers:
+    if side == "LONG":
+        raw = entry_price + (mult * atr_val)
+    else:
+        raw = entry_price - (mult * atr_val)
+    tp_prices.append(round_tick(raw, tick_size))
+```
+
+**Trailing דינמי + שמירה על TP1**:
+
+```python
+reached_tp1 = context.get("reached_tp1", False)  # או הדרך שלך לעקוב
+allow_trailing = not (freeze_after_tp1 and not reached_tp1)
+
+if allow_trailing and os.getenv("TRAIL_ENABLE","1") == "1":
+    trail_callback = trail_atr_mult * atr_val
+    # עדכן כאן את עדכון ה-SL הדינמי שלך להשתמש ב-trail_callback
+```
+
+**BE Guard**:
+
+```python
+if os.getenv("BE_GUARD_ENABLE","1") == "1":
+    if reached_tp1 and os.getenv("TP_BE_ONLY_AFTER_TP1","1") == "1":
+        be_price = entry_price * (1 + (be_offset_bps/10000.0)) if side=="LONG" else entry_price * (1 - (be_offset_bps/10000.0))
+        be_price = round_tick(be_price, tick_size)
+        # אם SL נוכחי רחוק מדי, קדם ל-BE
+```
+
+**Precision Guard לפני כל שליחה/שינוי הזמנה**:
+
+```python
+if os.getenv("PRECISION_GUARD_ENABLE","1") == "1":
+    price   = round_tick(price, tick_size)   if "price" in locals() else None
+    stop    = round_tick(stop, tick_size)    if "stop" in locals() else None
+    take_p  = round_tick(take_p, tick_size)  if "take_p" in locals() else None
+    qty     = round_qty(qty, step_size)      if "qty" in locals() else None
+```
+
+**החלפת SL אטומית כשצריך לעדכן**:
+
+```python
+# לדוגמה כשאתה מחליט לקדם SL:
+new_sl_price = calculated_sl  # מהלוגיקה שלך
+new_sl_price = round_tick(new_sl_price, tick_size)
+adj_qty = round_qty(current_qty, step_size)
+
+try:
+    safe_replace_sl(binance_client, symbol, position_side=side, qty=adj_qty, new_sl_price=new_sl_price)
+except Exception as e:
+    logger.warning(f"safe_replace_sl failed: {e}")
+```
+
+**Backoff/Jitter מינימליים בהזמנות חדשות** (עטוף כל יצירת הזמנה במקום המרכזי אצלך):
+
+```python
+from tenacity import retry, stop_after_attempt, wait_exponential_jitter
+
+@retry(stop=stop_after_attempt(int(os.getenv("ORDER_BACKOFF_MAX_ATTEMPTS","3"))),
+       wait=wait_exponential_jitter(float(os.getenv("ORDER_BACKOFF_BASE_SEC","0.2")), 1.2))
+def _place_order_guarded(params: dict):
+    # ודא שאתה עושה round_tick/round_qty לפני הקריאה בפועל
+    return binance_client.create_futures_order(**params)
+```
+
+> חשוב: **אל תבטל/תשנה** לוגיקות קיימות — רק תעטוף ותשתמש בפרופיל/precision/SL אטומי.
+
+---
+
+## 4) קובץ קונפיג (אופציונלי, אם יש `config.py` עם Pydantic Settings)
+
+הוסף שדות (optional) והשתמש בהם בתיעדוף על ENV אם תרצה. אם אין — דלג (ENV כבר עובד):
+
+```python
+from pydantic import BaseSettings
+
+class Settings(BaseSettings):
+    FORCE_REGIME: str | None = None
+    TRAIL_FREEZE_AFTER_TP1: int = 1
+    TRAIL_ATR_MULT: float | None = None
+    BE_OFFSET_BPS: int | None = None
+    PRECISION_GUARD_ENABLE: int = 1
+    ORDER_BACKOFF_MAX_ATTEMPTS: int = 3
+    ORDER_BACKOFF_BASE_SEC: float = 0.2
+    class Config:
+        env_file = ".env"
+```
+
+---
+
+## 5) בדיקות מהירות (ללא סיכון)
+
+1. **DRY-RUN** (אם יש נתיב/דגל):
+
+```bash
+# הנח ש-$BASE ו-$TOKEN מוגדרים; אם אין, דלג.
+curl -sS -H "Authorization: Bearer $TOKEN" \
+  "$BASE/manage-once?symbol=BTCUSDT&dry_run=1" | sed -e 's/{\|}/\n&\n/g' | head -n 120
+```
+
+וודא בלוגים:
+
+* נרשמה זיהוי Regime (mc.regime).
+* tp_prices בהתאם לפרופיל.
+* round_tick/round_qty הופעלו.
+
+2. **Override זמני**:
+
+```
+FORCE_REGIME=TRENDING TRAIL_ATR_MULT=0.55 BE_OFFSET_BPS=5 python -c "print('ok')"
+```
+
+רוץ אינטגרטיבית והבט שהמקדמים אכן משתנים.
+
+3. **החלפת SL**: טריגר פנימי (simulate) לראות שה-safe_replace_sl מציב חדש → מאשר → מבטל ישנים.
+
+---
+
+## 6) קומיט מסכם (ללא סודות)
+
+```bash
+git add utils/precision.py utils/regime_manager.py utils/sl_manager.py
+git add .env.example
+git add utils/trade_manager.py config.py || true
+git commit -m "feat(manage): dynamic regime tuning + atomic SL replace + precision/backoff guards (non-breaking, ENV-universal)"
+# git push
+```
+
+---
+
+## 7) עקרונות הגנה שהכנסת עכשיו (TL;DR)
+
+* **Regime-Aware**: TP/Trail/BE אדפטיביים ל-TRENDING/CHOPPY/VOLATILE/SIDEWAYS.
+* **Atomic SL**: אין חלון בלי SL, עם Idempotent clientOrderId + ביטול ישנים רק אחרי אימות חדש.
+* **Precision Guard**: כל מחיר/כמות מותאמים ל-tick/step לפני שליחה (סוף ל--2021).
+* **Backoff + Jitter**: הזמנות נופלות ננסות עם המתנה אקספוננציאלית אקראית — פחות עומס ופחות “רדיפות”.
+* **ENV אוניברסלי**: עובד ברנדר/דוקר/לוקאל בלי תלות ב-.replit; אם Replit מנותק — הכול ממשיך.
+* **Non-Breaking**: לא מחליף את הלוגיקה שלך — רק מחדד, עוטף ומגן.
+
+סיימתי.

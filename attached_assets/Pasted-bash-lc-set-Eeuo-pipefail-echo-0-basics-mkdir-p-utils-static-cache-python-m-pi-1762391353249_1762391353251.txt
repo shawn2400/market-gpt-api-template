@@ -1,0 +1,614 @@
+bash -lc '
+set -Eeuo pipefail
+
+echo "=== 0) basics =="
+mkdir -p utils static/cache
+python -m pip install -q --upgrade pip
+touch requirements.txt
+grep -q "^python-dotenv" requirements.txt || echo "python-dotenv>=1.0.1" >> requirements.txt
+grep -q "^pydantic"      requirements.txt || echo "pydantic>=2.8.0"      >> requirements.txt
+# אופציונלי אם חסר אצלך client אסינכרוני לבינאנס (תשאיר כבוי אם יש כבר):
+# grep -q "^aiohttp" requirements.txt || echo "aiohttp>=3.9.0" >> requirements.txt
+
+echo "=== 0b) .gitignore =="
+if [ -f ".gitignore" ]; then
+  grep -qE "^\s*\.env(\.local)?\s*$" .gitignore || printf "\n.env\n.env.local\n" >> .gitignore
+else
+  printf ".env\n.env.local\n" > .gitignore
+fi
+
+echo "=== 1) .env.example & .env (עם דגלים לניהול דינמי) =="
+cat > .env.example << "EOF"
+# ==== Core / App ====
+APP_VERSION=3.6.0
+NODE_ID=core-api
+PORT=5000
+BASE_URL=http://127.0.0.1:5000
+
+# ==== AI Providers / Consensus ====
+ENABLE_MULTI_AI_CONSENSUS=1
+CONSENSUS_MIN_PROVIDERS=2
+ENABLE_OPENAI=1
+OPENAI_BASE=https://api.openai.com/v1
+# OPENAI_API_KEY=
+ENABLE_XAI=1
+AIX_BASE=https://api.x.ai/v1
+# AIX_API_KEY=
+ENABLE_DEEPSEEK=1
+DEEPSEEK_BASE=https://api.deepseek.com/v1
+# DEEPSEEK_API_KEY=
+
+# ==== Supervisor / Mesh ====
+AI_MESH_PATH=ai_mesh.json
+AI_SUP_INTERVAL_SEC=300
+SUPERVISOR_SYMBOLS=BTCUSDT,ETHUSDT,SOLUSDT
+OPENAI_SUP_MODEL=gpt-4o
+AIX_SUP_MODEL=grok-beta
+SUP_AGREE_STRICT=1
+SUP_RESTART_GRACE_SEC=1
+
+# ==== News ====
+NEWS_ENABLE=1
+NEWS_MAX_POSTS=40
+NEWS_POLL_INTERVAL_SEC=28800
+NEWS_POLL_JITTER_SEC=90
+NEWS_DELTA_NOTIFY_THRESHOLD=8
+NEWS_SOURCE_CRYPTOPANIC=1
+CRYPTOPANIC_BASE=https://cryptopanic.com/api/developer/v2
+# CRYPTOPANIC_TOKEN=
+NEWS_SOURCE_FEARGREED=1
+FEARGREED_SOURCE=alternative
+NEWS_REQ_BUDGET_MONTH=90
+NEWS_REQ_WINDOW_DAYS=30
+NEWS_CB_FAIL_THRESHOLD=4
+NEWS_CB_COOLDOWN_SEC=900
+
+# ==== PnL Heartbeat ====
+PNL_HEARTBEAT_ENABLE=1
+PNL_HEARTBEAT_CACHE_SEC=60
+PNL_HEARTBEAT_WINDOW_TRADES=50
+PNL_HEARTBEAT_WINDOW_DAYS=7
+PNL_HEARTBEAT_LOG_PATH=static/cache/trades_log.json
+
+# ==== Trading Switches ====
+AUTO_RUN=1
+PAUSE_AUTO_RUN=0
+EXECUTE_TRADES=1
+TRADE_AUTO_SUGGEST=1
+SUGGEST_FUTURES=1
+SUGGEST_GRID=1
+SUGGEST_INTERVAL_SEC=60
+
+# ==== Dynamic Manager / TP / BE / Trail ====
+MANAGER_ENABLE=1
+TRADE_MANAGER_ENABLE=1
+ALLOW_MANAGE_OPEN_TRADES=1
+TRAIL_ENABLE=1
+BE_GUARD_ENABLE=1
+TP_BE_ONLY_AFTER_TP1=1
+TP_BE_OFFSET_BPS=8
+TM_BE_MIN_PROFIT_PCT=1.5
+LADDER_TP_DEFAULT_PCTS=1.6,3.0,4.8
+LADDER_TP_KIND=TAKE_PROFIT
+TP_LIMIT_OFFSET_BPS=6
+TM_UPDATE_COOLDOWN_SEC=20
+
+# ==== Dynamic Regime (“דינמי-על”) ====
+FORCE_REGIME=              # TRENDING|CHOPPY|VOLATILE|SIDEWAYS| (ריק=אוטומטי)
+LOG_REGIME_CHANGES=1
+TRAIL_FREEZE_ENABLE=1
+TRAIL_FREEZE_SPIKE_ATR_MULT=1.8
+TRAIL_FREEZE_MIN_SEC=60
+TRAIL_FREEZE_MAX_SEC=180
+
+# ==== Budget Intelligence ====
+DYNAMIC_BUDGET_ENABLE=1
+BUDGET_PCT_OF_EQUITY=1.0
+BUDGET_MIN_USDT=10
+BUDGET_MAX_USDT=100
+LOG_BUDGET_DEBUG=1
+
+# ==== Telegram / Approvals ====
+TELEGRAM_SEND_ENABLE=1
+APPROVAL_ENABLED=0
+REQUIRE_TELEGRAM_APPROVAL=0
+AUTO_OPEN_ON_APPROVE=1
+SMART_MANAGE_ON_APPROVE=1
+# TELEGRAM_BOT_TOKEN=
+# TELEGRAM_CHAT_ID=
+
+# ==== Security / Webhooks ====
+DEBUG_SIGN=1
+WEBHOOK_HMAC_SECRET=demo_secret_change_in_production
+# API_BEARER_TOKEN=
+# METRICS_BEARER=
+
+# ==== Wiring (workers) ====
+CONTEXT_URL=http://127.0.0.1:5000
+ALERT_INGEST_URL=http://127.0.0.1:5000/alerts/ingest
+
+# ==== Monitors ====
+ENABLE_POSITION_MONITOR=1
+POSITION_REPORT_INTERVAL_SEC=1800
+POSITION_ALERT_LEVEL=critical
+SENTINEL_ENABLED=1
+SENTINEL_ALERT_LEVEL=critical
+HEALTH_CHECK_INTERVAL=30
+AUTO_FIX_ENABLE=1
+FILLS_WATCH_ENABLE=1
+FILLS_WATCH_INTERVAL_SEC=15
+EOF
+[ -f .env ] || cp .env.example .env
+
+echo "=== 2) config.py (טעינה אוניברסלית) =="
+cat > config.py << "EOF"
+from pydantic import BaseSettings
+from dotenv import load_dotenv
+load_dotenv()
+
+class Settings(BaseSettings):
+    APP_VERSION: str = "3.6.0"
+    NODE_ID: str = "core-api"
+    PORT: int = 5000
+    BASE_URL: str = "http://127.0.0.1:5000"
+
+    ENABLE_MULTI_AI_CONSENSUS: int = 1
+    CONSENSUS_MIN_PROVIDERS: int = 2
+    ENABLE_OPENAI: int = 1
+    OPENAI_BASE: str = "https://api.openai.com/v1"
+    OPENAI_API_KEY: str = ""
+    ENABLE_XAI: int = 1
+    AIX_BASE: str = "https://api.x.ai/v1"
+    AIX_API_KEY: str = ""
+    ENABLE_DEEPSEEK: int = 1
+    DEEPSEEK_BASE: str = "https://api.deepseek.com/v1"
+    DEEPSEEK_API_KEY: str = ""
+
+    AI_MESH_PATH: str = "ai_mesh.json"
+    AI_SUP_INTERVAL_SEC: int = 300
+    SUPERVISOR_SYMBOLS: str = "BTCUSDT,ETHUSDT,SOLUSDT"
+    OPENAI_SUP_MODEL: str = "gpt-4o"
+    AIX_SUP_MODEL: str = "grok-beta"
+    SUP_AGREE_STRICT: int = 1
+    SUP_RESTART_GRACE_SEC: int = 1
+
+    NEWS_ENABLE: int = 1
+    NEWS_MAX_POSTS: int = 40
+    NEWS_POLL_INTERVAL_SEC: int = 28800
+    NEWS_POLL_JITTER_SEC: int = 90
+    NEWS_DELTA_NOTIFY_THRESHOLD: int = 8
+    NEWS_SOURCE_CRYPTOPANIC: int = 1
+    CRYPTOPANIC_BASE: str = "https://cryptopanic.com/api/developer/v2"
+    CRYPTOPANIC_TOKEN: str = ""
+    NEWS_SOURCE_FEARGREED: int = 1
+    FEARGREED_SOURCE: str = "alternative"
+    NEWS_REQ_BUDGET_MONTH: int = 90
+    NEWS_REQ_WINDOW_DAYS: int = 30
+    NEWS_CB_FAIL_THRESHOLD: int = 4
+    NEWS_CB_COOLDOWN_SEC: int = 900
+
+    PNL_HEARTBEAT_ENABLE: int = 1
+    PNL_HEARTBEAT_CACHE_SEC: int = 60
+    PNL_HEARTBEAT_WINDOW_TRADES: int = 50
+    PNL_HEARTBEAT_WINDOW_DAYS: int = 7
+    PNL_HEARTBEAT_LOG_PATH: str = "static/cache/trades_log.json"
+
+    AUTO_RUN: int = 1
+    PAUSE_AUTO_RUN: int = 0
+    EXECUTE_TRADES: int = 1
+    TRADE_AUTO_SUGGEST: int = 1
+    SUGGEST_FUTURES: int = 1
+    SUGGEST_GRID: int = 1
+    SUGGEST_INTERVAL_SEC: int = 60
+
+    MANAGER_ENABLE: int = 1
+    TRADE_MANAGER_ENABLE: int = 1
+    ALLOW_MANAGE_OPEN_TRADES: int = 1
+    TRAIL_ENABLE: int = 1
+    BE_GUARD_ENABLE: int = 1
+    TP_BE_ONLY_AFTER_TP1: int = 1
+    TP_BE_OFFSET_BPS: int = 8
+    TM_BE_MIN_PROFIT_PCT: float = 1.5
+    LADDER_TP_DEFAULT_PCTS: str = "1.6,3.0,4.8"
+    LADDER_TP_KIND: str = "TAKE_PROFIT"
+    TP_LIMIT_OFFSET_BPS: int = 6
+    TM_UPDATE_COOLDOWN_SEC: int = 20
+
+    FORCE_REGIME: str = ""
+    LOG_REGIME_CHANGES: int = 1
+    TRAIL_FREEZE_ENABLE: int = 1
+    TRAIL_FREEZE_SPIKE_ATR_MULT: float = 1.8
+    TRAIL_FREEZE_MIN_SEC: int = 60
+    TRAIL_FREEZE_MAX_SEC: int = 180
+
+    DYNAMIC_BUDGET_ENABLE: int = 1
+    BUDGET_PCT_OF_EQUITY: float = 1.0
+    BUDGET_MIN_USDT: float = 10
+    BUDGET_MAX_USDT: float = 100
+    LOG_BUDGET_DEBUG: int = 1
+
+    TELEGRAM_SEND_ENABLE: int = 1
+    APPROVAL_ENABLED: int = 0
+    REQUIRE_TELEGRAM_APPROVAL: int = 0
+    AUTO_OPEN_ON_APPROVE: int = 1
+    SMART_MANAGE_ON_APPROVE: int = 1
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_CHAT_ID: str = ""
+
+    DEBUG_SIGN: int = 1
+    WEBHOOK_HMAC_SECRET: str = "demo_secret_change_in_production"
+    API_BEARER_TOKEN: str = ""
+    METRICS_BEARER: str = ""
+
+    CONTEXT_URL: str = ""
+    ALERT_INGEST_URL: str = ""
+
+    ENABLE_POSITION_MONITOR: int = 1
+    POSITION_REPORT_INTERVAL_SEC: int = 1800
+    POSITION_ALERT_LEVEL: str = "critical"
+    SENTINEL_ENABLED: int = 1
+    SENTINEL_ALERT_LEVEL: str = "critical"
+    HEALTH_CHECK_INTERVAL: int = 30
+    AUTO_FIX_ENABLE: int = 1
+    FILLS_WATCH_ENABLE: int = 1
+    FILLS_WATCH_INTERVAL_SEC: int = 15
+
+    class Config:
+        env_file = ".env"
+        env_file_encoding = "utf-8"
+
+settings = Settings()
+EOF
+
+echo "=== 3) gunicorn_conf.py (מתחשב ב-PORT) =="
+cat > gunicorn_conf.py << "EOF"
+import multiprocessing, os
+bind = f"0.0.0.0:{os.environ.get('PORT', '5000')}"
+workers = int(os.environ.get("WEB_CONCURRENCY", max(1, multiprocessing.cpu_count() * 2 + 1)))
+threads = int(os.environ.get("GTHREADS", 1))
+timeout = int(os.environ.get("TIMEOUT", 120))
+graceful_timeout = int(os.environ.get("GRACEFUL_TIMEOUT", 30))
+keepalive = int(os.environ.get("KEEPALIVE", 5))
+EOF
+
+echo "=== 4) ניקוי ENV מוטמע מתוך .replit (אם קיים) =="
+if [ -f ".replit" ]; then
+python - << "PY"
+import re
+p = ".replit"
+s = open(p, "r", encoding="utf-8").read()
+def strip_env(val:str)->str:
+    parts = val.strip().split()
+    out, started = [], False
+    for token in parts:
+        if not started and "=" in token and not token.startswith(("python","gunicorn","uvicorn","cd","bash","sh")):
+            continue
+        started = True
+        out.append(token)
+    return " ".join(out)
+s2 = re.sub(r'(\bargs\s*=\s*")([^"]*)(")', lambda m: m.group(1)+strip_env(m.group(2))+m.group(3), s)
+if s!=s2:
+    open(p, "w", encoding="utf-8").write(s2)
+    print("updated .replit (removed inline ENV from args)")
+else:
+    print("no inline ENV found in .replit args")
+PY
+fi
+
+echo "=== 5) Dynamic Regime Manager (utils/regime_manager.py) ==="
+cat > utils/regime_manager.py << "EOF"
+from __future__ import annotations
+import os, logging
+from typing import Literal, Dict, List
+from dataclasses import dataclass
+
+logger = logging.getLogger(__name__)
+
+RegimeType = Literal["TRENDING", "CHOPPY", "VOLATILE", "SIDEWAYS"]
+PositionSide = Literal["LONG", "SHORT"]
+
+@dataclass
+class RegimeParams:
+    sl_atr_mult: float
+    tps_atr_mults: List[float]
+    trail_mode: str  # "aggr" | "mid" | "mild" | "off"
+    use_grid: bool = False
+
+class DynamicRegimeManager:
+    _REGIME_PARAMS: Dict[RegimeType, RegimeParams] = {
+        "TRENDING": RegimeParams(2.0, [2.5, 4.0, 6.0, 8.0], "aggr"),
+        "CHOPPY":   RegimeParams(0.8, [1.5, 2.5], "off", use_grid=True),
+        "VOLATILE": RegimeParams(3.0, [4.0, 7.0], "mid"),
+        "SIDEWAYS": RegimeParams(1.2, [2.0, 3.2], "mild"),
+    }
+
+    @staticmethod
+    def get_current_regime() -> RegimeType:
+        forced = os.getenv("FORCE_REGIME", "").upper().strip()
+        if forced in {"TRENDING","CHOPPY","VOLATILE","SIDEWAYS"}:
+            logger.info(f"Using forced regime: {forced}")
+            return forced  # type: ignore[return-value]
+        # TODO: חבר ל-detectors האמיתיים שלך (ADX/ATR/EMA/BTC trend)
+        return "TRENDING"
+
+    @staticmethod
+    def calculate_dynamic_targets(
+        regime: RegimeType, quality_score: float, atr_value: float,
+        swing_price: float, side: PositionSide, current_price: float
+    ) -> dict:
+        base = DynamicRegimeManager._REGIME_PARAMS.get(regime, DynamicRegimeManager._REGIME_PARAMS["TRENDING"])
+        adj = DynamicRegimeManager._apply_quality_adjustments(quality_score, base)
+        if side == "LONG":
+            sl = max(0.0, swing_price - adj.sl_atr_mult * atr_value)
+            tps = [current_price + m * atr_value for m in adj.tps_atr_mults]
+        else:
+            sl = swing_price + adj.sl_atr_mult * atr_value
+            tps = [current_price - m * atr_value for m in adj.tps_atr_mults]
+        return {"sl_price": sl, "tp_prices": tps, "trail_mode": adj.trail_mode, "use_grid": adj.use_grid,
+                "regime": regime, "quality_score": quality_score}
+
+    @staticmethod
+    def _apply_quality_adjustments(qs: float, base: RegimeParams) -> RegimeParams:
+        adj = RegimeParams(base.sl_atr_mult, base.tps_atr_mults.copy(), base.trail_mode, base.use_grid)
+        if qs >= 8.5:
+            adj.sl_atr_mult *= 1.10
+            adj.tps_atr_mults = [m*1.20 for m in adj.tps_atr_mults]
+        elif qs <= 7.5:
+            adj.sl_atr_mult *= 0.90
+            adj.tps_atr_mults = [m*0.85 for m in adj.tps_atr_mults]
+        return adj
+EOF
+
+echo "=== 6) Zero-Gap SL Manager (utils/sl_manager.py) ==="
+cat > utils/sl_manager.py << "EOF"
+import logging
+from typing import Dict, Any
+
+logger = logging.getLogger(__name__)
+
+class ZeroGapSLManager:
+    """
+    AtoMic SL replace: place new -> verify -> cancel old (no gap window).
+    client צריך לתמוך במתודות futures_create_order / futures_get_order / futures_get_open_orders / futures_cancel_order
+    """
+    @staticmethod
+    async def safe_replace_sl(symbol: str, position_side: str, current_price: float,
+                              atr_value: float, desired_sl: float, client: Any) -> Dict:
+        try:
+            new = await ZeroGapSLManager._place_new_sl_order(symbol, position_side, desired_sl, client)
+            if not new.get("success"):
+                return {"ok": False, "error": f"New SL placement failed: {new.get('error')}"}
+            new_id = new["order_id"]
+            ok = await ZeroGapSLManager._verify_order_active(symbol, new_id, client)
+            if not ok:
+                with logger: await ZeroGapSLManager._cancel_order(symbol, new_id, client)  # type: ignore
+                return {"ok": False, "error": "New SL order not verified"}
+            cancelled = await ZeroGapSLManager._cancel_old_sl_orders(symbol, position_side, client)
+            return {"ok": True, "new_order_id": new_id, "old_orders_cancelled": cancelled.get("cancelled_count", 0),
+                    "desired_sl": desired_sl}
+        except Exception as e:
+            logger.error(f"Zero-Gap SL replacement failed for {symbol}: {e}")
+            return {"ok": False, "error": str(e)}
+
+    @staticmethod
+    async def _place_new_sl_order(symbol: str, side: str, sl_price: float, client: Any) -> Dict:
+        try:
+            order = await client.futures_create_order(
+                symbol=symbol,
+                side="SELL" if side == "LONG" else "BUY",
+                type="STOP_MARKET",
+                stopPrice=sl_price,
+                reduceOnly=True,
+                timeInForce="GTC"
+            )
+            return {"success": True, "order_id": order["orderId"]}
+        except Exception as e:
+            logger.error(f"Failed to place new SL for {symbol}: {e}")
+            return {"success": False, "error": str(e)}
+
+    @staticmethod
+    async def _verify_order_active(symbol: str, order_id: int, client: Any, max_retries: int = 3) -> bool:
+        for _ in range(max_retries):
+            try:
+                info = await client.futures_get_order(symbol=symbol, orderId=order_id)
+                if info and info.get("status") in ("NEW","PARTIALLY_FILLED"):
+                    return True
+            except Exception as e:
+                logger.warning(f"Order verify failed: {e}")
+        return False
+
+    @staticmethod
+    async def _cancel_old_sl_orders(symbol: str, position_side: str, client: Any) -> Dict:
+        try:
+            open_orders = await client.futures_get_open_orders(symbol=symbol)
+            c = 0
+            for o in open_orders:
+                if o.get("type") in ("STOP_MARKET","STOP") and o.get("reduceOnly") and o.get("positionSide")==position_side:
+                    await client.futures_cancel_order(symbol=symbol, orderId=o["orderId"])
+                    c += 1
+            return {"cancelled_count": c}
+        except Exception as e:
+            logger.error(f"Failed cancel old SL: {e}")
+            return {"cancelled_count": 0, "error": str(e)}
+
+    @staticmethod
+    async def _cancel_order(symbol: str, order_id: int, client: Any):
+        try:
+            await client.futures_cancel_order(symbol=symbol, orderId=order_id)
+        except Exception as e:
+            logger.warning(f"cancel new SL failed silently: {e}")
+EOF
+
+echo "=== 7) Trade helpers (utils/trade_helpers.py) – stubs בטוחים אם חסר ==="
+cat > utils/trade_helpers.py << "EOF"
+from typing import List
+import logging
+logger = logging.getLogger(__name__)
+
+# NOTE: חבר כאן למימושים הקיימים שלך אם יש.
+async def cancel_existing_tps(symbol: str): logger.debug(f"cancel_existing_tps({symbol}) [stub]")
+
+async def place_tp_order(symbol: str, side: str, price: float, quantity: float, order_tag: str):
+    logger.info(f"TP {order_tag} {symbol} {side} @ {price} qty={quantity} [stub]")
+
+async def set_trailing_stop(symbol: str, activation_price: float, callback_rate: float):
+    logger.info(f"trail set {symbol} act={activation_price} cb={callback_rate} [stub]")
+
+async def disable_trailing_stop(symbol: str):
+    logger.info(f"trail disabled {symbol} [stub]")
+
+async def should_activate_be_guard(symbol: str) -> bool:
+    return False  # חבר ללוגיקה שלך (למשל: אחרי TP1)
+
+async def move_to_breakeven(symbol: str, side: str, current_price: float):
+    logger.info(f"move_to_BE {symbol} {side} @ {current_price} [stub]")
+
+async def should_freeze_trailing(symbol: str, atr_value: float) -> bool:
+    return False  # spike / ADX נמוך
+
+async def freeze_trailing_stop(symbol: str, duration_seconds: int):
+    logger.info(f"trail freeze {symbol} for {duration_seconds}s [stub]")
+
+# מקורות דאטה (תחבר ל-WS/REST שלך)
+async def get_current_atr(symbol: str) -> float:  return 50.0
+async def get_last_swing(symbol: str, side: str) -> float: return 50000.0
+async def get_market_price(symbol: str) -> float: return 50500.0
+EOF
+
+echo "=== 8) Patch trade_manager.py -> manage_open_trades() דינמי ==="
+if [ -f "utils/trade_manager.py" ]; then
+  cp utils/trade_manager.py utils/trade_manager.py.bak || true
+  python - << "PY"
+import re, sys
+p = "utils/trade_manager.py"
+s = open(p, "r", encoding="utf-8").read()
+
+# הזרקת imports בטוחה (אם לא קיימים)
+def ensure_import(s, imp):
+    return imp+"\n"+s if imp not in s else s
+
+s = ensure_import(s, "from utils.regime_manager import DynamicRegimeManager")
+s = ensure_import(s, "from utils.sl_manager import ZeroGapSLManager")
+s = ensure_import(s, "from utils.trade_helpers import (cancel_existing_tps, place_tp_order, set_trailing_stop, disable_trailing_stop, should_activate_be_guard, move_to_breakeven, should_freeze_trailing, freeze_trailing_stop, get_current_atr, get_last_swing, get_market_price)")
+s = ensure_import(s, "import asyncio, logging")
+s = ensure_import(s, "from config import settings")
+# ננסה להשיג client
+if "get_binance_client" not in s:
+    s = ensure_import(s, "try:\n    from utils.binance_client import get_binance_client\nexcept Exception:\n    get_binance_client = None  # type: ignore\n")
+
+body = r"""
+async def manage_open_trades():
+    \"\"\"Dynamic regime-driven manager (Zero-Gap SL, TP ladder, Trail, BE-Guard).\"\"\"
+    logger = logging.getLogger(__name__)
+    try:
+        regime = DynamicRegimeManager.get_current_regime()
+        logger.info(f\"Current market regime: {regime}\")
+    except Exception as e:
+        logger.warning(f\"Regime detection failed: {e}; default TRENDING\")
+        regime = \"TRENDING\"
+
+    # קבל פוזיציות פתוחות – חבר למקור שלך
+    try:
+        # דוגמה: אם יש לך פונקציה שמחזירה פוזיציות
+        open_positions = globals().get(\"OPEN_POSITIONS\", [])  # fallback; חבר למימוש שלך
+    except Exception:
+        open_positions = []
+
+    # client
+    client = None
+    try:
+        if \"get_binance_client\" in globals() and callable(get_binance_client):
+            client = get_binance_client()
+    except Exception as e:
+        logger.warning(f\"binance client unavailable: {e}\")
+        client = globals().get(\"binance_client\")  # אולי מוגדר גלובלי
+
+    if not open_positions:
+        logger.debug(\"no open positions\")
+        return
+
+    for pos in open_positions:
+        try:
+            symbol = pos[\"symbol\"]
+            side = \"LONG\" if float(pos.get(\"positionAmt\", 0)) > 0 else \"SHORT\"
+            qs = float(pos.get(\"quality_score\", 8.0))
+            atr_val = await get_current_atr(symbol)
+            swing = await get_last_swing(symbol, side)
+            price = await get_market_price(symbol)
+
+            targets = DynamicRegimeManager.calculate_dynamic_targets(
+                regime=regime, quality_score=qs, atr_value=atr_val,
+                swing_price=swing, side=side, current_price=price
+            )
+            logger.info(f\"{symbol}: SL={targets['sl_price']}, TPs={targets['tp_prices']}, trail={targets['trail_mode']}, grid={targets['use_grid']}\")
+            if client is None:
+                logger.error(\"binance client not available; skipping SL replace\")
+            else:
+                sl_res = await ZeroGapSLManager.safe_replace_sl(
+                    symbol=symbol, position_side=side, current_price=price,
+                    atr_value=atr_val, desired_sl=targets[\"sl_price\"], client=client
+                )
+                if not sl_res.get(\"ok\"):
+                    logger.error(f\"SL management failed for {symbol}: {sl_res.get('error')}\")
+                    continue
+
+            # TP ladder
+            qty = abs(float(pos.get(\"positionAmt\", 0)))
+            await cancel_existing_tps(symbol)
+            tps = targets[\"tp_prices\"]
+            weights = [0.5, 0.3, 0.2][:len(tps)]
+            s = sum(weights) or 1.0
+            weights = [w/s for w in weights]
+            for i, (tp, w) in enumerate(zip(tps, weights), start=1):
+                await place_tp_order(symbol=symbol, side=side, price=tp, quantity=qty*w, order_tag=f\"TP{i}_{symbol}\")
+
+            # Trail mode
+            tm = targets[\"trail_mode\"]
+            if tm == \"aggr\":      await set_trailing_stop(symbol, activation_price=price*1.005, callback_rate=0.4)
+            elif tm == \"mid\":     await set_trailing_stop(symbol, activation_price=price*1.010, callback_rate=0.2)
+            elif tm == \"mild\":    await set_trailing_stop(symbol, activation_price=price*1.015, callback_rate=0.1)
+            else:                   await disable_trailing_stop(symbol)
+
+            # BE guard + freeze
+            if await should_activate_be_guard(symbol):
+                await move_to_breakeven(symbol, side, price)
+            if await should_freeze_trailing(symbol, atr_val):
+                await freeze_trailing_stop(symbol, duration_seconds=120)
+
+            # cooldown
+            await asyncio.sleep(int(getattr(settings, \"TM_UPDATE_COOLDOWN_SEC\", 20)))
+        except Exception as e:
+            logger.error(f\"manage_open_trades loop error for {pos}: {e}\")
+"""
+
+# החלפת פונקציה קיימת או הוספה
+pat = re.compile(r"async\s+def\s+manage_open_trades\s*\([^)]*\):.*?(?=\n(?:async\s+def|def)\s|\Z)", re.S)
+if pat.search(s):
+    s = pat.sub(body, s)
+else:
+    s += "\n\n" + body + "\n"
+
+open(p, "w", encoding="utf-8").write(s)
+print("patched utils/trade_manager.py (manage_open_trades)")
+PY
+else
+  echo "utils/trade_manager.py not found — skipping patch (תוכל לייבא את הפונקציה החדשה ולקרוא לה מהסקד׳ולר שלך)"
+fi
+
+echo "=== 9) smoke test: טעינת ENV ==="
+python - << "PY"
+from config import settings
+print("ENV OK:", settings.PORT, settings.BASE_URL, settings.LADDER_TP_DEFAULT_PCTS, settings.TM_UPDATE_COOLDOWN_SEC)
+PY
+
+echo "=== 10) run hint ==="
+echo "להרצה לוקאלית: gunicorn -c gunicorn_conf.py main:app"
+
+echo "=== 11) git add/commit ==="
+git add .env.example config.py gunicorn_conf.py requirements.txt .gitignore utils/regime_manager.py utils/sl_manager.py utils/trade_helpers.py || true
+[ -f utils/trade_manager.py ] && git add utils/trade_manager.py || true
+[ -f .replit ] && git add .replit || true
+git commit -m "feat(dynamic-manage): regime-driven manager + Zero-Gap SL + TP ladder; config unify (.replit ➜ .env)" || echo "nothing to commit"
+
+echo "✅ Done."
+'
