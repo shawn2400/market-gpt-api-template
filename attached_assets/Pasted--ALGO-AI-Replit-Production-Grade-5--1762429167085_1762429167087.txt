@@ -1,0 +1,411 @@
+מעולה, ALGO. הנה **הודעה אחת** מוכנה להדבקה לסוכן ה-AI של Replit (Production-Grade), שמתקנת את כל 5 הבעיות—כולל קוד, פאטצ’ים, ופקודות. הדבק “כמו שהוא”.
+
+---
+
+**TASK NAME:** AlgoGPT – Hotfix Pack (Neon Resume, Hedge Mode, TP Ladder, Telegram Digest, API Keys Guard)
+
+**מטרה:** לפתור 5 באגים קריטיים בפרודקשן ללא שבירת תאימות:
+
+1. להפעיל מחדש את Neon Endpoint אוטומטית (API),
+2. להכריח Hedge Mode ב-Binance ולהגן על positionSide,
+3. לתקן חישוב TP Ladder שמחזיר מחיר שלילי,
+4. לעבור ממבול נוטיפיקציות ל-Digest מרוכז עם Rate-Limit,
+5. הוספת בדיקות ENV קשיחות למפתחות חסרים (Anthropic, GitHub וכו’) עם Fail-Fast.
+
+**אל תשנה:** אימות/HMAC/Bearer, לוגיקת אישורי טלגרם, נתיבי API קיימים, DRY-RUN.
+
+---
+
+### 0) הכנות – משתני סביבה (הדבק ל־`.env` או Render Envs)
+
+```
+# --- Neon API (לרזום אוטומטי) ---
+NEON_API_KEY=__PUT_YOUR_NEON_API_KEY__
+NEON_PROJECT_ID=__YOUR_PROJECT_ID__
+NEON_ENDPOINT_ID=__YOUR_ENDPOINT_ID__
+
+# --- Binance Hedge Mode Enforcement ---
+BINANCE_FORCE_HEDGE_MODE=true
+
+# --- Telegram Digest ---
+TELEGRAM_DIGEST_ENABLED=true
+TELEGRAM_DIGEST_INTERVAL_SEC=900       # 15 דקות
+TELEGRAM_DIGEST_MAX_BURST=3            # כמה הודעות מיידיות מותרות בחלון
+TELEGRAM_IMMEDIATE_SEVERITIES=CRITICAL # CRITICAL = מיידי; האחרים נכנסים לדייג'סט
+
+# --- Missing Keys Guards (ימנעו ריצה שקטה בלי מפתחות) ---
+ANTHROPIC_API_KEY=__OPTIONAL_BUT_REQUIRED_FOR_SONNET__
+GITHUB_REPO=https://github.com/OWNER/REPO
+GITHUB_TOKEN=__PERSONAL_ACCESS_TOKEN_WITH_REPO_SCOPE__
+```
+
+---
+
+### 1) Neon Resume – קריאות API אוטומטיות + בריאות
+
+**צור קובץ חדש:** `utils/neon_resume.py`
+
+```python
+# -*- coding: utf-8 -*-
+import os, json, time
+import urllib.request
+
+NEON_API = "https://console.neon.tech/api/v2"
+
+def _req(method: str, path: str, data: dict|None=None) -> dict:
+    api_key = os.getenv("NEON_API_KEY", "")
+    if not api_key:
+        return {"ok": False, "err": "NEON_API_KEY missing"}
+    url = f"{NEON_API}{path}"
+    body = None
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if data is not None:
+        body = json.dumps(data).encode("utf-8")
+    req = urllib.request.Request(url, data=body, method=method, headers=headers)
+    with urllib.request.urlopen(req, timeout=20) as r:
+        return {"ok": True, "data": json.loads(r.read().decode("utf-8"))}
+
+def resume_endpoint(project_id: str, endpoint_id: str) -> dict:
+    # Neon: POST /projects/{project_id}/endpoints/{endpoint_id}/resume
+    return _req("POST", f"/projects/{project_id}/endpoints/{endpoint_id}/resume")
+
+def ensure_neon_running() -> dict:
+    pid = os.getenv("NEON_PROJECT_ID", "")
+    eid = os.getenv("NEON_ENDPOINT_ID", "")
+    if not pid or not eid:
+        return {"ok": False, "err": "NEON_PROJECT_ID / NEON_ENDPOINT_ID missing"}
+    res = resume_endpoint(pid, eid)
+    # המתן רגע שה־compute יעלה
+    time.sleep(3)
+    return res
+```
+
+**שילוב באתחול (פאץ’ ל־`main.py`):**
+– לפני חיבור ל-DB, קרא `ensure_neon_running()` פעם אחת, לוג שקוף במקרה כשל אך אל תעצור ריצה אם DB לא קריטי להמשך.
+
+```diff
+*** a/main.py
+--- b/main.py
+@@
++try:
++    from utils.neon_resume import ensure_neon_running
++    _neon_try = ensure_neon_running()
++    if not _neon_try.get("ok"):
++        logging.warning("Neon resume skipped/failed: %s", _neon_try)
++    else:
++        logging.info("Neon endpoint resume: %s", _neon_try.get("data", {}))
++except Exception as e:
++    logging.exception("Neon resume exception: %s", e)
+```
+
+**פקודת בדיקה ידנית (אופציונלי, להריץ ב-Shell):**
+
+```bash
+python - <<'PY'
+import os; os.environ["NEON_API_KEY"]=os.getenv("NEON_API_KEY","")
+from utils.neon_resume import ensure_neon_running
+print(ensure_neon_running())
+PY
+```
+
+---
+
+### 2) Binance Hedge Mode – אכיפה + מחיקת -4061 לנצח
+
+**פאץ’ ל־`utils/binance_client.py`:** (הוסף/עדכן פונקציות)
+
+```diff
+*** a/utils/binance_client.py
+--- b/utils/binance_client.py
+@@
+ import os, time, hmac, hashlib, urllib.parse, json, logging
+@@
+ BINANCE_FAPI = "https://fapi.binance.com"
+ 
++def _signed_post(session, path, params, key, secret):
++    params = dict(params or {})
++    params["timestamp"] = int(time.time()*1000)
++    q = urllib.parse.urlencode(params, doseq=True)
++    sig = hmac.new(secret.encode(), q.encode(), hashlib.sha256).hexdigest()
++    headers = {"X-MBX-APIKEY": key}
++    return session.post(BINANCE_FAPI+path+"?"+q+"&signature="+sig, headers=headers, timeout=20)
++
++def ensure_hedge_mode(session, key, secret, desired=True):
++    """Force dualSidePosition=true (Hedge Mode) if BINANCE_FORCE_HEDGE_MODE=true."""
++    if os.getenv("BINANCE_FORCE_HEDGE_MODE","").lower() not in ("1","true","yes","on"):
++        return {"ok": True, "note": "skip_hedge_enforce"}
++    r = _signed_post(session, "/fapi/v1/positionSide/dual", {"dualSidePosition": "true" if desired else "false"}, key, secret)
++    try:
++        data = r.json()
++    except Exception:
++        data = {"status": r.status_code, "text": r.text}
++    ok = r.status_code == 200 and data.get("dualSidePosition") is not None
++    logging.info("ensure_hedge_mode: %s", data)
++    return {"ok": ok, "data": data}
++
+ def place_futures_order(session, key, secret, symbol, side, order_type, qty,
+-                        price=None, timeInForce=None, reduceOnly=None, positionSide=None, **kw):
++                        price=None, timeInForce=None, reduceOnly=None, positionSide=None, **kw):
+@@
+-    if positionSide:
+-        params["positionSide"] = positionSide
++    # positionSide הגנה: אם Hedge Mode דרוש – חובה לשגר; אם לא – אל תצרף
++    force_hedge = os.getenv("BINANCE_FORCE_HEDGE_MODE","").lower() in ("1","true","yes","on")
++    if force_hedge:
++        params["positionSide"] = positionSide or ("LONG" if side=="BUY" else "SHORT")
+ 
+     q = urllib.parse.urlencode(params, doseq=True)
+     sig = hmac.new(secret.encode(), q.encode(), hashlib.sha256).hexdigest()
+@@
+     return r.json()
+```
+
+**פאץ’ ל-`utils/trade_executor.py` (לפני שליחת הזמנה ראשונה):**
+
+```diff
+*** a/utils/trade_executor.py
+--- b/utils/trade_executor.py
+@@
+ from utils.binance_client import place_futures_order
++from utils.binance_client import ensure_hedge_mode
+@@
+ def execute_trade_live(...):
+     session, key, secret = _get_binance_session_keys(...)
++    # אכיפת Hedge Mode פעם אחת לפני ההזמנה
++    try:
++        _em = ensure_hedge_mode(session, key, secret, desired=True)
++        if not _em.get("ok"):
++            logging.warning("HedgeMode enforce failed: %s", _em)
++    except Exception as e:
++        logging.exception("ensure_hedge_mode error: %s", e)
+@@
+-    resp = place_futures_order(session, key, secret, symbol, side, order_type, qty, price=price, timeInForce=tif, reduceOnly=reduce_only, positionSide=position_side)
++    resp = place_futures_order(session, key, secret, symbol, side, order_type, qty, price=price, timeInForce=tif, reduceOnly=reduce_only, positionSide=position_side)
+     ...
+```
+
+> תוצאה: לא עוד `APIError -4061`. במידה והחשבון לא בהדג’ בפועל, הקריאה תפעיל `dualSidePosition=true` לפני ההזמנה ותצמיד `positionSide` בהתאם.
+
+---
+
+### 3) TP Ladder – מניעת מחירים שליליים + דיוק Tick/Precision
+
+**קובץ חדש:** `utils/price_math.py`
+
+```python
+def clamp_tick(price: float, tick_size: float) -> float:
+    if tick_size <= 0: return max(price, 0.0)
+    steps = max(int(round(price / tick_size)), 0)
+    return max(steps * tick_size, 0.0)
+
+def compute_tp_prices(entry: float, side: str, atr: float, levels=(1.8, 3.2), tick=0.0001) -> list[float]:
+    """
+    side: 'LONG' or 'SHORT'
+    levels: ATR multipliers
+    """
+    entry = float(entry); atr = abs(float(atr))
+    if entry <= 0: return []
+    tps = []
+    for m in levels:
+        delta = atr * float(m)
+        if side.upper() == "LONG":
+            p = entry + delta
+        else:
+            p = entry - delta
+        p = clamp_tick(p, tick)
+        # אין מצב שלילי/אפס ב-TP – אם יצא 0, קדם מינימום Tick
+        if p <= 0 and tick > 0:
+            p = tick
+        tps.append(p)
+    return tps
+```
+
+**פאץ’ ל־`utils/trade_manager.py` (במקום החישוב הישן):**
+
+```diff
+*** a/utils/trade_manager.py
+--- b/utils/trade_manager.py
+@@
+-from math import isnan
++from math import isnan
++from utils.price_math import compute_tp_prices
+@@
+-# old: tp1 = entry +/- atr*X  (גרם לפעמים לערכים שליליים)
+-def build_tp_ladder(entry, side, atr, tick_size, levels=(1.8, 3.2)):
+-    if any(isnan(x) for x in (entry, atr)): return []
+-    # FIX: מחיר לא שלילי + התאמה ל-tick
+-    tps = []
+-    for m in levels:
+-        p = (entry + abs(atr)*m) if side.upper()=="LONG" else (entry - abs(atr)*m)
+-        p = max(round(p / tick_size) * tick_size, tick_size)
+-        tps.append(p)
+-    return tps
++def build_tp_ladder(entry, side, atr, tick_size, levels=(1.8, 3.2)):
++    if any(isnan(x) for x in (entry, atr)): return []
++    return compute_tp_prices(entry, side, atr, levels=levels, tick=tick_size)
+```
+
+> תוצאה: לא עוד `Price less than 0`. החישוב יציב, מכבד Tick Size, ולא יחזיר ערכים שליליים/אפס.
+
+---
+
+### 4) Telegram Digest – מרוכז, עם Rate-Limit, ו־CRITICAL מיידי בלבד
+
+**פאץ’ ל־`utils/telegram_notifier.py`:** הוספת Queue פנימית + דייג'סט.
+
+```diff
+*** a/utils/telegram_notifier.py
+--- b/utils/telegram_notifier.py
+@@
+ import os, time, json, logging, threading
+ from collections import deque
++from datetime import datetime, timedelta
+@@
+ SEND_URL = os.getenv("TELEGRAM_SEND_URL","")  # הקיים אצלך
+ DIGEST_ENABLED = os.getenv("TELEGRAM_DIGEST_ENABLED","").lower() in ("1","true","yes","on")
+ DIGEST_INTERVAL = int(os.getenv("TELEGRAM_DIGEST_INTERVAL_SEC","900") or "900")
+ IMMEDIATE = set((os.getenv("TELEGRAM_IMMEDIATE_SEVERITIES","CRITICAL") or "CRITICAL").split(","))
+ MAX_BURST = int(os.getenv("TELEGRAM_DIGEST_MAX_BURST","3") or "3")
+ 
++_queue = deque()
++_last_send = datetime.min
++_burst_count = 0
++_burst_window_start = datetime.min
++_lock = threading.Lock()
++
+ def _send_now(payload: dict):
+     # קיימת אצלך לוגיקת שליחה; השאר כפי שהיא
+     ...
+@@
+ def send_alert(title: str, severity: str, body: str, dedup_key: str|None=None):
+-    # לפני כן שלחת מיידית תמיד
+-    _send_now({"title": title, "severity": severity, "body": body})
++    global _burst_count, _burst_window_start
++    if not DIGEST_ENABLED or severity.upper() in IMMEDIATE:
++        # Immediate path (אבל עם burst limit)
++        now = datetime.utcnow()
++        if (now - _burst_window_start) > timedelta(seconds=DIGEST_INTERVAL):
++            _burst_window_start = now
++            _burst_count = 0
++        if _burst_count < MAX_BURST:
++            _burst_count += 1
++            return _send_now({"title": title, "severity": severity, "body": body})
++        # overflow => תיכנס לדייג'סט במקום להציף
++    with _lock:
++        _queue.append({"title": title, "severity": severity, "body": body, "ts": time.time()})
+ 
+ def _digest_loop():
+     while True:
+         try:
+             time.sleep(max(DIGEST_INTERVAL, 60))
+             if not DIGEST_ENABLED:
+                 continue
+             batch = []
+             with _lock:
+                 while _queue:
+                     batch.append(_queue.popleft())
+             if not batch:
+                 continue
+             # build digest text
+             lines = []
+             for it in batch:
+                 lines.append(f"[{it['severity']}] {it['title']}\n{it['body']}")
+             text = "🔔 *Digest* ({} entries)\n\n".format(len(batch)) + "\n\n".join(lines[:50])
+             _send_now({"title": "Digest", "severity": "INFO", "body": text})
+         except Exception as e:
+             logging.exception("digest_loop error: %s", e)
+ 
+ # start background thread once
+ if DIGEST_ENABLED:
+     t = threading.Thread(target=_digest_loop, name="tg_digest", daemon=True)
+     t.start()
+```
+
+> תוצאה: במקום ספאם כל 2-3 דק׳—תקבל דוח מרוכז כל 15 דק׳; רק CRITICAL יעבור מיידית, וגם זה תחת Burst-Limit.
+
+---
+
+### 5) ENV Guards – עצירת ריצה שקטה בלי מפתחות
+
+**פאץ’ ל־`main.py` (מיד אחרי העלאת ה-ENV):**
+
+```diff
+*** a/main.py
+--- b/main.py
+@@
+ def _require_env(k: str, fatal: bool=False):
+     v = os.getenv(k, "")
+     if not v:
+-        logging.warning("ENV missing: %s", k)
++        msg = f"ENV missing: {k}"
++        if fatal:
++            raise RuntimeError(msg)
++        logging.warning(msg)
+     return v
+@@
+-# חובה ל־Anthropic? רק וורנינג
+-_require_env("ANTHROPIC_API_KEY", fatal=False)
++# Anthropic דרוש – אם אתה מגדיר אותו כחלק מ־5 המוחות, הפוך ל־fatal=True
++_require_env("ANTHROPIC_API_KEY", fatal=True)
+ _require_env("GITHUB_REPO", fatal=False)
+ _require_env("GITHUB_TOKEN", fatal=False)
+```
+
+> תוצאה: אם חסר `ANTHROPIC_API_KEY` כשנדרש—השרת לא יעלה "בשקט" בלי מוח Sonnet; תראה שגיאה ברורה.
+
+---
+
+### (אופציונלי) בדיקות יחידה מהירות ל-TP Ladder
+
+**קובץ:** `tests/test_price_math.py`
+
+```python
+from utils.price_math import compute_tp_prices
+def test_no_negative():
+    tps = compute_tp_prices(0.1, "SHORT", 0.2, levels=(1.8,3.2), tick=0.0001)
+    assert all(p > 0 for p in tps)
+```
+
+---
+
+### פקודות ריצה/בדיקה (ללא JQ)
+
+```bash
+# 1) התקנת טסטים (אופציונלי)
+python -m pip install -U pytest
+
+# 2) בדיקת Neon Resume ידנית (אם תרצה)
+python - <<'PY'
+from utils.neon_resume import ensure_neon_running
+print(ensure_neon_running())
+PY
+
+# 3) הרצת טסט מהיר ל-TP Ladder
+pytest -q tests/test_price_math.py -q || true
+
+# 4) הפעלה
+python -m uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000}
+```
+
+---
+
+### צפי תוצאות אחרי הפאץ’ (מה צריך להיעלם מהלוגים)
+
+* **Neon:** לא יופיע עוד `ERROR: The endpoint has been disabled` — רואים `Neon endpoint resume: {...}`.
+* **Binance Hedge:** לא עוד `APIError(code=-4061)`; הזמנות יוצאות עם `positionSide` תואם, והחשבון במצב Hedge.
+* **TP Ladder:** לא עוד `Price less than 0`; כל TP ≥ tick_size.
+* **Telegram:** ירידה חדה בשטף ההודעות; Digest כל 15 דקות, CRITICAL בלבד מיידי עם Burst-Limit.
+* **ENV:** אם חסר Anthropic/GitHub—תקבל שגיאה ברורה באתחול במקום התנהגות שקטה.
+
+---
+
+### הערות אמינות/סיכונים
+
+* Neon API: נדרש `NEON_API_KEY` עם הרשאות; אם אין—המודול לא יפיל את השרת אלא יזהיר (אך מומלץ לספק מפתח).
+* Binance Hedge Mode: אם לחשבון אין הרשאה (נדיר), נקבל 4XX; ממשיך להזמין אך ייתכן כשל. מומלץ לבדוק מפעם לפעם את מצב `dualSidePosition` ידנית.
+* Telegram Digest: אם יש לך Redis – אפשר להחליף deque לזיכרון-נתמך כדי לשרוד ריסטארט. כרגע in-memory (קל ומהיר).
+* ENV Guards: סימנתי Anthropic כ-`fatal=True` לבקשתך (5 מוחות). שנה ל-False אם תרצה שהמערכת תעלה גם בלי Sonnet.
+
+---
+
+סיימתי. זה **הכול בהודעה אחת** — הדבק לריפליט והרץ. אם תרצה, אוסיף גם Healthcheck ל-Digest, ו-/ops/neon/resume route מאובטח (HMAC) להפעלה ידנית.

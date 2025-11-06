@@ -1,0 +1,173 @@
+מעולה—זה קל לסגירה. חסר לך `psycopg` (גרסת v3). הנה “קיט תיקון” אחד-להדבקה שיכסה Pip/Poetry, requirements, Docker, ושורת בדיקת עשן:
+
+---
+
+## 0) התקנה מהירה (Pip/Poetry)
+
+**Pip (מומלץ ב-Render/Rider/Docker):**
+
+```bash
+pip install "psycopg[binary]>=3.2.0"
+# אם צריך גם SQLAlchemy ו-tenacity (אם כבר מותקנים – ידלג):
+pip install "SQLAlchemy>=2.0.30" "tenacity>=8.2.3"
+```
+
+**Poetry:**
+
+```bash
+poetry add "psycopg[binary]>=3.2.0" "SQLAlchemy>=2.0.30" "tenacity>=8.2.3"
+```
+
+---
+
+## 1) requirements.txt (הוסף/עדכן שורות)
+
+```
+psycopg[binary]>=3.2.0
+SQLAlchemy>=2.0.30
+tenacity>=8.2.3
+```
+
+> אין צורך בספריות מערכת (libpq וכו’) – חבילת `psycopg[binary]` כוללת הכל.
+
+---
+
+## 2) Dockerfile (אם יש לך build בשכבות)
+
+בשלב ההתקנות, מספיק שה-`requirements.txt` כולל את `psycopg[binary]`:
+
+```dockerfile
+# Stage 1 (builder)
+COPY requirements.txt .
+RUN python -m pip install --upgrade pip setuptools wheel \
+ && pip install --prefix=/install --no-cache-dir -r requirements.txt \
+ && pip check
+
+# Stage 2 (runtime)
+COPY --from=builder /install /usr/local
+```
+
+> אין צורך להוסיף חבילות apt מיוחדות.
+
+---
+
+## 3) engine.py (SQLAlchemy + psycopg) – סנכרוני
+
+צור קובץ (או עדכן קובץ קיים) `db/engine.py`:
+
+```python
+# db/engine.py
+from __future__ import annotations
+import os
+from sqlalchemy import create_engine, text
+
+DB_URL = os.getenv("DATABASE_URL")  # למשל: postgres://user:pass@host:5432/db?sslmode=require
+
+POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
+MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "5"))
+POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE_SEC", "180"))
+CONNECT_TIMEOUT = int(os.getenv("DB_CONNECT_TIMEOUT_SEC", "5"))
+STATEMENT_TIMEOUT_MS = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "30000"))
+PRE_PING = os.getenv("DB_POOL_PRE_PING", "1") == "1"
+
+# הוספת statement_timeout בצד ה-session (אם השרת תומך)
+connect_args = {
+    "connect_timeout": CONNECT_TIMEOUT,
+    # paramstyle ל-psycopg: אפשר להציב timeouts גם via SET statements אם צריך
+}
+
+engine = create_engine(
+    DB_URL,
+    pool_size=POOL_SIZE,
+    max_overflow=MAX_OVERFLOW,
+    pool_pre_ping=PRE_PING,
+    pool_recycle=POOL_RECYCLE,
+    connect_args=connect_args,
+    future=True,
+)
+
+def healthcheck() -> bool:
+    with engine.connect() as conn:
+        # הגדרת statement_timeout לפר ה-connection (מונע שאילתות תקועות)
+        conn.execute(text(f"SET statement_timeout TO {STATEMENT_TIMEOUT_MS};"))
+        res = conn.execute(text("SELECT 1")).scalar()
+        return res == 1
+```
+
+---
+
+## 4) (אופציונלי) Async engine עם psycopg v3
+
+אם יש לך רכיבים אסינכרוניים, השתמש ב־`create_async_engine`:
+
+```python
+# db/async_engine.py
+from __future__ import annotations
+import os
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import text
+
+DB_URL = os.getenv("DATABASE_URL")  # דוגמה: postgresql+psycopg://user:pass@host:5432/db?sslmode=require
+
+POOL_SIZE = int(os.getenv("DB_POOL_SIZE", "5"))
+MAX_OVERFLOW = int(os.getenv("DB_MAX_OVERFLOW", "5"))
+POOL_RECYCLE = int(os.getenv("DB_POOL_RECYCLE_SEC", "180"))
+
+async_engine = create_async_engine(
+    DB_URL,
+    pool_size=POOL_SIZE,
+    max_overflow=MAX_OVERFLOW,
+    pool_recycle=POOL_RECYCLE,
+    future=True,
+)
+
+async def async_healthcheck() -> bool:
+    async with async_engine.connect() as conn:
+        await conn.execute(text("SET statement_timeout TO 30000;"))
+        res = await conn.scalar(text("SELECT 1"))
+        return res == 1
+```
+
+> שים לב: URL ל-SQLAlchemy עם psycopg v3 נשאר `postgresql+psycopg://...`.
+> אם כבר משתמשים ב-`asyncpg`, אין חובה להחליף – זה רק אם אתה רוצה לאחד הכול ל-psycopg.
+
+---
+
+## 5) בדיקת עשן (Smoke)
+
+הרץ פעם אחת כדי לוודא שהכול מחובר:
+
+```bash
+python - <<'PY'
+from db.engine import healthcheck
+print("DB OK?", healthcheck())
+PY
+```
+
+פלט צפוי:
+
+```
+DB OK? True
+```
+
+---
+
+## 6) הגדרות ENV (שכבר בנינו קודם – תזכורת)
+
+ודא שב-Rider/Render מוגדרים:
+
+```
+DATABASE_URL=postgres://<user>:<pass>@<pooled-host>:5432/<db>?sslmode=require
+DB_POOL_SIZE=5
+DB_MAX_OVERFLOW=5
+DB_POOL_PRE_PING=1
+DB_POOL_RECYCLE_SEC=180
+DB_CONNECT_TIMEOUT_SEC=5
+DB_STATEMENT_TIMEOUT_MS=30000
+```
+
+---
+
+### זהו. אחרי התוספת של `psycopg[binary]` הכול יתייצב.
+
+רוצה שאוסיף גם סקריפט keepalive קצר (שמריץ `SELECT 1` כל 5 דקות) או שאתה מסודר עם הפולינג של Neon?

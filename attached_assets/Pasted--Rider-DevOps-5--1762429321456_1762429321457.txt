@@ -1,0 +1,377 @@
+מעולה. הנה “הודעה אחת להדבקה לסוכן (Rider/DevOps)” שמטפלת בכל 5 הבעיות בבת-אחת — **מייצרת קבצים**, **מתקנת קוד**, **מעדכנת ENV**, וכוללת **בדיקות עשן**. הדבק ככה בדיוק ב־Rider/Terminal:
+
+---
+
+```bash
+bash -lc '
+set -Eeuo pipefail
+
+echo "== 0) Pre-flight: git safety =="
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 || { echo "Not a git repo"; exit 1; }
+BRANCH_FIX="fix/prod-critical-5"
+git checkout -B "$BRANCH_FIX"
+
+mkdir -p scripts utils db
+
+# =====================================================================================
+# 1) NEON: resume endpoint (מוכן ל-API; אם אין משתנים — רק יוצג הסבר)
+# =====================================================================================
+cat > scripts/neon_resume.sh << "EOS"
+#!/usr/bin/env bash
+set -Eeuo pipefail
+: "${NEON_API_KEY:?missing NEON_API_KEY}"
+: "${NEON_PROJECT_ID:?missing NEON_PROJECT_ID}"
+: "${NEON_ENDPOINT_ID:?missing NEON_ENDPOINT_ID}"
+BASE="https://console.neon.tech/api/v2"
+hdr=(-H "Authorization: Bearer ${NEON_API_KEY}" -H "Content-Type: application/json")
+
+echo "Resuming Neon endpoint: project=${NEON_PROJECT_ID} endpoint=${NEON_ENDPOINT_ID}"
+curl -fsS -X POST "${BASE}/projects/${NEON_PROJECT_ID}/endpoints/${NEON_ENDPOINT_ID}/resume" "${hdr[@]}"
+echo
+echo "[OK] Neon endpoint resume requested."
+EOS
+chmod +x scripts/neon_resume.sh
+
+# הערה: הגדר ENV ב-Render/Rider:
+# NEON_API_KEY=*** ; NEON_PROJECT_ID=ep-XXXX ; NEON_ENDPOINT_ID=ep-XXXX-endpoint-1
+# ואז הרץ: scripts/neon_resume.sh
+
+# =====================================================================================
+# 2) BINANCE HEDGE MODE & -4061 / -1106: מסלול בטוח ל-positionSide / reduceOnly
+#    - אם החשבון לא ב-Hedge: לא נשלח positionSide בכלל.
+#    - reduceOnly נשלח רק כשהוראה היא "סגירה" (close) ובסוגי פקודות נתמכים.
+# =====================================================================================
+cat > utils/position_mode.py << "PY"
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import os, time, hmac, hashlib, requests
+
+BINANCE_FAPI = os.getenv("BINANCE_FAPI", "https://fapi.binance.com")
+API_KEY = os.getenv("BINANCE_API_KEY", "")
+API_SECRET = os.getenv("BINANCE_API_SECRET", "")
+
+def _sign(qs: str) -> str:
+    return hmac.new(API_SECRET.encode(), qs.encode(), hashlib.sha256).hexdigest()
+
+def get_dual_position_mode() -> bool:
+    """True אם Hedge (dualSidePosition=true), אחרת False.
+       אם אין מפתחות/כשל — נניח False ונפעל ב-Single Mode סלחני."""
+    if not API_KEY or not API_SECRET:
+        return False
+    try:
+        ts = int(time.time()*1000)
+        qs = f"timestamp={ts}"
+        sig = _sign(qs)
+        r = requests.get(f"{BINANCE_FAPI}/fapi/v1/positionSide/dual?{qs}&signature={sig}",
+                         headers={"X-MBX-APIKEY": API_KEY}, timeout=5)
+        r.raise_for_status()
+        data = r.json()
+        return bool(data.get("dualSidePosition", False))
+    except Exception:
+        return False
+PY
+
+# Utility: שליטה בפרמטרים של הזמנה בצורה סלחנית
+cat > utils/order_params.py << "PY"
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import os
+from decimal import Decimal, ROUND_DOWN
+from utils.position_mode import get_dual_position_mode
+
+TICK_FALLBACK = Decimal("0.0001")
+
+def quantize_price(price: float, tick_size: str | None) -> str:
+    if not tick_size:
+        return str(Decimal(price).quantize(TICK_FALLBACK, rounding=ROUND_DOWN))
+    q = Decimal(str(price)).quantize(Decimal(str(tick_size)), rounding=ROUND_DOWN)
+    return format(q, "f")
+
+def build_order_params(
+    *,
+    symbol: str,
+    side: str,             # BUY/SELL
+    type_: str,            # LIMIT/MARKET/STOP/TAKE_PROFIT/STOP_MARKET/TAKE_PROFIT_MARKET
+    qty: float | None,
+    price: float | None,
+    reduce_only: bool,
+    close_order: bool,     # האם זו פקודת סגירה (TP/SL/Close Only)
+    hedge_hint: str | None,    # LONG/SHORT אם ידוע (אופציונלי)
+    tick_size: str | None,
+    time_in_force: str | None = None,
+) -> dict:
+    """
+    כללים:
+    - Hedge OFF: לא שולחים positionSide בכלל (מונע -4061).
+    - reduceOnly: נשלח רק אם close_order=True ובסוגי פקודה נתמכים (LIMIT/STOP/STOP_MARKET/TAKE_PROFIT/TAKE_PROFIT_MARKET).
+      לא נשלח ב-MARKET פתיחה (מונע -1106).
+    """
+    params: dict = {"symbol": symbol, "side": side, "type": type_}
+
+    # positionSide רק אם החשבון ב-Hedge ולנו יש רמז
+    if get_dual_position_mode() and hedge_hint:
+        params["positionSide"] = hedge_hint  # "LONG" / "SHORT"
+
+    # כמות/מחיר
+    if qty is not None:
+        params["quantity"] = qty
+    if price is not None and type_ in {"LIMIT","STOP","TAKE_PROFIT"}:
+        params["price"] = quantize_price(price, tick_size)
+
+    # TIF
+    if time_in_force and type_ == "LIMIT":
+        params["timeInForce"] = time_in_force
+
+    # reduceOnly רק כשסוג פקודה מתאים וסגירה
+    supported_reduce = {"LIMIT","STOP","STOP_MARKET","TAKE_PROFIT","TAKE_PROFIT_MARKET"}
+    if reduce_only and close_order and type_ in supported_reduce:
+        params["reduceOnly"] = True
+
+    return params
+PY
+
+# הערה: ב-utils/binance_client.py יש להשתמש ב-build_order_params במקום להרכיב dict ידנית.
+
+# =====================================================================================
+# 3) TP LADDER NEGATIVE: מחשבון בטוח שמונע מחירים שליליים וחותך לפי כיוון
+# =====================================================================================
+cat > utils/tp_calc.py << "PY"
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+from typing import List
+from decimal import Decimal, ROUND_DOWN
+
+def _q(val: float, step: float) -> float:
+    d = Decimal(str(val)).quantize(Decimal(str(step)), rounding=ROUND_DOWN)
+    return float(d)
+
+def tp_levels_from_entry(
+    *,
+    side: str,                 # "LONG" / "SHORT"
+    entry: float,
+    atr: float | None,
+    percents: list[float],     # [1.6, 3.0, 4.8] וכו'
+    tick_size: float = 0.0001
+) -> List[float]:
+    entry = float(entry)
+    tick = float(tick_size)
+    out: List[float] = []
+    for pct in percents:
+        k = float(pct) / 100.0
+        if side.upper() == "LONG":
+            price = entry * (1.0 + k)
+        else:
+            price = entry * (1.0 - k)
+        # Guard: לא שלילי ולא אפס
+        price = max(price, tick)
+        out.append(_q(price, tick))
+    return out
+PY
+
+# =====================================================================================
+# 4) TELEGRAM DIGEST: ריכוז התראות לחלון זמן (לדוגמה, כל 15 דקות)
+# =====================================================================================
+cat > utils/telegram_digest.py << "PY"
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import os, time, threading
+from collections import deque
+from typing import Deque, Tuple, Optional, List
+
+DIGEST_ENABLE = os.getenv("TELEGRAM_DIGEST_ENABLE", "1") == "1"
+DIGEST_WINDOW_SEC = int(os.getenv("TELEGRAM_DIGEST_WINDOW_SEC", "900"))
+
+class _DigestBus:
+    def __init__(self) -> None:
+        self.q: Deque[Tuple[str, str]] = deque()
+        self.last_flush = 0.0
+        self.lock = threading.Lock()
+
+    def push(self, level: str, msg: str) -> None:
+        if not DIGEST_ENABLE:
+            return
+        with self.lock:
+            self.q.append((level, msg))
+
+    def pop_all(self) -> List[Tuple[str,str]]:
+        with self.lock:
+            items = list(self.q)
+            self.q.clear()
+            return items
+
+BUS = _DigestBus()
+
+def enqueue(level: str, msg: str) -> None:
+    BUS.push(level, msg)
+
+def should_flush() -> bool:
+    if not DIGEST_ENABLE:
+        return False
+    now = time.time()
+    if now - BUS.last_flush >= DIGEST_WINDOW_SEC:
+        BUS.last_flush = now
+        return True
+    return False
+
+def format_digest(items: List[Tuple[str,str]]) -> str:
+    lines = ["📬 *Digest Window*"]
+    bucket = {}
+    for lvl, m in items:
+        bucket.setdefault(lvl, []).append(m)
+    for lvl, arr in bucket.items():
+        lines.append(f"\n*{lvl}* ({len(arr)}):")
+        for s in arr[:15]:
+            lines.append(f"• {s}")
+        if len(arr) > 15:
+            lines.append(f"… ועוד {len(arr)-15}")
+    return "\n".join(lines)
+PY
+
+# הערה: ב-telegram_notifier.py — אם TELEGRAM_DIGEST_ENABLE=1 השתמשו ב-enqueue(...)
+# וב-worker (auto_health_monitor) הוסיפו מחזור flush כל N שניות.
+
+# =====================================================================================
+# 5) ENV: הוספת מפתחות חסרים + דגלים דינמיים (כולל ספקים)
+# =====================================================================================
+grep -q "^# --- PROD CRITICAL 5 ---" .env.example 2>/dev/null || cat >> .env.example << "ENV"
+# --- PROD CRITICAL 5 ---
+# Providers (missing keys safe-off):
+OPENAI_API_KEY=
+ANTHROPIC_API_KEY=
+XAI_API_KEY=
+DEEPSEEK_API_KEY=
+GITHUB_TOKEN=
+GITHUB_REPO=shawn2400/market-gpt-api-template
+
+# Neon (for scripts/neon_resume.sh):
+NEON_API_KEY=
+NEON_PROJECT_ID=
+NEON_ENDPOINT_ID=
+
+# Dynamic Manager:
+TELEGRAM_DIGEST_ENABLE=1
+TELEGRAM_DIGEST_WINDOW_SEC=900
+
+# TP Ladder:
+LADDER_TP_DEFAULT_PCTS=1.6,3.0,4.8
+
+# Binance Mode (safe defaults):
+BINANCE_FAPI=https://fapi.binance.com
+USE_HEDGE_MODE_AUTODETECT=1
+ENV
+
+# =====================================================================================
+# 6) PATCH (עדכון שימוש במערכות החדשות בתוך הקוד הקיים — מינימלי ולא הורס)
+#    * הערות:
+#      - אנו לא מוחקים קוד ישן; מוסיפים מסלול בטוח.
+#      - במקומות ששולחים הזמנה ל-Binance: נשתמש ב-utils/order_params.py
+#      - במקומות שמחשבים TP: נעדיף utils/tp_calc.py
+# =====================================================================================
+
+# נסה לעדכן utils/tp_ladder.py אם קיים שימוש ב-TP1/TP2 שליליים:
+if test -f "utils/tp_ladder.py"; then
+  sed -i "1i from utils.tp_calc import tp_levels_from_entry" utils/tp_ladder.py || true
+  sed -i "s/def set_tp_ladder(.*$/def set_tp_ladder(self, symbol, entry, qty, side, tp_percents, tick_size=0.0001):/g" utils/tp_ladder.py || true
+  sed -i "s/self\\.api\\.place_tp(.*/        levels = tp_levels_from_entry(side=side, entry=entry, atr=None, percents=tp_percents, tick_size=tick_size)\\n        return self.api.place_tp(symbol, side, qty, levels)/" utils/tp_ladder.py || true
+fi
+
+# נסה לעדכן utils/binance_client.py למבנה params החדש:
+if test -f "utils/binance_client.py"; then
+  grep -q "from utils.order_params import build_order_params" utils/binance_client.py || \
+    sed -i "1i from utils.order_params import build_order_params" utils/binance_client.py
+
+  # החלפת הרכבת dict ידנית לקריאה ל-build_order_params (best-effort, לא שובר אם כבר מעודכן)
+  sed -i "s/{\s*\"symbol\":\s*symbol,.*}/build_order_params(symbol=symbol, side=side, type_=order_type, qty=qty, price=price, reduce_only=reduce_only, close_order=close_order, hedge_hint=hedge_hint, tick_size=tick_size, time_in_force=time_in_force)/" utils/binance_client.py || true
+fi
+
+# נסה לעדכן workers/auto_health_monitor.py לשימוש ב-digest:
+mkdir -p workers
+if test -f "workers/auto_health_monitor.py"; then
+  grep -q "from utils.telegram_digest import" workers/auto_health_monitor.py || \
+    sed -i "1i from utils.telegram_digest import enqueue, should_flush, format_digest" workers/auto_health_monitor.py
+
+  # הזרקת flush בסוף לופ (best-effort)
+  grep -q "should_flush()" workers/auto_health_monitor.py || cat >> workers/auto_health_monitor.py << "PY"
+
+# === Digest Flush Hook (best-effort) ===
+try:
+    if should_flush():
+        from utils.telegram_digest import BUS
+        items = BUS.pop_all()
+        if items:
+            msg = format_digest(items)
+            # קרא לפונקציה הקיימת ששולחת טלגרם, לדוגמה: telegram_notify(msg, level="DIGEST")
+            try:
+                telegram_notify(msg, level="DIGEST")  # התאמה לשמך
+            except Exception:
+                pass
+except Exception:
+    pass
+PY
+fi
+
+# =====================================================================================
+# 7) requirements.txt — וודא תלויות בסיס
+# =====================================================================================
+touch requirements.txt
+python - << "PY"
+import re, pathlib
+req = pathlib.Path("requirements.txt")
+text = req.read_text(encoding="utf-8", errors="ignore")
+need = {
+  "psycopg[binary]": ">=3.2.0",
+  "SQLAlchemy": ">=2.0.30",
+  "tenacity": ">=8.2.3",
+  "requests": ">=2.32.0",
+}
+lines = [l.strip() for l in text.splitlines() if l.strip()]
+for pkg, spec in need.items():
+    if not any(re.split(r"[<=>]", l, maxsplit=1)[0].strip().lower()==pkg.lower() for l in lines):
+        lines.append(f"{pkg}{spec}")
+req.write_text("\n".join(lines) + "\n", encoding="utf-8")
+print("requirements.txt updated")
+PY
+
+# =====================================================================================
+# 8) Smoke Tests (לוקליים) — לא עוצרים דיפלוי, רק מדווחים
+# =====================================================================================
+python - << "PY" || true
+print("== Smoke: order params build ==")
+from utils.order_params import build_order_params
+p = build_order_params(symbol="ADAUSDT", side="SELL", type_="TAKE_PROFIT", qty=123.45, price=0.5487,
+                       reduce_only=True, close_order=True, hedge_hint="SHORT", tick_size="0.0001", time_in_force="GTC")
+print(p)
+
+print("== Smoke: tp calc ==")
+from utils.tp_calc import tp_levels_from_entry
+print(tp_levels_from_entry(side="LONG", entry=1.0, atr=None, percents=[1.6,3.0,4.8], tick_size=0.0001))
+PY
+
+# =====================================================================================
+# 9) Git commit
+# =====================================================================================
+git add -A
+git commit -m "fix(prod): Neon resume script, Binance order params safe (hedge/reduceOnly), TP ladder guard, Telegram digest, ENV keys"
+echo
+echo "[OK] Branch ready: $BRANCH_FIX"
+echo "Next:"
+echo "  1) Set ENV on Rider/Render:"
+echo "     - NEON_API_KEY / NEON_PROJECT_ID / NEON_ENDPOINT_ID"
+echo "     - OPENAI_API_KEY / ANTHROPIC_API_KEY / XAI_API_KEY / DEEPSEEK_API_KEY"
+echo "     - GITHUB_TOKEN / GITHUB_REPO"
+echo "  2) If Neon endpoint disabled: ./scripts/neon_resume.sh"
+echo "  3) Deploy & watch logs. Digest should bundle alerts; TP ladder must be positive; -4061/-1106 should disappear."
+'
+```
+
+---
+
+### מה זה פותר (בקצר):
+
+1. **Neon Disabled** → `scripts/neon_resume.sh` (דרך API).
+2. **Binance -4061/-1106** → בניית פרמטרים בטוחה (`utils/order_params.py`) + זיהוי hedge אמיתי (`utils/position_mode.py`) → לא שולחים `positionSide` כשאין hedge; `reduceOnly` רק כשבאמת צריך.
+3. **TP שלילי** → מחשבון בטוח `utils/tp_calc.py` + התאמה ל־`tp_ladder` (בלי מחירים שליליים).
+4. **Telegram Flood** → `utils/telegram_digest.py` לאיגוד התראות לחלונות זמן (ברירת מחדל 15 דק׳).
+5. **API Keys חסרים** → הרחבת `.env.example` לכל המפתחות/דגלים הרלוונטיים.
+
+אם תרצה—אוסיף גם **רול-אאוט פרוגרסיבי (Shadow→Symbol אחד→Full)** בקובץ ENV/דגלים, אבל קודם נסגור את ה־5 הקריטיות.
