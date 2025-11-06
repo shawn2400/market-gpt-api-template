@@ -173,15 +173,17 @@ class MetaBrainOrchestrator:
             # Budget Manager calculates position size
             budget_result = self.budget_manager.calculate_position_size(
                 quality_score=final_score,
-                rr_ratio=scout_data["risk_reward"],
-                volatility_pct=market_data.get("atr_pct", 2.0),
-                regime=market_data.get("regime", "CHOPPY")
+                risk_reward=scout_data["risk_reward"],
+                volatility_atr_pct=market_data.get("atr_pct", 2.0),
+                market_regime=market_data.get("regime", "CHOPPY"),
+                wallet_state=wallet_state
             )
             
             self.logger.info(
-                f"💰 Budget: ${budget_result['budget_usd']:.2f} | "
+                f"💰 Position: ${budget_result['position_size_usdt']:.2f} | "
                 f"Leverage: {budget_result['leverage']}x | "
-                f"Position: ${budget_result['position_size_usd']:.2f}"
+                f"Risk: {budget_result['risk_pct']:.1f}% | "
+                f"Reason: {budget_result['reason']}"
             )
             
             # === FINAL APPROVAL ===
