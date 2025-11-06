@@ -63,6 +63,107 @@ The production environment runs on Render.com with 8 background workers and a Ne
 - Capital: $166 USDT for 5-6 simultaneous positions
 - Dependencies: psycopg[binary]>=3.2.1 for PostgreSQL 3.x support
 
+### Progressive Rollout - Dynamic Regime Trading (v8.0+)
+
+MetaBrain v8.0 introduces **100% dynamic, context-adaptive position management** with confidence-based regime detection and adaptive parameter mixing. The system uses a **3-phase Progressive Rollout** strategy for safe deployment:
+
+**Key Features:**
+- **Regime Detection v2**: Confidence-based classification (TRENDING/CHOPPY/VOLATILE/SIDEWAYS) with minimum 62% confidence threshold
+- **Adaptive Parameter Mixing**: Context-aware SL/TP calculation based on regime, volatility, PnL state, and position age
+- **Zero-Gap SL Updates**: Places new SL → Verifies → Cancels old SL (never leaves positions unprotected)
+- **TP Ladder System**: Multi-level take profits with dynamic distribution
+- **Safety Guards**: Stale data protection (35s max age), low confidence filter, BTC correlation gate, circuit breaker (5 failures → 15min cooldown)
+- **Idempotency Protection**: HMAC-based duplicate order prevention (90s window)
+- **Prometheus Metrics**: Full observability with decisions, skips, errors, SL/TP changes, guard triggers
+
+**3-Phase Deployment Strategy:**
+
+**Phase 1: Shadow Mode (48-72 hours)**
+- Configuration:
+  ```
+  MANAGER_DYN_PATH=1
+  DYN_SHADOW=1
+  DYN_ENFORCE=0
+  DYN_ALLOWED_SYMBOLS=
+  ```
+- Behavior: Calculates SL/TP dynamically but **does not execute** - logs only
+- Purpose: Validate regime detection, parameter calculations, and safety guards
+- Validation Checkpoints:
+  - ✅ Regime detection confidence >62% for most symbols
+  - ✅ SL/TP calculations are reasonable (SL 1.5-2.5 ATR, TP RR 1.5-3.0x)
+  - ✅ No excessive skips due to stale data or low confidence
+  - ✅ Circuit breaker not triggering falsely
+- Logs: Search for `evt:dyn_shadow` in Fills Watcher logs
+
+**Phase 2: Single Symbol Enforce (48-72 hours)**
+- Configuration:
+  ```
+  MANAGER_DYN_PATH=1
+  DYN_SHADOW=0
+  DYN_ENFORCE=1
+  DYN_ALLOWED_SYMBOLS=ADAUSDT
+  ```
+- Behavior: **Executes** dynamic SL/TP updates **only for ADAUSDT**
+- Purpose: Test live execution on a single, controlled symbol
+- Validation Checkpoints:
+  - ✅ Zero-Gap SL updates execute successfully (no gaps in protection)
+  - ✅ TP Ladder placements work correctly
+  - ✅ No order failures or rejections
+  - ✅ Metrics confirm successful SL/TP changes
+  - ✅ Position management improves vs. legacy (fewer premature stops, better RR)
+- Logs: Search for `DynPath ENFORCE` in Fills Watcher logs
+
+**Phase 3: Full Production**
+- Configuration:
+  ```
+  MANAGER_DYN_PATH=1
+  DYN_SHADOW=0
+  DYN_ENFORCE=1
+  DYN_ALLOWED_SYMBOLS=
+  ```
+- Behavior: **Executes** dynamic SL/TP updates **for all symbols**
+- Purpose: Full autonomous position management across all positions
+- Validation Checkpoints:
+  - ✅ System handles multiple simultaneous positions (5-6 positions)
+  - ✅ No performance degradation or excessive API calls
+  - ✅ Win rate and RR metrics improve vs. baseline
+  - ✅ Circuit breaker protects against cascading failures
+
+**Instant Rollback Procedure:**
+
+If issues are detected at any phase:
+1. Set `MANAGER_DYN_PATH=0` in ENV to **immediately** disable dynamic path
+2. Restart Fills Watcher workflow
+3. System falls back to legacy position management instantly
+4. Monitor `/metrics` endpoint for `algogpt_dyn_enforce` gauge (should be 0)
+5. Review logs and metrics to identify root cause
+
+**Monitoring & Metrics:**
+
+- **Endpoint**: `GET /metrics` (Prometheus exposition format)
+- **Key Metrics**:
+  - `algogpt_dyn_decisions_total{symbol,regime}` - Decision counter by symbol/regime
+  - `algogpt_dyn_skips_total{reason}` - Skip reasons (stale_data, low_conf, circuit_block, etc.)
+  - `algogpt_dyn_errors_total{stage}` - Error counter by stage
+  - `algogpt_sl_changes_total{symbol}` - Successful SL updates
+  - `algogpt_tp_sets_total{symbol}` - Successful TP ladder placements
+  - `algogpt_stale_guard_hits_total` - Stale data protection triggers
+  - `algogpt_low_conf_hits_total` - Low confidence guard triggers
+  - `algogpt_circuit_blocks_total` - Circuit breaker blocks
+  - `algogpt_dyn_enforce` - 1 if enforce mode active, 0 if shadow/disabled
+  - `algogpt_regime_confidence{symbol,regime}` - Current regime confidence by symbol
+
+**Implementation Files:**
+- `utils/trade_manager.py` - Main integration (manages open positions)
+- `utils/regime_detector_v2.py` - Confidence-based regime classification
+- `utils/adaptive_mixer.py` - Context-aware parameter calculation
+- `utils/precision.py` - Binance tick/step size quantization
+- `utils/idempotency_simple.py` - Duplicate order prevention
+- `utils/circuit_breaker.py` - Failure protection with exponential cooldown
+- `utils/metrics_dyn.py` - Prometheus metrics definitions
+- `utils/sl_manager.py` - Zero-Gap SL replacement (legacy)
+- `utils/tp_ladder.py` - Multi-level TP placement (legacy)
+
 ## External Dependencies
 
 -   **Binance Futures API**: Market data, order execution, account management.
