@@ -91,7 +91,7 @@ async def get_gpt5_recommendation(context: str) -> Optional[str]:
         response = await _client.chat.completions.create(
             model=GPT5_MODEL,
             messages=messages,
-            max_tokens=500
+            max_completion_tokens=500
         )
         
         return response.choices[0].message.content.strip()

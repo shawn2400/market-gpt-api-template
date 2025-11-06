@@ -71,6 +71,14 @@ def ensure_hedge_mode() -> bool:
         return True
     
     try:
+        # First, check if already in Hedge Mode
+        current_mode = get_dual_position_mode()
+        if current_mode:
+            logger.info("Hedge Mode already enabled, no action needed")
+            return True
+        
+        # Not in Hedge Mode, try to enable it
+        logger.info("Enabling Hedge Mode...")
         ts = int(time.time() * 1000)
         body = f"dualSidePosition=true&timestamp={ts}"
         result = _req("POST", "/fapi/v1/positionSide/dual", body)
@@ -79,5 +87,7 @@ def ensure_hedge_mode() -> bool:
         return True
         
     except Exception as e:
-        logger.exception(f"Failed to enforce Hedge Mode: {e}")
+        logger.error(f"Failed to enforce Hedge Mode: {e}")
+        # Don't crash if Hedge Mode enforcement fails - just warn
+        logger.warning("⚠️ Binance Hedge Mode enforcement failed (will retry on first order)")
         return False

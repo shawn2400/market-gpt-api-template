@@ -27,7 +27,7 @@ def resume_endpoint(timeout_sec: int = 30) -> tuple[bool, str]:
     if not (NEON_API_KEY and NEON_PROJECT_ID and NEON_ENDPOINT_ID):
         return False, "NEON vars missing (NEON_API_KEY/NEON_PROJECT_ID/NEON_ENDPOINT_ID)"
     
-    url = f"{NEON_BASE}/projects/{NEON_PROJECT_ID}/endpoints/{NEON_ENDPOINT_ID}/resume"
+    url = f"{NEON_BASE}/projects/{NEON_PROJECT_ID}/endpoints/{NEON_ENDPOINT_ID}/start"
     
     try:
         req = urllib.request.Request(
