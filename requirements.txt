@@ -161,3 +161,4 @@ psycopg2-binary
 sqlalchemy
 psutil
 python-dateutil
+psycopg[binary]

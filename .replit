@@ -6,7 +6,7 @@ integrations = ["python_database:1.0.0", "github:1.0.0"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["cairo", "cargo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "iproute2", "lcms2", "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "libyaml", "nettools", "openjpeg", "pkg-config", "qhull", "rustc", "tcl", "tk", "xsimd", "zlib"]
+packages = ["cairo", "cargo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "iproute2", "lcms2", "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "libyaml", "nettools", "openjpeg", "pkg-config", "postgresql", "qhull", "rustc", "tcl", "tk", "xsimd", "zlib"]
 
 [workflows]
 runButton = "Project"
@@ -172,10 +172,6 @@ outputType = "console"
 [[ports]]
 localPort = 5000
 externalPort = 80
-
-[[ports]]
-localPort = 39533
-externalPort = 5000
 
 [[ports]]
 localPort = 43085
