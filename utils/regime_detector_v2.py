@@ -6,7 +6,7 @@ Returns regime label + confidence score (0..1)
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Dict
+from typing import Dict, Optional
 import logging
 
 log = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ class RegimeResult:
     """Market regime detection result"""
     regime: str          # "TRENDING" | "CHOPPY" | "VOLATILE" | "SIDEWAYS"
     confidence: float    # 0..1
-    features: Dict[str, float] = None
+    features: Optional[Dict[str, float]] = None
 
 
 def detect_market_regime_v2(features: Dict[str, float]) -> RegimeResult:
@@ -60,7 +60,7 @@ def detect_market_regime_v2(features: Dict[str, float]) -> RegimeResult:
     }
     
     # Select regime with highest score
-    regime = max(scores, key=scores.get)
+    regime = max(scores, key=lambda k: scores[k])
     conf = float(scores[regime])
     
     # Lower confidence if scores are close (ambiguous)

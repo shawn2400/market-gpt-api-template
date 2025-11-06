@@ -15,8 +15,8 @@ COOLDOWN_S = int(os.getenv("CB_COOLDOWN_SEC", "900"))  # 15 minutes
 
 _state = {
     "fails": 0,
-    "until": 0,
-    "last_error_time": 0
+    "until": 0.0,
+    "last_error_time": 0.0
 }
 
 

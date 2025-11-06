@@ -5,7 +5,7 @@ Dynamically adjusts SL/TP multipliers, trailing, and TP ladder levels
 based on regime, confidence, volatility, PnL state, and position age.
 """
 from __future__ import annotations
-from typing import Dict, List
+from typing import Dict, List, Any
 import logging
 
 log = logging.getLogger(__name__)
@@ -22,7 +22,7 @@ def adaptive_mix(
     atr_pct: float,
     pnl_state: str = "normal",
     time_in_pos_min: float = 0.0
-) -> Dict[str, any]:
+) -> Dict[str, Any]:
     """
     Calculate adaptive trading parameters based on market regime and position state.
     
