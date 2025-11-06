@@ -185,12 +185,12 @@ class HealthCheck:
 
 # === Telegram Alerts ===
 async def send_telegram_alert(message: str, level: str = "WARNING"):
-    """Send alert to Telegram"""
+    """Send alert to Digest Queue (batched delivery)"""
     if not TELEGRAM_ENABLED:
         return
     
     try:
-        from utils.telegram_api import send_message
+        digest = get_digest()
         
         emoji = {
             "INFO": "ℹ️",
@@ -201,10 +201,12 @@ async def send_telegram_alert(message: str, level: str = "WARNING"):
         }.get(level, "📢")
         
         formatted = f"{emoji} *Auto Health Monitor*\n\n{message}"
-        await send_message(formatted)
-        logger.info(f"Telegram alert sent: {level}")
+        
+        # Add to digest queue instead of immediate send
+        digest.add_health_alert(level=level, message=formatted)
+        logger.info(f"Health alert queued for digest: {level}")
     except Exception as e:
-        logger.error(f"Failed to send Telegram alert: {e}")
+        logger.error(f"Failed to queue Telegram alert: {e}")
 
 # === Main Loop ===
 async def main():

@@ -18,6 +18,15 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.binance_client import _init_client as get_client
 from utils.alerts import send_telegram_message
 
+try:
+    from utils.telegram_digest import get_digest
+except Exception:
+    def get_digest():  # type: ignore
+        class MockDigest:
+            def add_health_alert(self, *args, **kwargs):
+                pass
+        return MockDigest()
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(levelname)s:%(name)s:%(message)s'
@@ -144,31 +153,28 @@ def detect_significant_changes(positions: List[Dict[str, Any]]) -> tuple[bool, s
     return should_alert, reason
 
 async def send_position_report():
-    """Send consolidated position report to Telegram every 30 minutes"""
+    """Send consolidated position report to Digest Queue (batched delivery)"""
     try:
         positions = get_active_positions()
+        digest = get_digest()
         
         # שליחה אוטומטית כל 30 דקות - אין תלות ברמת ההתראה
         if POSITION_ALERT_LEVEL == "all":
-            logger.info(f"Sending scheduled report: {len(positions)} positions")
+            logger.info(f"Queuing scheduled report: {len(positions)} positions")
+            message = format_position_summary(positions)
+            digest.add_health_alert(level="INFO", message=f"📊 Position Report\n\n{message}")
         elif POSITION_ALERT_LEVEL == "critical":
             should_alert, reason = detect_significant_changes(positions)
             if not should_alert:
                 logger.info(f"Skipping notification: {reason}")
                 return
-            logger.info(f"Sending alert: {reason}")
+            logger.info(f"Queuing alert: {reason}")
+            message = format_position_summary(positions)
+            digest.add_health_alert(level="WARNING", message=f"⚠️ Position Alert: {reason}\n\n{message}")
         
-        message = format_position_summary(positions)
-        
-        await send_telegram_message(
-            message,
-            parse_mode="HTML",
-            disable_preview=True
-        )
-        
-        logger.info(f"Position report sent: {len(positions)} active positions")
+        logger.info(f"Position report queued for digest: {len(positions)} active positions")
     except Exception as e:
-        logger.error(f"Failed to send position report: {e}")
+        logger.error(f"Failed to queue position report: {e}")
 
 async def monitor_loop():
     """Main monitoring loop"""
