@@ -45,15 +45,8 @@ class DB:
     """
 
     def __init__(self):
-        # CRITICAL FIX: Override DATABASE_URL if pointing to disabled endpoint
-        _db_url = os.getenv("DATABASE_URL", "")
-        if "ep-cool-tooth-a5dlnc71" in _db_url:
-            log.warning("🔧 DATABASE_URL pointing to DISABLED endpoint, overriding with ACTIVE endpoint")
-            _db_url = "postgresql://neondb_owner:npg_8zKsmVwMLZ0u@ep-spring-silence-ag9wyuvd-pooler.c-2.eu-central-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require"
-            os.environ["DATABASE_URL"] = _db_url  # Update environment
-            # Update PGHOST as well
-            os.environ["PGHOST"] = "ep-spring-silence-ag9wyuvd-pooler.c-2.eu-central-1.aws.neon.tech"
-            log.info("✅ DATABASE_URL overridden: ep-spring-silence-ag9wyuvd (ACTIVE)")
+        # Use DATABASE_URL from environment - no override needed
+        log.info("📊 Using DATABASE_URL and PG* credentials from environment")
         
         # Neon Database connection params
         self.host = _get("DB_HOST") or _get("PGHOST")
