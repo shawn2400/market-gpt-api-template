@@ -158,10 +158,6 @@ externalPort = 3001
 localPort = 45313
 externalPort = 3003
 
-[[ports]]
-localPort = 45453
-externalPort = 3000
-
 # === Deployment (VM Target) ===
 [deployment]
 deploymentTarget = "vm"
