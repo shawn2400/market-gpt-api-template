@@ -1,0 +1,106 @@
+נפלת על כלל ידוע של Binance Futures: כשאתה שולח **`closePosition=true`** (ב־`STOP_MARKET` / `TAKE_PROFIT_MARKET` ״סגור-הכול״), **אסור** לשלוח `reduceOnly`. זה בדיוק מה שמפעיל
+`APIError(code=-1106): Parameter 'reduceonly' sent when not required`.
+
+### מה לתקן (בקיצור חד):
+
+1. **אם `closePosition=true`**
+
+   * אל תשלח: `reduceOnly`, `quantity`, `price`, `timeInForce`.
+   * כן לשלוח: `stopPrice`, `workingType` (Mark/Last), `positionSide`.
+
+2. **אם זו הזמנה שמפחיתה פוזיציה (close/partial) בלי closePosition**
+
+   * אפשר `reduceOnly=true`, אבל **רק** כשצד העסקה באמת סוגר את הפוזיציה:
+
+     * סוגר LONG ⇒ `side=SELL` עם `positionSide=LONG`
+     * סוגר SHORT ⇒ `side=BUY` עם `positionSide=SHORT`
+   * אחרת—אל תשלח `reduceOnly`.
+
+3. **LIMIT/TP-LIMIT/STOP-LIMIT**:
+
+   * `reduceOnly` מותר רק כשההיגיון לעיל מתקיים.
+   * `postOnly` רלוונטי רק ל־`LIMIT`; אל תצרף אותו לסוגים אחרים.
+
+---
+
+### תיקון מיידי בקוד (עטיפה בטוחה לפני הקריאה ל־API)
+
+שבץ לוגיקה כזו איפה שאתה בונה את ה־payload (למשל ב־`utils/binance_client.py::futures_create_order`):
+
+```python
+def build_futures_payload(
+    symbol, side, position_side, type_,
+    qty=None, price=None, stop_price=None,
+    reduce_only=False, close_position=False,
+    time_in_force=None, working_type="MARK_PRICE", post_only=False, **kw
+):
+    p = {
+        "symbol": symbol,
+        "side": side,                      # BUY / SELL
+        "type": type_,                     # LIMIT / MARKET / STOP / STOP_MARKET / TAKE_PROFIT / TAKE_PROFIT_MARKET ...
+        "positionSide": position_side,     # LONG / SHORT (ב-Hedge Mode)
+        "workingType": working_type,       # MARK_PRICE / CONTRACT_PRICE
+        **kw
+    }
+
+    # 1) close-all triggers: אסור לשלוח reduceOnly/qty/price/TIF
+    if type_ in {"STOP_MARKET", "TAKE_PROFIT_MARKET"} and close_position:
+        p["closePosition"] = True
+        if stop_price is not None:
+            p["stopPrice"] = stop_price
+        # מנקים שלא יזלוג:
+        for k in ("reduceOnly", "quantity", "price", "timeInForce", "postOnly"):
+            p.pop(k, None)
+        return p
+
+    # 2) שאר הסוגים – ממלאים פרמטרים לפי הצורך
+    if qty is not None:
+        p["quantity"] = qty
+    if type_ in {"LIMIT", "STOP", "TAKE_PROFIT"} and price is not None:
+        p["price"] = price
+    if type_ in {"STOP", "TAKE_PROFIT", "STOP_MARKET", "TAKE_PROFIT_MARKET"} and stop_price is not None:
+        p["stopPrice"] = stop_price
+    if type_ in {"LIMIT", "STOP", "TAKE_PROFIT"} and time_in_force:
+        p["timeInForce"] = time_in_force
+    if type_ == "LIMIT" and post_only:
+        p["newOrderRespType"] = "RESULT"  # אופציונלי
+        p["timeInForce"] = p.get("timeInForce", "GTC")
+        p["postOnly"] = True
+
+    # 3) reduceOnly – רק אם זה באמת סוגר פוזיציה (לא פותח/מגדיל)
+    is_closing = (
+        (position_side == "LONG" and side == "SELL") or
+        (position_side == "SHORT" and side == "BUY")
+    )
+    if reduce_only and is_closing and not close_position:
+        p["reduceOnly"] = True
+    else:
+        p.pop("reduceOnly", None)
+
+    return p
+```
+
+> טיפ: השאר את קבלת ההחלטה אם `is_closing` אמיתי ע״י בדיקה מול גודל הפוזיציה בפועל (אם qty ≤ position_qty).
+
+---
+
+### דוגמאות נכונות/לא נכונות
+
+* **נכון (סגור-הכול בלונג בסטופ-מרקט):**
+  `type=STOP_MARKET, positionSide=LONG, side=SELL, closePosition=true, stopPrice=..., (בלי reduceOnly/qty/price/TIF)`
+
+* **נכון (TP-LIMIT חלקי לשורט):**
+  `type=LIMIT, positionSide=SHORT, side=BUY, quantity=..., price=..., reduceOnly=true`
+
+* **לא נכון (יגרום -1106):**
+  `type=STOP_MARKET, closePosition=true, reduceOnly=true  ← אסור`
+
+---
+
+### למה קיבלת את השגיאה אצלך
+
+בלוג:
+`[DEBUG futures_create_order] positionSide='SHORT' ... APIError -1106 reduceonly`
+משמע: שלחת `reduceOnly` יחד עם הזמנת **close-all trigger** או עם הזמנה שלא באמת מפחיתה SHORT. התיקון למעלה ימנע את זה אוטומטית.
+
+אם תרצה, אכין לך **patch דיפ** מדויק לקובץ `utils/binance_client.py` לפי המבנה שלך.

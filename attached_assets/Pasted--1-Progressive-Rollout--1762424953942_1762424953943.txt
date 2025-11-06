@@ -1,0 +1,97 @@
+נלך על **אופציה 1: תיקון מהיר עכשיו** → מאשרים שהכול נקי, ואז **ממשיכים מיד ל-Progressive Rollout**.
+הנה Task-list קצר, חד, והעתק-הדבק לביצוע מיידי:
+
+---
+
+# ✅ תיקון מהיר ל-`-1106` (עכשיו)
+
+**מטרה:** למנוע שליחת `reduceOnly` כש־`closePosition=true` ולנקות שדות אסורים ב-Close-All Triggers.
+
+1. עדכון קוד
+
+* החלת ה-patch ששלחתי ל־`utils/binance_client.py` (ה־helper `_build_futures_payload` + שימוש בו בפונקציה `futures_create_order`).
+
+2. בדיקות מהירות (DRY-RUN/סביבה חיה קטנה)
+
+* **Close-All STOP_MARKET** (לונג):
+
+  * מצופה: `closePosition=true`, **ללא** `reduceOnly/quantity/price/TIF/postOnly`.
+* **TP-LIMIT חלקי עם reduceOnly=true** (שורט סוגר):
+
+  * מצופה: `reduceOnly=true` נשאר ונשלח.
+* **LIMIT פותח פוזיציה** בטעות עם `reduceOnly=true`:
+
+  * מצופה: ה-helper מנקה את `reduceOnly`.
+
+3. לוגים/התראות
+
+* ודא בלוג: `[futures_create_order] safe payload=…` מציג payload נקי (ללא סודות).
+* אין `APIError -1106` ברצף 3–5 קריאות.
+
+4. דיפלוי
+
+* Build/Deploy כרגיל (Docker/Render).
+* אימות `/readyz` + טרייד לדוגמה קטן.
+
+---
+
+# 🚀 מעבר מיידי ל-Progressive Rollout (אחרי שעבר נקי)
+
+**שלב A — Shadow (48 שעות):**
+מחשב דינמיקה, לא מבצע שינויים בפועל.
+
+* ENV:
+
+  * `DYN_SHADOW=1`
+  * `DYN_ENFORCE=0`
+  * `DYN_ALLOWED_SYMBOLS=ADAUSDT` (או כל סימבול בודד לבקרה)
+  * `DYN_STALE_GUARD_SEC=35`
+  * `DYN_MIXER_MIN_CONF=0.6`
+  * `DYN_BTC_GATE_ENABLE=1`
+* לוגים רצויים:
+
+  * `dyn.shadow=on`, `regime=…`, `conf=…`, `sl/tp_calc=…`, `skip_reason=shadow`.
+
+**שלב B — Enforce לסימבול אחד (48–72 שעות):**
+מפעיל דינמיקה אמיתית רק על סימבול אחד.
+
+* ENV:
+
+  * `DYN_SHADOW=0`
+  * `DYN_ENFORCE=1`
+  * `DYN_ALLOWED_SYMBOLS=ADAUSDT` (יחיד)
+  * `CB_ENABLE=1`, `CB_MAX_FAILS=5`, `CB_COOLDOWN_SEC=900`
+* מעקב:
+
+  * Zero-Gap SL נשלח אטומי (create→verify→cancel).
+  * נבדק שלא נשלחים פרמטרים אסורים ב-close-all.
+
+**שלב C — הרחבה לכל הסימבולים (אחרי אימות):**
+
+* ENV:
+
+  * `DYN_ALLOWED_SYMBOLS=*`
+  * `PROM_ENABLE=1` (אם מוכן) + חשיפת `/metrics` לדאשבורד
+* ניטור:
+
+  * שיעור שגיאות < 1%, אין `-1106/-1013/-1111`, SL תמיד קיים.
+
+---
+
+# 🛡️ בדיקות/שומרי ראש שחובה להפעיל לאורך כל התהליך
+
+* **Idempotency** להזמנות ניהול: מפתח לפי `(symbol, orderKind, price/stopPrice, tsBucket)`.
+* **Stale-Guard**: לא לפעול אם `last_market_update_ts` ישן מ-`DYN_STALE_GUARD_SEC`.
+* **BTC-Gate**: חסום שינויים אם קורלציה/כיוון BTC נגד הפוזיציה.
+* **Fallback ל-Legacy**: אם dynamic path נכשל → חזור לנתיב הישן לאותה לולאה בלבד (עם לוג `dyn.fallback=legacy`).
+* **Precision**: הקפד על `tickSize/stepSize` לפני שליחה כדי למנוע `-1013/-1111`.
+
+---
+
+אם תרצה—אשלח לך גם **unit tests קצרים (pytest)** שמוודאים:
+
+* אין `reduceOnly` עם `closePosition=true`.
+* אין שדות אסורים ב-close-all.
+* `reduceOnly` נשמר כשבאמת סוגרים פוזיציה חלקית.
+
+מוכן להתחיל מיד עם השלב הראשון?
