@@ -24,6 +24,30 @@ from typing import Dict, Any, List, Optional
 import asyncio
 import httpx
 
+# Import AI clients
+try:
+    from utils.gemini_client import call_gemini, ENABLE_GEMINI
+except ImportError:
+    call_gemini = None
+    ENABLE_GEMINI = False
+
+try:
+    from utils.llm_client import llm_chat_completion
+except ImportError:
+    llm_chat_completion = None
+
+try:
+    from utils.xai_client import call_xai, ENABLE_XAI
+except ImportError:
+    call_xai = None
+    ENABLE_XAI = False
+
+try:
+    from utils.anthropic_client import call_anthropic, ENABLE_ANTHROPIC
+except ImportError:
+    call_anthropic = None
+    ENABLE_ANTHROPIC = False
+
 logger = logging.getLogger("algogpt.ai_decisions")
 
 
@@ -54,6 +78,65 @@ class AIBrain:
             Dict with vote, score, reasoning
         """
         raise NotImplementedError
+    
+    def _build_prompt(self, scout_data: Dict, market_data: Dict, wallet_state: Dict) -> str:
+        """Build decision prompt for AI brain."""
+        symbol = scout_data.get("symbol", "UNKNOWN")
+        strategy = scout_data.get("strategy", "NONE")
+        scanner_score = scout_data.get("market_scanner", {}).get("score", 0)
+        analyst_score = scout_data.get("technical_analyst", {}).get("score", 0)
+        
+        return f"""Analyze this trade proposal:
+
+Symbol: {symbol}
+Strategy: {strategy}
+
+Scout Scores:
+- Market Scanner: {scanner_score}/10
+- Technical Analyst: {analyst_score}/10
+
+Wallet: ${wallet_state.get('available_balance', 0):.2f} available
+
+Decision required:
+1. APPROVE ✅ or REJECT ❌
+2. Score (0-10)
+3. Brief reasoning (2-3 sentences, mix Hebrew + English)
+
+Format: VOTE|SCORE|REASONING"""
+    
+    def _parse_response(self, analysis: str, scout_data: Dict) -> Dict[str, Any]:
+        """Parse AI response into structured vote."""
+        try:
+            parts = analysis.split("|")
+            if len(parts) >= 3:
+                vote = "APPROVE" if "APPROVE" in parts[0].upper() else "REJECT"
+                score = float(parts[1].strip())
+                reasoning = parts[2].strip()
+            else:
+                vote = "APPROVE" if scout_data.get("avg_score", 5) >= 6.0 else "REJECT"
+                score = scout_data.get("avg_score", 5.0)
+                reasoning = analysis[:200]
+            
+            return {
+                "brain": self.name,
+                "vote": vote,
+                "score": max(0, min(10, score)),
+                "reasoning": reasoning,
+                "confidence": "HIGH" if score >= 7.0 else "MEDIUM"
+            }
+        except:
+            return self._mock_vote(scout_data)
+    
+    def _mock_vote(self, scout_data: Dict) -> Dict[str, Any]:
+        """Fallback mock vote when API fails."""
+        avg_score = scout_data.get("avg_score", 5.0)
+        return {
+            "brain": self.name,
+            "vote": "APPROVE" if avg_score >= 6.0 else "REJECT",
+            "score": round(avg_score, 1),
+            "reasoning": f"{self.name}: Setup looks reasonable (fallback)",
+            "confidence": "LOW"
+        }
 
 
 class GPT5Brain(AIBrain):
@@ -102,65 +185,6 @@ class GPT5Brain(AIBrain):
         except Exception as e:
             self.logger.error(f"GPT-5 vote failed: {e}", exc_info=True)
             return self._mock_vote(scout_data)
-    
-    def _build_prompt(self, scout_data, market_data, wallet_state) -> str:
-        """Build decision prompt."""
-        symbol = scout_data.get("symbol", "UNKNOWN")
-        strategy = scout_data.get("strategy", "NONE")
-        scanner_score = scout_data.get("market_scanner", {}).get("score", 0)
-        analyst_score = scout_data.get("technical_analyst", {}).get("score", 0)
-        
-        return f"""Analyze this trade proposal:
-
-Symbol: {symbol}
-Strategy: {strategy}
-
-Scout Scores:
-- Market Scanner: {scanner_score}/10
-- Technical Analyst: {analyst_score}/10
-
-Wallet: ${wallet_state.get('available_balance', 0):.2f} available
-
-Decision required:
-1. APPROVE ✅ or REJECT ❌
-2. Score (0-10)
-3. Brief reasoning (2-3 sentences, mix Hebrew + English)
-
-Format: VOTE|SCORE|REASONING"""
-    
-    def _parse_response(self, analysis: str, scout_data: Dict) -> Dict[str, Any]:
-        """Parse AI response."""
-        try:
-            parts = analysis.split("|")
-            if len(parts) >= 3:
-                vote = "APPROVE" if "APPROVE" in parts[0].upper() else "REJECT"
-                score = float(parts[1].strip())
-                reasoning = parts[2].strip()
-            else:
-                vote = "APPROVE" if scout_data.get("avg_score", 5) >= 6.0 else "REJECT"
-                score = scout_data.get("avg_score", 5.0)
-                reasoning = analysis[:200]
-            
-            return {
-                "brain": self.name,
-                "vote": vote,
-                "score": max(0, min(10, score)),
-                "reasoning": reasoning,
-                "confidence": "HIGH" if score >= 7.0 else "MEDIUM"
-            }
-        except:
-            return self._mock_vote(scout_data)
-    
-    def _mock_vote(self, scout_data: Dict) -> Dict[str, Any]:
-        """Fallback mock vote."""
-        avg_score = scout_data.get("avg_score", 5.0)
-        return {
-            "brain": self.name,
-            "vote": "APPROVE" if avg_score >= 6.0 else "REJECT",
-            "score": round(avg_score, 1),
-            "reasoning": "מומנטום חיובי, Setup נראה טוב",
-            "confidence": "MEDIUM"
-        }
 
 
 class GeminiBrain(AIBrain):
@@ -172,8 +196,31 @@ class GeminiBrain(AIBrain):
     
     async def vote(self, scout_data, market_data, wallet_state) -> Dict[str, Any]:
         """Gemini analyzes and votes."""
+        try:
+            if not ENABLE_GEMINI or not call_gemini:
+                return self._mock_vote(scout_data)
+            
+            prompt = self._build_prompt(scout_data, market_data, wallet_state)
+            
+            response = await call_gemini(
+                prompt,
+                system="You are Gemini 2 Pro, fast multi-modal trading analyst. Analyze and vote APPROVE/REJECT.",
+                temperature=0.7,
+                max_tokens=300
+            )
+            
+            if response:
+                return self._parse_response(response, scout_data)
+            else:
+                return self._mock_vote(scout_data)
+                
+        except Exception as e:
+            self.logger.error(f"Gemini vote failed: {e}", exc_info=True)
+            return self._mock_vote(scout_data)
+    
+    def _mock_vote(self, scout_data) -> Dict[str, Any]:
+        """Fallback mock vote when API fails"""
         avg_score = scout_data.get("avg_score", 5.0)
-        
         vote = "APPROVE" if avg_score >= 6.5 else "REJECT"
         score = min(avg_score + 0.3, 10.0) if vote == "APPROVE" else avg_score - 0.5
         
@@ -181,7 +228,7 @@ class GeminiBrain(AIBrain):
             "brain": self.name,
             "vote": vote,
             "score": round(score, 1),
-            "reasoning": "Technical setup solid, נזילות טובה",
+            "reasoning": "Technical setup solid, נזילות טובה (mock)",
             "confidence": "HIGH" if score >= 7.0 else "MEDIUM"
         }
 
@@ -195,18 +242,31 @@ class DeepSeekBrain(AIBrain):
     
     async def vote(self, scout_data, market_data, wallet_state) -> Dict[str, Any]:
         """DeepSeek analyzes and votes."""
-        avg_score = scout_data.get("avg_score", 5.0)
-        
-        vote = "APPROVE" if avg_score >= 6.2 else "REJECT"
-        score = avg_score + 0.5 if vote == "APPROVE" else avg_score
-        
-        return {
-            "brain": self.name,
-            "vote": vote,
-            "score": round(score, 1),
-            "reasoning": "Pattern recognition strong, SL placement good",
-            "confidence": "HIGH" if score >= 7.0 else "MEDIUM"
-        }
+        try:
+            if not self.api_key or not llm_chat_completion:
+                return self._mock_vote(scout_data)
+            
+            prompt = self._build_prompt(scout_data, market_data, wallet_state)
+            
+            response = await llm_chat_completion(
+                messages=[
+                    {"role": "system", "content": "You are DeepSeek, deep market pattern analyst. Analyze and vote APPROVE/REJECT."},
+                    {"role": "user", "content": prompt}
+                ],
+                model="deepseek-chat",
+                temperature=0.7,
+                max_tokens=300
+            )
+            
+            if response and "choices" in response:
+                analysis = response["choices"][0]["message"]["content"]
+                return self._parse_response(analysis, scout_data)
+            else:
+                return self._mock_vote(scout_data)
+                
+        except Exception as e:
+            self.logger.error(f"DeepSeek vote failed: {e}", exc_info=True)
+            return self._mock_vote(scout_data)
 
 
 class GrokBrain(AIBrain):
@@ -218,41 +278,59 @@ class GrokBrain(AIBrain):
     
     async def vote(self, scout_data, market_data, wallet_state) -> Dict[str, Any]:
         """Grok analyzes and votes."""
-        avg_score = scout_data.get("avg_score", 5.0)
-        
-        vote = "APPROVE" if avg_score >= 6.8 else "REJECT"
-        score = avg_score - 0.2
-        
-        return {
-            "brain": self.name,
-            "vote": vote,
-            "score": round(score, 1),
-            "reasoning": "Smart money accumulating, timing optimal",
-            "confidence": "MEDIUM"
-        }
+        try:
+            if not ENABLE_XAI or not call_xai:
+                return self._mock_vote(scout_data)
+            
+            prompt = self._build_prompt(scout_data, market_data, wallet_state)
+            
+            response = await call_xai(
+                prompt,
+                system="You are Grok, contrarian AI analyst. Analyze and vote APPROVE/REJECT with unique perspective.",
+                temperature=0.8,
+                max_tokens=300
+            )
+            
+            if response:
+                return self._parse_response(response, scout_data)
+            else:
+                return self._mock_vote(scout_data)
+                
+        except Exception as e:
+            self.logger.error(f"Grok vote failed: {e}", exc_info=True)
+            return self._mock_vote(scout_data)
 
 
 class ClaudeBrain(AIBrain):
     """Claude Sonnet 3.5 - Conservative validator."""
     
     def __init__(self):
-        super().__init__("Claude Sonnet 3.5", "anthropic", "claude-sonnet-3.5")
+        super().__init__("Claude Sonnet 3.5", "anthropic", "claude-sonnet-3-5-20241022")
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
     
     async def vote(self, scout_data, market_data, wallet_state) -> Dict[str, Any]:
         """Claude analyzes and votes."""
-        avg_score = scout_data.get("avg_score", 5.0)
-        
-        vote = "APPROVE" if avg_score >= 6.5 else "REJECT"
-        score = avg_score
-        
-        return {
-            "brain": self.name,
-            "vote": vote,
-            "score": round(score, 1),
-            "reasoning": "RR ratio acceptable, risk managed properly",
-            "confidence": "HIGH" if score >= 6.5 else "LOW"
-        }
+        try:
+            if not ENABLE_ANTHROPIC or not call_anthropic:
+                return self._mock_vote(scout_data)
+            
+            prompt = self._build_prompt(scout_data, market_data, wallet_state)
+            
+            response = await call_anthropic(
+                prompt,
+                system="You are Claude Sonnet 3.5, conservative risk validator. Analyze and vote APPROVE/REJECT carefully.",
+                temperature=0.5,
+                max_tokens=300
+            )
+            
+            if response:
+                return self._parse_response(response, scout_data)
+            else:
+                return self._mock_vote(scout_data)
+                
+        except Exception as e:
+            self.logger.error(f"Claude vote failed: {e}", exc_info=True)
+            return self._mock_vote(scout_data)
 
 
 class AIConsensusEngine:
