@@ -12,8 +12,8 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstr
 OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT_SECONDS", "30"))
 OPENAI_MAX_CONCURRENCY = int(os.getenv("OPENAI_MAX_CONCURRENCY", "4"))
 
-# thresholds (ברירת מחדל: 8.5 ו-0.2)
-AI_MIN_QUALITY = float(os.getenv("AI_MIN_QUALITY", "8.5"))
+# thresholds (Dynamic from AI Protection Manager - base: 6.0)
+AI_MIN_QUALITY = float(os.getenv("AI_MIN_QUALITY", "6.0"))
 AI_CONFLICT_MIN = float(os.getenv("AI_CONFLICT_MIN", "0.2"))
 
 # Retry / Backoff

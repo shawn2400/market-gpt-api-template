@@ -84,9 +84,9 @@ def enforce(inputs: SopInputs) -> Dict[str, Any]:
         if not g["ok"]:
             reasons.append(_rc(g["code"]))
 
-    # 6) Quality
+    # 6) Quality (Dynamic - from AI Protection Manager)
     if get_flag(FEAT_QUALITY_ENFORCE, False):
-        qmin = float(os.getenv("QUALITY_MIN_SCORE", os.getenv("MIN_QUALITY_SCORE", "8.5")))
+        qmin = float(os.getenv("QUALITY_MIN_SCORE", os.getenv("MIN_QUALITY_SCORE", "6.0")))
         if inputs.quality_score is not None and inputs.quality_score < qmin:
             reasons.append(_rc("quality_low"))
 

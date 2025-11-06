@@ -27,7 +27,7 @@ ABC_LOCAL_ENABLE     = str(os.getenv("ABC_LOCAL_ENABLE", "1")).lower() in ("1","
 SR_LEVELS_ENABLE     = str(os.getenv("SR_LEVELS_ENABLE", "1")).lower() in ("1","true","yes","on")
 TV_ENABLE            = str(os.getenv("TV_ENABLE", "0")).lower()      in ("1","true","yes","on")
 
-LEGACY_QUALITY_PASS  = _to_float(os.getenv("QUALITY_MIN_SCORE"), 8.5)
+LEGACY_QUALITY_PASS  = _to_float(os.getenv("QUALITY_MIN_SCORE"), 6.0)
 
 def _clamp01(x: float) -> float:
     return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)

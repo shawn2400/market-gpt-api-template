@@ -218,6 +218,7 @@ async def main():
     health_checker = HealthCheck()
     consecutive_failures = 0
     last_alert_time = 0
+    last_critical_alert_time = 0
     
     while True:
         try:
@@ -238,9 +239,9 @@ async def main():
                 consecutive_failures += 1
                 logger.warning(f"⚠️  Issues detected ({consecutive_failures}): {', '.join(result['issues'])}")
                 
-                # Send Telegram alert (rate limited)
+                # Send Telegram alert to DIGEST (batched delivery)
                 current_time = time.time()
-                if current_time - last_alert_time > 300:  # Max 1 alert per 5 min
+                if current_time - last_alert_time > 300:  # Max 1 digest alert per 5 min
                     alert_msg = (
                         f"*Status:* {result['status'].upper()}\n"
                         f"*Issues:* {len(result['issues'])}\n"
@@ -253,8 +254,8 @@ async def main():
                     await send_telegram_alert(alert_msg, "ERROR" if result["status"] == "critical" else "WARNING")
                     last_alert_time = current_time
                 
-                # Critical: send immediate alert with restart instructions
-                if consecutive_failures >= 3:
+                # CRITICAL: Only send if TRULY critical (≥5 consecutive + 15min cooldown)
+                if consecutive_failures >= 5 and (current_time - last_critical_alert_time > 900):
                     restart_msg = (
                         f"🚨 CRITICAL: {consecutive_failures} consecutive failures!\n\n" +
                         "\n".join(f"• {issue}" for issue in result['issues']) +
@@ -263,7 +264,8 @@ async def main():
                         "💡 Tip: Click the 'Run' button in Replit to restart all services."
                     )
                     await send_telegram_alert(restart_msg, "CRITICAL")
-                    consecutive_failures = 0  # Reset after alert
+                    last_critical_alert_time = current_time
+                    consecutive_failures = 0  # Reset after critical alert
             else:
                 # System healthy
                 if consecutive_failures > 0:
