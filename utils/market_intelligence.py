@@ -352,11 +352,14 @@ class MarketIntelligence:
             base_rr = 1.2
             base_quality = 4.5
         
-        # Mood adjustments - SMALLER impact now
-        if mood in ["bullish", "bearish"]:
-            base_rr -= 0.05  # Clear direction helps
-        else:
-            base_rr += 0.05  # ✅ Reduced penalty for neutral (was 0.1)
+        # Mood adjustments - MINIMAL impact for CHOPPY markets
+        # CHOPPY/SIDEWAYS don't need mood penalty (they're meant for neutral markets!)
+        if regime not in ["choppy", "sideways"]:
+            if mood in ["bullish", "bearish"]:
+                base_rr -= 0.05  # Clear direction helps
+            else:
+                base_rr += 0.05  # Neutral adds slight caution
+        # else: CHOPPY/SIDEWAYS → no mood penalty (neutral is GOOD for these strategies!)
         
         # Volatility adjustments
         if volatility == "high":
