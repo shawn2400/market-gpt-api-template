@@ -38,7 +38,7 @@ with suppress(Exception):
 with suppress(Exception):
     from utils.alerts import send_telegram_message  # type: ignore
 
-# Dynamic Trading System (MetaBrain v8.0)
+# Dynamic Trading System (MetaBrain v8.0) - Legacy
 with suppress(Exception):
     from utils.regime_glue import RegimeAdapter
     from utils.sl_manager import ZeroGapSLManager
@@ -54,6 +54,22 @@ except Exception as _e:
     _sl_manager = None  # type: ignore
     _tp_ladder = None  # type: ignore
     _DYNAMIC_TRADING_AVAILABLE = False
+
+# Progressive Rollout System (v2 - Regime-based Dynamic Trading)
+with suppress(Exception):
+    from utils.regime_detector_v2 import detect_market_regime_v2
+    from utils.adaptive_mixer import adaptive_mix
+    from utils.precision import quantize_price, quantize_qty
+    from utils.idempotency_simple import make_key, seen
+    from utils.circuit_breaker import track as cb_track, allow as cb_allow
+    from utils.metrics_dyn import (
+        dyn_decisions, dyn_skips, dyn_errors, sl_changes, tp_sets,
+        age_guard_hit, conf_low_hit, cb_blocks, live_enforce, regime_confidence
+    )
+    _PROGRESSIVE_ROLLOUT_AVAILABLE = True
+except Exception as _e:
+    logger.warning(f"[Progressive Rollout] Import failed: {_e}")
+    _PROGRESSIVE_ROLLOUT_AVAILABLE = False
 
 logger = logging.getLogger("algogpt.trade_manager")
 
@@ -98,6 +114,36 @@ _cap_triggered = False
 
 _health_fails = 0
 _HEALTH_FAIL_MAX = int(os.getenv("KILLSWITCH_THRESHOLD", "3"))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Progressive Rollout ENV (Shadow → Single Symbol → Full)
+# ──────────────────────────────────────────────────────────────────────────────
+MANAGER_DYN_PATH = os.getenv("MANAGER_DYN_PATH", "1") == "1"
+DYN_SHADOW = os.getenv("DYN_SHADOW", "1") == "1"  # Phase 1: Shadow mode
+DYN_ENFORCE = os.getenv("DYN_ENFORCE", "0") == "1"  # Phase 2+: Enforce mode
+DYN_MIN_CONF = float(os.getenv("DYN_MIN_CONF", "0.62"))
+DYN_SAFE_STALE_SEC = int(os.getenv("DYN_SAFE_STALE_SEC", "35"))
+BTC_GATE_ENABLE = os.getenv("BTC_GATE_ENABLE", "1") == "1"
+
+# Symbol whitelist/blacklist for Progressive Rollout
+_ALLOWED = {s.strip().upper() for s in os.getenv("DYN_ALLOWED_SYMBOLS", "").split(",") if s.strip()}
+_DENY = {s.strip().upper() for s in os.getenv("DYN_DENYLIST", "").split(",") if s.strip()}
+
+def _enforce_allowed(sym: str) -> bool:
+    """Check if symbol is allowed for dynamic enforce mode."""
+    su = (sym or "").upper()
+    if su in _DENY:
+        return False
+    if _ALLOWED:
+        return su in _ALLOWED
+    return True  # If no whitelist, allow all
+
+# Set metrics gauge for enforce status
+if _PROGRESSIVE_ROLLOUT_AVAILABLE:
+    try:
+        live_enforce.set(1.0 if (DYN_ENFORCE and not DYN_SHADOW) else 0.0)
+    except Exception:
+        pass
 
 REVIEW_PATH = Path("static/cache/trade_reviews.json")
 
@@ -537,6 +583,207 @@ async def manage_open_trades():
                     logger.info(f"[manage] Skipping {sym}: invalid MACD")
                     continue
 
+                # ═══════════════════════════════════════════════════════════════════
+                # PROGRESSIVE ROLLOUT: Dynamic Regime-Based Management
+                # ═══════════════════════════════════════════════════════════════════
+                if MANAGER_DYN_PATH and _PROGRESSIVE_ROLLOUT_AVAILABLE:
+                    try:
+                        # Calculate RSI and ATR% for regime detection
+                        try:
+                            delta = df["close"].diff()
+                            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+                            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+                            rs = gain / loss
+                            rsi_series = 100 - (100 / (1 + rs))
+                            current_rsi = float(rsi_series.iloc[-1])
+                        except Exception:
+                            current_rsi = 50.0  # Neutral fallback
+                        
+                        atr_pct = (current_atr / price) * 100.0 if price > 0 else 0.0
+                        
+                        # Calculate MACD slope (simple momentum)
+                        try:
+                            macd_slope = float(macd_line.iloc[-1] - macd_line.iloc[-5]) if len(macd_line) >= 5 else 0.0
+                        except Exception:
+                            macd_slope = 0.0
+                        
+                        # Get symbol filters for precision
+                        filters = get_symbol_filters(sym) or {}
+                        tick_size = float(filters.get("tickSize", 0.01))
+                        step_size = float(filters.get("stepSize", 0.001))
+                        
+                        # Build Context object
+                        context = {
+                            "symbol": sym,
+                            "side": side,
+                            "entry_price": entry,
+                            "atr": current_atr,
+                            "atr_pct": atr_pct,
+                            "adx": current_adx,
+                            "macd_slope": macd_slope,
+                            "rsi": current_rsi,
+                            "tick_size": tick_size,
+                            "step_size": step_size,
+                            "position_qty": qty,
+                            "last_market_update_ts": now,
+                            "price": price,
+                            "btc_gate_ok": True,  # TODO: Add real BTC correlation check if needed
+                            "pnl_state": "normal",  # TODO: Track PnL state
+                            "time_in_position_min": 0.0  # TODO: Track position age
+                        }
+                        
+                        # Safety guards
+                        required = ["symbol", "side", "entry_price", "atr", "atr_pct", "adx",
+                                    "macd_slope", "rsi", "tick_size", "step_size", "position_qty", "last_market_update_ts"]
+                        
+                        if any(k not in context for k in required):
+                            dyn_skips.labels(reason="missing_context").inc()
+                            print(f"⚠️ [DynPath] {sym} missing context fields, skipping")
+                        elif (now - float(context["last_market_update_ts"])) > DYN_SAFE_STALE_SEC:
+                            age_guard_hit.inc()
+                            dyn_skips.labels(reason="stale_data").inc()
+                            print(f"⚠️ [DynPath] {sym} stale data ({now - context['last_market_update_ts']:.0f}s), skipping")
+                        elif BTC_GATE_ENABLE and not bool(context.get("btc_gate_ok", True)):
+                            dyn_skips.labels(reason="btc_gate").inc()
+                            print(f"⚠️ [DynPath] {sym} BTC gate check failed, skipping")
+                        elif not cb_allow():
+                            cb_blocks.inc()
+                            dyn_skips.labels(reason="circuit_block").inc()
+                            print(f"⛔ [DynPath] Circuit breaker open, skipping all dynamic updates")
+                        else:
+                            # Detect regime
+                            feats = {
+                                "atr_pct": float(context["atr_pct"]),
+                                "adx": float(context["adx"]),
+                                "macd_slope": float(context["macd_slope"]),
+                                "rsi": float(context["rsi"]),
+                            }
+                            r = detect_market_regime_v2(feats)
+                            
+                            if r.confidence < DYN_MIN_CONF:
+                                conf_low_hit.inc()
+                                dyn_skips.labels(reason="low_conf").inc()
+                                print(f"⚠️ [DynPath] {sym} low confidence ({r.confidence:.3f} < {DYN_MIN_CONF}), skipping")
+                            else:
+                                # Adaptive parameter mixing
+                                mix = adaptive_mix(
+                                    regime=r.regime,
+                                    confidence=r.confidence,
+                                    atr_pct=feats["atr_pct"],
+                                    pnl_state=context.get("pnl_state", "normal"),
+                                    time_in_pos_min=context.get("time_in_position_min", 0.0)
+                                )
+                                
+                                # Calculate SL/TP
+                                sl_dist = mix["sl_atr"] * current_atr
+                                if side == "LONG":
+                                    sl_p = entry - sl_dist
+                                else:
+                                    sl_p = entry + sl_dist
+                                
+                                rr = mix["tp_rr"]
+                                if side == "LONG":
+                                    tp_p = entry + (rr * sl_dist)
+                                else:
+                                    tp_p = entry - (rr * sl_dist)
+                                
+                                # Quantize
+                                qtz = quantize_qty(abs(float(context["position_qty"])), step_size)
+                                sl_p = quantize_price(sl_p, tick_size)
+                                tp_p = quantize_price(tp_p, tick_size)
+                                
+                                # Idempotency check
+                                payload = json.dumps({
+                                    "sym": context["symbol"],
+                                    "sl": sl_p,
+                                    "tp": tp_p,
+                                    "qty": qtz,
+                                    "side": side,
+                                    "reg": r.regime,
+                                    "conf": round(r.confidence, 3)
+                                })
+                                idem_key = make_key("manage_dyn", payload)
+                                
+                                if seen(idem_key):
+                                    dyn_skips.labels(reason="idem_dup").inc()
+                                    print(f"⏭️ [DynPath] {sym} duplicate detected (idempotency), skipping")
+                                else:
+                                    # Progressive rollout: check if symbol is allowed for enforce
+                                    enforce_now = (DYN_ENFORCE and not DYN_SHADOW and _enforce_allowed(context["symbol"]))
+                                    
+                                    if not enforce_now:
+                                        # SHADOW MODE
+                                        dyn_decisions.labels(symbol=context["symbol"], regime=r.regime).inc()
+                                        regime_confidence.labels(symbol=sym, regime=r.regime).set(r.confidence)
+                                        print(json.dumps({
+                                            "evt": "dyn_shadow",
+                                            "sym": context["symbol"],
+                                            "regime": r.regime,
+                                            "conf": round(r.confidence, 3),
+                                            "sl_atr": round(mix["sl_atr"], 3),
+                                            "tp_rr": round(mix["tp_rr"], 3),
+                                            "side": side,
+                                            "sl_p": sl_p,
+                                            "tp_p": tp_p,
+                                            "qty": qtz
+                                        }, ensure_ascii=False))
+                                        cb_track(ok=True)
+                                    else:
+                                        # ENFORCE MODE
+                                        print(f"🚀 [DynPath ENFORCE] {sym} {r.regime} (conf={r.confidence:.3f}) → SL={sl_p:.4f}, TP={tp_p:.4f}")
+                                        
+                                        # Execute Zero-Gap SL update
+                                        ok1 = _sl_manager.safe_replace_sl(
+                                            symbol=context["symbol"],
+                                            new_stop_price=sl_p,
+                                            qty=qtz,
+                                            side=side
+                                        )
+                                        if ok1:
+                                            sl_changes.labels(symbol=context["symbol"]).inc()
+                                            print(f"✅ [DynPath] {sym} SL updated to {sl_p:.4f}")
+                                        
+                                        # Execute TP Ladder
+                                        tp_ladder_levels = mix.get("tp_ladder", [tp_p])
+                                        # Convert multipliers to actual prices
+                                        tp_prices = []
+                                        for mult in tp_ladder_levels:
+                                            if side == "LONG":
+                                                tp_level = entry + (sl_dist * mult)
+                                            else:
+                                                tp_level = entry - (sl_dist * mult)
+                                            tp_prices.append(quantize_price(tp_level, tick_size))
+                                        
+                                        ok2 = _tp_ladder.set_tp_ladder(
+                                            context["symbol"],
+                                            entry,
+                                            qtz,
+                                            side,
+                                            tp_prices
+                                        )
+                                        if ok2:
+                                            tp_sets.labels(symbol=context["symbol"]).inc()
+                                            print(f"✅ [DynPath] {sym} TP ladder set: {tp_prices}")
+                                        
+                                        dyn_decisions.labels(symbol=context["symbol"], regime=r.regime).inc()
+                                        regime_confidence.labels(symbol=sym, regime=r.regime).set(r.confidence)
+                                        cb_track(ok=(ok1 and ok2))
+                                        
+                                        # Skip legacy path if enforce successful
+                                        if ok1 and ok2:
+                                            _last_update[sym] = now
+                                            print(f"✅ [DynPath] {sym} dynamic management complete, skipping legacy")
+                                            continue
+                    
+                    except Exception as e:
+                        dyn_errors.labels(stage="manage_dyn").inc()
+                        cb_track(ok=False)
+                        print(json.dumps({"evt": "dyn_error", "err": str(e), "sym": sym}, ensure_ascii=False))
+                        logger.error(f"[DynPath] Error for {sym}: {e}", exc_info=True)
+                
+                # ═══════════════════════════════════════════════════════════════════
+                # LEGACY PATH (Fallback if dynamic path skipped/failed)
+                # ═══════════════════════════════════════════════════════════════════
                 profit_pct = abs((price - entry) / entry) * 100.0
 
                 be_trigger = float(os.getenv("TM_BE_MIN_PROFIT_PCT", "1.5"))
