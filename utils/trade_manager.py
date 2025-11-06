@@ -524,9 +524,14 @@ def _maybe_freeze_trailing(symbol: str, df: pd.DataFrame, atr_now: float, adx_no
 
 async def manage_open_trades():
     global _daily_pnl, _cap_triggered
-    if not ALLOW_MANAGE_OPEN_TRADES or _cap_triggered:
-        print(f"⚠️ [manage_open_trades] BLOCKED: ALLOW_MANAGE={ALLOW_MANAGE_OPEN_TRADES}, cap_triggered={_cap_triggered}")
-        logger.info(f"[manage] Disabled or cap triggered, skipping (ALLOW={ALLOW_MANAGE_OPEN_TRADES}, cap={_cap_triggered})")
+    # ⚠️ DEBUG: Read directly from ENV to bypass module cache
+    _ALLOW_FROM_ENV = os.getenv("ALLOW_MANAGE_OPEN_TRADES", "true").lower() in ("1", "true", "yes", "on")
+    logger.info(f"🔍 [DEBUG] ALLOW_MANAGE_OPEN_TRADES config={ALLOW_MANAGE_OPEN_TRADES}, ENV={_ALLOW_FROM_ENV}, cap={_cap_triggered}")
+    print(f"🔍 [DEBUG] ALLOW_MANAGE_OPEN_TRADES config={ALLOW_MANAGE_OPEN_TRADES}, ENV={_ALLOW_FROM_ENV}, cap={_cap_triggered}", flush=True)
+    
+    if not _ALLOW_FROM_ENV or _cap_triggered:
+        print(f"⚠️ [manage_open_trades] BLOCKED: ALLOW_MANAGE={_ALLOW_FROM_ENV}, cap_triggered={_cap_triggered}", flush=True)
+        logger.info(f"[manage] Disabled or cap triggered, skipping (ALLOW={_ALLOW_FROM_ENV}, cap={_cap_triggered})")
         return
 
     try:
