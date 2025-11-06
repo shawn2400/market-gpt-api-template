@@ -21,7 +21,7 @@ RR_TOP10_MAX = 1.01      # מקסימום=מינימום → ללא adjustment!
 RR_ALT_MIN = 1.01        # מינימום מוחלט - קבוע!
 RR_ALT_MAX = 1.01        # מקסימום=מינימום → ללא adjustment!
 QUALITY_MIN = 4.0        # מינימום מאוד נמוך
-QUALITY_MAX = 6.5        # מקסימום נמוך
+QUALITY_MAX = 8.0        # מקסימום ריאלי (טווח: 4.0-8.0)
 
 # ====== Market regime weights ======
 REGIME_WEIGHTS = {
