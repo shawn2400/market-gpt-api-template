@@ -1,0 +1,513 @@
+להדבקה אחת לסוכן (Rider/Replit/DevOps) — **Progressive Rollout מלא** + מיגרציית ENV מ־`.replit` + תיקוני דיוק/4061 + שמירה אוטומטית ב-GitHub + תאימות Render
+הדבק כ־הודעה אחת, והוא יבצע הכל בשלבים בטוחים (Shadow → Enforce-1-Symbol → Full).
+
+---
+
+**TASK NAME:** AlgoGPT — Dynamic Manage v2 (Shadow→Enforce), ENV Migration, Precision Fixes, GitHub & Render Ready
+
+**מטרה:**
+
+1. לחבר סוף-סוף את הניהול הדינמי ל־`manage_open_trades()` ב־Shadow Mode, לעבור בהדרגה ל־Enforce.
+2. להוציא את כל ההגדרות מ־`.replit` ל־ENV אוניברסלי (.env/.env.example + config.py), כך שהמערכת תמשיך לעבוד גם בלי Replit (Rider/Render/Docker/לוקאלי).
+3. לתקן שגיאות Binance `APIError -4061`/דיוק (qty/price/tickSize/stepSize/minNotional) בצורה עקבית.
+4. לשמור כל שינוי לגיט (Commit → Branch → PR), בלי לשבור Legacy, עם Rollback מהיר.
+
+---
+
+### שלב 0 — כלל־ברזל (לא לשבור כלום)
+
+* **אין מחיקות** של קוד קיים: מוסיפים “נתיב דינמי” במקביל ל־Legacy, עם דגלי ENV.
+* **ברירת מחדל:** Shadow Mode (מחשב, לא משגר הזמנות).
+* **מעבר מדורג:** Shadow → Enforce לסימבול אחד → Enforce לכולם.
+
+---
+
+### שלב 1 — קבצים חדשים (להוסיף אם לא קיימים)
+
+**(1) `utils/precision.py` — עטיפות דיוק+מסננים**
+
+```python
+# utils/precision.py
+from __future__ import annotations
+from decimal import Decimal, ROUND_DOWN
+
+def _to_dec(x): 
+    return Decimal(str(x))
+
+def quant_to_step(value: float, step: float) -> float:
+    v = _to_dec(value); s = _to_dec(step)
+    if s <= 0: return float(v)
+    return float((v // s) * s)
+
+def clamp_tick(price: float, tick: float) -> float:
+    return quant_to_step(price, tick)
+
+def clamp_step(qty: float, step: float) -> float:
+    return quant_to_step(qty, step)
+
+def ensure_min_notional(price: float, qty: float, min_notional: float) -> float:
+    notional = _to_dec(price) * _to_dec(qty)
+    if notional >= _to_dec(min_notional):
+        return qty
+    need_qty = (_to_dec(min_notional) / _to_dec(price)).quantize(_to_dec("0.00000001"), rounding=ROUND_DOWN)
+    return float(need_qty)
+
+def sanitize_order(price: float, qty: float, tick: float, step: float, min_notional: float) -> tuple[float,float]:
+    p = clamp_tick(price, tick)
+    q = clamp_step(qty, step)
+    q = ensure_min_notional(p, q, min_notional)
+    q = clamp_step(q, step)
+    return p, q
+```
+
+**(2) `utils/regime_detector_v2.py` — זיהוי משופר + confidence**
+
+```python
+# utils/regime_detector_v2.py
+from __future__ import annotations
+from dataclasses import dataclass
+import time, math
+
+@dataclass
+class RegimeResult:
+    regime: str           # TRENDING/CHOPPY/VOLATILE/SIDEWAYS
+    confidence: float     # 0..1
+    ts: float
+
+def detect_regime_v2(atr_pct: float, adx: float, macd_slope: float) -> RegimeResult:
+    # היגיון פשוט ויציב (אפשר לשפר בהמשך):
+    # atr_pct = ATR/Price * 100
+    # adx: 0..50+
+    # macd_slope: חיובי/שלילי/שטוח
+    score_trend  = max(0.0, (adx-18)/22) * (1.0 if abs(macd_slope) > 0.0 else 0.7)
+    score_chop   = max(0.0, (15-abs(macd_slope))/15) * (1.0 if adx<20 else 0.6)
+    score_vol    = min(1.0, atr_pct/2.5)
+    score_side   = max(0.0, 1.0 - (score_trend+score_vol))
+
+    # נרמל:
+    raw = [("TRENDING", score_trend), ("CHOPPY", score_chop), ("VOLATILE", score_vol), ("SIDEWAYS", score_side)]
+    s = sum(v for _,v in raw) or 1.0
+    probs = [(k, v/s) for k,v in raw]
+    regime, conf = max(probs, key=lambda kv: kv[1])
+    return RegimeResult(regime=regime, confidence=float(conf), ts=time.time())
+```
+
+**(3) `utils/adaptive_mixer.py` — מיקסר פשוט (שלב 1)**
+
+```python
+# utils/adaptive_mixer.py
+from __future__ import annotations
+from dataclasses import dataclass
+
+@dataclass
+class MixParams:
+    sl_atr_mult: float
+    tp_rr_mult: float
+    trail_enable: bool
+
+def basic_mix(regime: str, conf: float, pnl_state: str|None = None) -> MixParams:
+    # בסיס בטוח; בהמשך נרחיב:
+    base = {
+        "TRENDING": (2.0, 2.2, True),
+        "CHOPPY":   (1.2, 1.4, False),
+        "VOLATILE": (2.5, 1.8, True),
+        "SIDEWAYS": (1.0, 1.2, False),
+    }.get(regime, (1.6, 1.6, False))
+    sl, rr, te = base
+
+    # confidence משפיע עד ±20%
+    factor = 0.8 + 0.4*conf
+    sl *= factor
+    rr *= factor
+
+    # מצב PnL זהיר (אם קיים): אם Drawdown → הגדל SL והקטן RR מעט
+    if pnl_state == "drawdown":
+        sl *= 1.1; rr *= 0.9
+
+    return MixParams(sl_atr_mult=sl, tp_rr_mult=rr, trail_enable=te)
+```
+
+**(4) `utils/idempotency.py` — מפתח אידמפוטנטי**
+
+```python
+# utils/idempotency.py
+import hashlib, time
+
+def make_ik(symbol: str, side: str, action: str, seed: str|None=None) -> str:
+    raw = f"{symbol}|{side}|{action}|{seed or ''}|{int(time.time()//5)}"
+    return hashlib.sha256(raw.encode()).hexdigest()[:32]
+```
+
+**(5) `utils/circuit_breaker.py` — בלם כשלים פשוט**
+
+```python
+# utils/circuit_breaker.py
+import time
+
+class CircuitBreaker:
+    def __init__(self, fail_threshold:int=5, cooldown_sec:int=900):
+        self.fail_threshold = fail_threshold
+        self.cooldown_sec   = cooldown_sec
+        self._fails = 0
+        self._opened_ts = 0.0
+
+    def record_success(self):
+        self._fails = 0
+
+    def record_fail(self):
+        self._fails += 1
+        if self._fails >= self.fail_threshold:
+            self._opened_ts = time.time()
+
+    def is_open(self)->bool:
+        if self._opened_ts==0: return False
+        if time.time()-self._opened_ts >= self.cooldown_sec:
+            self._opened_ts = 0; self._fails = 0
+            return False
+        return True
+```
+
+**(6) `utils/metrics_dyn.py` — לוג/מטריקות קלות (שלב 1)**
+
+```python
+# utils/metrics_dyn.py
+import logging, time
+log = logging.getLogger("dyn")
+
+def log_shadow(sample: dict):
+    log.info("[DYN_SHADOW] %s", sample)
+
+def log_enforce(sample: dict, ok: bool, err: str|None=None):
+    if ok:
+        log.info("[DYN_ENFORCE_OK] %s", sample)
+    else:
+        log.error("[DYN_ENFORCE_FAIL] %s err=%s", sample, err)
+
+def stale_guard(last_ts: float, max_age: float=35.0) -> bool:
+    return (time.time() - last_ts) <= max_age
+```
+
+---
+
+### שלב 2 — חיווט ל־`utils/trade_manager.py` (בלי למחוק Legacy)
+
+1. הוספת ייבוא בראש הקובץ:
+
+```python
+# trade_manager.py (ראש הקובץ)
+from utils.precision import sanitize_order
+from utils.regime_detector_v2 import detect_regime_v2
+from utils.adaptive_mixer import basic_mix
+from utils.idempotency import make_ik
+from utils.circuit_breaker import CircuitBreaker
+from utils.metrics_dyn import log_shadow, log_enforce, stale_guard
+```
+
+2. **מצב/דגלים** (ליד globals קיימים):
+
+```python
+import os
+DYN_SHADOW = os.getenv("DYN_SHADOW","1") == "1"
+DYN_ENFORCE = os.getenv("DYN_ENFORCE","0") == "1"
+DYN_ALLOWED = os.getenv("DYN_ALLOWED_SYMBOLS","").split(",") if os.getenv("DYN_ALLOWED_SYMBOLS") else []
+DYN_BTC_GATE = os.getenv("DYN_BTC_GATE","1")=="1"
+DYN_STALE_MAX_SEC = float(os.getenv("DYN_STALE_MAX_SEC","35"))
+CB_FAILS = int(os.getenv("DYN_CB_FAIL_THRESHOLD","5"))
+CB_COOL = int(os.getenv("DYN_CB_COOLDOWN_SEC","900"))
+
+_dyn_cb = CircuitBreaker(fail_threshold=CB_FAILS, cooldown_sec=CB_COOL)
+```
+
+3. בתוך `manage_open_trades()` — **אחרי** חישוב ATR/ADX/MACD/entry/position (לא למחוק קיים):
+   הוסף “נתיב דינמי” עם שמירה על fallback ל־Legacy (אם דולק רק Shadow/CB פתוח/שגיאה).
+
+```python
+# בתוך הלולאה לכל פוזיציה/סימבול:
+context = {
+    "symbol": symbol,
+    "side": side,  # "LONG"/"SHORT"
+    "entry_price": entry_price,
+    "atr": atr_value,            # נדרש
+    "atr_pct": (atr_value/last_price)*100 if last_price>0 else 0.0,
+    "adx": adx_value,
+    "macd_slope": macd_slope,
+    "rsi": rsi_value,
+    "tick_size": tick_size,
+    "step_size": step_size,
+    "min_notional": min_notional,  # מה-exchangeInfo
+    "position_qty": abs_qty,
+    "last_market_update_ts": last_ts,  # זמן עדכון מחיר אחרון
+}
+
+def _dyn_allowed(symbol: str)->bool:
+    if not DYN_ALLOWED:  # אם ריק: Shadow מותר לכולם; Enforce תלוי דגל
+        return True
+    return symbol in DYN_ALLOWED
+
+use_dyn_path = True
+reason_block = None
+if _dyn_cb.is_open(): 
+    use_dyn_path = False; reason_block="circuit_open"
+elif not stale_guard(context["last_market_update_ts"], DYN_STALE_MAX_SEC):
+    use_dyn_path = False; reason_block="stale_market_data"
+elif DYN_ENFORCE and not _dyn_allowed(symbol):
+    use_dyn_path = False; reason_block="not_in_allowed_set"
+
+# BTC Gate (אופציונלי, אם יש פונקציה קיימת לבדיקה מול מגמת BTC):
+if use_dyn_path and DYN_BTC_GATE:
+    if not btc_gate_allows(side):  # לדוגמה: לונג אלטים רק אם BTC מעל EMA50...
+        use_dyn_path = False; reason_block="btc_gate"
+
+# חישוב משופר (גם אם לא נאכף בפועל):
+reg = detect_regime_v2(context["atr_pct"], context["adx"], context["macd_slope"])
+mix = basic_mix(reg.regime, reg.confidence, pnl_state=getattr(self,"_pnl_state",None))  # אם יש PnL state
+
+# חשב SL/TP דינמיים:
+sl_distance = mix.sl_atr_mult * context["atr"]
+if side == "LONG":
+    sl_price = context["entry_price"] - sl_distance
+else:
+    sl_price = context["entry_price"] + sl_distance
+
+# RR יחסי פשוט → יעד TP יחיד (שלב 1; TP Ladder אפשר בהמשך):
+tp_distance = max(0.00000001, mix.tp_rr_mult * sl_distance)
+tp_price = (context["entry_price"] + tp_distance) if side=="LONG" else (context["entry_price"] - tp_distance)
+
+# סניטיזציה מול exchange filters:
+sl_price, _ = sanitize_order(price=sl_price, qty=context["position_qty"], tick=context["tick_size"], step=context["step_size"], min_notional=context["min_notional"])
+tp_price, _ = sanitize_order(price=tp_price, qty=context["position_qty"], tick=context["tick_size"], step=context["step_size"], min_notional=context["min_notional"])
+
+sample = {
+    "sym": symbol, "side": side, "regime": reg.regime, "conf": round(reg.confidence,3),
+    "sl_atr_mult": round(mix.sl_atr_mult,3), "tp_rr_mult": round(mix.tp_rr_mult,3),
+    "sl": sl_price, "tp": tp_price, "trail": mix.trail_enable,
+    "allowed": _dyn_allowed(symbol), "enforce": DYN_ENFORCE, "shadow": DYN_SHADOW,
+    "block_reason": reason_block,
+}
+
+if DYN_SHADOW or not use_dyn_path:
+    # מחשב ודוגם — לא מבצע
+    log_shadow(sample)
+    # כאן רץ ה-LEGACY הקיים שלך כרגיל (אין שינוי)
+else:
+    # ENFORCE + מותר
+    ok = True; err = None
+    try:
+        ik = make_ik(symbol, side, "manage_dyn")
+        # 1) Zero-Gap SL: place → verify → cancel (השתמש בקיים אצלך / פונקציות העזר)
+        place_or_replace_stop_loss(symbol, side, context["position_qty"], sl_price, ik)  # עטוף קיים
+        # 2) TP: החלף/הצע לפי השיטה הקיימת (או Limit Post-Only בטוחה)
+        place_or_replace_take_profit(symbol, side, context["position_qty"], tp_price, ik)
+        # 3) Trail אם mix.trail_enable, רק אם זה לא סותר את ה-SL העיקרי שלך
+        if mix.trail_enable:
+            maybe_place_trailing_callback(symbol, side, context["position_qty"], context["atr"], ik)
+        _dyn_cb.record_success()
+    except Exception as e:
+        ok = False; err = str(e)
+        _dyn_cb.record_fail()
+    finally:
+        log_enforce(sample, ok=ok, err=err)
+        if not ok:
+            # על כשל — אל תעצור את ה-LEGACY; תן לו לנסות לשמור הגנות כרגיל.
+            pass
+```
+
+> **הערה:** שמור את הקריאות ל־Legacy SL/TP קיימים כ-fallback. בשלב הבא (TP ladder דינמי) נוסיף `_tp_ladder`.
+
+---
+
+### שלב 3 — ENV אוניברסלי (.env.example) + הוצאת הגדרות מ־`.replit`
+
+**ליצור/לעדכן `./.env.example` (ואל תשכח `.env` פרטי אצלך):**
+
+```env
+# === Dynamic Manage v2 ===
+DYN_SHADOW=1
+DYN_ENFORCE=0
+DYN_ALLOWED_SYMBOLS=ADAUSDT
+DYN_BTC_GATE=1
+DYN_STALE_MAX_SEC=35
+DYN_CB_FAIL_THRESHOLD=5
+DYN_CB_COOLDOWN_SEC=900
+
+# === Budget / Manager ===
+DYNAMIC_BUDGET_ENABLE=1
+BUDGET_PCT_OF_EQUITY=1.0
+BUDGET_MIN_USDT=10
+BUDGET_MAX_USDT=100
+LOG_BUDGET_DEBUG=1
+
+# === Auto / Manager switches ===
+AUTO_RUN=1
+EXECUTE_TRADES=1
+TRADE_AUTO_SUGGEST=1
+SUGGEST_FUTURES=1
+ALLOW_MANAGE_OPEN_TRADES=1
+PAUSE_AUTO_RUN=0
+MANAGER_ENABLE=1
+TRADE_MANAGER_ENABLE=1
+
+# === Telegram / Approvals ===
+TELEGRAM_SEND_ENABLE=1
+APPROVAL_ENABLED=0
+REQUIRE_TELEGRAM_APPROVAL=0
+AUTO_OPEN_ON_APPROVE=1
+SMART_MANAGE_ON_APPROVE=1
+
+# === TP/BE defaults ===
+TRAIL_ENABLE=1
+BE_GUARD_ENABLE=1
+LADDER_TP_DEFAULT_PCTS=1.6,3.0,4.8
+LADDER_TP_KIND=TAKE_PROFIT
+TP_LIMIT_OFFSET_BPS=6
+TP_BE_ONLY_AFTER_TP1=1
+TP_BE_OFFSET_BPS=5
+TM_BE_MIN_PROFIT_PCT=1.5
+
+# === AI Providers ===
+ENABLE_MULTI_AI_CONSENSUS=1
+ENABLE_OPENAI=1
+ENABLE_DEEPSEEK=1
+ENABLE_XAI=1
+CONSENSUS_MIN_PROVIDERS=2
+OPENAI_BASE=https://api.openai.com/v1
+AIX_BASE=https://api.x.ai/v1
+DEEPSEEK_BASE=https://api.deepseek.com/v1
+
+# === News / PnL heartbeat (אם בשימוש) ===
+NEWS_ENABLE=1
+NEWS_MAX_POSTS=40
+NEWS_POLL_INTERVAL_SEC=28800
+NEWS_DELTA_NOTIFY_THRESHOLD=8
+NEWS_SOURCE_CRYPTOPANIC=1
+NEWS_SOURCE_FEARGREED=1
+FEARGREED_SOURCE=alternative
+CRYPTOPANIC_BASE=https://cryptopanic.com/api/developer/v2
+PNL_HEARTBEAT_ENABLE=1
+PNL_HEARTBEAT_CACHE_SEC=60
+PNL_HEARTBEAT_WINDOW_TRADES=50
+PNL_HEARTBEAT_WINDOW_DAYS=7
+PNL_HEARTBEAT_LOG_PATH=static/cache/trades_log.json
+
+# === App ===
+NODE_ID=core-api
+APP_VERSION=3.6.0
+PORT=5000
+```
+
+> **חשוב:** אל תתבסס על `.replit` להרצה בפרודקשן. ההגדרות כאן יחולו בכל מקום (Rider/Render/Docker).
+
+---
+
+### שלב 4 — תיקון `APIError -4061` (מסנני בורסה)
+
+* בכל מקום שמייצרים **מחיר/כמות/נוטיונל** — עטוף עם `sanitize_order(...)`.
+* ודא שאנו מושכים `tickSize/stepSize/minNotional` מה־`exchangeInfo` ושומרים בקאש.
+* ודא של־**Reduce-Only** יש דגל (לסגירה) ושתנאי ה־Trigger (Mark/Last) מכוונים נכון.
+* אם קיבלת -4061 שוב: לוג + הדפס את שלושת הערכים (tick/step/minNotional) ואת (price, qty, price*qty) לפני השליחה.
+
+---
+
+### שלב 5 — Git (Branch → Commit → PR)
+
+בצע:
+
+1. צור ענף: `feat/dyn-manage-v2-shadow`
+2. הוסף קבצים חדשים, עדכן `trade_manager.py`, הוסף `.env.example`.
+3. Commit מסכם עם הודעה ברורה.
+4. פתח PR ל־`main` (Protected), תיאור: “Shadow→Enforce rollout, ENV migration, precision fixes”.
+5. אל תמזג לפני שעבר Shadow 48 שעות.
+
+*(אם יש לך סוכן Git אוטומטי—תן לו לבצע את זה. אם ידני: `git checkout -b feat/dyn-manage-v2-shadow && git add ... && git commit -m ... && git push -u origin ...` ואז לפתוח PR.)*
+
+---
+
+### שלב 6 — Render/Docker
+
+* ב־Render: הוסף את אותם ENV (מה־`.env.example`) כ־**Environment Variables** (לא סודות ב-git).
+* ודא שה־`run` הוא `gunicorn -c gunicorn_conf.py main:app`.
+* ברגע הדיפלוי, Shadow בלבד (DYN_SHADOW=1, DYN_ENFORCE=0).
+
+---
+
+### שלב 7 — אימות (Shadow 48 שעות)
+
+בדוק לוגים:
+
+* רואים `[DYN_SHADOW] {... "sl": ..., "tp": ..., "regime": "TRENDING", "conf": 0.74 ...}`
+* אין שגיאות דיוק.
+* אין `stale_market_data`. אם יש—עדכן מקור מחיר/זמן.
+
+בדיקות ידניות (קריאות HTTP — להתאים ל־BASE):
+
+```bash
+# בריאות
+curl -sS "$BASE/readyz"
+curl -sS "$BASE/version"
+
+# סטטוס מנהל (אם קיים)
+curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/status" | jq .
+
+# בדיקת מנהל פעם אחת (אם יש route כזה)
+curl -sS -H "Authorization: Bearer $TOKEN" -X POST "$BASE/manage-once" -d '{"symbol":"ADAUSDT"}'
+```
+
+---
+
+### שלב 8 — מעבר ל־Enforce לסימבול אחד (48–72 שעות)
+
+ב־ENV:
+
+```
+DYN_SHADOW=0
+DYN_ENFORCE=1
+DYN_ALLOWED_SYMBOLS=ADAUSDT
+```
+
+* עקוב אחרי לוגים: `[DYN_ENFORCE_OK]` / `[DYN_ENFORCE_FAIL]`.
+* אם יש כשלים רצופים ≥5 → Circuit Breaker נפתח אוטומטית; בדוק סיבה, תקן, המשך.
+
+---
+
+### שלב 9 — Full Rollout
+
+אם ADAUSDT עבר חלק:
+
+```
+DYN_ENFORCE=1
+DYN_ALLOWED_SYMBOLS=*   # או מחק את המשתנה כדי להתיר לכולם
+```
+
+* הוסף בהדרגה עוד סימבולים אם תרצה שליטה עדינה.
+
+---
+
+### שלב 10 — פתרון תקלות נפוצות
+
+* **APIError -4061**: כמעט תמיד דיוק/מסננים → בדוק tickSize/stepSize/minNotional + השתמש ב־`sanitize_order`.
+* **Stale Data**: אם חוטף `stale_market_data` → ודא שמועד עדכון המחיר (last_ts) מתעדכן < 35 שניות.
+* **Neon DB (הלינק ששלחת)**: ודא ש־`DATABASE_URL` תקין (postgres://...) וש־IP של השרת מורשה; אם מופיע שגיאת חיבור—בדוק firewall/SSL mode.
+* **“חצי דינמי”**: עכשיו התחברנו בפועל ל־`manage_open_trades()`; אלגוריתם ה־SL/TP כבר פעיל (בהתחלה ב־Shadow).
+* **Render בלבד** בלי Replit: עובד — כי כל ההגדרות עכשיו ב־ENV אוניברסלי, לא תלויות `.replit`.
+
+---
+
+### בונוס — TP Ladder דינמי (להוסיף אחרי הייצוב)
+
+* חשב `tp_levels = [entry ± k*ATR]` (למשל k = 1.8, 3.2, 5.0) בהתאם ל־`mix.tp_rr_mult`.
+* החלף הזמנות TP קיימות ע”י פונקציה ייעודית (אידמפוטנטי).
+* הפעל “BE אחרי TP1” ע״פ `TP_BE_ONLY_AFTER_TP1=1` + `TP_BE_OFFSET_BPS`.
+
+---
+
+### סיכום קצר לסוכן
+
+* צור 6 קבצים חדשים תחת `utils/…` כפי שמופיע.
+* עדכן `trade_manager.py` עם “נתיב דינמי” בדיוק כפי שמופיע ללא מחיקת Legacy.
+* הוצא קונפיגים מ־`.replit` ל־`.env`/Render ENV; צור `.env.example`.
+* תקן דיוק/מסננים דרך `sanitize_order` בכל Order Path.
+* בצע Branch → Commit → PR.
+* פרוס ל־Render עם Shadow 48 שעות → Enforce סימבול אחד → Full.
+* שמור על לוגים ברורים ו-Circuit Breaker פעיל.
+
+**סיום.**
