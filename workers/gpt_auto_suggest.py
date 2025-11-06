@@ -26,6 +26,7 @@ from utils.db import insert_tf_snapshot  # ← TF Snapshot Persistence
 from utils.ai_tracker import log_prediction, MarketRegime, AIModel  # ← AI Performance Tracking
 from utils.ai_trade_scorer import get_multi_ai_scorer  # ← Multi-AI Consensus (5 providers)
 from utils.strategy_orchestrator import get_strategy_orchestrator  # ← Strategy Orchestrator (Auto-select strategy)
+from utils.metabrain.dynamic_protection_manager import protection_manager  # ← Dynamic Protection Manager (Regime-based params)
 
 # Grid helper
 try:
@@ -218,6 +219,35 @@ def _quality_from_ctx(ctx: Dict[str, Any]) -> Optional[float]:
         except Exception:
             continue
     return None
+
+def _get_regime_quality_threshold(ctx: Dict[str, Any]) -> float:
+    """
+    Get quality threshold based on market regime from Dynamic Protection Manager.
+    Returns regime-specific entry_quality_min (5.8-6.5 depending on regime).
+    """
+    try:
+        # Extract regime from context
+        regime = (ctx.get("filters") or {}).get("regime", "").upper()
+        
+        # Map regime names to protection manager format
+        regime_map = {
+            "TREND": "TRENDING",
+            "TRENDING": "TRENDING",
+            "CHOP": "CHOPPY",
+            "CHOPPY": "CHOPPY",
+            "VOLATILE": "VOLATILE",
+            "BREAKOUT": "TRENDING",  # Breakout behaves like trending
+            "MEAN_REVERT": "SIDEWAYS",  # Mean reversion behaves like sideways
+            "SIDEWAYS": "SIDEWAYS"
+        }
+        
+        regime_key = regime_map.get(regime, "CHOPPY")  # Default to CHOPPY (most conservative)
+        protection = protection_manager.get_base_protection(regime_key)
+        
+        return protection.get("entry_quality_min", 6.0)
+    except Exception as e:
+        LOGGER.debug(f"Failed to get regime quality threshold: {e}, using default 6.0")
+        return 6.0  # Safe default
 
 def _maybe_float(d: Dict[str, Any], *keys: str) -> Optional[float]:
     for k in keys:
@@ -557,6 +587,17 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     if not prop:
         LOGGER.info(f"NO PROPOSAL from AI for {symbol}")
         return None
+    
+    # 🎯 REGIME-BASED QUALITY FILTER (from Dynamic Protection Manager)
+    quality_score = _quality_from_ctx(ctx)
+    min_quality = _get_regime_quality_threshold(ctx)
+    if quality_score is not None and quality_score < min_quality:
+        regime = (ctx.get("filters") or {}).get("regime", "UNKNOWN")
+        LOGGER.info(
+            f"REJECTED {symbol}: quality={quality_score:.1f} < {min_quality:.1f} "
+            f"(regime={regime}, threshold from Protection Manager)"
+        )
+        return None
 
     price = (ctx or {}).get("price")
     if not entry_gap_ok(price, prop["entry"]):  # לא לרדוף
@@ -714,6 +755,18 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
 async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -> Optional[Dict[str, Any]]:
     prop = await _gpt_suggest(symbol, ctx, for_spot=True)
     if not prop: return None
+    
+    # 🎯 REGIME-BASED QUALITY FILTER (from Dynamic Protection Manager)
+    quality_score = _quality_from_ctx(ctx)
+    min_quality = _get_regime_quality_threshold(ctx)
+    if quality_score is not None and quality_score < min_quality:
+        regime = (ctx.get("filters") or {}).get("regime", "UNKNOWN")
+        LOGGER.info(
+            f"REJECTED SPOT {symbol}: quality={quality_score:.1f} < {min_quality:.1f} "
+            f"(regime={regime}, threshold from Protection Manager)"
+        )
+        return None
+    
     price = ctx.get("price") if ctx else None
     if not entry_gap_ok(price, prop["entry"]):
         return None
