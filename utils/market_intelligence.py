@@ -507,6 +507,81 @@ class MarketIntelligence:
             intervals.append("1h")
         
         return intervals
+    
+    def calculate_quality_score(self, context: Dict) -> float:
+        """
+        Calculate dynamic quality score (0-10) based on technical indicators.
+        
+        Scoring breakdown:
+        - ADX (Trend Strength): 30%
+        - ATR/Volatility Quality: 25%
+        - RSI (Momentum): 25%
+        - MACD (Trend Direction): 20%
+        
+        Returns:
+            Float 0-10 representing market setup quality
+        """
+        # 1. ADX Score (30%) - Trend strength
+        adx = context.get("adx", 20.0)
+        if adx >= 35:
+            adx_score = 10.0  # Very strong trend
+        elif adx >= 25:
+            adx_score = 7.5  # Strong trend
+        elif adx >= 20:
+            adx_score = 5.0  # Moderate trend
+        elif adx >= 15:
+            adx_score = 3.0  # Weak trend
+        else:
+            adx_score = 1.0  # No trend
+        
+        # 2. ATR/Volatility Score (25%) - Volatility quality
+        atr_pct = context.get("atr_percent", 2.5)
+        if 2.0 <= atr_pct <= 4.0:
+            atr_score = 10.0  # Ideal volatility
+        elif 1.5 <= atr_pct < 2.0 or 4.0 < atr_pct <= 5.0:
+            atr_score = 7.0  # Acceptable
+        elif 1.0 <= atr_pct < 1.5 or 5.0 < atr_pct <= 6.0:
+            atr_score = 4.0  # Suboptimal
+        else:
+            atr_score = 2.0  # Too low or too high
+        
+        # 3. RSI Score (25%) - Momentum quality
+        rsi = context.get("rsi", 50.0)
+        # Penalize extreme RSI (overbought/oversold can be opportunity but risky)
+        if 40 <= rsi <= 60:
+            rsi_score = 10.0  # Neutral/balanced
+        elif 30 <= rsi < 40 or 60 < rsi <= 70:
+            rsi_score = 8.0  # Slight bias but OK
+        elif 20 <= rsi < 30 or 70 < rsi <= 80:
+            rsi_score = 5.0  # Extreme but tradeable
+        else:
+            rsi_score = 3.0  # Very extreme (risky)
+        
+        # 4. MACD Score (20%) - Trend direction confirmation
+        macd = context.get("macd", 0.0)
+        macd_signal = context.get("macd_signal", 0.0)
+        macd_hist = context.get("macd_hist", 0.0)
+        
+        # Check for bullish/bearish alignment
+        if macd_hist and abs(macd_hist) > 0:
+            if (macd > macd_signal and macd_hist > 0):
+                macd_score = 10.0  # Bullish aligned
+            elif (macd < macd_signal and macd_hist < 0):
+                macd_score = 10.0  # Bearish aligned
+            else:
+                macd_score = 5.0  # Mixed signals
+        else:
+            macd_score = 5.0  # Neutral/no clear signal
+        
+        # Final weighted score
+        quality_score = (
+            adx_score * 0.30 +
+            atr_score * 0.25 +
+            rsi_score * 0.25 +
+            macd_score * 0.20
+        )
+        
+        return round(quality_score, 1)
 
 
 # Global instance

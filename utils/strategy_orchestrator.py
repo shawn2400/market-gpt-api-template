@@ -315,6 +315,109 @@ class StrategyOrchestrator:
                 for name, cfg in self.strategies.items()
             }
         }
+    
+    def calculate_setup_score(self, ctx: Dict[str, Any]) -> float:
+        """
+        Calculate dynamic setup quality score (0-10) based on technical signals.
+        
+        Scoring breakdown:
+        - RSI Signals (35%): Oversold/Overbought opportunities
+        - MACD Alignment (25%): Trend confirmation
+        - Bollinger Bands Position (25%): Price positioning
+        - Volume (15%): Confirmation strength
+        
+        Returns:
+            Float 0-10 representing setup quality
+        """
+        # 1. RSI Signals Score (35%) - Entry opportunities
+        rsi = ctx.get("rsi", 50.0)
+        
+        # Strong signals at extremes (oversold/overbought)
+        if rsi <= 25 or rsi >= 75:
+            rsi_score = 10.0  # Extreme - strong reversal opportunity
+        elif rsi <= 30 or rsi >= 70:
+            rsi_score = 8.5  # Very strong signal
+        elif rsi <= 35 or rsi >= 65:
+            rsi_score = 7.0  # Good signal
+        elif 40 <= rsi <= 60:
+            rsi_score = 5.0  # Neutral zone
+        else:
+            rsi_score = 6.0  # Moderate signal
+        
+        # 2. MACD Alignment Score (25%) - Trend confirmation
+        macd = ctx.get("macd", 0.0)
+        macd_signal = ctx.get("macd_signal", 0.0)
+        macd_hist = ctx.get("macd_hist", 0.0)
+        
+        # Check for fresh crossovers and alignment
+        if abs(macd_hist) > 0:
+            # Recent crossover (histogram small = fresh signal)
+            hist_abs = abs(macd_hist)
+            if hist_abs > 0 and hist_abs < 0.1:  # Fresh crossover
+                macd_score = 10.0
+            elif macd > 0 and macd > macd_signal:  # Bullish aligned
+                macd_score = 8.0
+            elif macd < 0 and macd < macd_signal:  # Bearish aligned
+                macd_score = 8.0
+            else:
+                macd_score = 5.0  # Mixed
+        else:
+            macd_score = 4.0  # Flat
+        
+        # 3. Bollinger Bands Position Score (25%) - Price positioning
+        bb_position = ctx.get("bb_position")  # "upper", "middle", "lower"
+        price = ctx.get("close", 0)
+        bb_upper = ctx.get("bb_upper")
+        bb_lower = ctx.get("bb_lower")
+        
+        if bb_upper and bb_lower and price:
+            # Calculate position in BB range
+            bb_range = bb_upper - bb_lower
+            if bb_range > 0:
+                position_pct = ((price - bb_lower) / bb_range) * 100
+                
+                # Near bands = better setup (potential reversal)
+                if position_pct <= 15 or position_pct >= 85:
+                    bb_score = 10.0  # Very close to bands
+                elif position_pct <= 25 or position_pct >= 75:
+                    bb_score = 8.0  # Close to bands
+                elif 40 <= position_pct <= 60:
+                    bb_score = 5.0  # Middle zone
+                else:
+                    bb_score = 6.5  # Moderate
+            else:
+                bb_score = 5.0
+        else:
+            bb_score = 5.0  # No BB data
+        
+        # 4. Volume Score (15%) - Confirmation
+        volume = ctx.get("volume", 0)
+        volume_sma = ctx.get("volume_sma_20", volume)
+        
+        if volume and volume_sma and volume_sma > 0:
+            volume_ratio = volume / volume_sma
+            
+            # Higher volume = stronger signal
+            if volume_ratio >= 1.5:
+                volume_score = 10.0  # Very high volume
+            elif volume_ratio >= 1.2:
+                volume_score = 8.0  # High volume
+            elif volume_ratio >= 0.8:
+                volume_score = 6.0  # Normal volume
+            else:
+                volume_score = 4.0  # Low volume
+        else:
+            volume_score = 5.0  # No volume data
+        
+        # Final weighted score
+        setup_score = (
+            rsi_score * 0.35 +
+            macd_score * 0.25 +
+            bb_score * 0.25 +
+            volume_score * 0.15
+        )
+        
+        return round(setup_score, 1)
 
 
 # ==================== GLOBAL INSTANCE ====================
