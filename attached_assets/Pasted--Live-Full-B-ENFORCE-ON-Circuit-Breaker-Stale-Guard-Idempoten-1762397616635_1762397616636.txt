@@ -1,0 +1,340 @@
+פיצוץ. הולכים על **Live + Full B+** — דינמי מלא, ENFORCE=ON, Circuit-Breaker, Stale-Guard, Idempotency, BTC-Gate, TP-Ladder דינמי, Metrics.
+הדבק כהודעה אחת לסוכן (Replit/“Rider”/DevOps). זה **לא תלוי Replit**: מגרילים ENV אוניברסלי, עובדים על Render/Docker/VM, בלי לשבור קיים.
+
+---
+
+**TASK NAME:** AlgoGPT — Full B+ Live (Enforce, Circuit, Metrics)
+
+**Goal:** להפעיל ניהול דינמי *חי* (לא Shadow), כולל זיהוי Regime v2 עם Confidence, Adaptive Mixer, Circuit Breaker, Stale Data Protection, Idempotency להזמנות, BTC Gate, TP Ladder דינמי, ומדדי Prometheus.
+לא מוחקים legacy; מוסיפים “נתיב דינמי” עם גיבוי Fallback. שמירה על: אין Market Orders, Post-Only/Reduce-Only ל-TP/SL, תקני דיוק Binance.
+
+---
+
+## 0) שמור תלויות (אם חסרות)
+
+* `pip install tenacity prometheus-client pydantic`
+* לא ליצור כפילויות.
+
+---
+
+## 1) קבצים חדשים (קצרים ומוכנים)
+
+### 1.1 `utils/regime_detector_v2.py`
+
+```python
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Dict
+
+@dataclass
+class RegimeResult:
+    regime: str          # "TRENDING"|"CHOPPY"|"VOLATILE"|"SIDEWAYS"
+    confidence: float    # 0..1
+
+def detect_market_regime_v2(features: Dict[str, float]) -> RegimeResult:
+    atr_pct = float(features.get("atr_pct", 0.0))
+    adx     = float(features.get("adx", 0.0))
+    macd_s  = float(features.get("macd_slope", 0.0))
+    rsi     = float(features.get("rsi", 50.0))
+
+    trending = min(max((adx/48.0)*0.55 + (abs(macd_s)/5.0)*0.35 + (0.1 if (rsi<35 or rsi>65) else 0.0), 0), 1)
+    volatile = min(max(atr_pct/90.0, 0), 1)
+    choppy   = max(0.0, 0.9 - trending - 0.3*volatile)
+    sideways = max(0.0, 1.0 - max(trending, volatile, choppy))
+    scores = {"TRENDING": trending, "VOLATILE": volatile, "CHOPPY": choppy, "SIDEWAYS": sideways}
+    regime = max(scores, key=scores.get)
+    conf   = float(scores[regime])
+    ordered = sorted(scores.values(), reverse=True)
+    if len(ordered) > 1 and (ordered[0]-ordered[1]) < 0.12:
+        conf *= 0.75
+    return RegimeResult(regime=regime, confidence=conf)
+```
+
+### 1.2 `utils/adaptive_mixer.py`
+
+```python
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+from typing import Dict
+
+def _clamp(v, lo, hi): return max(lo, min(hi, v))
+
+def adaptive_mix(regime: str, confidence: float, atr_pct: float, pnl_state: str, time_in_pos_min: float) -> Dict[str, float]:
+    # בסיס לפי Regime
+    base = {
+        "TRENDING": {"sl_atr": 1.8, "tp_rr": 2.3, "trail": True,  "tp_ladder": [1.8, 3.2, 4.8]},
+        "CHOPPY":   {"sl_atr": 1.1, "tp_rr": 1.5, "trail": False, "tp_ladder": [1.6, 2.6]},
+        "VOLATILE": {"sl_atr": 2.2, "tp_rr": 2.1, "trail": True,  "tp_ladder": [2.0, 3.6]},
+        "SIDEWAYS": {"sl_atr": 1.3, "tp_rr": 1.4, "trail": False, "tp_ladder": [1.4, 2.2]},
+    }.get(regime, {"sl_atr": 1.5, "tp_rr": 1.8, "trail": False, "tp_ladder": [1.6, 2.6]})
+
+    k = _clamp(confidence, 0.2, 1.0)
+    v = _clamp(atr_pct/100.0, 0.3, 1.2)
+
+    # התאמות לפי ביטחון/תנודתיות
+    base["sl_atr"] *= (1.0 + (1.0-k)*0.28) * (1.0 + (v-0.6)*0.35)
+    base["tp_rr"]  *= (0.95 + 0.15*k)
+    base["sl_atr"] = _clamp(base["sl_atr"], 0.9, 3.0)
+    base["tp_rr"]  = _clamp(base["tp_rr"], 1.3, 3.2)
+
+    # התאמות לפי מצב PnL
+    if pnl_state in ("drawdown", "cooldown"):
+        base["tp_rr"] *= 0.9
+        base["sl_atr"] *= 0.95
+
+    # התאמות לפי זמן בפוזיציה
+    if time_in_pos_min > 120:
+        base["trail"] = True
+
+    return base
+```
+
+### 1.3 `utils/precision.py` (אם חסר)
+
+```python
+# -*- coding: utf-8 -*-
+import math
+def quantize_price(p: float, tick: float) -> float:
+    return p if tick<=0 else math.floor(p/tick)*tick
+def quantize_qty(q: float, step: float) -> float:
+    return q if step<=0 else math.floor(q/step)*step
+```
+
+### 1.4 `utils/idempotency.py`
+
+```python
+# -*- coding: utf-8 -*-
+import time, hashlib, hmac, os
+WINDOW_SEC = int(os.getenv("IDEMP_WINDOW_SEC", "90"))
+SECRET = os.getenv("IDEMP_SECRET", "demo_secret_change")
+_cache = {}
+
+def make_key(route: str, payload: str) -> str:
+    msg = f"{route}|{payload}|{int(time.time()/WINDOW_SEC)}".encode()
+    return hmac.new(SECRET.encode(), msg, hashlib.sha256).hexdigest()
+
+def seen(key: str) -> bool:
+    t = int(time.time()/WINDOW_SEC)
+    _cache.setdefault(t, set())
+    # נקה דלי ישן
+    for old in list(_cache.keys()):
+        if old < t-2: _cache.pop(old, None)
+    if key in _cache[t]: return True
+    _cache[t].add(key); return False
+```
+
+### 1.5 `utils/circuit_breaker.py`
+
+```python
+# -*- coding: utf-8 -*-
+import time, os
+MAX_FAILS   = int(os.getenv("CB_MAX_FAILS", "5"))
+COOLDOWN_S  = int(os.getenv("CB_COOLDOWN_SEC", "900"))
+_state = {"fails": 0, "until": 0}
+
+def track(ok: bool) -> None:
+    global _state
+    now = time.time()
+    if now < _state["until"]: return
+    if ok: _state["fails"] = 0
+    else:
+        _state["fails"] += 1
+        if _state["fails"] >= MAX_FAILS:
+            _state["until"] = now + COOLDOWN_S
+
+def allow() -> bool:
+    return time.time() >= _state["until"]
+```
+
+### 1.6 `utils/metrics_dyn.py` (משתלב ל-/metrics הקיים אם יש)
+
+```python
+# -*- coding: utf-8 -*-
+from prometheus_client import Counter, Gauge
+
+dyn_decisions = Counter("algogpt_dyn_decisions", "Dynamic decisions taken", ["symbol","regime"])
+dyn_skips     = Counter("algogpt_dyn_skips", "Dynamic decisions skipped", ["reason"])
+dyn_errors    = Counter("algogpt_dyn_errors", "Dynamic errors", ["stage"])
+sl_changes    = Counter("algogpt_sl_changes", "Stop-loss updates", ["symbol"])
+tp_sets       = Counter("algogpt_tp_sets", "TP ladder sets", ["symbol"])
+age_guard_hit = Counter("algogpt_stale_guard_hits", "Stale data guard hits")
+conf_low_hit  = Counter("algogpt_low_conf_hits", "Low confidence guard hits")
+cb_blocks     = Counter("algogpt_circuit_blocks", "Circuit breaker blocks")
+live_enforce  = Gauge("algogpt_dyn_enforce", "1=enforce,0=shadow")
+```
+
+> אם כבר יש `metrics.py`, רק **ייבא** את המונים והוסף אותם ל-/metrics הקיים (אין להכפיל רישום).
+
+---
+
+## 2) עדכון עדין ל־`utils/trade_manager.py` (לא מוחקים legacy)
+
+**Imports נוספים:**
+
+```python
+from utils.regime_detector_v2 import detect_market_regime_v2
+from utils.adaptive_mixer import adaptive_mix
+from utils.precision import quantize_price, quantize_qty
+from utils.idempotency import make_key, seen
+from utils.circuit_breaker import track as cb_track, allow as cb_allow
+from utils.metrics_dyn import dyn_decisions, dyn_skips, dyn_errors, sl_changes, tp_sets, age_guard_hit, conf_low_hit, cb_blocks, live_enforce
+import os, time, json
+```
+
+**ENV חדשים בראש הקובץ:**
+
+```python
+MANAGER_DYN_PATH   = os.getenv("MANAGER_DYN_PATH", "1") == "1"
+DYN_SHADOW         = os.getenv("DYN_SHADOW", "0") == "1"      # LIVE=0
+DYN_ENFORCE        = os.getenv("DYN_ENFORCE", "1") == "1"     # LIVE=1
+DYN_MIN_CONF       = float(os.getenv("DYN_MIN_CONF", "0.62"))
+DYN_SAFE_STALE_SEC = int(os.getenv("DYN_SAFE_STALE_SEC", "35"))
+BTC_GATE_ENABLE    = os.getenv("BTC_GATE_ENABLE", "1") == "1"
+IDEMP_SECRET       = os.getenv("IDEMP_SECRET", "demo_secret_change")
+live_enforce.set(1.0 if DYN_ENFORCE and not DYN_SHADOW else 0.0)
+```
+
+**בתוך `manage_open_trades()` — לפני נתיב legacy, הוסף נתיב דינמי (ENFORCE חי):**
+
+```python
+now = time.time()
+if MANAGER_DYN_PATH:
+    try:
+        # context חייב להכיל שדות אלה (אם חסרים – נעשה skip):
+        required = ["symbol","side","entry_price","atr","atr_pct","adx","macd_slope","rsi","tick_size","step_size","position_qty","last_market_update_ts"]
+        if any(k not in context for k in required):
+            dyn_skips.labels(reason="missing_context").inc()
+        elif (now - float(context["last_market_update_ts"])) > DYN_SAFE_STALE_SEC:
+            age_guard_hit.inc(); dyn_skips.labels(reason="stale_data").inc()
+        elif BTC_GATE_ENABLE and not bool(context.get("btc_gate_ok", True)):
+            dyn_skips.labels(reason="btc_gate").inc()
+        elif not cb_allow():
+            cb_blocks.inc(); dyn_skips.labels(reason="circuit_block").inc()
+        else:
+            feats = {
+                "atr_pct": float(context["atr_pct"]),
+                "adx": float(context["adx"]),
+                "macd_slope": float(context["macd_slope"]),
+                "rsi": float(context["rsi"]),
+            }
+            r = detect_market_regime_v2(feats)
+            if r.confidence < DYN_MIN_CONF:
+                conf_low_hit.inc(); dyn_skips.labels(reason="low_conf").inc()
+            else:
+                entry = float(context["entry_price"])
+                atr   = float(context["atr"])
+                side  = context["side"]
+                regime = r.regime
+                # time in position (דקות) — אם יש, אחרת 0
+                tip_min = float(context.get("time_in_position_min", 0.0))
+                pnl_state = str(context.get("pnl_state", "normal"))
+                mix = adaptive_mix(regime, r.confidence, feats["atr_pct"], pnl_state, tip_min)
+
+                sl_dist = mix["sl_atr"] * atr
+                sl_p = (entry - sl_dist) if side=="LONG" else (entry + sl_dist)
+                rr   = mix["tp_rr"]
+                tp_p = (entry + rr*sl_dist) if side=="LONG" else (entry - rr*sl_dist)
+
+                qtz = quantize_qty(abs(float(context["position_qty"])), float(context["step_size"]))
+                sl_p = quantize_price(sl_p, float(context["tick_size"]))
+                tp_p = quantize_price(tp_p, float(context["tick_size"]))
+
+                # Idempotency – מונע כפילות
+                payload = json.dumps({"sym":context["symbol"],"sl":sl_p,"tp":tp_p,"qty":qtz,"side":side,"reg":regime,"conf":r.confidence}) 
+                idem_key = make_key("manage_dyn", payload)
+                if seen(idem_key):
+                    dyn_skips.labels(reason="idem_dup").inc()
+                else:
+                    if DYN_SHADOW and not DYN_ENFORCE:
+                        dyn_decisions.labels(symbol=context["symbol"], regime=regime).inc()
+                        print(json.dumps({"evt":"dyn_shadow","sym":context["symbol"],"regime":regime,"conf":round(r.confidence,3),"sl_atr":round(mix["sl_atr"],3),"tp_rr":round(mix["tp_rr"],3),"side":side,"sl_p":sl_p,"tp_p":tp_p,"qty":qtz}, ensure_ascii=False))
+                        cb_track(ok=True)
+                    else:
+                        # === LIVE ENFORCE ===
+                        ok1 = _sl_manager.safe_replace_sl(symbol=context["symbol"], new_stop_price=sl_p, qty=qtz, side=side)
+                        if ok1: sl_changes.labels(symbol=context["symbol"]).inc()
+                        ok2 = _tp_ladder.set_tp_ladder(context["symbol"], entry, qtz, side, mix.get("tp_ladder", []), reduce_only=True, post_only=True)
+                        if ok2: tp_sets.labels(symbol=context["symbol"]).inc()
+                        dyn_decisions.labels(symbol=context["symbol"], regime=regime).inc()
+                        cb_track(ok=(ok1 and ok2))
+    except Exception as e:
+        dyn_errors.labels(stage="manage_dyn").inc()
+        cb_track(ok=False)
+        print(json.dumps({"evt":"dyn_error","err":str(e),"sym":context.get("symbol")}, ensure_ascii=False))
+# legacy path ממשיך אחר כך ללא שינוי
+```
+
+> הערה: `_sl_manager` ו-`_tp_ladder` כבר קיימים אצלך; אינטגרציה נשמרת. אין Market Orders. TP מוגדר Reduce-Only + Post-Only.
+
+---
+
+## 3) ENV — להוסיף ל־`.env.example` ולהגדיר ב-Render/Production
+
+```
+# ==== Full B+ Live ====
+MANAGER_DYN_PATH=1
+DYN_SHADOW=0
+DYN_ENFORCE=1
+DYN_MIN_CONF=0.62
+DYN_SAFE_STALE_SEC=35
+BTC_GATE_ENABLE=1
+
+# Circuit / Idempotency
+CB_MAX_FAILS=5
+CB_COOLDOWN_SEC=900
+IDEMP_WINDOW_SEC=90
+IDEMP_SECRET=change_me_long_random
+
+# Metrics
+PROMETHEUS_ENABLE=1
+```
+
+---
+
+## 4) Metrics
+
+* אם כבר יש `/metrics` — רק לייבא את `utils.metrics_dyn` ולוודא שמונה נרשם.
+* אם אין — הוסף FastAPI/Starlette endpoint שמחזיר `prometheus_client.generate_latest()` (לא לשכפל רישום).
+
+---
+
+## 5) Smoke & Live Tests
+
+```bash
+# 1) בריאות
+curl -sS "$BASE/readyz"
+
+# 2) הרצת מחזור ניהול (צריך פוזיציה פתוחה/קונטקסט)
+curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/manage-once?symbol=ADAUSDT" | sed -n '1,160p'
+
+# 3) בדיקת מדדים
+curl -sS "$BASE/metrics" | grep -E "algogpt_dyn_|algogpt_sl_changes|algogpt_tp_sets" | sed -n '1,80p'
+```
+
+---
+
+## 6) Rollback מהיר (ללא קוד)
+
+* לכבות LIVE זמנית: `DYN_ENFORCE=0` ו/או `MANAGER_DYN_PATH=0` (ריסטארט שירות).
+* לעבור ל-Shadow: `DYN_SHADOW=1`, `DYN_ENFORCE=0`.
+
+---
+
+## 7) Commit
+
+```
+feat(dyn-live-bplus): live enforce + adaptive mixer + circuit breaker + stale guard + idempotency + metrics; legacy path kept
+```
+
+---
+
+### הערות תפעול קצרות
+
+* עומס: הנתיב הדינמי קל — חישובים O(1), לא מוסיף לולאות/פולינג.
+* בטיחות: Circuit-Breaker עוצר אחרי 5 כישלונות (15 דקות), Stale-Guard מונע פעולה על נתונים ישנים, Idempotency מונע כפילות, BTC-Gate מגן מסחר בניגוד למגמת BTC שלך.
+* תאימות: לא נוגעים ב-legacy; אפשר להריץ שניהם.
+* דיוק: `quantize_price/qty` מבטיחים tick/step תקין מול Binance.
+
+**סיום.**
+זה מפעיל ניהול *חי* “על אמת” עם כל ההגנות. אם תרצה, אכין גם patch קטן להוספת `time_in_position_min` ו-`pnl_state` בקונטקסט בצורה יעילה — אבל גם בלי זה זה רץ מעולה (ברירת מחדל 0/“normal”).

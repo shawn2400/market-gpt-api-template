@@ -1,0 +1,422 @@
+מעולה. הנה **הודעה אחת, העתק/הדבק** לסוכן (Replit/“Rider”/DevOps) שתבצע **Approach B+** — שילוב דינמי מלא בלי לדרוס את ה־legacy, עם Shadow→Enforce, פיצ’רי בטיחות, Metrics ולוגים. פשוט תדביק כפי שהוא:
+
+---
+
+**TASK NAME:** AlgoGPT – Dynamic Manager (B+) • Shadow→Enforce • Zero-Gap • Metrics • ENV
+
+**מטרה:** להוסיף ניהול דינמי “אמיתי” לפוזיציות ב־`manage_open_trades()` לצד הנתיב הישן (לא מוחקים כלום), כולל:
+
+* זיהוי Regime חכם + Confidence
+* Mixer אדפטיבי למקדמי SL/TP/Trail
+* Zero-Gap SL (create→verify→cancel old) עם Idempotency
+* Fallback אוטומטי, Circuit-Breaker, Stale-Data guard
+* Prometheus metrics + Structured JSON logs
+* Shadow Mode (ללא פעולות) → Enforce Mode (הפעל מלא)
+* ENV אחיד (רינדֶר/דוקר/ריפלט) — בלי תלות ב־.replit
+
+---
+
+### 0) כלל זהב
+
+* **אסור** למחוק/להחליף קוד קיים; מוסיפים נתיב חדש בלבד.
+* אם קובץ כבר קיים — **מעדכנים**; לא יוצרים כפילות.
+
+---
+
+### 1) קבצים חדשים/מעודכנים
+
+#### 1.1 `utils/regime_detector_v2.py` (חדש)
+
+```python
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+from dataclasses import dataclass
+from typing import Dict, Any
+
+@dataclass
+class RegimeResult:
+    regime: str          # "TRENDING" | "CHOPPY" | "VOLATILE" | "SIDEWAYS"
+    confidence: float    # 0..1
+    features: Dict[str, float]
+
+# פשט: קבל פיצ'רים מחושבים חיצונית (ATR_pct, ADX, MACD_slope, RSI, VOL_PCT וכד')
+def detect_market_regime_v2(features: Dict[str, float]) -> RegimeResult:
+    atr_pct = features.get("atr_pct", 0.0)
+    adx     = features.get("adx", 0.0)
+    macd_s  = features.get("macd_slope", 0.0)
+    rsi     = features.get("rsi", 50.0)
+    vol_pct = features.get("vol_pct", atr_pct)
+
+    # ניחוש חכם מינימלי:
+    trending_score = 0.0
+    trending_score += (adx/50.0) * 0.5
+    trending_score += max(0.0, abs(macd_s))/5.0 * 0.3
+    trending_score += (1.0 if rsi<35 or rsi>65 else 0.3) * 0.2
+    trending_score = min(max(trending_score, 0.0), 1.0)
+
+    volatile_score = min(max(vol_pct/100.0, 0.0), 1.0)
+    choppy_score   = 1.0 - trending_score if volatile_score < 0.5 else 0.4
+    sideways_score = 1.0 - max(trending_score, volatile_score, choppy_score)
+
+    scores = {
+        "TRENDING": trending_score,
+        "CHOPPY": choppy_score,
+        "VOLATILE": volatile_score,
+        "SIDEWAYS": max(0.0, sideways_score)
+    }
+    regime = max(scores, key=scores.get)
+    conf   = float(min(max(scores[regime], 0.0), 1.0))
+    # lowering confidence if signals conflict:
+    if sorted(scores.values(), reverse=True)[0] - sorted(scores.values(), reverse=True)[1] < 0.15:
+        conf *= 0.75
+    return RegimeResult(regime=regime, confidence=conf, features=features)
+```
+
+#### 1.2 `utils/adaptive_mixer.py` (חדש)
+
+```python
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+from typing import Dict, Any
+
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+def mix_sl_tp_params(
+    regime: str,
+    confidence: float,
+    atr_pct: float,
+    pnl_state: str,       # "win"/"loss"/"even"
+    time_in_pos_s: int,
+    btc_gate_ok: bool
+) -> Dict[str, Any]:
+    # בסיס למקדמים, לפי regime:
+    base = {
+        "TRENDING": {"sl_atr": 1.8, "tp_rr": 2.4, "trail": True},
+        "CHOPPY":   {"sl_atr": 1.1, "tp_rr": 1.6, "trail": False},
+        "VOLATILE": {"sl_atr": 2.2, "tp_rr": 2.0, "trail": True},
+        "SIDEWAYS": {"sl_atr": 1.3, "tp_rr": 1.4, "trail": False},
+    }.get(regime, {"sl_atr": 1.5, "tp_rr": 1.8, "trail": False})
+
+    # התאמות לפי confidence:
+    k = clamp(confidence, 0.2, 1.0)
+    base["sl_atr"] *= (1.0 + (1.0-k)*0.35)  # ביטחון נמוך => SL רחוק יותר
+    base["tp_rr"]  *= (0.9 + k*0.2)         # ביטחון גבוה => מעט שאפתני
+
+    # התאמות לפי תנודתיות (atr_pct ~ אחוזון תנודתיות):
+    v = clamp(atr_pct/100.0, 0.2, 1.2)
+    base["sl_atr"] *= (1.0 + (v-0.5)*0.4)   # יותר תנודה => SL רחוק
+    if regime == "CHOPPY":
+        base["tp_rr"]  *= (0.9)             # פחות שאפתני ב-chop
+        base["trail"]   = False
+
+    # התאמות לפי מצב פוזיציה/זמן:
+    if pnl_state == "loss":
+        base["tp_rr"] *= 0.9
+    if time_in_pos_s > 3600 and regime != "TRENDING":
+        base["trail"] = False  # לא לגרור לנצח בעישון צד
+
+    # BTC gate:
+    if not btc_gate_ok:
+        base["tp_rr"] *= 0.85
+        base["sl_atr"] *= 1.1
+
+    # תקרות/רצפות:
+    base["sl_atr"] = clamp(base["sl_atr"], 0.8, 3.0)
+    base["tp_rr"]  = clamp(base["tp_rr"], 1.2, 3.5)
+
+    return base
+```
+
+#### 1.3 `utils/precision.py` (עדכון/חדש — הרחבה בטוחה)
+
+```python
+# -*- coding: utf-8 -*-
+from __future__ import annotations
+import math
+
+def quantize_price(p: float, tick: float) -> float:
+    if tick <= 0: return p
+    return math.floor(p / tick) * tick
+
+def quantize_qty(q: float, step: float) -> float:
+    if step <= 0: return q
+    return math.floor(q / step) * step
+
+def near(a: float, b: float, eps: float=1e-9) -> bool:
+    return abs(a-b) <= eps*max(1.0, abs(a), abs(b))
+```
+
+> אם קיימת גרסת `precision.py` אצלך – מיזוג עדין: הוסף רק פונקציות שחסרות / אל תדרוס קיימות.
+
+---
+
+### 2) Patch עדין ל־`utils/trade_manager.py`
+
+* הוסף imports בראש הקובץ (בלי למחוק כלום):
+
+```python
+from utils.regime_detector_v2 import detect_market_regime_v2
+from utils.adaptive_mixer import mix_sl_tp_params
+from utils.precision import quantize_price, quantize_qty, near
+import os, time, json, math, uuid
+```
+
+* הוסף **ENV** ברירת מחדל בתוך הקובץ (או קרא דרך config שכבר קיים אצלך):
+
+```python
+MANAGER_DYN_PATH       = os.getenv("MANAGER_DYN_PATH", "1") == "1"
+DYN_SHADOW             = os.getenv("DYN_SHADOW", "1") == "1"
+DYN_ENFORCE            = os.getenv("DYN_ENFORCE", "0") == "1"
+DYN_MIN_CONF           = float(os.getenv("DYN_MIN_CONF", "0.55"))
+DYN_SAFE_STALE_SEC     = int(os.getenv("DYN_SAFE_STALE_SEC", "35"))
+DYN_MAX_RETRIES        = int(os.getenv("DYN_MAX_RETRIES", "3"))
+DYN_CIRCUIT_FAILS      = int(os.getenv("DYN_CIRCUIT_FAILS", "5"))
+DYN_CIRCUIT_COOLDOWN   = int(os.getenv("DYN_CIRCUIT_COOLDOWN_SEC", "600"))
+BTC_GATE_ENABLE        = os.getenv("BTC_GATE_ENABLE", "1") == "1"
+```
+
+* הוסף state/circuit מקומי (למעלה, גלובלי או במחלקה קיימת):
+
+```python
+_dyn_fail_count = 0
+_dyn_circuit_until = 0
+_last_metrics = {}
+```
+
+* בתוך `manage_open_trades()` (אל תמחק קוד ישן), הוסף **נתיב חדש** מוקף `if MANAGER_DYN_PATH:`. דוגמה ממוזערת (התאם לשמות הפונקציות/אובייקטים אצלך — הסוכן ישלים לפי הקוד הקיים):
+
+```python
+now = time.time()
+
+if MANAGER_DYN_PATH and now >= _dyn_circuit_until:
+    try:
+        # 1) שמירת סטייל נתונים זמינים (מחיר, ATR, ADX, MACD, RSI, ATR_pct, VOL_PCT, וכו')
+        feats = {
+            "atr_pct": float(context.get("atr_pct", 0.0)),
+            "adx": float(context.get("adx", 0.0)),
+            "macd_slope": float(context.get("macd_slope", 0.0)),
+            "rsi": float(context.get("rsi", 50.0)),
+            "vol_pct": float(context.get("vol_pct", 0.0)),
+        }
+        regime_res = detect_market_regime_v2(feats)
+        conf = regime_res.confidence
+        regime = regime_res.regime
+
+        if conf < DYN_MIN_CONF or (now - context.get("last_market_update_ts", now)) > DYN_SAFE_STALE_SEC:
+            # fallback: לא מבצעים כלום, ממשיכים ל-legacy
+            _last_metrics.update({"dyn_fallback": 1})
+        else:
+            # 2) בדיקת BTC gate אם מופעל
+            btc_gate_ok = True
+            if BTC_GATE_ENABLE:
+                btc_gate_ok = bool(context.get("btc_gate_ok", True))
+
+            # 3) Mixer אדפטיבי
+            mix = mix_sl_tp_params(
+                regime=regime,
+                confidence=conf,
+                atr_pct=feats["atr_pct"],
+                pnl_state=context.get("pnl_state", "even"),
+                time_in_pos_s=int(context.get("time_in_pos_s", 0)),
+                btc_gate_ok=btc_gate_ok
+            )
+
+            # 4) חישוב SL/TP בפועל
+            entry = float(context["entry_price"])
+            atr   = float(context["atr"])
+            side  = context["side"]  # "LONG"/"SHORT"
+            sl_distance = mix["sl_atr"] * atr
+            if side == "LONG":
+                sl_price = entry - sl_distance
+            else:
+                sl_price = entry + sl_distance
+
+            rr = mix["tp_rr"]
+            tp_price = entry + (rr*sl_distance) if side == "LONG" else entry - (rr*sl_distance)
+
+            # 5) Zero-Gap SL: צור חדש → אמת → בטל ישן
+            tick, step = float(context["tick_size"]), float(context["step_size"])
+            new_sl_q  = abs(float(context["position_qty"]))
+            new_sl_p  = quantize_price(sl_price, tick)
+            new_tp_p  = quantize_price(tp_price, tick)
+
+            order_key = f"dynsl-{context['symbol']}-{uuid.uuid4().hex[:8]}"
+
+            if not DYN_SHADOW:
+                ok_new = place_or_update_stop_loss_with_verify(
+                    symbol=context["symbol"],
+                    stop_price=new_sl_p,
+                    qty=quantize_qty(new_sl_q, step),
+                    side=side,
+                    idempotency=order_key
+                )
+                if not ok_new:
+                    raise RuntimeError("SL verify failed")
+
+                # עדכון TP (יכול להיות Ladder אצלך; שמור את הקריאה המתאימה אם יש)
+                set_or_update_tp(
+                    symbol=context["symbol"],
+                    tp_price=new_tp_p,
+                    qty=quantize_qty(new_sl_q, step),
+                    side=side
+                )
+
+            # metrics + logs (גם ב-Shadow)
+            _last_metrics.update({
+                "dyn_active": 1, "dyn_conf": conf, "dyn_regime": regime,
+                "dyn_sl_atr": mix["sl_atr"], "dyn_tp_rr": rr,
+                "dyn_shadow": 1 if DYN_SHADOW else 0
+            })
+
+    except Exception as e:
+        _last_metrics.update({"dyn_error": 1})
+        _dyn_fail_count += 1
+        log_json = {
+            "evt":"dyn_error","err":str(e),"symbol":context.get("symbol"),
+            "regime":locals().get("regime","?"),"conf":locals().get("conf",0.0)
+        }
+        print(json.dumps(log_json, ensure_ascii=False))
+        if _dyn_fail_count >= DYN_CIRCUIT_FAILS:
+            _dyn_circuit_until = now + DYN_CIRCUIT_COOLDOWN
+else:
+    # circuit open / dyn disabled → legacy path only
+    pass  # אל תיגעו בקוד ה-legacy הקיים
+```
+
+> הערה: `place_or_update_stop_loss_with_verify` ו־`set_or_update_tp` הן עטיפות קיימות אצלך (או ב־`sl_manager/tp_ladder`). אם שמותיהן שונים — הסוכן יתאים לשמות הנכונים בפרויקט.
+
+---
+
+### 3) Metrics (הרחבה עדינה)
+
+ב־`metrics.py` או היכן שנרשמים מדדים — הוסף/עדכן “safe register” שלא יתנגש אם קיים:
+
+```python
+# safe registry helper
+def _safe_gauge(registry, name, desc, labels=()):
+    try:
+        from prometheus_client import Gauge
+        g = Gauge(name, desc, labels=labels, registry=registry)
+        return g
+    except Exception:
+        class Dummy: 
+            def labels(self, *a, **k): return self
+            def set(self, *a, **k): pass
+            def inc(self, *a, **k): pass
+        return Dummy()
+
+# דוגמאות:
+DYNA_CONF_GAUGE = _safe_gauge(REGISTRY, "dyn_regime_confidence", "Confidence of dynamic regime", labels=("symbol","regime"))
+DYNA_ACTIVE     = _safe_gauge(REGISTRY, "dyn_active", "Is dynamic path active", labels=("symbol",))
+DYNA_FALLBACKS  = _safe_gauge(REGISTRY, "dyn_fallbacks_total", "Dyn fallbacks total", labels=("symbol",))
+DYNA_ERRORS     = _safe_gauge(REGISTRY, "dyn_errors_total", "Dyn errors total", labels=("symbol",))
+```
+
+ובמקום שמעדכנים (ליד `_last_metrics.update(...)`) הוסף:
+
+```python
+try:
+    DYNA_CONF_GAUGE.labels(context["symbol"], regime).set(conf)
+    DYNA_ACTIVE.labels(context["symbol"]).set(1 if _last_metrics.get("dyn_active") else 0)
+    if _last_metrics.get("dyn_error"): DYNA_ERRORS.labels(context["symbol"]).inc()
+    if _last_metrics.get("dyn_fallback"): DYNA_FALLBACKS.labels(context["symbol"]).inc()
+except Exception:
+    pass
+```
+
+---
+
+### 4) ENV — עדכון אחוד (ל־Render/Docker/Local)
+
+עדכן `.env.example` (ול־Render “Environment”) — **לא מוחקים קיים**; רק מוסיפים:
+
+```
+# ==== Dynamic Manager (B+) ====
+MANAGER_DYN_PATH=1
+DYN_SHADOW=1
+DYN_ENFORCE=0
+DYN_MIN_CONF=0.55
+DYN_SAFE_STALE_SEC=35
+DYN_MAX_RETRIES=3
+DYN_CIRCUIT_FAILS=5
+DYN_CIRCUIT_COOLDOWN_SEC=600
+BTC_GATE_ENABLE=1
+```
+
+> כבר עכשיו רץ ב־Shadow (מחשב, לא מבצע). כשתהיה מרוצה מהמדדים — שנה `DYN_SHADOW=0` ו־`DYN_ENFORCE=1`.
+
+---
+
+### 5) Zero-Gap & Idempotency — עטיפות (אם חסר)
+
+במקום המתאים אצלך (למשל ב־`utils/sl_manager.py`/`utils/trade_executor.py`) ודא שיש פונקציות עם הלוגיקה:
+
+* **create/update → verify (GET) → cancel old**
+* שימוש ב־`idempotency` token (uuid) כדי למנוע כפילויות ריצה.
+  אם חסר — הוסף פונקציית מעטפת פשוטה (`place_or_update_stop_loss_with_verify`, `set_or_update_tp`) וקריאה לשיטות הקיימות אצלך לבינאנס.
+
+---
+
+### 6) לוגים — JSON
+
+כל קריאת Dyn תדפיס JSON חד־שורה, לדוגמה:
+
+```python
+print(json.dumps({
+  "evt":"dyn_decision",
+  "symbol":context.get("symbol"),
+  "regime":regime, "conf":conf,
+  "sl_atr":mix["sl_atr"], "tp_rr":mix["tp_rr"],
+  "shadow":DYN_SHADOW, "enforce":DYN_ENFORCE
+}, ensure_ascii=False))
+```
+
+---
+
+### 7) Smoke Test (מיידי, בלי לשבור)
+
+לאחר הפעלת השרת (לוקאל/Render), הרץ:
+
+```bash
+# בריאות
+curl -sS "$BASE/readyz" || true
+
+# ניהול חד-פעמי (Dry path) – ודא שמדפיס לוגים "dyn_decision"
+curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/manage-once?symbol=ADAUSDT" | jq . || true
+
+# מטריקות – ודא המדדים החדשים מופיעים
+curl -sS "$BASE/metrics" | grep -E "dyn_regime_confidence|dyn_active|dyn_fallbacks_total|dyn_errors_total" || true
+```
+
+---
+
+### 8) מעבר הדרגתי Shadow → Enforce
+
+1. **יום–יומיים Shadow**: בדוק לוגים/מדדים שמראים שהמסלול הדינמי “חושב” יציב.
+2. כשתרצה הפעלה אמיתית:
+
+   * `DYN_SHADOW=0`
+   * `DYN_ENFORCE=1`
+3. השאר את ה־legacy פעיל כ־fallback.
+
+---
+
+### 9) שמירת תאימות מלאה
+
+* לא להסיר/לשנות חתימות API, אימותים, HMAC, Bearer, CORS — אסור לגעת.
+* לא לשנות שמות מסלולים קיימים.
+* לא לשנות תלויות — רק שימוש במה שכבר בפרויקט (או קוד פנימי שסיפקנו כאן).
+
+---
+
+### 10) Commit מסכם (כותרת)
+
+```
+feat(manager-dyn): add dynamic path (B+) with regime v2 + adaptive mixer + zero-gap SL + shadow/enforce + metrics/logs; legacy path retained as fallback
+```
+
+---
+
+**סיום.**
+לאחר שהסוכן מריץ את הכל: ודא שאתה רואה ב־`/metrics` את המדדים החדשים, וב־לוגים את אירועי `dyn_decision`. כשתרצה “על מלא” — העבר ל־ENFORCE כמוסבר.

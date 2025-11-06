@@ -1,0 +1,154 @@
+להדבקה לסוכן (העתק-הדבק אחת):
+
+---
+
+**TASK NAME:** לחבר ניהול דינמי מלא ל-`manage_open_trades()` (Approach B – שילוב מינימלי, הכי חכם ובטוח)
+
+**מטרה:** להפוך את הניהול מהתבניתי לדינמי 100% בזמן אמת: זיהוי משטר שוק (regime), חישוב SL/TP לפי ATR/ADX/MACD, החלפת SL אטומית (Zero-Gap), TP-Ladder דינמי, BE+Trailing חכמים — בלי לדרוס קוד קיים.
+
+**אל תשנה/תשבור:** אימות/חתימות, Bearer/HMAC, מסלולי API, ENV קיימים, טלגרם, Docker/Render. אין מחיקות, אין החלפות קבצים מלאות. רק הוספה/חיווט עדין.
+
+---
+
+### 1) קבצים לעריכה/הוספה (לשמר אם כבר קיימים)
+
+* `utils/regime_glue.py` (קיים) — להשתמש בו, לאפס לוגיקה קבועה ולהחליף לבחירה דינמית דרך פרמטרים.
+* `utils/sl_manager.py` (קיים) — להשתמש ב־`safe_replace_sl()` בלבד.
+* `utils/tp_ladder.py` (קיים) — להשתמש ב־`set_tp_ladder()`.
+* **חדש אם חסר:** `utils/regime_detector.py` – פונקציה `detect_market_regime(atr, adx, macd, volp=None)` שמחזירה `"TRENDING" | "CHOPPY" | "VOLATILE" | "SIDEWAYS"`.
+
+> אם יש כבר `utils/market_intelligence.py` – מותר להוסיף שם את `detect_market_regime` במקום ליצור קובץ חדש.
+
+---
+
+### 2) חיווט בתוך `utils/trade_manager.py` (בלבד, בלי שינויים חיצוניים)
+
+בפונקציה `manage_open_trades()`:
+
+1. אחרי שליפת המדדים (ATR/ADX/MACD/price/entry/qty/side):
+
+   ```python
+   from utils.regime_detector import detect_market_regime  # או market_intelligence
+   regime = detect_market_regime(current_atr, current_adx, macd_now, volp=current_volp if defined else None)
+   ```
+2. בחירת פרמטרים דינמית:
+
+   ```python
+   params = _regime_adapter.pick_params(
+       regime=regime,
+       atr=current_atr,
+       entry_price=entry,
+       side=side,
+   )
+   sl_price = params["sl_price"]        # חייב להיות מבוסס ATR חי
+   tp_levels = _regime_adapter.get_tp_ladder_levels(regime, entry, current_atr, side)
+   ```
+3. **Zero-Gap SL** (החלפה אטומית, Reduce-Only):
+
+   ```python
+   _sl_manager.safe_replace_sl(symbol=sym, new_stop_price=sl_price, qty=abs(qty), side=side)
+   ```
+4. **TP-Ladder דינמי**:
+
+   ```python
+   _tp_ladder.set_tp_ladder(sym, entry, abs(qty), side, tp_levels)
+   ```
+5. **BE + Trailing** (להשאיר לוגיקה קיימת, רק לוודא דגלים):
+
+   * אם `TP_BE_ONLY_AFTER_TP1=1` → הזזת SL ל-BE+offset רק אחרי TP1.
+   * Trailing לפי ATR אם `TRAIL_ENABLE=1`.
+
+> הסר/נטרל חישובי SL/TP **קבועים** שהיו בפנים — שלא ירמסו את הדינמי.
+
+---
+
+### 3) היגיון זיהוי Regime (דיפולט סביר)
+
+ב־`detect_market_regime()`:
+
+* אם `ADX ≥ 22` ו־`|MACD| ↑` ⇒ `"TRENDING"`
+* אם `ADX < 16` ו־`ATR_pct ∈ [0.8%, 2.0%]` ⇒ `"CHOPPY"`
+* אם `ATR_pct ≥ 2.2%` ⇒ `"VOLATILE"`
+* אחרת ⇒ `"SIDEWAYS"`
+
+החזר גם `confidence` (0–1) לשימוש עתידי (לא חובה לשלב עכשיו).
+
+---
+
+### 4) ENV (להוסיף אם חסר, לא לשבור קיים)
+
+ב־`.env.example` (או ENV של Render):
+
+```
+MANAGER_ENABLE=1
+TRADE_MANAGER_ENABLE=1
+TRAIL_ENABLE=1
+BE_GUARD_ENABLE=1
+TP_BE_ONLY_AFTER_TP1=1
+TM_BE_MIN_PROFIT_PCT=1.5
+TP_BE_OFFSET_BPS=5
+TP_LIMIT_OFFSET_BPS=6
+CONSENSUS_MIN_PROVIDERS=2
+```
+
+> אין לגעת בערכי PROD הסודיים; רק להבטיח דגלים זמינים.
+
+---
+
+### 5) לוגים/אבחון (חובה)
+
+ב־`manage_open_trades()` הדפס:
+
+* `"[dyn] regime=%s atr=%.5f adx=%.2f macd=%.5f"`
+* `"[dyn] sl→ %.6f (zero-gap) | tp=%s"`
+* `"[dyn] BE move → %.6f (after TP1)"`
+* `"[dyn] trail→ %.6f (ATR-based)"`
+
+---
+
+### 6) בטיחות והחזרות
+
+* אם `EXECUTE_TRADES=0` ⇒ הרץ **Dry-Run**: לחשב ולהדפיס, לא לשלוח/orders.
+* ב־`safe_replace_sl` תמיד `Reduce-Only`, וודא תקינות `tickSize/stepSize`.
+* ריטריי עדין (tenacity) על שגיאות API רגעיות (3 ניסיונות, backoff קצר).
+
+---
+
+### 7) בדיקות מהירות (Smoke)
+
+לאחר הדיפלוי:
+
+```bash
+# קריאה חד-פעמית לניהול:
+curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/manage-once?symbol=ADAUSDT"
+
+# צפה בלוגים שאתה רואה:
+# [dyn] regime=TRENDING ...
+# [dyn] sl→ ...
+# [dyn] BE move → ... (אם TP1 מולא)
+# [dyn] trail→ ...
+```
+
+אם המחיר מתקדם וה-SL “מטייל” מעלה/מטה לפי ATR, וה-SL זז ל-BE אחרי TP1 (אם דגל פעיל) — הצלחנו.
+
+---
+
+### 8) Git/PR
+
+* פתח ענף: `feat/dynamic-manage-wire-in`
+* בצע שינויי קוד נקודתיים בלבד (בלי מחיקות קבצים/תוכן קיים).
+* PR עם כותרת: **“Wire dynamic regime-based management into manage_open_trades (Zero-Gap SL + TP Ladder)”**
+* תיאור: מה הוסף, איפה חובר, אילו דגלים, וכיצד לבדוק (להדביק את ה-Smoke).
+* אין שינויי פורמט מסוכנים או ריפורמים אגרסיביים.
+
+---
+
+### סיכום תוצאה נדרשת
+
+* `manage_open_trades()` **מחשב** Regime ו-ATR/ADX/MACD בזמן אמת.
+* SL מוחלף אטומית (Zero-Gap) לפי ATR.
+* TP-Ladder נקבע דינמית.
+* BE+Trailing פועלים בהתאם לדגלים.
+* לוגים ברורים, Dry-Run שמיש, ללא שבירת API/אבטחה.
+
+בצע עכשיו והעלה PR לאישור.

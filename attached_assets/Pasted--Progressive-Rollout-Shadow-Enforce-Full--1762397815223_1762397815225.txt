@@ -1,0 +1,259 @@
+מעולה. הולכים על **Progressive Rollout** — Shadow → Enforce לסימבול בודד → Full.
+הדבק כהודעה אחת לסוכן (Replit/“Rider”/DevOps). זה לא תלוי-Replit: נטען ENV אוניברסלי ועובד זהה ב-Render/Docker/VM.
+
+---
+
+**TASK NAME:** AlgoGPT — Progressive Rollout (Shadow → Single Symbol → Full)
+
+**Goal:** לפרוס את הנתיב הדינמי המלא (Regime v2 + Adaptive Mixer + Circuit + Idempotency + BTC-Gate + TP-Ladder + Metrics) **בזהירות**: להתחיל ב-Shadow, לעבור לאכיפה חיה לסימבול אחד, ואז להרחיב לכולם. לא מוחקים legacy — הנתיב הישן נשאר כ-fallback.
+
+---
+
+## 0) תלויות (אם חסרות)
+
+* `pip install -U tenacity prometheus-client pydantic`
+
+---
+
+## 1) קבצים חדשים (צור אם לא קיימים — בלי כפילויות)
+
+* `utils/regime_detector_v2.py`  *(כפי ששלחתי בהודעה הקודמת)*
+* `utils/adaptive_mixer.py`
+* `utils/precision.py`
+* `utils/idempotency.py`
+* `utils/circuit_breaker.py`
+* `utils/metrics_dyn.py`
+
+> אם יש `metrics.py` קיים: רק **ייבא** מונים מ-`utils.metrics_dyn` וחבר ל־`/metrics` הקיים (לא ליצור endpoint כפול).
+
+---
+
+## 2) עדכון עדין ל־`utils/trade_manager.py` (ללא מחיקת legacy)
+
+**הוספת imports (אם חסרים):**
+
+```python
+from utils.regime_detector_v2 import detect_market_regime_v2
+from utils.adaptive_mixer import adaptive_mix
+from utils.precision import quantize_price, quantize_qty
+from utils.idempotency import make_key, seen
+from utils.circuit_breaker import track as cb_track, allow as cb_allow
+from utils.metrics_dyn import (
+    dyn_decisions, dyn_skips, dyn_errors, sl_changes, tp_sets,
+    age_guard_hit, conf_low_hit, cb_blocks, live_enforce
+)
+import os, time, json
+```
+
+**ENV ושומרי בטיחות בראש הקובץ:**
+
+```python
+MANAGER_DYN_PATH   = os.getenv("MANAGER_DYN_PATH", "1") == "1"
+
+# מצב פרוגרסיבי: מתחילים SHADOW=1 / ENFORCE=0
+DYN_SHADOW         = os.getenv("DYN_SHADOW", "1") == "1"
+DYN_ENFORCE        = os.getenv("DYN_ENFORCE", "0") == "1"
+
+DYN_MIN_CONF       = float(os.getenv("DYN_MIN_CONF", "0.62"))
+DYN_SAFE_STALE_SEC = int(os.getenv("DYN_SAFE_STALE_SEC", "35"))
+BTC_GATE_ENABLE    = os.getenv("BTC_GATE_ENABLE", "1") == "1"
+
+# סימבולים מותרים/חסומים לאכיפה חיה (לשלב 2)
+_ALLOWED = {s.strip().upper() for s in os.getenv("DYN_ALLOWED_SYMBOLS", "").split(",") if s.strip()}
+_DENY    = {s.strip().upper() for s in os.getenv("DYN_DENYLIST", "").split(",") if s.strip()}
+
+def _enforce_allowed(sym: str) -> bool:
+    su = (sym or "").upper()
+    if su in _DENY:
+        return False
+    if _ALLOWED:
+        return su in _ALLOWED
+    return True  # אם לא הוגדר ALLOWED — הכל מותר
+
+# GAUGE לויזואליזציה: 1 = אכיפה חיה כללית דולקת, 0 = Shadow
+live_enforce.set(1.0 if (DYN_ENFORCE and not DYN_SHADOW) else 0.0)
+```
+
+**בתוך `manage_open_trades()` — לפני הקוד ה־legacy, הוסף את “הנתיב הדינמי”:**
+
+> (אותו קוד משלוחתי קודם — עם שומר חדש `if not _enforce_allowed(context["symbol"])` כדי לאכוף *רק* על סימבולים מותרים בשלב 2; אם לא מותר → Shadow בלבד.)
+
+```python
+now = time.time()
+if MANAGER_DYN_PATH:
+    try:
+        required = ["symbol","side","entry_price","atr","atr_pct","adx",
+                    "macd_slope","rsi","tick_size","step_size",
+                    "position_qty","last_market_update_ts"]
+        if any(k not in context for k in required):
+            dyn_skips.labels(reason="missing_context").inc()
+        elif (now - float(context["last_market_update_ts"])) > DYN_SAFE_STALE_SEC:
+            age_guard_hit.inc(); dyn_skips.labels(reason="stale_data").inc()
+        elif BTC_GATE_ENABLE and not bool(context.get("btc_gate_ok", True)):
+            dyn_skips.labels(reason="btc_gate").inc()
+        elif not cb_allow():
+            cb_blocks.inc(); dyn_skips.labels(reason="circuit_block").inc()
+        else:
+            feats = {
+                "atr_pct": float(context["atr_pct"]),
+                "adx": float(context["adx"]),
+                "macd_slope": float(context["macd_slope"]),
+                "rsi": float(context["rsi"]),
+            }
+            r = detect_market_regime_v2(feats)
+            if r.confidence < DYN_MIN_CONF:
+                conf_low_hit.inc(); dyn_skips.labels(reason="low_conf").inc()
+            else:
+                entry = float(context["entry_price"])
+                atr   = float(context["atr"])
+                side  = context["side"]
+                regime = r.regime
+                tip_min = float(context.get("time_in_position_min", 0.0))
+                pnl_state = str(context.get("pnl_state", "normal"))
+                mix = adaptive_mix(regime, r.confidence, feats["atr_pct"], pnl_state, tip_min)
+
+                sl_dist = mix["sl_atr"] * atr
+                sl_p = (entry - sl_dist) if side=="LONG" else (entry + sl_dist)
+                rr   = mix["tp_rr"]
+                tp_p = (entry + rr*sl_dist) if side=="LONG" else (entry - rr*sl_dist)
+
+                qtz = quantize_qty(abs(float(context["position_qty"])), float(context["step_size"]))
+                sl_p = quantize_price(sl_p, float(context["tick_size"]))
+                tp_p = quantize_price(tp_p, float(context["tick_size"]))
+
+                payload = json.dumps({
+                    "sym":context["symbol"],"sl":sl_p,"tp":tp_p,
+                    "qty":qtz,"side":side,"reg":regime,"conf":r.confidence
+                })
+                idem_key = make_key("manage_dyn", payload)
+                if seen(idem_key):
+                    dyn_skips.labels(reason="idem_dup").inc()
+                else:
+                    # שלב פרוגרסיבי: אם ENFORCE=1 אבל הסימבול לא מורשה → Shadow בלבד
+                    enforce_now = (DYN_ENFORCE and not DYN_SHADOW and _enforce_allowed(context["symbol"]))
+
+                    if not enforce_now:
+                        dyn_decisions.labels(symbol=context["symbol"], regime=regime).inc()
+                        print(json.dumps({
+                            "evt":"dyn_shadow","sym":context["symbol"],"regime":regime,
+                            "conf":round(r.confidence,3),
+                            "sl_atr":round(mix["sl_atr"],3),"tp_rr":round(mix["tp_rr"],3),
+                            "side":side,"sl_p":sl_p,"tp_p":tp_p,"qty":qtz
+                        }, ensure_ascii=False))
+                        cb_track(ok=True)
+                    else:
+                        ok1 = _sl_manager.safe_replace_sl(
+                            symbol=context["symbol"], new_stop_price=sl_p, qty=qtz, side=side
+                        )
+                        if ok1: sl_changes.labels(symbol=context["symbol"]).inc()
+                        ok2 = _tp_ladder.set_tp_ladder(
+                            context["symbol"], entry, qtz, side, mix.get("tp_ladder", []),
+                            reduce_only=True, post_only=True
+                        )
+                        if ok2: tp_sets.labels(symbol=context["symbol"]).inc()
+                        dyn_decisions.labels(symbol=context["symbol"], regime=regime).inc()
+                        cb_track(ok=(ok1 and ok2))
+    except Exception as e:
+        dyn_errors.labels(stage="manage_dyn").inc()
+        cb_track(ok=False)
+        print(json.dumps({"evt":"dyn_error","err":str(e),"sym":context.get("symbol")}, ensure_ascii=False))
+# כאן ממשיך ה-legacy path ללא שינוי
+```
+
+---
+
+## 3) ENV — הוסף ל־`.env.example` והגדר ב-Render/Production
+
+### שלב 1 — **Shadow (48 שעות)**
+
+```
+MANAGER_DYN_PATH=1
+DYN_SHADOW=1
+DYN_ENFORCE=0
+DYN_MIN_CONF=0.62
+DYN_SAFE_STALE_SEC=35
+BTC_GATE_ENABLE=1
+CB_MAX_FAILS=5
+CB_COOLDOWN_SEC=900
+IDEMP_WINDOW_SEC=90
+IDEMP_SECRET=change_me_long_random
+PROMETHEUS_ENABLE=1
+DYN_ALLOWED_SYMBOLS=
+DYN_DENYLIST=
+```
+
+### שלב 2 — **Single Symbol Enforce (48–72 שעות)**
+
+```
+MANAGER_DYN_PATH=1
+DYN_SHADOW=0
+DYN_ENFORCE=1
+DYN_ALLOWED_SYMBOLS=ADAUSDT
+DYN_DENYLIST=
+```
+
+### שלב 3 — **Full Production**
+
+```
+MANAGER_DYN_PATH=1
+DYN_SHADOW=0
+DYN_ENFORCE=1
+DYN_ALLOWED_SYMBOLS=
+DYN_DENYLIST=
+```
+
+> שינוי שלב = עדכון ENV + ריסטארט השירות בלבד (אין שינוי קוד).
+
+---
+
+## 4) Smoke & Validation
+
+**בריאות:**
+
+```bash
+curl -sS "$BASE/readyz"
+```
+
+**ניהול “פעם אחת” (צריך פוזיציה/קונטקסט):**
+
+```bash
+curl -sS -H "Authorization: Bearer $TOKEN" "$BASE/manage-once?symbol=ADAUSDT" | sed -n '1,200p'
+```
+
+**מדדים (לבדוק שהמונים זזים):**
+
+```bash
+curl -sS "$BASE/metrics" | grep -E "algogpt_dyn_|algogpt_sl_changes|algogpt_tp_sets|algogpt_stale_guard_hits|algogpt_low_conf_hits|algogpt_circuit_blocks" | sed -n '1,200p'
+```
+
+**לוגי Shadow (שלב 1/סימבולים לא-מורשים בשלב 2):**
+
+* חפש `{"evt":"dyn_shadow", ...}` ובדוק `sl_p/tp_p/qty`.
+
+---
+
+## 5) Rollback מיידי (ללא קוד)
+
+* לכבות הנתיב הדינמי: `MANAGER_DYN_PATH=0`
+* או להעביר ל-Shadow: `DYN_SHADOW=1`, `DYN_ENFORCE=0`
+* Circuit חוסם אוטומטית לאחר `CB_MAX_FAILS` כשלים ל-`CB_COOLDOWN_SEC`.
+
+---
+
+## 6) Commit
+
+```
+feat(manage:progressive-rollout): add allowed-symbols gating + shadow→enforce staged env; keep legacy as fallback; metrics wired
+```
+
+---
+
+## 7) נקודות בקרה לפני מעבר שלב
+
+* **Shadow (48h):** אין שגיאות `dyn_error`, אין `stale_guard_hits` חריגים, `low_conf_hits` סביר (<25%), ה-SL/TP המחושבים נראים הגיוניים.
+* **Single Symbol (48–72h):** אין spike ב-`circuit_blocks`, `sl_changes/tp_sets` מתקדמים, אין דחיות דיוק (tick/step) מהבורסה.
+* **Full:** להרחיב רק אחרי הצלחה בסעיפים לעיל.
+
+---
+
+**סיום.** זה מפעיל את כל יכולות ה-B+ עם פריסה מדורגת בטוחה.
