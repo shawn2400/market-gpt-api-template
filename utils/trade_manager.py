@@ -39,7 +39,7 @@ with suppress(Exception):
     from utils.alerts import send_telegram_message  # type: ignore
 
 # Dynamic Trading System (MetaBrain v8.0) - Legacy
-with suppress(Exception):
+try:
     from utils.regime_glue import RegimeAdapter
     from utils.sl_manager import ZeroGapSLManager
     from utils.tp_ladder import TPLadder
@@ -56,7 +56,7 @@ except Exception as _e:
     _DYNAMIC_TRADING_AVAILABLE = False
 
 # Progressive Rollout System (v2 - Regime-based Dynamic Trading)
-with suppress(Exception):
+try:
     from utils.regime_detector_v2 import detect_market_regime_v2
     from utils.adaptive_mixer import adaptive_mix
     from utils.precision import quantize_price, quantize_qty
@@ -591,6 +591,12 @@ async def manage_open_trades():
                 # ═══════════════════════════════════════════════════════════════════
                 # PROGRESSIVE ROLLOUT: Dynamic Regime-Based Management
                 # ═══════════════════════════════════════════════════════════════════
+                # Check symbol whitelist/blacklist (only in ENFORCE mode)
+                if DYN_ENFORCE and not DYN_SHADOW and not _enforce_allowed(sym):
+                    print(f"⏭️ [DynPath] Skipping {sym}: not in DYN_ALLOWED_SYMBOLS whitelist")
+                    logger.info(f"[DynPath] Skipping {sym}: not in whitelist")
+                    continue
+                
                 if MANAGER_DYN_PATH and _PROGRESSIVE_ROLLOUT_AVAILABLE:
                     try:
                         # Calculate RSI and ATR% for regime detection
