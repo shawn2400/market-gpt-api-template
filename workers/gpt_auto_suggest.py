@@ -524,18 +524,18 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
     
     # Log consensus
     LOGGER.info(
-        f"🗳️ CONSENSUS [{symbol}]: {consensus_result['votes_approve']}/{consensus_result['total_votes']} APPROVE | "
-        f"Decision: {consensus_result['decision']} | "
-        f"Avg Score: {consensus_result['consensus_score']:.1f}/10"
+        f"🗳️ CONSENSUS [{symbol}]: {consensus_result['approve_count']}/5 APPROVE | "
+        f"Decision: {consensus_result['final_vote']} | "
+        f"Avg Score: {consensus_result['final_score']:.1f}/10"
     )
     
-    for vote in consensus_result["votes"]:
+    for vote in consensus_result["brain_votes"]:
         LOGGER.info(
             f"  {vote['brain']}: {vote['vote']} ({vote['score']:.1f}/10) - {vote['reasoning'][:60]}..."
         )
     
     # If REJECT, stop here
-    if consensus_result["decision"] == "REJECT":
+    if consensus_result["final_vote"] == "REJECT":
         LOGGER.info(f"❌ REJECTED by consensus: {symbol}")
         return None
     
