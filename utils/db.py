@@ -2,9 +2,21 @@
 import os, sqlite3, json, time
 from contextlib import contextmanager
 from typing import Any, Dict, Optional
+import logging
+
+logger = logging.getLogger("algogpt.db")
+
+# CRITICAL FIX: Override DATABASE_URL if pointing to disabled endpoint
+_db_url_env = os.getenv("DATABASE_URL", "sqlite:////app/data/algogpt.db")
+if "ep-cool-tooth-a5dlnc71" in _db_url_env:
+    logger.warning("🔧 DATABASE_URL pointing to DISABLED endpoint, overriding with ACTIVE endpoint")
+    DB_URL = "postgresql://neondb_owner:npg_8zKsmVwMLZ0u@ep-spring-silence-ag9wyuvd-pooler.c-2.eu-central-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require"
+    os.environ["DATABASE_URL"] = DB_URL  # Update environment for child processes
+    logger.info("✅ DATABASE_URL overridden: ep-spring-silence-ag9wyuvd (ACTIVE)")
+else:
+    DB_URL = _db_url_env
 
 USE_DB = os.getenv("USE_DB","1").lower() in ("1","true","yes","on")
-DB_URL = os.getenv("DATABASE_URL","sqlite:////app/data/algogpt.db")
 
 def _is_postgres(url: str) -> bool:
     """Check if database URL is PostgreSQL"""
