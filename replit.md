@@ -1,7 +1,7 @@
 # AlgoGPT - Algorithmic Trading Platform
 
 ## Overview
-AlgoGPT is an algorithmic trading platform for 24/7 live Binance Futures trading. It automates market scanning across 530+ symbols, utilizes AI-powered trade decisions via GPT-5 and multi-AI consensus, and integrates GRID trading with dynamic capital management. The platform features a self-adaptive trading engine with complete data persistence, aiming for 4-10 high-quality daily trades, profitability, and autonomous operation. MetaBrain v8.0 introduces fully autonomous regime-driven trading with 3-layer database resilience for production stability.
+AlgoGPT is an algorithmic trading platform for 24/7 live Binance Futures trading. It automates market scanning across 534 symbols, utilizes 100% autonomous AI-powered trade decisions via 7-Brain architecture (2 AI Scouts + 5 AI Decision Makers), and integrates GRID trading with dynamic capital management. The platform features a self-adaptive trading engine with complete data persistence, aiming for 4-10 high-quality daily trades, profitability, and autonomous operation. **MetaBrain v9.0** introduces fully autonomous, fully dynamic trading with hierarchical AI consensus, regime-driven dynamic parameters, and 100% strategic freedom (LONG/SHORT/GRID/SPOT/Scalping/Mean-Reversion) across all market conditions.
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
@@ -27,13 +27,22 @@ The core application is built with FastAPI and Gunicorn, featuring modularized f
 -   **Dynamic SL/TP Calculation**: ATR-based Stop Loss and RR-based Take Profit, adapting to market volatility.
 -   **Complete Data Persistence**: All critical data is saved to a PostgreSQL database.
 
-**MetaBrain v8.0 Enhancements:**
--   **Database Resilience**: 3-layer protection including auto-pause prevention, exponential backoff retries, and fallback queue to JSON.
--   **Dynamic Regime System**: Four market regimes (TRENDING, CHOPPY, VOLATILE, SIDEWAYS) with context-adaptive strategy switching.
--   **Zero-Gap SL Manager**: Ensures continuous protection during stop-loss updates.
--   **TP Ladder System**: Multi-level take profits with configurable weights.
--   **Daily Trading Reports**: Comprehensive Telegram reports with PnL, Win Rate, and trade summaries.
--   **Security & Authentication**: Uses Bearer Token (`X-API-Key`) and HMAC Signature, with anti-replay protection and mandatory Telegram approval.
+**MetaBrain v9.0 - 100% Autonomous Dynamic Trading:**
+-   **7-Brain Hierarchical Architecture**: 
+    - **2 AI Scouts**: Market Scanner (identifies opportunities across 534 symbols) + Technical Analyst (deep technical analysis)
+    - **5 AI Decision Makers**: GPT-5, Gemini 2 Pro, DeepSeek, Grok, Claude Sonnet 3.5 vote independently (≥3 APPROVE required)
+-   **Dynamic Protection Manager**: Maintains 4 regime-specific parameter sets (Entry Quality, SL ATR, TP RR, BE Trigger, Trail ATR, Leverage)
+    - TRENDING: Entry 5.8, SL ATR×1.7, TP RR 2.0, BE +0.4%, Trail ATR×0.9, Lev 6x
+    - CHOPPY: Entry 6.5, SL ATR×1.3, TP RR 1.4, BE +0.6%, Trail ATR×0.6, Lev 3x
+    - VOLATILE: Entry 6.2, SL ATR×1.9, TP RR 2.2, BE +0.5%, Trail ATR×1.0, Lev 4x
+    - SIDEWAYS: Entry 6.0, SL ATR×1.4, TP RR 1.3, BE +0.6%, Trail ATR×0.7, Lev 5x
+-   **Regime Detector**: Automatically detects market regime using ADX, ATR, Bollinger Bands, and price range analysis
+-   **Dual Order Types**: System uses BOTH LIMIT (precision entry) and MARKET (instant execution) orders dynamically based on regime and volatility
+-   **100% Strategic Freedom**: Generates trades in EVERY market condition (LONG/SHORT/GRID/SPOT/Scalping/Mean-Reversion)
+-   **AI Consensus Parameters**: Each brain proposes parameters within base protection ranges; final values = median of all brains
+-   **Database Resilience**: 3-layer protection including auto-pause prevention, exponential backoff retries, and fallback queue to JSON
+-   **Daily Trading Reports**: Comprehensive Telegram reports with PnL, Win Rate, and trade summaries (70% Hebrew, 30% English)
+-   **Security & Authentication**: Uses Bearer Token (`X-API-Key`) and HMAC Signature, with anti-replay protection
 
 ### AI Brains System
 The system integrates 9+ specialized AI systems with 5 AI providers for consensus-based decisions:

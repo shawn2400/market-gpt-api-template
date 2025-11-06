@@ -5,15 +5,23 @@ AI Scouts System - Market Scanner + Technical Analyst
 2 specialized AI agents that analyze markets and propose strategies.
 
 Scouts:
-1. Market Scanner - Scans 531 symbols, identifies opportunities
+1. Market Scanner - Scans 534 symbols, identifies opportunities
 2. Technical Analyst - Deep technical analysis, scores setups
+
+MetaBrain v9.0:
+- Uses Regime Detector to identify market conditions
+- Uses Dynamic Protection Manager for regime-specific parameters
+- Proposes BOTH strategy (LONG/SHORT/GRID) AND order type (LIMIT/MARKET)
 
 Both provide detailed reasoning for their recommendations.
 """
 
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Literal
 from decimal import Decimal
+
+from utils.metabrain.regime_detector import regime_detector, MarketRegime
+from utils.metabrain.dynamic_protection_manager import protection_manager
 
 logger = logging.getLogger("algogpt.ai_scouts")
 
@@ -23,16 +31,16 @@ class MarketScanner:
     Market Scanner Scout - Identifies trading opportunities across all markets.
     
     Responsibilities:
-    - Scan 531 Binance Futures symbols
+    - Scan 534 Binance Futures symbols
     - Identify volume surges, breakouts, reversals
-    - Detect market regime changes
-    - Propose initial strategy (LONG/SHORT/GRID)
-    - Score opportunity (0-10)
+    - Detect market regime using Regime Detector
+    - Propose strategy (LONG/SHORT/GRID) + order type (LIMIT/MARKET)
+    - Score opportunity (0-10) with regime-specific criteria
     """
     
     def __init__(self):
         self.logger = logging.getLogger("algogpt.market_scanner")
-        self.logger.info("Market Scanner Scout initialized - 531 symbols monitored")
+        self.logger.info("Market Scanner Scout initialized - 534 symbols monitored with Regime Detection")
     
     def scan_symbol(self, symbol: str, market_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -109,11 +117,22 @@ class MarketScanner:
             
             score = max(0, min(10, score))
             
+            regime_indicators = {
+                "adx": market_data.get("adx", 0),
+                "atr": market_data.get("atr", 0),
+                "bb_width": market_data.get("bb_width", 0),
+                "price_range_pct": abs(price_change_24h)
+            }
+            regime = regime_detector.detect_regime(regime_indicators)
+            
+            order_type = self._suggest_order_type(regime, atr_pct, strategy)
+            
             reasoning = " | ".join(reasons) if reasons else "אין אינדיקציה ברורה"
+            regime_desc = regime_detector.get_regime_description(regime)
             
             self.logger.debug(
                 f"{symbol}: Market Scanner score={score:.1f}, "
-                f"strategy={strategy}, reasons={len(reasons)}"
+                f"strategy={strategy}, regime={regime}, order_type={order_type}, reasons={len(reasons)}"
             )
             
             return {
@@ -121,10 +140,13 @@ class MarketScanner:
                 "symbol": symbol,
                 "score": round(score, 1),
                 "strategy": strategy,
+                "order_type": order_type,
+                "market_regime": regime,
+                "regime_description": regime_desc,
                 "reasoning": reasoning,
                 "confidence": "HIGH" if score >= 7.0 else "MEDIUM" if score >= 5.5 else "LOW"
             }
-            
+        
         except Exception as e:
             self.logger.error(f"Failed to scan {symbol}: {e}", exc_info=True)
             return {
@@ -132,9 +154,30 @@ class MarketScanner:
                 "symbol": symbol,
                 "score": 0,
                 "strategy": "NONE",
+                "order_type": "LIMIT",
+                "market_regime": "CHOPPY",
+                "regime_description": "Unknown",
                 "reasoning": f"שגיאה: {e}",
                 "confidence": "LOW"
             }
+    
+    def _suggest_order_type(self, regime: str, volatility: float, strategy: str) -> str:
+        """
+        Suggest order type (LIMIT/MARKET) based on regime and volatility
+        
+        TRENDING: Prefer MARKET for fast execution
+        CHOPPY: Prefer LIMIT for better entry
+        VOLATILE: Mix based on urgency
+        SIDEWAYS: Prefer LIMIT for precision
+        """
+        if regime == "TRENDING":
+            return "MARKET" if volatility > 3.0 else "LIMIT"
+        elif regime == "CHOPPY":
+            return "LIMIT"
+        elif regime == "VOLATILE":
+            return "MARKET" if volatility > 5.0 else "LIMIT"
+        else:
+            return "LIMIT"
 
 
 class TechnicalAnalyst:
@@ -145,13 +188,14 @@ class TechnicalAnalyst:
     - Multi-timeframe analysis (1m, 5m, 15m, 1h, 4h)
     - Support/Resistance identification
     - Trend analysis
-    - Entry/Exit quality scoring
-    - Risk/Reward calculation
+    - Entry/Exit quality scoring with regime-specific criteria
+    - Risk/Reward calculation using Dynamic Protection Manager
+    - SL/TP calculation based on regime base protections
     """
     
     def __init__(self):
         self.logger = logging.getLogger("algogpt.technical_analyst")
-        self.logger.info("Technical Analyst Scout initialized - MTF analysis ready")
+        self.logger.info("Technical Analyst Scout initialized - MTF analysis + Dynamic Protection ready")
     
     def analyze_setup(
         self,
@@ -243,8 +287,28 @@ class TechnicalAnalyst:
             
             score = max(0, min(10, score))
             
-            sl_price = support if strategy == "LONG" else resistance
-            tp_price = resistance if strategy == "LONG" else support
+            regime_indicators = {
+                "adx": market_data.get("adx", 0),
+                "atr": atr / price * 100 if price > 0 else 2.0,
+                "bb_width": (bb_upper - bb_lower) / price * 100 if price > 0 else 0,
+                "price_range_pct": market_data.get("price_change_24h_pct", 0)
+            }
+            regime = regime_detector.detect_regime(regime_indicators)
+            
+            base_protection = protection_manager.get_base_protection(regime)
+            
+            sl_multiplier = base_protection["sl_atr_multiplier"]
+            tp_rr = base_protection["tp_rr_ratio"]
+            
+            if strategy == "LONG":
+                sl_price = price - (atr * sl_multiplier)
+                tp_price = price + ((price - sl_price) * tp_rr)
+            elif strategy == "SHORT":
+                sl_price = price + (atr * sl_multiplier)
+                tp_price = price - ((sl_price - price) * tp_rr)
+            else:
+                sl_price = support if strategy == "LONG" else resistance
+                tp_price = resistance if strategy == "LONG" else support
             
             risk = abs(price - sl_price)
             reward = abs(tp_price - price)
@@ -257,8 +321,8 @@ class TechnicalAnalyst:
             reasoning = " | ".join(reasons) if reasons else "אין הצדקה טכנית ברורה"
             
             self.logger.debug(
-                f"{symbol} {strategy}: Technical score={score:.1f}, "
-                f"RR={rr_ratio:.1f}:1, reasons={len(reasons)}"
+                f"{symbol} {strategy}: Technical score={score:.1f}, regime={regime}, "
+                f"RR={rr_ratio:.1f}:1, SL=ATR×{sl_multiplier}, TP=RR{tp_rr}, reasons={len(reasons)}"
             )
             
             return {
@@ -266,11 +330,15 @@ class TechnicalAnalyst:
                 "symbol": symbol,
                 "score": round(score, 1),
                 "strategy": strategy,
+                "market_regime": regime,
                 "reasoning": reasoning,
                 "entry_quality": "EXCELLENT" if score >= 7.5 else "GOOD" if score >= 6.0 else "FAIR",
                 "sl_price": round(sl_price, 2),
                 "tp_price": round(tp_price, 2),
                 "risk_reward": round(rr_ratio, 2),
+                "sl_atr_multiplier": sl_multiplier,
+                "tp_rr_target": tp_rr,
+                "base_leverage": int(base_protection["default_leverage"]),
                 "confidence": "HIGH" if score >= 7.0 else "MEDIUM" if score >= 5.5 else "LOW"
             }
             
