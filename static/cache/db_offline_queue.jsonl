@@ -76,3 +76,5 @@
 {"sql": "INSERT INTO app_heartbeat(note) VALUES (%s)", "params": ["boot"]}
 {"sql": "\nCREATE TABLE IF NOT EXISTS app_heartbeat(\n  id BIGSERIAL PRIMARY KEY,\n  at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n  note TEXT\n);\n", "params": []}
 {"sql": "INSERT INTO app_heartbeat(note) VALUES (%s)", "params": ["boot"]}
+{"sql": "\nCREATE TABLE IF NOT EXISTS app_heartbeat(\n  id BIGSERIAL PRIMARY KEY,\n  at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n  note TEXT\n);\n", "params": []}
+{"sql": "INSERT INTO app_heartbeat(note) VALUES (%s)", "params": ["boot"]}
