@@ -310,40 +310,71 @@ Return your analysis in JSON format with exact entry, sl, tp1, tp2, tp3, leverag
         regime: str,
         min_rr: float
     ) -> str:
-        """Ultra-conservative prompt for unclear/volatile markets"""
+        """Selective prompt for uncertain/volatile markets - QUALITY FOCUS"""
         
-        prompt = f"""You are analyzing {symbol} in a UNCERTAIN/VOLATILE market. Return ONLY JSON.
+        prompt = f"""You are analyzing {symbol} in a VOLATILE/UNCERTAIN market. Return ONLY JSON.
 
-**MARKET REGIME: {regime.upper()} ⚠️**
-**STRATEGY: ULTRA-SELECTIVE (wait for exceptional setups only)**
-**MINIMUM RR REQUIRED: {min_rr + 0.2:.2f} (HIGHER threshold due to uncertainty)**
+**⚡ MARKET REGIME: {regime.upper()} - HIGH VOLATILITY ⚠️**
+**💎 STRATEGY: SELECTIVE QUALITY - Only best setups**
+**✅ MINIMUM RR: {min_rr:.2f} (adaptive threshold based on volatility)**
 
 **SITUATION:**
-Market conditions are unclear or too volatile. We need EXCEPTIONAL setups only.
+Market is volatile or uncertain - this creates BOTH risk AND opportunity!
+We need QUALITY setups with clear risk definition and realistic targets.
+
+**🎯 VOLATILE MARKETS = OPPORTUNITY FOR SMART TRADERS:**
+Volatility creates price swings - capture them with:
+- Wider stop losses (accept bigger swings)
+- Clear support/resistance levels (technical anchors)
+- Higher RR targets (volatility allows bigger moves)
+- Strong confirmation signals (reduce false entries)
 
 **WHAT TO LOOK FOR:**
-🔍 Only crystal-clear, textbook-perfect setups
-🔍 Very strong technical confluence
-🔍 Obvious support/resistance levels
-🔍 Extreme RR ratios (≥ {min_rr + 0.5:.2f} preferred)
+✅ **Strong Technical Levels**: Clear S/R tested multiple times
+✅ **Confluence**: Multiple indicators agreeing (RSI + MACD + Volume)
+✅ **Wide Protection**: SL beyond noise (2-4% typical in volatile markets)
+✅ **Realistic Targets**: TP at logical levels (next S/R, not random)
+✅ **Risk Definition**: Clear invalidation point for the setup
 
 **STRICT REQUIREMENTS:**
-⚠️ **MANDATORY: RR ≥ {min_rr + 0.2:.2f} (higher than normal)**
-⚠️ **Multiple confirmations required**
-⚠️ **Very high confidence only (>75%)**
+⚠️ **MANDATORY: RR ≥ {min_rr:.2f}** (calculate carefully!)
+⚠️ **Wide Stops OK**: 2-4% SL acceptable in volatile markets
+⚠️ **Multiple Confirmations**: Need 2-3 signals agreeing
+⚠️ **Honest Probability**: 50-70% realistic, not optimistic
 
-**DECISION PROCESS:**
-1. Is this a TEXTBOOK-PERFECT setup? (YES/NO)
-2. Is RR ≥ {min_rr + 0.2:.2f}? **MANDATORY!** (YES/NO)
-3. Is confidence >75%? (YES/NO)
+**✅ EXAMPLES OF QUALITY VOLATILE SETUPS:**
 
-**IF ALL "YES" → Propose (rare but possible)**
-**IF ANY "NO" → Return {{"proposal": false}} - WAIT for better conditions**
+EXCELLENT ✅: Entry=100, SL=96 (4%), TP=108 (8%) → RR=2.00 (capture volatility!)
+GOOD ✅: Entry=100, SL=97 (3%), TP=105 (5%) → RR=1.67 (solid!)
+ACCEPTABLE ✅: Entry=100, SL=97.5 (2.5%), TP=103.5 (3.5%) → RR=1.40 (minimum!)
 
-**MOST LIKELY OUTCOME:** {{"proposal": false}}
+REJECT ❌: Entry=100, SL=97, TP=101 → RR=0.33 (too tight for volatility!)
+REJECT ❌: Entry=100, SL=95, TP=103 → RR=0.60 (weak reward!)
 
-Remember: In uncertain markets, PATIENCE is our best strategy. 
-Better to wait than force trades in poor conditions!
+**🚀 YOUR DECISION PROCESS:**
+1. Are support/resistance levels CLEAR and STRONG? (YES/NO)
+2. Are there 2+ technical confirmations (RSI/MACD/Volume)? (YES/NO)
+3. Can I place wide SL beyond noise (2-4%)? (YES/NO)
+4. Is target realistic at next technical level? (YES/NO)
+5. **Does RR ≥ {min_rr:.2f}?** MANDATORY! (YES/NO)
+6. Is probability realistic (50-70%)? (YES/NO)
+
+**IF 5-6 "YES" → PROPOSE THE TRADE!** (Quality volatile setup)
+**IF 3-4 "YES" → Adjust levels to improve setup**
+**IF ≤2 "YES" → Return {{"proposal": false}} - wait for clarity**
+
+**💎 VOLATILE MARKET PHILOSOPHY:**
+Volatility = opportunity for BIGGER moves (not something to fear!)
+Accept wider stops, demand higher RR, wait for clear signals
+Quality = strong levels + multiple confirmations + realistic RR ≥ {min_rr:.2f}
+
+**🎯 KEY REMINDER:**
+- Wider stops (2-4%) are NORMAL in volatile markets
+- Higher RR targets ({min_rr:.2f}+) are ACHIEVABLE
+- Look for QUALITY, not perfection
+- If setup is clear → TAKE IT! Don't overthink!
+
+Return your analysis in JSON format with exact entry, sl, tp1, tp2, tp3, leverage, success_pct, reason.
 """
         return prompt
     
