@@ -481,8 +481,39 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     elif ORDER_ID_PREFIX:
         kwargs["newClientOrderId"] = f"{ORDER_ID_PREFIX}_{int(_ms() % 10 ** 9)}"
     
-    # DEBUG: Print to console to verify function is called
-    print(f"[DEBUG futures_create_order] positionSide={kwargs.get('positionSide')!r}")
+    # Smart reduceOnly handling for Hedge Mode
+    # Binance Futures rule: closePosition=true cannot have reduceOnly
+    # Also: reduceOnly only makes sense when actually closing a position
+    close_position = kwargs.get("closePosition", False)
+    reduce_only = kwargs.get("reduceOnly", False)
+    position_side = kwargs.get("positionSide")
+    side = kwargs.get("side", "").upper()
+    
+    # Determine if this is actually closing a position
+    is_closing = False
+    if position_side and side:
+        pos_upper = position_side.upper()
+        is_closing = (
+            (pos_upper == "LONG" and side == "SELL") or
+            (pos_upper == "SHORT" and side == "BUY")
+        )
+    
+    # Rule 1: closePosition=true → remove reduceOnly and other forbidden params
+    if typ in {"STOP_MARKET", "TAKE_PROFIT_MARKET"} and close_position:
+        for forbidden in ("reduceOnly", "quantity", "price", "timeInForce", "postOnly"):
+            kwargs.pop(forbidden, None)
+        print(f"[DEBUG futures_create_order] closePosition=true, removed forbidden params")
+    
+    # Rule 2: reduceOnly only when actually closing, not opening/increasing
+    elif reduce_only:
+        if not is_closing or close_position:
+            # Not actually closing OR using closePosition → remove reduceOnly
+            kwargs.pop("reduceOnly", None)
+            print(f"[DEBUG futures_create_order] Removed reduceOnly (not closing or has closePosition)")
+        else:
+            print(f"[DEBUG futures_create_order] Keeping reduceOnly=true (closing {position_side})")
+    
+    print(f"[DEBUG futures_create_order] Final: positionSide={kwargs.get('positionSide')!r}, reduceOnly={kwargs.get('reduceOnly')!r}")
     last: Optional[Exception] = None
     for attempt in range(1, max(1, BINANCE_MAX_RETRIES) + 1):
         try:
