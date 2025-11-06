@@ -6,6 +6,9 @@ import logging
 import threading
 import asyncio
 from typing import Dict, Any, Optional, List, Tuple
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from utils.metrics_prom import inc_fill, set_rr, inc_profit_lock, observe_ttp1
 from utils.rr import rr_now
