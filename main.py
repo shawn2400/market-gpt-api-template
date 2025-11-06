@@ -38,6 +38,16 @@ try:
 except Exception as e:
     raise RuntimeError("httpx is required") from e
 
+# ======== Database Resilience (MetaBrain v8.0) ========
+try:
+    from utils.db_bootstrap import bootstrap_schema
+    from utils.db_resilience import periodic_health_and_resync
+    _DB_RESILIENCE_AVAILABLE = True
+except Exception as e:
+    bootstrap_schema = None  # type: ignore
+    periodic_health_and_resync = None  # type: ignore
+    _DB_RESILIENCE_AVAILABLE = False
+
 # ======== Utility: safe string headers ========
 def _to_str_header(val: Any) -> str:
     try:
@@ -1889,6 +1899,33 @@ async def _on_startup():
     # ==================== Mesh Bus Ping Loop ====================
     # Disabled (legacy Phase 3 feature - not required for Phase 1)
     logger.info("ℹ️  Mesh Bus disabled (legacy feature, not required)")
+    
+    # ==================== Database Resilience (MetaBrain v8.0) ====================
+    if _DB_RESILIENCE_AVAILABLE:
+        try:
+            logger.info("🗄️  Initializing Database Resilience Layer...")
+            
+            # Bootstrap database schema (creates heartbeat table)
+            if bootstrap_schema:
+                bootstrap_schema()
+            
+            # Start periodic health check & fallback resync in background thread
+            if periodic_health_and_resync:
+                db_health_thread = threading.Thread(
+                    target=periodic_health_and_resync,
+                    daemon=True,
+                    name="DB-Health-Resync"
+                )
+                db_health_thread.start()
+                logger.info("✅ Database Resilience enabled: 3-layer protection (Auto-pause OFF + Backoff retries + Fallback queue)")
+                logger.info("  🔄 Periodic health check: Every 45s")
+                logger.info("  💾 Fallback queue: static/cache/db_offline_queue.jsonl")
+            else:
+                logger.warning("⚠️  Database Resilience partially loaded (missing periodic_health_and_resync)")
+        except Exception as e:
+            logger.error(f"❌ Database Resilience initialization failed: {e}", exc_info=True)
+    else:
+        logger.warning("ℹ️  Database Resilience not available (psycopg not installed or import failed)")
 
 # ============= Dashboard Route =============
 @app.get('/dashboard', response_class=HTMLResponse)
