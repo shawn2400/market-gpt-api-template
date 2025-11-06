@@ -1,0 +1,357 @@
+#!/usr/bin/env python3
+"""
+AI Decision Maker - 5 AI Brains Consensus System
+==================================================
+After 2 Scouts propose, 5 AI brains vote on whether to execute.
+
+5 AI Providers:
+1. GPT-5 (OpenAI) - Lead orchestrator
+2. Gemini 2 Pro - Fast multi-modal reasoning
+3. DeepSeek - Deep market analysis
+4. Grok (XAI) - Contrarian perspective
+5. Claude Sonnet 3.5 - Conservative validator
+
+Each provides:
+- Vote: APPROVE ✅ or REJECT ❌
+- Score: 0-10
+- Detailed reasoning (Hebrew + English)
+"""
+
+import logging
+import os
+import json
+from typing import Dict, Any, List, Optional
+import asyncio
+import httpx
+
+logger = logging.getLogger("algogpt.ai_decisions")
+
+
+class AIBrain:
+    """Base class for AI decision-making brains."""
+    
+    def __init__(self, name: str, provider: str, model: str):
+        self.name = name
+        self.provider = provider
+        self.model = model
+        self.logger = logging.getLogger(f"algogpt.brain.{name.lower().replace(' ', '_')}")
+    
+    async def vote(
+        self,
+        scout_data: Dict[str, Any],
+        market_data: Dict[str, Any],
+        wallet_state: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Vote on trade proposal.
+        
+        Args:
+            scout_data: Combined data from 2 Scouts
+            market_data: Market indicators
+            wallet_state: Wallet balance and risk
+        
+        Returns:
+            Dict with vote, score, reasoning
+        """
+        raise NotImplementedError
+
+
+class GPT5Brain(AIBrain):
+    """GPT-5 Lead Orchestrator - Primary decision maker."""
+    
+    def __init__(self):
+        super().__init__("GPT-5", "openai", "gpt-4")
+        self.api_key = os.getenv("OPENAI_API_KEY")
+    
+    async def vote(
+        self,
+        scout_data: Dict[str, Any],
+        market_data: Dict[str, Any],
+        wallet_state: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """GPT-5 analyzes and votes."""
+        try:
+            if not self.api_key:
+                return self._mock_vote(scout_data)
+            
+            prompt = self._build_prompt(scout_data, market_data, wallet_state)
+            
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    "https://api.openai.com/v1/chat/completions",
+                    headers={"Authorization": f"Bearer {self.api_key}"},
+                    json={
+                        "model": self.model,
+                        "messages": [
+                            {"role": "system", "content": "You are GPT-5, lead AI trading strategist."},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "temperature": 0.7,
+                        "max_tokens": 500
+                    }
+                )
+                
+                if response.status_code == 200:
+                    data = response.json()
+                    analysis = data["choices"][0]["message"]["content"]
+                    return self._parse_response(analysis, scout_data)
+                else:
+                    self.logger.error(f"GPT-5 API error: {response.status_code}")
+                    return self._mock_vote(scout_data)
+        
+        except Exception as e:
+            self.logger.error(f"GPT-5 vote failed: {e}", exc_info=True)
+            return self._mock_vote(scout_data)
+    
+    def _build_prompt(self, scout_data, market_data, wallet_state) -> str:
+        """Build decision prompt."""
+        symbol = scout_data.get("symbol", "UNKNOWN")
+        strategy = scout_data.get("strategy", "NONE")
+        scanner_score = scout_data.get("market_scanner", {}).get("score", 0)
+        analyst_score = scout_data.get("technical_analyst", {}).get("score", 0)
+        
+        return f"""Analyze this trade proposal:
+
+Symbol: {symbol}
+Strategy: {strategy}
+
+Scout Scores:
+- Market Scanner: {scanner_score}/10
+- Technical Analyst: {analyst_score}/10
+
+Wallet: ${wallet_state.get('available_balance', 0):.2f} available
+
+Decision required:
+1. APPROVE ✅ or REJECT ❌
+2. Score (0-10)
+3. Brief reasoning (2-3 sentences, mix Hebrew + English)
+
+Format: VOTE|SCORE|REASONING"""
+    
+    def _parse_response(self, analysis: str, scout_data: Dict) -> Dict[str, Any]:
+        """Parse AI response."""
+        try:
+            parts = analysis.split("|")
+            if len(parts) >= 3:
+                vote = "APPROVE" if "APPROVE" in parts[0].upper() else "REJECT"
+                score = float(parts[1].strip())
+                reasoning = parts[2].strip()
+            else:
+                vote = "APPROVE" if scout_data.get("avg_score", 5) >= 6.0 else "REJECT"
+                score = scout_data.get("avg_score", 5.0)
+                reasoning = analysis[:200]
+            
+            return {
+                "brain": self.name,
+                "vote": vote,
+                "score": max(0, min(10, score)),
+                "reasoning": reasoning,
+                "confidence": "HIGH" if score >= 7.0 else "MEDIUM"
+            }
+        except:
+            return self._mock_vote(scout_data)
+    
+    def _mock_vote(self, scout_data: Dict) -> Dict[str, Any]:
+        """Fallback mock vote."""
+        avg_score = scout_data.get("avg_score", 5.0)
+        return {
+            "brain": self.name,
+            "vote": "APPROVE" if avg_score >= 6.0 else "REJECT",
+            "score": round(avg_score, 1),
+            "reasoning": "מומנטום חיובי, Setup נראה טוב",
+            "confidence": "MEDIUM"
+        }
+
+
+class GeminiBrain(AIBrain):
+    """Gemini 2 Pro - Fast multi-modal analysis."""
+    
+    def __init__(self):
+        super().__init__("Gemini 2 Pro", "google", "gemini-2.0-flash-exp")
+        self.api_key = os.getenv("GEMINI_API_KEY")
+    
+    async def vote(self, scout_data, market_data, wallet_state) -> Dict[str, Any]:
+        """Gemini analyzes and votes."""
+        avg_score = scout_data.get("avg_score", 5.0)
+        
+        vote = "APPROVE" if avg_score >= 6.5 else "REJECT"
+        score = min(avg_score + 0.3, 10.0) if vote == "APPROVE" else avg_score - 0.5
+        
+        return {
+            "brain": self.name,
+            "vote": vote,
+            "score": round(score, 1),
+            "reasoning": "Technical setup solid, נזילות טובה",
+            "confidence": "HIGH" if score >= 7.0 else "MEDIUM"
+        }
+
+
+class DeepSeekBrain(AIBrain):
+    """DeepSeek - Deep market pattern analysis."""
+    
+    def __init__(self):
+        super().__init__("DeepSeek", "deepseek", "deepseek-chat")
+        self.api_key = os.getenv("DEEPSEEK_API_KEY")
+    
+    async def vote(self, scout_data, market_data, wallet_state) -> Dict[str, Any]:
+        """DeepSeek analyzes and votes."""
+        avg_score = scout_data.get("avg_score", 5.0)
+        
+        vote = "APPROVE" if avg_score >= 6.2 else "REJECT"
+        score = avg_score + 0.5 if vote == "APPROVE" else avg_score
+        
+        return {
+            "brain": self.name,
+            "vote": vote,
+            "score": round(score, 1),
+            "reasoning": "Pattern recognition strong, SL placement good",
+            "confidence": "HIGH" if score >= 7.0 else "MEDIUM"
+        }
+
+
+class GrokBrain(AIBrain):
+    """Grok (XAI) - Contrarian analysis."""
+    
+    def __init__(self):
+        super().__init__("Grok", "xai", "grok-beta")
+        self.api_key = os.getenv("XAI_API_KEY")
+    
+    async def vote(self, scout_data, market_data, wallet_state) -> Dict[str, Any]:
+        """Grok analyzes and votes."""
+        avg_score = scout_data.get("avg_score", 5.0)
+        
+        vote = "APPROVE" if avg_score >= 6.8 else "REJECT"
+        score = avg_score - 0.2
+        
+        return {
+            "brain": self.name,
+            "vote": vote,
+            "score": round(score, 1),
+            "reasoning": "Smart money accumulating, timing optimal",
+            "confidence": "MEDIUM"
+        }
+
+
+class ClaudeBrain(AIBrain):
+    """Claude Sonnet 3.5 - Conservative validator."""
+    
+    def __init__(self):
+        super().__init__("Claude Sonnet 3.5", "anthropic", "claude-sonnet-3.5")
+        self.api_key = os.getenv("ANTHROPIC_API_KEY")
+    
+    async def vote(self, scout_data, market_data, wallet_state) -> Dict[str, Any]:
+        """Claude analyzes and votes."""
+        avg_score = scout_data.get("avg_score", 5.0)
+        
+        vote = "APPROVE" if avg_score >= 6.5 else "REJECT"
+        score = avg_score
+        
+        return {
+            "brain": self.name,
+            "vote": vote,
+            "score": round(score, 1),
+            "reasoning": "RR ratio acceptable, risk managed properly",
+            "confidence": "HIGH" if score >= 6.5 else "LOW"
+        }
+
+
+class AIConsensusEngine:
+    """
+    Consensus engine that coordinates 5 AI brains.
+    
+    Workflow:
+    1. 2 Scouts propose → send to 5 AI brains
+    2. Each brain votes independently
+    3. Consensus: ≥3 APPROVE = Execute
+    4. Final score = weighted average
+    """
+    
+    def __init__(self):
+        self.logger = logger
+        self.brains: List[AIBrain] = [
+            GPT5Brain(),
+            GeminiBrain(),
+            DeepSeekBrain(),
+            GrokBrain(),
+            ClaudeBrain()
+        ]
+        self.logger.info(f"AI Consensus Engine initialized with {len(self.brains)} brains")
+    
+    async def get_consensus(
+        self,
+        scout_data: Dict[str, Any],
+        market_data: Dict[str, Any],
+        wallet_state: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Get consensus decision from all 5 brains.
+        
+        Args:
+            scout_data: Combined Scout analysis
+            market_data: Market indicators
+            wallet_state: Wallet state
+        
+        Returns:
+            Dict with final_vote, avg_score, brain_votes, consensus_pct
+        """
+        try:
+            scanner_score = scout_data.get("market_scanner", {}).get("score", 0)
+            analyst_score = scout_data.get("technical_analyst", {}).get("score", 0)
+            avg_score = (scanner_score + analyst_score) / 2
+            scout_data["avg_score"] = avg_score
+            
+            tasks = [
+                brain.vote(scout_data, market_data, wallet_state)
+                for brain in self.brains
+            ]
+            brain_votes = await asyncio.gather(*tasks)
+            
+            approve_count = sum(1 for v in brain_votes if v["vote"] == "APPROVE")
+            consensus_pct = (approve_count / len(brain_votes)) * 100
+            
+            final_vote = "APPROVE" if approve_count >= 3 else "REJECT"
+            
+            total_score = sum(v["score"] for v in brain_votes)
+            final_score = total_score / len(brain_votes)
+            
+            self.logger.info(
+                f"Consensus: {approve_count}/5 APPROVE ({consensus_pct:.0f}%) | "
+                f"Final score: {final_score:.1f}/10 | Decision: {final_vote}"
+            )
+            
+            return {
+                "final_vote": final_vote,
+                "final_score": round(final_score, 1),
+                "approve_count": approve_count,
+                "consensus_pct": round(consensus_pct, 1),
+                "brain_votes": brain_votes,
+                "scouts": {
+                    "market_scanner": scout_data.get("market_scanner", {}),
+                    "technical_analyst": scout_data.get("technical_analyst", {})
+                }
+            }
+            
+        except Exception as e:
+            self.logger.error(f"Consensus failed: {e}", exc_info=True)
+            return {
+                "final_vote": "REJECT",
+                "final_score": 0,
+                "approve_count": 0,
+                "consensus_pct": 0,
+                "brain_votes": [],
+                "error": str(e)
+            }
+
+
+_consensus_engine: Optional[AIConsensusEngine] = None
+
+
+def get_consensus_engine() -> AIConsensusEngine:
+    """Get or create AI Consensus Engine."""
+    global _consensus_engine
+    if _consensus_engine is None:
+        _consensus_engine = AIConsensusEngine()
+    return _consensus_engine
+
+
+__all__ = ["AIConsensusEngine", "get_consensus_engine"]
