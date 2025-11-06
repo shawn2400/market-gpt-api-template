@@ -1,0 +1,124 @@
+מעולה — מבין: אתה רוצה ש**לא יהיה יותר Auto-pause ב-Neon** לפרויקט `ep-cool-tooth-a5dlnc71`, והכול יהיה מיושם אצלך ב“ריידר” (כלומר ה-VM/Render שלך), בלי תלות ב-Replit.
+
+הנה הודעה אחת, העתק-הדבק לסוכן ה-DevOps של “ריידר” לביצוע מלא:
+
+---
+
+**TASK NAME:** Disable Neon Auto-Pause + Hardening on Rider (no Replit deps)
+
+**Goal:** לבטל Auto-pause ב-Neon, לעבור ל-Pooling endpoint, ולעדכן את כל שירותי Rider/Render כך שה-DB לא יירדם לעולם + Keepalive/Backoff/Pooling. אין שימוש ב-.replit. כל ההגדרות ב-ENV/Render בלבד.
+
+### 1) Neon Console – הגדרות פרויקט
+
+* Project: `ep-cool-tooth-a5dlnc71`
+* Console → **Settings → Compute**
+
+  * **Auto-pause: Disable** (כבה לגמרי).
+* Endpoints:
+
+  * צור/הפעל **Pooling endpoint (PgBouncer)** אם לא קיים.
+  * קבל את שני ה-URLs:
+
+    * **Direct** (אין תיווך)
+    * **Pooled** (מומלץ לשירותי ווב)
+
+### 2) עדכון משתני סביבה ב-Rider/Render (ללא .replit)
+
+בכל השירותים הצורכים DB (API, Workers, Schedulers):
+
+* קבע `DATABASE_URL` ל-**Pooled endpoint** עם `?sslmode=require`.
+  דוגמה:
+  `DATABASE_URL=postgres://<user>:<pass>@<pooled-host>:5432/<db>?sslmode=require`
+* אם יש רכבים שמבצעים עבודות כבדות/דוחות ארוכים – ניתן להשאיר להם `DATABASE_URL_DIRECT`:
+  `DATABASE_URL_DIRECT=postgres://<user>:<pass>@<direct-host>:5432/<db>?sslmode=require`
+* ודא שאין יותר תלות ב-`.replit`. כל מה שהיה שם עובר ל-ENV של Rider/Render (Settings → Environment).
+
+### 3) Pooling/ORM Hardening (למנוע timeouts)
+
+ב-SQLAlchemy / psycopg:
+
+* `POOL_SIZE=5`
+* `MAX_OVERFLOW=5`
+* `POOL_PRE_PING=true`
+* `POOL_RECYCLE_SEC=180`
+* `CONNECT_TIMEOUT_SEC=5`
+* `STATEMENT_TIMEOUT_MS=30000` (ב-server-side, אם נתמך)
+
+הוסף ל-ENV של השירות:
+
+```
+DB_POOL_SIZE=5
+DB_MAX_OVERFLOW=5
+DB_POOL_PRE_PING=1
+DB_POOL_RECYCLE_SEC=180
+DB_CONNECT_TIMEOUT_SEC=5
+DB_STATEMENT_TIMEOUT_MS=30000
+```
+
+### 4) Keepalive יזום בריידר (מונע הירדמות גם אם Auto-pause חוזר בטעות)
+
+צור Worker קטן (`workers/db_keepalive.py`) שרץ כל 5 דקות ומבצע `SELECT 1;`:
+
+* ENV:
+
+```
+DB_KEEPALIVE_ENABLE=1
+DB_KEEPALIVE_INTERVAL_SEC=300
+```
+
+* הרץ כ-process נפרד (Supervisor/Procfile/Render Background Worker).
+* לוג מצופה: `db.keepalive=ok latency_ms=…`
+
+### 5) Retry/Backoff בטוח
+
+ב-DB client עטוף קריאות קריטיות ב-exponential backoff (Tenacity):
+
+* Retries: 3–5
+* Backoff: 0.5s → 2s
+* על שגיאות `connection refused`/`read timeout`/`too many connections` בלבד.
+
+### 6) בריאות וניטור
+
+* הוסף בדיקת בריאות `/readyz` שמבצעת `SELECT 1` דרך ה-pooling (עם timeout 200ms).
+* במטריקות (Prometheus אם קיים):
+
+  * `db_keepalive_last_ok_ts`
+  * `db_connect_errors_total`
+  * `db_query_timeout_total`
+
+### 7) דיפלוי ובדיקות עשן
+
+סדר פעולות:
+
+1. עדכון Neon (Disable Auto-pause + Pooling endpoint).
+2. עדכון ENV בריידר/Render לכל השירותים.
+3. הפעלת Worker Keepalive.
+4. Restart ל-API/Workers.
+5. **Smoke tests** (פקודות לדוגמה):
+
+   * `GET /readyz` → 200.
+   * Run lightweight query (למשל `/status` שמבצע קריאת DB קצרה) 3–5 פעמים ברצף → ללא timeouts.
+   * בדוק לוגים: אין `connection closed/idle timeout/Insufficient result buffer`.
+
+### 8) ניקיון תלויות מ-Replit
+
+* מחק/התעלם קבצי `.replit`/`replit.nix` מה-runtime.
+* ודא שב-Docker/Render אין שום קריאה או source לקבצים אלה.
+* אם יש references בקוד – החלף ל-Pydantic Settings/`config.py` הטוען אך ורק מ-ENV.
+
+### 9) Rollback Plan (אם צריך)
+
+* שמור `DATABASE_URL_PREV` זמנית.
+* אם יש בעיות עומס ב-pool: הגדל `DB_POOL_SIZE` ל-8–10 והפעל מחדש.
+* אם עדיין יש timeouts: החלף זמנית ל-`DATABASE_URL_DIRECT` לשירות הבעייתי בלבד, ותוריד קצבי עבודה של ה-workers.
+
+**Deliverables:**
+
+* ENV מעודכנים בכל השירותים (צירוף שמות השירותים + prints של var names בלבד, בלי סודות).
+* צילום מסך Neon Compute עם Auto-pause=Disabled.
+* לוג Keepalive המציג 2–3 ריצות תקינות.
+* פלט `/readyz` ו-`/version`.
+
+---
+
+אם תרצה, אכין גם סקריפט keepalive קצר + קוד init ל-SQLAlchemy עם כל ה-pool flags (להדבקה).
