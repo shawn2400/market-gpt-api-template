@@ -25,25 +25,9 @@ args = "DYNAMIC_BUDGET_ENABLE=1 BUDGET_PCT_OF_EQUITY=1.0 BUDGET_MIN_USDT=10 BUDG
 waitForPort = 5000
 
 [[workflows.workflow]]
-name = "Auto Scanner"
-mode = "parallel"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG TRADE_AUTO_SUGGEST=1 SUGGEST_FUTURES=1 SUGGEST_GRID=1 SUGGEST_INTERVAL_SEC=60 CONTEXT_URL=http://127.0.0.1:5000 ALERT_INGEST_URL=http://127.0.0.1:5000/alerts/ingest WEBHOOK_HMAC_SECRET=demo_secret_change_in_production ENABLE_MULTI_AI_CONSENSUS=1 ENABLE_OPENAI=1 ENABLE_DEEPSEEK=1 ENABLE_XAI=1 python workers/gpt_auto_suggest.py"
-
-[[workflows.workflow]]
 name = "Project"
 mode = "parallel"
 author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Auto Scanner"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
