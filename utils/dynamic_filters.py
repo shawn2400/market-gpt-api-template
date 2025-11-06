@@ -129,12 +129,12 @@ def get_dynamic_thresholds(
     quality = BASE_QUALITY - (adjustment * (quality_range / 2))
     quality = _clamp(quality, QUALITY_MIN, QUALITY_MAX)
     
-    # Check for ENV overrides (למי שרוצה לכפות ערכים ידנית)
+    # Return fully dynamic thresholds (no ENV overrides to enforce dynamic behavior)
     return {
-        "success_pct_min": float(os.getenv("SUCCESS_PCT_MIN", success_pct)),
-        "rr_top10_min": float(os.getenv("MIN_RR_TOP10", rr_top10)),
-        "rr_alt_min": float(os.getenv("MIN_RR_ALT", rr_alt)),
-        "quality_min": float(os.getenv("MIN_QUALITY_SCORE", quality)),
+        "success_pct_min": success_pct,
+        "rr_top10_min": rr_top10,
+        "rr_alt_min": rr_alt,
+        "quality_min": quality,  # ALWAYS use dynamic quality (4.0-8.0 range)
         "market_score": market_score,
         "regime": (ctx.get("filters") or {}).get("regime", "") if ctx else "",
     }
