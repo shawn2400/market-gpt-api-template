@@ -219,7 +219,7 @@ class GeminiBrain(AIBrain):
             return self._mock_vote(scout_data)
     
     def _mock_vote(self, scout_data) -> Dict[str, Any]:
-        """Fallback mock vote when API fails"""
+        """Fallback vote when API fails - uses REAL scores from scout_data"""
         avg_score = scout_data.get("avg_score", 5.0)
         vote = "APPROVE" if avg_score >= 6.5 else "REJECT"
         score = min(avg_score + 0.3, 10.0) if vote == "APPROVE" else avg_score - 0.5
@@ -228,7 +228,7 @@ class GeminiBrain(AIBrain):
             "brain": self.name,
             "vote": vote,
             "score": round(score, 1),
-            "reasoning": "Technical setup solid, נזילות טובה (mock)",
+            "reasoning": f"{self.name}: Analysis based on MI/SO scores (API unavailable)",
             "confidence": "HIGH" if score >= 7.0 else "MEDIUM"
         }
 

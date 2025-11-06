@@ -598,7 +598,18 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
     from utils.ai_decision_maker import AIConsensusEngine
     
     consensus_engine = AIConsensusEngine()
-    wallet_state = {"available_balance": 1000.0}  # Placeholder, will be replaced with real balance
+    
+    # Get REAL wallet balance from Binance
+    wallet_state = {"available_balance": 1000.0}  # Default fallback
+    try:
+        from utils.binance_client import futures_balance
+        balances = futures_balance()
+        for asset in balances:
+            if asset.get("asset") == "USDT":
+                wallet_state["available_balance"] = float(asset.get("availableBalance", 1000.0))
+                break
+    except Exception as e:
+        LOGGER.warning(f"⚠️ Failed to fetch real balance, using fallback: {e}")
     
     LOGGER.info(f"🧠 Requesting consensus from 5 AI Brains for {symbol}...")
     
