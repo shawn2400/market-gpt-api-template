@@ -109,14 +109,21 @@ def _tick_symbol(symbol: str):
         
         # 🔔 IMMEDIATE Telegram Notification: Trade Opened (with 5 AI Brains consensus)
         try:
-            # Try to get consensus data from trade_store
+            # Try to get consensus data from Redis (stored by symbol)
             consensus_data = None
             try:
-                from utils.trade_store import get_trade
-                trade_data = get_trade(symbol) or {}
-                consensus_data = trade_data.get("consensus")
-            except Exception:
-                pass
+                from utils.redis_client import redis_client as RED
+                import json
+                if RED:
+                    consensus_key = f"consensus:{symbol}"
+                    consensus_json = RED.get(consensus_key)
+                    if consensus_json:
+                        if isinstance(consensus_json, bytes):
+                            consensus_json = consensus_json.decode('utf-8')
+                        consensus_data = json.loads(consensus_json)
+                        log.info(f"✅ Consensus loaded from Redis for {symbol}")
+            except Exception as e:
+                log.debug(f"Failed to load consensus from Redis: {e}")
             
             msg_lines = [
                 f"🚀 <b>טרייד נפתח</b>",

@@ -288,6 +288,7 @@ class IngestReq(BaseModel):
     trade_id: Optional[str] = None
     notional_usd: Optional[float] = None
     chat_id: Optional[str] = None
+    consensus: Optional[dict] = None  # 🧠 5 AI Brains consensus data
 
 def _ticket_id_for(req: IngestReq) -> str:
     base = {
@@ -464,6 +465,7 @@ async def alerts_ingest(
         "entry": _to_float(req.entry),
         "success_pct": _to_float(req.success_pct) if req.success_pct else score,
         "created_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "consensus": req.consensus,  # 🧠 5 AI Brains consensus data
     }
 
     tid = req.ticket_id or _ticket_id_for(req)
@@ -491,6 +493,18 @@ async def alerts_ingest(
     logger.info(f"   - final_require_approval: {final_require_approval}")
     logger.info(f"   - plan['require_approval']: {plan['require_approval']}")
     logger.info(f"   - Decision: {'FULL AUTO' if not plan['require_approval'] else 'APPROVAL MODE'}")
+    
+    # 🧠 Store consensus in Redis for fills_watcher access (by symbol)
+    if req.consensus:
+        try:
+            from utils.redis_client import redis_client as RED
+            if RED:
+                consensus_key = f"consensus:{sym}"
+                import json
+                RED.setex(consensus_key, 3600, json.dumps(req.consensus))  # 1 hour TTL
+                logger.info(f"✅ Consensus stored in Redis for {sym}")
+        except Exception as e:
+            logger.warning(f"Failed to store consensus in Redis: {e}")
     
     # אם במצב FULL AUTO - בצע מיידית
     print(f"🔍 [PRE-IF] Checking condition: plan['require_approval']={plan['require_approval']}, type={type(plan['require_approval'])}")

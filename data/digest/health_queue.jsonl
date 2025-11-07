@@ -378,9 +378,16 @@
 {"timestamp": 1762484132.4043765, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
 {"timestamp": 1762485934.8918476, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
 {"timestamp": 1762487737.1643844, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
-{"timestamp": 1762511908.097124, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
-{"timestamp": 1762513714.8521771, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
-{"timestamp": 1762515519.2306905, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
-{"timestamp": 1762517343.030114, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>ACTIVE POSITIONS REPORT</b>\n\n\ud83d\udfe2 LONG <b>BTCUSDT</b>\n  Entry: <code>100501.10</code> | Mark: <code>100505.17</code>\n  \ud83d\udcb0 PNL: <code>$0.02</code> | Lev: x4\n  Qty: <code>0.0050</code>\n\n==============================\n\u2705 <b>Total Unrealized PNL: $0.02</b>\n\ud83d\udcc8 Active Trades: 1\n\ud83d\udd50 2025-11-07 12:09 UTC", "details": {}}
-{"timestamp": 1762519148.1133966, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
-{"timestamp": 1762520950.745454, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
+{"timestamp": 1762511916.0903246, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 2\n*Details:*\n\u2022 API not responding\n\u2022 Dashboard not accessible", "details": {}}
+{"timestamp": 1762511947.1835015, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
+{"timestamp": 1762516774.4383845, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 1\n*Details:*\n\u2022 API not responding", "details": {}}
+{"timestamp": 1762516805.4934862, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
+{"timestamp": 1762517093.2703145, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
+{"timestamp": 1762518963.309988, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 1\n*Details:*\n\u2022 Workflows: All connection attempts failed", "details": {}}
+{"timestamp": 1762518994.4186442, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
+{"timestamp": 1762519900.6833408, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 1\n*Details:*\n\u2022 API not responding", "details": {}}
+{"timestamp": 1762519931.8036156, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
+{"timestamp": 1762520654.1633093, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 1\n*Details:*\n\u2022 API not responding", "details": {}}
+{"timestamp": 1762520685.2777328, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
+{"timestamp": 1762520884.58004, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
+{"timestamp": 1762521366.492209, "level": "ERROR", "message": "\ud83d\udd34 *Auto Health Monitor*\n\n*Status:* CRITICAL\n*Issues:* 3\n*Details:*\n\u2022 API not responding\n\u2022 Dashboard not accessible\n\u2022 Workflows: ", "details": {}}
