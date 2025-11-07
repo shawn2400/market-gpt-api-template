@@ -13,7 +13,12 @@ _BASE_PAUSE_MS = int(os.getenv("KLINES_BASE_PAUSE_MS", "60"))
 _JITTER_MS_MIN = int(os.getenv("KLINES_JITTER_MS_MIN", "20"))
 _JITTER_MS_MAX = int(os.getenv("KLINES_JITTER_MS_MAX", "120"))
 
-_last_ts: Dict[str, int] = {}
+# CRITICAL FIX v2: DISABLE klines caching completely
+# The _last_ts cache causes "Insufficient klines data (1 candles)" when:
+# - Requesting limit=200 with startTime from 30min ago
+# - Binance interprets this as incremental update and returns only 1 new candle
+# Solution: No caching = always get latest N candles
+_last_ts: Dict[str, int] = {}  # Keep dict for compatibility but never use it
 
 def _cache_key(market: str, symbol: str, interval: str) -> str:
     return f"{market}:{symbol}:{interval}"
@@ -50,28 +55,22 @@ async def _rest_klines(symbol: str, interval: str, limit: int, market_type: str,
     return _to_dataframe(r.json())
 
 async def get_klines(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> pd.DataFrame:
-    norm_key_sym = normalize_symbol(symbol) if market_type == "futures" else symbol
-    key = _cache_key(market_type, norm_key_sym, interval)
-    since = _last_ts.get(key, 0)
-
+    # CRITICAL FIX: Never use _last_ts cache - it causes "Insufficient klines (1 candles)" issue
+    # Always fetch latest N candles without startTime to avoid Binance incremental update logic
     df = pd.DataFrame()
+    
     try:
-        df = await _rest_klines(symbol, interval, limit, "futures", since + 1 if since else None)
+        df = await _rest_klines(symbol, interval, limit, "futures", None)  # No startTime!
     except Exception:
         df = pd.DataFrame()
+    
     if df.empty:
         try:
-            df = await _rest_klines(symbol, interval, limit, "futures", None)
+            df = await _rest_klines(symbol, interval, limit, "spot", None)  # No startTime!
         except Exception:
             df = pd.DataFrame()
-    if df.empty:
-        try:
-            df = await _rest_klines(symbol, interval, limit, "spot", None)
-        except Exception:
-            df = pd.DataFrame()
-
-    if not df.empty:
-        _last_ts[key] = int(df["close_time"].iloc[-1].timestamp() * 1000)
+    
+    # DO NOT update _last_ts cache - disabled permanently
     return df
 
 def get_klines_sync(symbol: str, interval: str, limit: int = 150, market_type: str = "futures") -> pd.DataFrame:

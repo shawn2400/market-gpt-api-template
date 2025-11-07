@@ -58,8 +58,16 @@ async def _fetch_real_indicators(symbol: str, interval: str = "15m", limit: int 
     🎯 LIVE BINANCE DATA - Fetch real klines and calculate all indicators
     """
     try:
-        from utils.get_klines import get_klines
+        from utils.get_klines import get_klines, _last_ts, _cache_key
+        from utils.symbols import normalize_symbol
         from utils.indicators import rsi, adx, atr, macd, bollinger_bands, ema
+        
+        # CRITICAL FIX: Clear startTime cache before fetching large dataset
+        # This prevents "Insufficient klines data (1 candles)" issue
+        if limit > 100:
+            cache_key = _cache_key("futures", normalize_symbol(symbol), interval)
+            _last_ts.pop(cache_key, None)  # Remove cached timestamp
+            LOGGER.info(f"🔧 Cleared klines cache for {symbol} (limit={limit})")
         
         # Fetch real klines from Binance
         df = await get_klines(symbol, interval=interval, limit=limit, market_type="futures")
@@ -1316,7 +1324,7 @@ async def process_cycle():
         available = 0.0  # Initialize before try block
         try:
             from utils.binance_client import futures_balance
-            bals = await futures_balance() or []
+            bals = futures_balance() or []
             for a in bals:
                 if str(a.get("asset", "")).upper() == "USDT":
                     available = float(a.get("availableBalance") or a.get("available") or 0.0)
