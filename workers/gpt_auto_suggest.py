@@ -621,6 +621,9 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
         wallet_state=wallet_state
     )
     
+    # 🧠 STORE CONSENSUS IN CONTEXT for payload inclusion
+    ctx["_consensus_result"] = consensus_result
+    
     # Log consensus
     LOGGER.info(
         f"🗳️ CONSENSUS [{symbol}]: {consensus_result['approve_count']}/5 APPROVE | "
@@ -953,6 +956,9 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
         LOGGER.warning(f"Failed to log AI prediction for {symbol}: {e}")
         prediction_id = ""
 
+    # 🧠 ADD CONSENSUS DATA for Telegram notifications
+    consensus_data = ctx.get("_consensus_result") if ctx else None
+    
     payload = {
         "trade_id": f"f{int(time.time())}{random.randint(100,999)}",
         "trade_type": "FUTURES",
@@ -971,6 +977,7 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
         "qty": None,
         "chat_id": TELEGRAM_CHAT_ID or None,
         "prediction_id": prediction_id,  # Store for outcome linking
+        "consensus": consensus_data,  # 🧠 5 AI Brains voting data
     }
     return payload
 

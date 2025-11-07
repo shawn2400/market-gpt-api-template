@@ -53,6 +53,7 @@ class TradeIn(BaseModel):
     chat_id: int | str | None = None
     interval: Optional[str] = Field(default=os.getenv("DEFAULT_INTERVAL","15m"))
     market: Optional[str]  = Field(default=os.getenv("DEFAULT_MARKET","futures"))
+    consensus: Optional[Dict[str, Any]] = None  # 🧠 5 AI Brains consensus data
 
 class TradeOut(BaseModel):
     ok: bool = True

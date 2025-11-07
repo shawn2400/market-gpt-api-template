@@ -107,18 +107,54 @@ def _tick_symbol(symbol: str):
             "regime": "UNKNOWN"
         }
         
-        # 🔔 IMMEDIATE Telegram Notification: Trade Opened
+        # 🔔 IMMEDIATE Telegram Notification: Trade Opened (with 5 AI Brains consensus)
         try:
-            msg = (
-                f"🚀 <b>טרייד נפתח</b>\n\n"
-                f"🎯 Symbol: <b>{symbol}</b>\n"
-                f"{'📈 LONG' if side == 'LONG' else '📉 SHORT'}\n"
-                f"💵 Entry: <code>{ep:.4f}</code>\n"
-                f"📦 Quantity: <code>{qty:.4f}</code>\n"
+            # Try to get consensus data from trade_store
+            consensus_data = None
+            try:
+                from utils.trade_store import get_trade
+                trade_data = get_trade(symbol) or {}
+                consensus_data = trade_data.get("consensus")
+            except Exception:
+                pass
+            
+            msg_lines = [
+                f"🚀 <b>טרייד נפתח</b>",
+                f"",
+                f"🎯 Symbol: <b>{symbol}</b>",
+                f"{'📈 LONG' if side == 'LONG' else '📉 SHORT'}",
+                f"💵 Entry: <code>{ep:.4f}</code>",
+                f"📦 Quantity: <code>{qty:.4f}</code>",
                 f"⏰ {time.strftime('%H:%M:%S', time.localtime(now))}"
-            )
+            ]
+            
+            # 🧠 Add 5 AI Brains consensus if available
+            if consensus_data and isinstance(consensus_data, dict):
+                final_vote = consensus_data.get("final_vote", "")
+                final_score = consensus_data.get("final_score", 0.0)
+                approve_count = consensus_data.get("approve_count", 0)
+                brain_votes = consensus_data.get("brain_votes", [])
+                
+                msg_lines.append("")
+                msg_lines.append(f"🧠 <b>5 AI Brains Consensus:</b>")
+                msg_lines.append(f"🗳️ Decision: <b>{final_vote}</b> ({approve_count}/5 APPROVE)")
+                msg_lines.append(f"⭐ Avg Score: <code>{final_score:.1f}/10</code>")
+                
+                if brain_votes:
+                    msg_lines.append("")
+                    msg_lines.append("<b>המוחות:</b>")
+                    for vote in brain_votes[:5]:
+                        brain = vote.get("brain", "Unknown")
+                        vote_str = vote.get("vote", "")
+                        score = vote.get("score", 0.0)
+                        reasoning = vote.get("reasoning", "")[:50]
+                        
+                        emoji = "✅" if vote_str == "APPROVE" else "❌"
+                        msg_lines.append(f"{emoji} <b>{brain}</b>: {score:.1f}/10 - {reasoning}...")
+            
+            msg = "\n".join(msg_lines)
             send_telegram(msg, parse_mode="HTML")
-            log.info(f"✅ Telegram sent: Trade opened {symbol}")
+            log.info(f"✅ Telegram sent: Trade opened {symbol} (with AI consensus)")
         except Exception as e:
             log.warning(f"Failed to send Telegram notification: {e}")
 
