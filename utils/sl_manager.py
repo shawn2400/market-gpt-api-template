@@ -1,8 +1,10 @@
 # utils/sl_manager.py
 """
-Zero-Gap Stop Loss Manager.
+Zero-Gap Stop Loss Manager with Smart Position Mode Compatibility.
 Ensures positions are never left unprotected when updating SL.
 Strategy: place new SL → verify → cancel old SL
+
+✅ Supports both Hedge Mode (LONG/SHORT) and One-Way Mode (BOTH)
 """
 from __future__ import annotations
 import logging
@@ -10,13 +12,6 @@ import time
 from typing import Optional, Dict, Any
 
 log = logging.getLogger(__name__)
-
-try:
-    from utils.binance_client import adapt_order_for_mode
-    _ADAPT_AVAILABLE = True
-except ImportError:
-    _ADAPT_AVAILABLE = False
-    log.warning("[ZeroGapSL] adapt_order_for_mode not available, falling back to legacy mode")
 
 
 class ZeroGapSLManager:
@@ -68,7 +63,7 @@ class ZeroGapSLManager:
             # Step 1: Place new SL
             log.info(f"[ZeroGapSL] {symbol} placing new SL @ {new_stop_price} ({side})")
             
-            # Build order kwargs
+            # Build base order kwargs
             order_kwargs = {
                 "symbol": symbol,
                 "side": order_side,
@@ -76,22 +71,18 @@ class ZeroGapSLManager:
                 "quantity": qty,
                 "stopPrice": new_stop_price,
                 "newClientOrderId": f"SL_{symbol}_{int(time.time())}",
-                "position_side": position_side,
-                "reduceOnly": None,
             }
             
-            # Use Smart Position Mode Detection to adapt order
-            if _ADAPT_AVAILABLE:
-                order_kwargs = adapt_order_for_mode(order_kwargs)
-                log.debug(f"[ZeroGapSL] {symbol} order adapted for position mode: positionSide={order_kwargs.get('positionSide')}, reduceOnly={order_kwargs.get('reduceOnly')}")
+            # ✅ SMART POSITION MODE COMPATIBILITY
+            # Add positionSide ONLY in Hedge Mode (LONG/SHORT)
+            # In One-Way Mode, position_side='BOTH' and must be OMITTED
+            if position_side and position_side in ("LONG", "SHORT"):
+                order_kwargs["positionSide"] = position_side
+                log.debug(f"[ZeroGapSL] {symbol} Hedge Mode detected: positionSide={position_side}")
             else:
-                # Legacy fallback: add positionSide if set, otherwise add reduceOnly
-                if position_side is not None:
-                    order_kwargs["positionSide"] = position_side
-                else:
-                    order_kwargs["reduceOnly"] = True
-                # Remove helper fields
-                order_kwargs.pop("position_side", None)
+                # One-Way Mode: use reduceOnly instead
+                order_kwargs["reduceOnly"] = True
+                log.debug(f"[ZeroGapSL] {symbol} One-Way Mode detected: position_side={position_side}, using reduceOnly")
             
             new_order = self.client.futures_create_order(**order_kwargs)
 
