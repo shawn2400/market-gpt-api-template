@@ -486,6 +486,17 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     elif ORDER_ID_PREFIX:
         kwargs["newClientOrderId"] = f"{ORDER_ID_PREFIX}_{int(_ms() % 10 ** 9)}"
     
+    # ✅ SMART POSITION MODE COMPATIBILITY
+    # Adapt order parameters based on detected position mode (HEDGE vs ONE-WAY)
+    # This prevents -4061 errors when position mode doesn't match order params
+    try:
+        from utils.position_mode import adapt_order_for_mode
+        side = str(kwargs.get("side", "BUY")).upper()
+        kwargs = adapt_order_for_mode(kwargs, side)
+    except Exception as e:
+        # Don't crash on adaptation failure - just log and proceed
+        print(f"[WARN] Position mode adaptation failed: {e}")
+    
     # Smart reduceOnly handling for Hedge Mode
     # CRITICAL: In Hedge Mode (positionSide present), Binance NEVER needs reduceOnly
     # The positionSide already indicates if we're closing LONG or SHORT
