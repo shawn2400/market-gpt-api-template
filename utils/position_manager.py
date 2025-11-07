@@ -27,9 +27,11 @@ ENV רלוונטי:
 הקובץ בטוח גם ללא Binance SDK/מפתחות — יחזיר skipped=True.
 """
 
-import os, math
+import os, math, logging
 from typing import Any, Dict, List, Optional, Tuple
 from contextlib import suppress
+
+logger = logging.getLogger(__name__)
 
 # --- Metrics (אופציונלי; לא בשימוש ישיר) ---
 with suppress(Exception):
@@ -322,11 +324,11 @@ async def manage_once(
                     client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
                     cancelled_sl_count += 1
                 except Exception as e:
-                    log.warning(f"Failed to cancel old SL for {symbol}: {e}")
+                    logger.warning(f"Failed to cancel old SL for {symbol}: {e}")
         if cancelled_sl_count > 0:
-            log.info(f"Cancelled {cancelled_sl_count} old SL order(s) for {symbol}")
+            logger.info(f"Cancelled {cancelled_sl_count} old SL order(s) for {symbol}")
     except Exception as e:
-        log.error(f"Failed to get/cancel old SL for {symbol}: {e}")
+        logger.error(f"Failed to get/cancel old SL for {symbol}: {e}")
 
     # Create/Replace BE Stop (STOP_MARKET closePosition)
     sl_placed = False
@@ -342,9 +344,9 @@ async def manage_once(
         )
         sl_order = client.futures_create_order(**sl_kwargs)
         sl_placed = True
-        log.info(f"✅ {symbol}: SL placed @ {be_price} (Order #{sl_order.get('orderId')})")
+        logger.info(f"✅ {symbol}: SL placed @ {be_price} (Order #{sl_order.get('orderId')})")
     except Exception as e:
-        log.error(f"❌ CRITICAL: Failed to place SL for {symbol} @ {be_price}: {e}", exc_info=True)
+        logger.error(f"❌ CRITICAL: Failed to place SL for {symbol} @ {be_price}: {e}", exc_info=True)
         return {"ok": False, "error": f"SL placement failed: {str(e)}", "symbol": symbol}
 
     # --- TP ladder + Merge ---
@@ -378,9 +380,9 @@ async def manage_once(
         try:
             tp_order = client.futures_create_order(**tp_kwargs)
             placed_tp.append({"i": i, "price": tp_price, "qty": qty_i})
-            log.debug(f"  TP{i} @ {tp_price} (qty: {qty_i})")
+            logger.debug(f"  TP{i} @ {tp_price} (qty: {qty_i})")
         except Exception as e:
-            log.warning(f"Failed to place TP{i} for {symbol} @ {tp_price}: {e}")
+            logger.warning(f"Failed to place TP{i} for {symbol} @ {tp_price}: {e}")
 
     # --- Rearm on Bounce (כמעט נגיעה) ---
     # נבדוק high/low אחרונים אל מול היעד; אם קרוב בתוך TP_REARM_TICK — נזיז את ההזמנה טיק אחד פנימה לטובת מילוי.
