@@ -374,6 +374,13 @@ async def manage_once(
             workingType=BINANCE_WORKING,
             newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role=f"SL@BE{stair_offset_bps}"),
         )
+        
+        # ✅ SMART POSITION MODE COMPATIBILITY
+        # Add positionSide ONLY in Hedge Mode (LONG/SHORT)
+        # In One-Way Mode, position_side='BOTH' and must be OMITTED
+        if position_side and position_side in ("LONG", "SHORT"):
+            sl_kwargs["positionSide"] = position_side
+        
         sl_order = client.futures_create_order(**sl_kwargs)
         sl_placed = True
         logger.info(f"✅ {symbol}: SL placed @ {be_price} (Order #{sl_order.get('orderId')})")
@@ -438,6 +445,12 @@ async def manage_once(
                 reduceOnly=True,
                 newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role=f"TP{i}"),
             )
+        
+        # ✅ SMART POSITION MODE COMPATIBILITY
+        # Add positionSide ONLY in Hedge Mode (LONG/SHORT)
+        # In One-Way Mode, position_side='BOTH' and must be OMITTED
+        if position_side and position_side in ("LONG", "SHORT"):
+            tp_kwargs["positionSide"] = position_side
         
         try:
             tp_order = client.futures_create_order(**tp_kwargs)
