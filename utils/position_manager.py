@@ -312,15 +312,25 @@ async def manage_once(
             be_price = _round_tick_dir(base_price + tick, tick, "up")
 
     # Cancel existing SL/Trail to avoid conflicts
-    with suppress(Exception):
+    try:
         open_orders = client.futures_get_open_orders(symbol=symbol)
+        cancelled_sl_count = 0
         for o in open_orders or []:
             t = str(o.get("type") or "")
             if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
-                client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+                try:
+                    client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+                    cancelled_sl_count += 1
+                except Exception as e:
+                    log.warning(f"Failed to cancel old SL for {symbol}: {e}")
+        if cancelled_sl_count > 0:
+            log.info(f"Cancelled {cancelled_sl_count} old SL order(s) for {symbol}")
+    except Exception as e:
+        log.error(f"Failed to get/cancel old SL for {symbol}: {e}")
 
     # Create/Replace BE Stop (STOP_MARKET closePosition)
-    with suppress(Exception):
+    sl_placed = False
+    try:
         sl_kwargs = dict(
             symbol=symbol,
             side=("SELL" if side_txt == "BUY" else "BUY"),
@@ -328,9 +338,14 @@ async def manage_once(
             stopPrice=be_price,
             closePosition=True,
             workingType=BINANCE_WORKING,
-            newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role=f"SL@BE{xround:=stair_offset_bps}"),  # unique-ish
+            newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role=f"SL@BE{stair_offset_bps}"),
         )
-        client.futures_create_order(**sl_kwargs)
+        sl_order = client.futures_create_order(**sl_kwargs)
+        sl_placed = True
+        log.info(f"✅ {symbol}: SL placed @ {be_price} (Order #{sl_order.get('orderId')})")
+    except Exception as e:
+        log.error(f"❌ CRITICAL: Failed to place SL for {symbol} @ {be_price}: {e}", exc_info=True)
+        return {"ok": False, "error": f"SL placement failed: {str(e)}", "symbol": symbol}
 
     # --- TP ladder + Merge ---
     qty_abs = abs(pos_amt)
@@ -360,9 +375,12 @@ async def manage_once(
             reduceOnly=True,
             newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role=f"TP{i}"),
         )
-        with suppress(Exception):
-            client.futures_create_order(**tp_kwargs)
+        try:
+            tp_order = client.futures_create_order(**tp_kwargs)
             placed_tp.append({"i": i, "price": tp_price, "qty": qty_i})
+            log.debug(f"  TP{i} @ {tp_price} (qty: {qty_i})")
+        except Exception as e:
+            log.warning(f"Failed to place TP{i} for {symbol} @ {tp_price}: {e}")
 
     # --- Rearm on Bounce (כמעט נגיעה) ---
     # נבדוק high/low אחרונים אל מול היעד; אם קרוב בתוך TP_REARM_TICK — נזיז את ההזמנה טיק אחד פנימה לטובת מילוי.

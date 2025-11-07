@@ -65,6 +65,10 @@ args = "Daily Meeting 00:00"
 task = "workflow.run"
 args = "Telegram Digest Reporter"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Trade Guardian"
+
 [[workflows.workflow]]
 name = "Auto Health Monitor"
 author = "agent"
@@ -149,6 +153,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/telegram_digest_reporter.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Trade Guardian"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_GUARDIAN=1 GUARDIAN_INTERVAL_SEC=30 GUARDIAN_TELEGRAM_ALERTS=1 python workers/trade_guardian.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
