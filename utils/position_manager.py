@@ -413,20 +413,37 @@ async def manage_once(
         if qty_i <= 0: 
             logger.warning(f"Skipping TP{i} - calculated qty={qty_i} is invalid")
             continue
-        tp_kwargs = dict(
-            symbol=symbol,
-            side=("SELL" if side_txt == "BUY" else "BUY"),
-            type="LIMIT",
-            price=tp_price,
-            quantity=qty_i,
-            timeInForce="GTC",
-            reduceOnly=True,
-            newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role=f"TP{i}"),
-        )
+        
+        # HYBRID TP Strategy: TP1=TAKE_PROFIT_MARKET (fast), TP2+=LIMIT (precise)
+        if i == 1:
+            # TP1: TAKE_PROFIT_MARKET for instant execution
+            tp_kwargs = dict(
+                symbol=symbol,
+                side=("SELL" if side_txt == "BUY" else "BUY"),
+                type="TAKE_PROFIT_MARKET",
+                stopPrice=tp_price,
+                quantity=qty_i,
+                reduceOnly=True,
+                newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role=f"TP{i}"),
+            )
+        else:
+            # TP2+: LIMIT for precise price control
+            tp_kwargs = dict(
+                symbol=symbol,
+                side=("SELL" if side_txt == "BUY" else "BUY"),
+                type="LIMIT",
+                price=tp_price,
+                quantity=qty_i,
+                timeInForce="GTC",
+                reduceOnly=True,
+                newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role=f"TP{i}"),
+            )
+        
         try:
             tp_order = client.futures_create_order(**tp_kwargs)
             placed_tp.append({"i": i, "price": tp_price, "qty": qty_i})
-            logger.info(f"  ✅ TP{i} @ {tp_price} (qty: {qty_i})")
+            tp_type = "TAKE_PROFIT_MARKET" if i == 1 else "LIMIT"
+            logger.info(f"  ✅ TP{i} @ {tp_price} (qty: {qty_i}, type: {tp_type})")
         except Exception as e:
             logger.warning(f"Failed to place TP{i} for {symbol} @ {tp_price} qty={qty_i}: {e}")
 

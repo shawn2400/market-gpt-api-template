@@ -28,6 +28,7 @@ try:
     from utils.ai_post_trade_review import review_completed_trade
     from utils.ai_consensus_improver import analyze_and_apply_improvements
     from utils.telegram_digest import get_digest
+    from utils.telegram_send import send_telegram
 except Exception as e:
     log.warning(f"AI review modules unavailable: {e}")
     async def review_completed_trade(trade_data: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore
@@ -39,6 +40,8 @@ except Exception as e:
             def add_trade_completion(self, *args, **kwargs):
                 pass
         return MockDigest()
+    def send_telegram(message: str, **kwargs):  # type: ignore
+        pass
 
 # ייבוא עדין של לקוח הבורסה
 try:
@@ -93,15 +96,31 @@ def _tick_symbol(symbol: str):
         
         # Track new position
         current_price = float(get_price(symbol) or ep)
+        side = "LONG" if current_price >= ep else "SHORT"
         _active_positions[symbol] = {
             "entry_price": ep,
             "quantity": qty,
-            "side": "LONG" if current_price >= ep else "SHORT",
+            "side": side,
             "entry_time": now,
             "sl_price": None,
             "tp_prices": [],
             "regime": "UNKNOWN"
         }
+        
+        # 🔔 IMMEDIATE Telegram Notification: Trade Opened
+        try:
+            msg = (
+                f"🚀 <b>טרייד נפתח</b>\n\n"
+                f"🎯 Symbol: <b>{symbol}</b>\n"
+                f"{'📈 LONG' if side == 'LONG' else '📉 SHORT'}\n"
+                f"💵 Entry: <code>{ep:.4f}</code>\n"
+                f"📦 Quantity: <code>{qty:.4f}</code>\n"
+                f"⏰ {time.strftime('%H:%M:%S', time.localtime(now))}"
+            )
+            send_telegram(msg, parse_mode="HTML")
+            log.info(f"✅ Telegram sent: Trade opened {symbol}")
+        except Exception as e:
+            log.warning(f"Failed to send Telegram notification: {e}")
 
     if not (ep and qty):
         # אין פוזיציה → איפוס + detect trade completion
@@ -131,6 +150,21 @@ def _tick_symbol(symbol: str):
                 inc_fill(symbol, "tp1")
                 if symbol in _entry_ts:
                     observe_ttp1(now - _entry_ts[symbol])
+                
+                # 🔔 IMMEDIATE Telegram: TP1 Hit
+                try:
+                    pnl_pct = ((current - ep) / ep * 100) if current >= ep else ((ep - current) / ep * 100)
+                    msg = (
+                        f"🎯 <b>TP1 Hit!</b>\n\n"
+                        f"🎯 Symbol: <b>{symbol}</b>\n"
+                        f"💰 Price: <code>{current:.4f}</code>\n"
+                        f"📊 PnL: <code>{pnl_pct:+.2f}%</code>\n"
+                        f"⏱️ Time to TP1: <code>{int(now - _entry_ts[symbol])}s</code>"
+                    )
+                    send_telegram(msg, parse_mode="HTML")
+                    log.info(f"✅ Telegram sent: TP1 hit {symbol}")
+                except Exception as e:
+                    log.warning(f"Failed to send TP1 Telegram: {e}")
 
     except Exception as e:
         log.debug("tick_symbol_failed %s: %s", symbol, e)
@@ -194,6 +228,25 @@ def _on_trade_completion(symbol: str, exit_time: float):
         
         # Add to buffer for batch AI review
         _completed_trades_buffer.append(trade_data)
+        
+        # 🔔 IMMEDIATE Telegram: Trade Closed + Trigger AI Review
+        try:
+            pnl_emoji = "💚" if pnl_pct > 0 else "❤️"
+            msg = (
+                f"{pnl_emoji} <b>טרייד נסגר</b>\n\n"
+                f"🎯 Symbol: <b>{symbol}</b>\n"
+                f"{'📈 LONG' if side == 'LONG' else '📉 SHORT'}\n"
+                f"💵 Entry: <code>{entry_price:.4f}</code>\n"
+                f"🏁 Exit: <code>{exit_price:.4f}</code>\n"
+                f"💰 PnL: <code>{pnl_pct:+.2f}% (${pnl_usd:+.2f})</code>\n"
+                f"⏰ Duration: <code>{int((exit_time - pos_data['entry_time']) / 60)}min</code>\n"
+                f"━━━━━━━━━━━━━━━\n"
+                f"🤖 <i>AI Review coming soon...</i>"
+            )
+            send_telegram(msg, parse_mode="HTML")
+            log.info(f"✅ Telegram sent: Trade closed {symbol} PnL={pnl_pct:+.2f}%")
+        except Exception as e:
+            log.warning(f"Failed to send trade close Telegram: {e}")
         
         log.info(f"Trade completion detected: {symbol} - PnL: ${pnl_usd:.2f} ({pnl_pct:.2f}%)")
         
