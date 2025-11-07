@@ -42,7 +42,7 @@ class DynamicBudgetManager:
         self.logger = logger
         self.client = binance_client
         
-        self.min_trade_usdt = float(os.getenv("BUDGET_MIN_USDT", "10"))
+        self.min_trade_usdt = float(os.getenv("BUDGET_MIN_USDT", "5"))  # Lower minimum for small accounts
         self.max_trade_usdt = float(os.getenv("BUDGET_MAX_USDT", "100"))
         
         self.default_risk_pct = float(os.getenv("BUDGET_RISK_PCT", "2.0"))

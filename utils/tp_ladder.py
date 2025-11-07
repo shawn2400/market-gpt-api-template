@@ -142,7 +142,7 @@ class TPLadder:
     def _cancel_existing_tps(self, symbol: str, position_side: Optional[str] = None) -> int:
         """Cancel existing TP (LIMIT) orders for this symbol."""
         try:
-            orders = self.client.get_open_orders(symbol) or []
+            orders = self.client.futures_get_open_orders(symbol=symbol) or []
             cancelled = 0
             for o in orders:
                 otype = (o.get("type") or "").upper()
