@@ -92,7 +92,7 @@ class DynamicProtectionManager:
         except Exception as e:
             log.error(f"Failed to save base protections: {e}")
     
-    def get_protection_ranges(self) -> Dict[str, Dict[str, tuple]]:
+    def get_protection_ranges(self) -> Dict[str, tuple]:
         """
         Get allowed ranges for each parameter (for AI to stay within)
         These are the boundaries AI brains must respect

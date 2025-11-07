@@ -272,6 +272,14 @@ class LivePositionManager:
             current_sl = position_data.get("current_sl", 0)
             be_moved = position_data.get("be_moved", False)
             
+            # Type guards
+            if not symbol or not isinstance(symbol, str):
+                return {"error": "Missing or invalid symbol"}
+            if not direction or not isinstance(direction, str):
+                return {"error": "Missing or invalid direction"}
+            if not sl_order_id or not isinstance(sl_order_id, str):
+                return {"error": "Missing or invalid sl_order_id"}
+            
             updates = {
                 "be_moved": be_moved,
                 "sl_updated": False,
