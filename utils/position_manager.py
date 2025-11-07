@@ -259,6 +259,7 @@ async def manage_once(
     pos_amt = 0.0
     entry_price = None
     side_txt = None
+    position_side = None  # CRITICAL: Track positionSide for Hedge Mode compatibility
     with suppress(Exception):
         positions = client.futures_position_information(symbol=symbol)
         for p in positions or []:
@@ -267,6 +268,7 @@ async def manage_once(
                 pos_amt = amt
                 entry_price = float(p.get("entryPrice") or 0.0)
                 side_txt = "BUY" if amt > 0 else "SELL"
+                position_side = p.get("positionSide")  # LONG/SHORT/BOTH (hedge mode)
                 break
     if not side_txt or not entry_price or abs(pos_amt) <= 0:
         return {"ok": True, "skipped": True, "reason": "no_open_position"}
@@ -320,22 +322,45 @@ async def manage_once(
         if base_price and be_price <= base_price:
             be_price = _round_tick_dir(base_price + tick, tick, "up")
 
-    # Cancel existing SL/Trail to avoid conflicts
+    # Cancel existing SL/Trail AND TP orders to avoid conflicts
+    # CRITICAL: Only cancel orders matching our positionSide (Hedge Mode compatibility)
     try:
         open_orders = client.futures_get_open_orders(symbol=symbol)
         cancelled_sl_count = 0
+        cancelled_tp_count = 0
+        skipped_count = 0
         for o in open_orders or []:
             t = str(o.get("type") or "")
-            if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
+            reduce_only = bool(o.get("reduceOnly"))
+            order_position_side = o.get("positionSide")
+            
+            # SAFETY: Skip orders for opposite hedge leg
+            if position_side and order_position_side and position_side != order_position_side:
+                skipped_count += 1
+                continue
+            
+            # Cancel SL/Trail orders (also closePosition=true orders without reduceOnly flag)
+            if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET") or bool(o.get("closePosition")):
                 try:
                     client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
                     cancelled_sl_count += 1
                 except Exception as e:
                     logger.warning(f"Failed to cancel old SL for {symbol}: {e}")
+            # Cancel ALL types of TP orders (LIMIT, TAKE_PROFIT, TAKE_PROFIT_MARKET with reduceOnly)
+            elif t in ("LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_MARKET") and reduce_only:
+                try:
+                    client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+                    cancelled_tp_count += 1
+                except Exception as e:
+                    logger.warning(f"Failed to cancel old TP for {symbol}: {e}")
+        if skipped_count > 0:
+            logger.debug(f"Skipped {skipped_count} order(s) for opposite hedge leg ({symbol})")
         if cancelled_sl_count > 0:
-            logger.info(f"Cancelled {cancelled_sl_count} old SL order(s) for {symbol}")
+            logger.info(f"Cancelled {cancelled_sl_count} old SL order(s) for {symbol} ({position_side or 'ONE-WAY'})")
+        if cancelled_tp_count > 0:
+            logger.info(f"Cancelled {cancelled_tp_count} old TP order(s) for {symbol} ({position_side or 'ONE-WAY'})")
     except Exception as e:
-        logger.error(f"Failed to get/cancel old SL for {symbol}: {e}")
+        logger.error(f"Failed to get/cancel old SL/TP for {symbol}: {e}")
 
     # Create/Replace BE Stop (STOP_MARKET closePosition)
     sl_placed = False

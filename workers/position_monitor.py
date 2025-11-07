@@ -37,6 +37,9 @@ def cleanup_orders_for_closed_positions(closed_symbols: List[str]) -> None:
     Cancel all remaining orders for positions that have been closed.
     This prevents orphaned TP/SL/Trailing orders from staying active.
     
+    SAFETY: Only cancels orders for symbols with ZERO position size across all sides.
+    In Hedge Mode, verifies both LONG and SHORT are flat before cleanup.
+    
     Args:
         closed_symbols: List of symbols that have been closed
     """
@@ -45,6 +48,15 @@ def cleanup_orders_for_closed_positions(closed_symbols: List[str]) -> None:
     
     for symbol in closed_symbols:
         try:
+            # SAFETY CHECK: Verify position is actually ZERO on all sides before cleanup
+            client = get_client()
+            if client:
+                positions = client.futures_position_information(symbol=symbol)
+                total_amt = sum(abs(float(p.get("positionAmt", 0))) for p in positions)
+                if total_amt > 0:
+                    logger.warning(f"⚠️ Skipping cleanup for {symbol}: Position still active (amt={total_amt})")
+                    continue
+            
             logger.info(f"🧹 Cleaning up orders for closed position: {symbol}")
             result = futures_cancel_all_orders(symbol)
             if result.get("ok"):
@@ -57,8 +69,10 @@ def cleanup_orders_for_closed_positions(closed_symbols: List[str]) -> None:
 async def ensure_positions_protected() -> None:
     """
     Auto-protect positions: adds missing SL/TP, manages BE, trailing stops.
-    Runs every 30 seconds to ensure LIVE protection.
+    Runs every 30 seconds to ensure LIVE protection + cleanup closed positions.
     """
+    global _previous_positions
+    
     if not ENABLE_AUTO_PROTECT:
         return
     
@@ -68,6 +82,21 @@ async def ensure_positions_protected() -> None:
     
     try:
         positions = get_active_positions()
+        current_symbols = {p["symbol"] for p in positions}
+        
+        # 🧹 CRITICAL: Detect and cleanup closed positions EVERY 30 seconds
+        closed_positions = []
+        for prev_symbol in _previous_positions.keys():
+            if prev_symbol not in current_symbols:
+                closed_positions.append(prev_symbol)
+        
+        if closed_positions:
+            logger.info(f"🔍 Detected {len(closed_positions)} closed position(s): {', '.join(closed_positions)}")
+            cleanup_orders_for_closed_positions(closed_positions)
+        
+        # Update tracking
+        _previous_positions = {p["symbol"]: p for p in positions}
+        
         if not positions:
             return
         
