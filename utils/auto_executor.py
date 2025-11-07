@@ -388,10 +388,18 @@ def _detect_position_mode() -> str:
     return "ONEWAY"
 
 def _pos_side_for_open(side: str) -> str:
-    return "LONG" if side == "BUY" else "SHORT"
+    """Return positionSide for order placement.
+    In ONE-WAY mode (current account setting), always use 'BOTH'.
+    In HEDGE mode, would use side (LONG/SHORT)."""
+    # Current account is in ONE-WAY MODE → use 'BOTH'
+    return "BOTH"
 
 def _pos_side_for_close(entry_side: str) -> str:
-    return "LONG" if entry_side == "BUY" else "SHORT"
+    """Return positionSide for closing orders.
+    In ONE-WAY mode (current account setting), always use 'BOTH'.
+    In HEDGE mode, would use entry_side (LONG/SHORT)."""
+    # Current account is in ONE-WAY MODE → use 'BOTH'
+    return "BOTH"
 
 # ─────────── Idempotency (Redis/memory) ───────────
 class _Idem:

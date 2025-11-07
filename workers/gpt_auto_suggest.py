@@ -1259,9 +1259,10 @@ async def process_cycle():
                 available = float(a.get("availableBalance") or a.get("available") or 0.0)
                 break
         
-        # Use 2x MIN budget as safety buffer for dynamic sizing
+        # Use 1x MIN budget as safety buffer for dynamic sizing
+        # Changed from 2.0x to 1.0x to allow trading with lower balances
         min_budget = float(os.getenv("BUDGET_MIN_USDT", "10.0"))
-        safety_buffer = min_budget * 2.0  # $20 minimum for realistic trades
+        safety_buffer = min_budget * 1.0  # $10 minimum for realistic trades
         if available < safety_buffer:
             LOGGER.warning(
                 f"⏸️ CYCLE PAUSED: Insufficient free margin (${available:.2f} < ${safety_buffer:.2f}). "
@@ -1323,9 +1324,10 @@ async def process_cycle():
                     available = float(a.get("availableBalance") or a.get("available") or 0.0)
                     break
             
-            # Use 2x MIN budget as safety buffer for dynamic sizing
+            # Use 1x MIN budget as safety buffer for dynamic sizing
+            # Changed from 2.0x to 1.0x to allow trading with lower balances
             min_budget = float(os.getenv("BUDGET_MIN_USDT", "10.0"))
-            safety_buffer = min_budget * 2.0  # $20 minimum for realistic trades
+            safety_buffer = min_budget * 1.0  # $10 minimum for realistic trades
             if available < safety_buffer:
                 LOGGER.warning(
                     f"⏸️ Insufficient margin (${available:.2f} < ${safety_buffer:.2f}) - skipping proposals temporarily"
