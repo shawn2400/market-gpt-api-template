@@ -1360,10 +1360,35 @@ async def process_cycle():
             
             consensus_engine = AIConsensusEngine()
             
-            # Build scout_data from payload for AI Consensus
+            # Extract scores from payload
+            mi_score = payload.get("mi_score", 6.0)
+            so_score = payload.get("so_score", 6.0)
+            strategy_type = payload.get("strategy_type", "mean_reversion" if ttype == "MEAN_REVERSION" else "trend_following")
+            
+            # Build scout_data with CORRECT structure that get_consensus expects
             scout_data = {
                 "symbol": symbol,
-                "side": side,
+                "strategy": strategy_type,
+                
+                # Market Scanner (Market Intelligence)
+                "market_scanner": {
+                    "score": mi_score,
+                    "regime": payload.get("regime", "UNKNOWN"),
+                    "reasoning": f"{ttype} strategy with MI score {mi_score:.1f}",
+                    "quality_score": mi_score
+                },
+                
+                # Technical Analyst (Strategy Orchestrator)
+                "technical_analyst": {
+                    "score": so_score,
+                    "strategy": strategy_type,
+                    "reasoning": f"Setup score {so_score:.1f} for {strategy_type}",
+                    "signals": []
+                },
+                
+                "avg_score": (mi_score + so_score) / 2.0,
+                
+                # Trade parameters
                 "entry": payload.get("entry"),
                 "sl": payload.get("sl"),
                 "tp1": payload.get("tp1"),
@@ -1373,9 +1398,11 @@ async def process_cycle():
                 "leverage": payload.get("leverage", 5),
                 "budget_usd": size_usd,
                 "trade_type": ttype,
-                "mi_score": payload.get("mi_score", 6.0),
-                "so_score": payload.get("so_score", 6.0),
-                "strategy_type": payload.get("strategy_type", "mean_reversion" if ttype == "MEAN_REVERSION" else "trend_following"),
+                
+                # Additional metadata
+                "min_rr": payload.get("min_rr", 1.1),
+                "sl_atr_mult": payload.get("sl_atr_mult", 1.5),
+                "tp_rr": payload.get("tp_rr", 1.5),
             }
             
             # Get wallet state for AI Consensus
