@@ -27,11 +27,10 @@ from typing import Dict, Any, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.binance_client import _init_client as get_client
-from utils.db import get_db_connection
+from utils.db import _conn
 from utils.alerts import send_telegram_message
 from utils.dynamic_sltp_manager import DynamicSLTPManager
 from utils.live_position_manager import LivePositionManager
-from utils.indicators import calculate_atr
 
 logging.basicConfig(
     level=logging.INFO,
@@ -113,6 +112,29 @@ def get_open_orders(symbol: str) -> Dict[str, List[Dict[str, Any]]]:
         return {"SL": [], "TP": [], "TRAILING": [], "OTHER": []}
 
 
+def calculate_simple_atr(highs: list, lows: list, closes: list, period: int = 14) -> float:
+    """Simple ATR calculation"""
+    try:
+        if len(highs) < period + 1:
+            return 0.0
+        
+        tr_values = []
+        for i in range(1, len(highs)):
+            high_low = highs[i] - lows[i]
+            high_close = abs(highs[i] - closes[i-1])
+            low_close = abs(lows[i] - closes[i-1])
+            tr = max(high_low, high_close, low_close)
+            tr_values.append(tr)
+        
+        if len(tr_values) < period:
+            return 0.0
+        
+        atr = sum(tr_values[-period:]) / period
+        return atr
+    except Exception:
+        return 0.0
+
+
 def get_market_data(symbol: str) -> Dict[str, Any]:
     """Get current market data for symbol"""
     try:
@@ -126,7 +148,7 @@ def get_market_data(symbol: str) -> Dict[str, Any]:
         lows = [float(k[3]) for k in klines]
         closes = [float(k[4]) for k in klines]
         
-        atr = calculate_atr(highs, lows, closes, period=14)
+        atr = calculate_simple_atr(highs, lows, closes, period=14)
         current_price = closes[-1]
         atr_pct = (atr / current_price) * 100 if current_price > 0 else 0
         
@@ -360,28 +382,26 @@ def cancel_orphaned_orders() -> int:
 def log_guardian_fix(symbol: str, issue: str, fix_applied: str, success: bool):
     """Log guardian fix to database"""
     try:
-        conn = get_db_connection()
-        if not conn:
-            return
-        
-        with conn.cursor() as cur:
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS guardian_fixes (
-                    id SERIAL PRIMARY KEY,
-                    timestamp TIMESTAMP DEFAULT NOW(),
-                    symbol VARCHAR(20),
-                    issue VARCHAR(50),
-                    fix_applied TEXT,
-                    success BOOLEAN
-                )
-            """)
+        with _conn() as conn:
+            if not conn:
+                return
             
-            cur.execute("""
-                INSERT INTO guardian_fixes (symbol, issue, fix_applied, success)
-                VALUES (%s, %s, %s, %s)
-            """, (symbol, issue, fix_applied, success))
-            
-            conn.commit()
+            with conn.cursor() as cur:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS guardian_fixes (
+                        id SERIAL PRIMARY KEY,
+                        timestamp TIMESTAMP DEFAULT NOW(),
+                        symbol VARCHAR(20),
+                        issue VARCHAR(50),
+                        fix_applied TEXT,
+                        success BOOLEAN
+                    )
+                """)
+                
+                cur.execute("""
+                    INSERT INTO guardian_fixes (symbol, issue, fix_applied, success)
+                    VALUES (%s, %s, %s, %s)
+                """, (symbol, issue, fix_applied, success))
     except Exception as e:
         logger.error(f"Failed to log guardian fix: {e}")
 
