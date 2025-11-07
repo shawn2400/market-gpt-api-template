@@ -1193,10 +1193,19 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
             LOGGER.info(f"propose_mean_reversion REJECTED {symbol}: liquidity_gate failed")
             return None
         
+        # 📊 Calculate MI Score with strategy-aware scoring
+        from utils.market_intelligence import MarketIntelligence
+        mi = MarketIntelligence()
+        mi_score = mi.calculate_quality_score(ctx, strategy="mean_reversion")
+        
+        # 📊 Calculate SO Score
+        so_score = 7.0  # Default conservative score for mean-reversion
+        
         LOGGER.info(
             f"✅ MEAN-REVERSION PROPOSAL {symbol}: {levels['side']} @ {levels['entry']:.4f}, "
             f"TP={levels['tp2']:.4f}, SL={levels['sl']:.4f}, RR={levels['rr']:.2f}, "
-            f"VWAP={levels['vwap']:.4f}, Dev={levels['deviation_pct']:.2f}%"
+            f"VWAP={levels['vwap']:.4f}, Dev={levels['deviation_pct']:.2f}%, "
+            f"MI={mi_score:.1f}, SO={so_score:.1f}"
         )
         
         payload = {
@@ -1211,13 +1220,17 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
             "tp1": float(levels["tp1"]),
             "tp2": float(levels["tp2"]),
             "tp3": None,
+            "rr": float(levels["rr"]),
             "success_pct": float(levels.get("win_rate_expected", 70.0)),
             "reason": levels.get("reason", "Mean-Reversion VWAP Strategy"),
             "leverage": 6,  # Conservative leverage for mean-reversion
             "budget_usd": float(budget),
             "notional_usd": float(budget),
             "strategy": "mean_reversion",
+            "strategy_type": "mean_reversion",
             "win_rate_expected": float(levels.get("win_rate_expected", 70.0)),
+            "mi_score": float(mi_score),
+            "so_score": float(so_score),
             "chat_id": TELEGRAM_CHAT_ID or None,
         }
         return payload
@@ -1294,16 +1307,16 @@ async def process_cycle():
     # קאפ דינמי — המינימום בין env לבין topk/3 כדי לא להציף
     cap_per_cycle = max(1, min(CAP_PER_CYCLE_ENV, max(1, topk // 3)))
 
-    async def maybe_emit(ttype: str, payload: Optional[Dict[str, Any]]):
+    async def maybe_emit(ttype: str, payload: Optional[Dict[str, Any]], ctx: Optional[Dict[str, Any]] = None):
         nonlocal accepted
         if not payload:
             return
         
         # 💰 CHECK AVAILABLE MARGIN: Skip proposals if insufficient funds
+        available = 0.0  # Initialize before try block
         try:
             from utils.binance_client import futures_balance
             bals = await futures_balance() or []
-            available = 0.0
             for a in bals:
                 if str(a.get("asset", "")).upper() == "USDT":
                     available = float(a.get("availableBalance") or a.get("available") or 0.0)
@@ -1337,6 +1350,74 @@ async def process_cycle():
             LOGGER.info(
                 f"🛡️ Portfolio blocked {symbol} {side}: {rejection_reason}"
             )
+            return
+        
+        # 🧠 AI CONSENSUS: Validate proposal with 5 AI Brains (≥3/5 required)
+        # This applies to ALL proposal types: MEAN_REVERSION, GRID, FUTURES, SPOT
+        try:
+            from utils.ai_decision_maker import AIConsensusEngine
+            
+            consensus_engine = AIConsensusEngine()
+            
+            # Build scout_data from payload for AI Consensus
+            scout_data = {
+                "symbol": symbol,
+                "side": side,
+                "entry": payload.get("entry"),
+                "sl": payload.get("sl"),
+                "tp1": payload.get("tp1"),
+                "tp2": payload.get("tp2"),
+                "tp3": payload.get("tp3"),
+                "rr": payload.get("rr"),
+                "leverage": payload.get("leverage", 5),
+                "budget_usd": size_usd,
+                "trade_type": ttype,
+                "mi_score": payload.get("mi_score", 6.0),
+                "so_score": payload.get("so_score", 6.0),
+                "strategy_type": payload.get("strategy_type", "mean_reversion" if ttype == "MEAN_REVERSION" else "trend_following"),
+            }
+            
+            # Get wallet state for AI Consensus
+            wallet_state = {"available_balance": available}
+            
+            # Use ctx if provided, otherwise build minimal context
+            market_data = ctx or {"symbol": symbol, "price": payload.get("entry")}
+            
+            LOGGER.info(f"🧠 Requesting consensus from 5 AI Brains for {symbol} ({ttype})...")
+            
+            consensus_result = await consensus_engine.get_consensus(
+                scout_data=scout_data,
+                market_data=market_data,
+                wallet_state=wallet_state
+            )
+            
+            # Log consensus
+            LOGGER.info(
+                f"🗳️ CONSENSUS [{symbol}]: {consensus_result['approve_count']}/5 APPROVE | "
+                f"Decision: {consensus_result['final_vote']} | "
+                f"Avg Score: {consensus_result['final_score']:.1f}/10"
+            )
+            
+            for vote in consensus_result["brain_votes"]:
+                LOGGER.info(
+                    f"  {vote['brain']}: {vote['vote']} ({vote['score']:.1f}/10) - {vote['reasoning'][:80]}..."
+                )
+            
+            # If REJECT, stop here
+            if consensus_result["final_vote"] == "REJECT":
+                LOGGER.info(f"❌ REJECTED by AI consensus: {symbol} ({ttype})")
+                return
+            
+            # Update payload with consensus scores
+            payload["consensus_score"] = consensus_result["final_score"]
+            payload["consensus_votes"] = f"{consensus_result['approve_count']}/5"
+            
+            LOGGER.info(f"✅ APPROVED by AI consensus: {symbol} ({ttype}) - {consensus_result['approve_count']}/5 votes")
+            
+        except Exception as e:
+            LOGGER.error(f"⚠️ AI Consensus failed for {symbol} ({ttype}): {e}")
+            # If AI Consensus fails, reject the proposal for safety
+            LOGGER.info(f"❌ REJECTED due to consensus failure: {symbol} ({ttype})")
             return
         
         # שמירת "טוקן" נסיונות כדי להגביל כמות שליחות בפועל
@@ -1402,21 +1483,21 @@ async def process_cycle():
                     LOGGER.info(f"🎯 {sym}: Attempting GRID strategy (range required ≥2%)")
                     p = await propose_grid(sym, ctx)
                     if p:
-                        await maybe_emit("GRID", p)
+                        await maybe_emit("GRID", p, ctx)
                     else:
                         # 🔄 FALLBACK CHAIN: GRID → Mean-Reversion → Futures
                         LOGGER.info(f"🔄 {sym}: GRID unavailable (no range), trying Mean-Reversion")
                         mr_p = await propose_mean_reversion(sym, ctx)
                         if mr_p:
                             LOGGER.info(f"✅ {sym}: Mean-Reversion viable for CHOPPY/<2% market")
-                            await maybe_emit("MEAN_REVERSION", mr_p)
+                            await maybe_emit("MEAN_REVERSION", mr_p, ctx)
                         else:
                             # Final fallback to Futures/Scalping
                             LOGGER.info(f"🔄 {sym}: Mean-Reversion unavailable, falling back to FUTURES")
                             if SUGGEST_FUTURES:
                                 try:
                                     p = await propose_futures(sym, ctx, success_floor)
-                                    await maybe_emit("FUTURES", p)
+                                    await maybe_emit("FUTURES", p, ctx)
                                 except Exception as e:
                                     LOGGER.exception(f"propose_futures fallback error {sym}: {e}")
                 except Exception as e:
@@ -1425,7 +1506,7 @@ async def process_cycle():
                     if SUGGEST_FUTURES:
                         try:
                             p = await propose_futures(sym, ctx, success_floor)
-                            await maybe_emit("FUTURES", p)
+                            await maybe_emit("FUTURES", p, ctx)
                         except Exception as e2:
                             LOGGER.exception(f"propose_futures fallback error {sym}: {e2}")
             
@@ -1436,14 +1517,14 @@ async def process_cycle():
                     mr_p = await propose_mean_reversion(sym, ctx)
                     if mr_p:
                         LOGGER.info(f"✅ {sym}: Mean-Reversion proposal generated")
-                        await maybe_emit("MEAN_REVERSION", mr_p)
+                        await maybe_emit("MEAN_REVERSION", mr_p, ctx)
                     else:
                         # Fallback to Futures/Scalping
                         LOGGER.info(f"🔄 {sym}: Mean-Reversion unavailable, falling back to FUTURES")
                         if SUGGEST_FUTURES:
                             try:
                                 p = await propose_futures(sym, ctx, success_floor)
-                                await maybe_emit("FUTURES", p)
+                                await maybe_emit("FUTURES", p, ctx)
                             except Exception as e:
                                 LOGGER.exception(f"propose_futures fallback error {sym}: {e}")
                 except Exception as e:
@@ -1452,7 +1533,7 @@ async def process_cycle():
                     if SUGGEST_FUTURES:
                         try:
                             p = await propose_futures(sym, ctx, success_floor)
-                            await maybe_emit("FUTURES", p)
+                            await maybe_emit("FUTURES", p, ctx)
                         except Exception as e2:
                             LOGGER.exception(f"propose_futures fallback error {sym}: {e2}")
             
@@ -1463,7 +1544,7 @@ async def process_cycle():
                 if SUGGEST_FUTURES:
                     try:
                         p = await propose_futures(sym, ctx, success_floor)
-                        await maybe_emit("FUTURES", p)
+                        await maybe_emit("FUTURES", p, ctx)
                     except Exception as e:
                         LOGGER.exception(f"propose_futures error {sym}: {e}")
             
@@ -1472,7 +1553,7 @@ async def process_cycle():
                 if SUGGEST_FUTURES:
                     try:
                         p = await propose_futures(sym, ctx, success_floor)
-                        await maybe_emit("FUTURES", p)
+                        await maybe_emit("FUTURES", p, ctx)
                     except Exception as e:
                         LOGGER.exception(f"propose_futures error {sym}: {e}")
                 
@@ -1480,7 +1561,7 @@ async def process_cycle():
                 if SUGGEST_SPOT:
                     try:
                         p = await propose_spot(sym, ctx, success_floor)
-                        await maybe_emit("SPOT", p)
+                        await maybe_emit("SPOT", p, ctx)
                     except Exception as e:
                         LOGGER.debug("propose_spot error %s: %s", sym, e)
         
@@ -1490,7 +1571,7 @@ async def process_cycle():
             if SUGGEST_FUTURES:
                 try:
                     p = await propose_futures(sym, ctx, success_floor)
-                    await maybe_emit("FUTURES", p)
+                    await maybe_emit("FUTURES", p, ctx)
                 except Exception as e2:
                     LOGGER.exception(f"propose_futures fallback error {sym}: {e2}")
 
