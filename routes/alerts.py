@@ -479,6 +479,12 @@ async def alerts_ingest(
             })
 
     # 🔍 CRITICAL LOGGING: Debug approval mode decision
+    print(f"\n\n🔍 [APPROVAL DEBUG] {sym} {side}:")
+    print(f"   - req.require_approval: {req.require_approval}")
+    print(f"   - require_approval_default: {require_approval_default}")
+    print(f"   - final_require_approval: {final_require_approval}")
+    print(f"   - plan['require_approval']: {plan['require_approval']}")
+    print(f"   - Decision: {'FULL AUTO' if not plan['require_approval'] else 'APPROVAL MODE'}\n\n")
     logger.info(f"🔍 [APPROVAL DEBUG] {sym} {side}:")
     logger.info(f"   - req.require_approval: {req.require_approval}")
     logger.info(f"   - require_approval_default: {require_approval_default}")
@@ -487,14 +493,20 @@ async def alerts_ingest(
     logger.info(f"   - Decision: {'FULL AUTO' if not plan['require_approval'] else 'APPROVAL MODE'}")
     
     # אם במצב FULL AUTO - בצע מיידית
+    print(f"🔍 [PRE-IF] Checking condition: plan['require_approval']={plan['require_approval']}, type={type(plan['require_approval'])}")
+    print(f"🔍 [PRE-IF] Condition result: not plan['require_approval'] = {not plan['require_approval']}")
     if not plan["require_approval"]:
-        logger.info(f"🚀 [FULL AUTO] Starting execution for {sym} {side} (no approval required)")
+        print(f"🚀 [INSIDE IF] YES! Entering FULL AUTO execution block!")
+        print(f"🚀 [FULL AUTO] Starting execution for {sym} {side} (no approval required)")
         try:
+            print(f"📦 [FULL AUTO] About to import auto_execute_plan...")
             from utils.auto_executor import auto_execute_plan
-            logger.info(f"📦 [FULL AUTO] Imported auto_execute_plan successfully")
-            logger.info(f"📋 [FULL AUTO] Plan details: {json.dumps(plan, indent=2)}")
+            print(f"📦 [FULL AUTO] Imported auto_execute_plan successfully")
+            print(f"📋 [FULL AUTO] Plan details: {json.dumps(plan, indent=2)}")
             
+            print(f"🚀 [FULL AUTO] About to call auto_execute_plan...")
             result = await auto_execute_plan(plan)
+            print(f"✅ [FULL AUTO] auto_execute_plan returned: {result}")
             logger.info(f"✅ [FULL AUTO] Execution completed: {result}")
             
             # שלח התראה לטלגרם (ללא כפתורים)

@@ -1108,9 +1108,11 @@ async def auto_execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     Wrapper שמקבל plan (מ-/alerts/ingest) ומבצע את הטרייד באמצעות execute_trade_live.
     מחזיר תוצאה עם ok/error + פרטי הביצוע.
     """
+    print(f"🔧 [auto_execute_plan] ENTERED function")
     try:
         symbol = str(plan.get("symbol", "")).upper()
         side = str(plan.get("side", "")).upper()
+        print(f"🔧 [auto_execute_plan] Processing {symbol} {side}")
         
         # המר LONG/SHORT ל-BUY/SELL
         if side == "LONG":
