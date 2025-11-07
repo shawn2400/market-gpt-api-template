@@ -478,18 +478,31 @@ async def alerts_ingest(
                 "require_approval": bool(plan["require_approval"]), "ts": int(time.time()),
             })
 
+    # 🔍 CRITICAL LOGGING: Debug approval mode decision
+    logger.info(f"🔍 [APPROVAL DEBUG] {sym} {side}:")
+    logger.info(f"   - req.require_approval: {req.require_approval}")
+    logger.info(f"   - require_approval_default: {require_approval_default}")
+    logger.info(f"   - final_require_approval: {final_require_approval}")
+    logger.info(f"   - plan['require_approval']: {plan['require_approval']}")
+    logger.info(f"   - Decision: {'FULL AUTO' if not plan['require_approval'] else 'APPROVAL MODE'}")
+    
     # אם במצב FULL AUTO - בצע מיידית
     if not plan["require_approval"]:
+        logger.info(f"🚀 [FULL AUTO] Starting execution for {sym} {side} (no approval required)")
         try:
             from utils.auto_executor import auto_execute_plan
-            logger.info(f"[FULL AUTO] Executing {sym} {side} immediately (no approval required)")
+            logger.info(f"📦 [FULL AUTO] Imported auto_execute_plan successfully")
+            logger.info(f"📋 [FULL AUTO] Plan details: {json.dumps(plan, indent=2)}")
+            
             result = await auto_execute_plan(plan)
+            logger.info(f"✅ [FULL AUTO] Execution completed: {result}")
             
             # שלח התראה לטלגרם (ללא כפתורים)
             try:
                 await _tg_send_auto_notification(plan, result)
+                logger.info(f"📱 [FULL AUTO] Telegram notification sent")
             except Exception as notif_err:
-                logger.warning(f"Failed to send auto-execution notification: {notif_err}")
+                logger.warning(f"⚠️ [FULL AUTO] Failed to send auto-execution notification: {notif_err}")
             
             return {
                 "ok": True, 
@@ -501,16 +514,20 @@ async def alerts_ingest(
                 "execution_result": result
             }
         except Exception as exec_err:
-            logger.error(f"[FULL AUTO] Execution failed for {sym}: {exec_err}", exc_info=True)
+            logger.error(f"❌ [FULL AUTO] Execution failed for {sym}: {exec_err}", exc_info=True)
             # אם הביצוע נכשל - נשלח לאישור במקום
             plan["require_approval"] = True
-            logger.info(f"Falling back to approval mode due to execution error")
+            logger.info(f"🔄 [FULL AUTO] Falling back to approval mode due to execution error")
+    else:
+        logger.info(f"⏸️ [APPROVAL MODE] Skipping auto-execution for {sym} {side} - sending to Telegram for approval")
     
     # מצב APPROVAL - שלח לטלגרם עם כפתורים
     try:
+        logger.info(f"📱 [APPROVAL MODE] Sending plan to Telegram with approval buttons")
         await _tg_send_plan(plan)  # רך: אם נכשל לא מפיל
+        logger.info(f"✅ [APPROVAL MODE] Telegram message sent successfully")
     except Exception as e:
-        logger.error(f"_tg_send_plan ERROR: {e}", exc_info=True)
+        logger.error(f"❌ [APPROVAL MODE] _tg_send_plan ERROR: {e}", exc_info=True)
 
     return {"ok": True, "ticket_id": tid, "symbol": sym, "qty": float(req.qty or 0), "leverage": int(plan["leverage"])}
 
