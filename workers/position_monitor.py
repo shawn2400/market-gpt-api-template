@@ -27,6 +27,11 @@ except Exception:
                 pass
         return MockDigest()
 
+try:
+    from utils.position_manager import manage_once as add_sl_tp_protection
+except Exception:
+    add_sl_tp_protection = None  # type: ignore
+
 def cleanup_orders_for_closed_positions(closed_symbols: List[str]) -> None:
     """
     Cancel all remaining orders for positions that have been closed.
@@ -49,6 +54,55 @@ def cleanup_orders_for_closed_positions(closed_symbols: List[str]) -> None:
         except Exception as e:
             logger.error(f"❌ Error cancelling orders for {symbol}: {e}")
 
+async def ensure_positions_protected() -> None:
+    """
+    Auto-protect positions: adds missing SL/TP, manages BE, trailing stops.
+    Runs every 30 seconds to ensure LIVE protection.
+    """
+    if not ENABLE_AUTO_PROTECT:
+        return
+    
+    if add_sl_tp_protection is None:
+        logger.warning("⚠️ position_manager.manage_once not available - skipping auto-protect")
+        return
+    
+    try:
+        positions = get_active_positions()
+        if not positions:
+            return
+        
+        for pos in positions:
+            symbol = pos.get("symbol", "")
+            amt = float(pos.get("positionAmt", 0))
+            
+            if amt == 0:
+                continue
+            
+            try:
+                result = await add_sl_tp_protection(symbol=symbol)
+                
+                if result.get("skipped"):
+                    logger.debug(f"⏭️ {symbol}: Protection skipped - {result.get('reason', 'unknown')}")
+                elif result.get("success"):
+                    actions = []
+                    if result.get("sl_moved"):
+                        actions.append(f"SL→BE")
+                    if result.get("tp_set"):
+                        actions.append(f"TP×{result.get('tp_count', 0)}")
+                    if result.get("trail_active"):
+                        actions.append(f"Trail")
+                    
+                    if actions:
+                        logger.info(f"✅ {symbol}: Protected [{', '.join(actions)}]")
+                else:
+                    logger.warning(f"⚠️ {symbol}: Protection failed - {result.get('error', 'unknown')}")
+            
+            except Exception as e:
+                logger.error(f"❌ {symbol}: Auto-protect error: {e}")
+        
+    except Exception as e:
+        logger.error(f"❌ ensure_positions_protected failed: {e}")
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(levelname)s:%(name)s:%(message)s'
@@ -57,7 +111,9 @@ logger = logging.getLogger("position_monitor")
 
 # Configuration
 REPORT_INTERVAL_SEC = int(os.getenv("POSITION_REPORT_INTERVAL_SEC", "1800"))  # 30 minutes
+AUTO_PROTECT_INTERVAL_SEC = int(os.getenv("AUTO_PROTECT_INTERVAL_SEC", "30"))  # 30 seconds for SL/TP checks
 ENABLE_POSITION_MONITOR = os.getenv("ENABLE_POSITION_MONITOR", "1").lower() in ("1", "true", "yes")
+ENABLE_AUTO_PROTECT = os.getenv("ENABLE_AUTO_PROTECT", "1").lower() in ("1", "true", "yes")
 POSITION_ALERT_LEVEL = os.getenv("POSITION_ALERT_LEVEL", "critical").lower()
 POSITION_PNL_THRESHOLD = float(os.getenv("POSITION_PNL_THRESHOLD_PCT", "10.0"))
 
@@ -203,17 +259,33 @@ async def send_position_report():
         logger.error(f"Failed to queue position report: {e}")
 
 async def monitor_loop():
-    """Main monitoring loop"""
-    logger.info(f"Position Monitor started (interval: {REPORT_INTERVAL_SEC}s)")
+    """Main monitoring loop - dual frequency for reports and protection"""
+    logger.info(
+        f"Position Monitor started | "
+        f"Reports: {REPORT_INTERVAL_SEC}s | "
+        f"Auto-Protect: {AUTO_PROTECT_INTERVAL_SEC}s | "
+        f"Protection: {'ON' if ENABLE_AUTO_PROTECT else 'OFF'}"
+    )
+    
+    last_report_time = 0
     
     while True:
-        try:
-            await send_position_report()
-        except Exception as e:
-            logger.error(f"Error in monitor loop: {e}")
+        current_time = time.time()
         
-        # Wait for next interval
-        await asyncio.sleep(REPORT_INTERVAL_SEC)
+        try:
+            if ENABLE_AUTO_PROTECT:
+                await ensure_positions_protected()
+        except Exception as e:
+            logger.error(f"Error in auto-protect: {e}")
+        
+        if current_time - last_report_time >= REPORT_INTERVAL_SEC:
+            try:
+                await send_position_report()
+                last_report_time = current_time
+            except Exception as e:
+                logger.error(f"Error in report: {e}")
+        
+        await asyncio.sleep(AUTO_PROTECT_INTERVAL_SEC)
 
 def main():
     if not ENABLE_POSITION_MONITOR:
