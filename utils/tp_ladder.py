@@ -102,21 +102,23 @@ class TPLadder:
                 tp_price_str, tp_price_float = self._normalize_price(symbol, tp_price)
 
                 try:
-                    # Build order kwargs, only include positionSide if it's not None
+                    # Build order kwargs
                     order_kwargs = {
                         "symbol": symbol,
                         "side": order_side,
                         "type": "LIMIT",
                         "quantity": tp_qty_str,
                         "price": tp_price_str,
-                        "reduceOnly": True,
                         "timeInForce": "GTC",
                         "newClientOrderId": f"TP{i + 1}_{symbol}_{int(tp_price_float)}",
                     }
                     
-                    # Only add positionSide if it's explicitly set (not None)
+                    # Add positionSide if set, otherwise add reduceOnly
+                    # Note: Binance API doesn't accept both positionSide and reduceOnly together
                     if position_side is not None:
                         order_kwargs["positionSide"] = position_side
+                    else:
+                        order_kwargs["reduceOnly"] = True
                     
                     order = self.client.futures_create_order(**order_kwargs)
                     if order and "orderId" in order:

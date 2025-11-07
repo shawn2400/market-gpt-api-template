@@ -63,20 +63,22 @@ class ZeroGapSLManager:
             print(f"[DEBUG SLManager] About to call self.client.futures_create_order, client type: {type(self.client)}")
             print(f"[DEBUG SLManager] positionSide={position_side!r}")
             
-            # Build order kwargs, only include positionSide if it's not None
+            # Build order kwargs
             order_kwargs = {
                 "symbol": symbol,
                 "side": order_side,
                 "type": "STOP_MARKET",
                 "quantity": qty,
                 "stopPrice": new_stop_price,
-                "reduceOnly": True,
                 "newClientOrderId": f"SL_{symbol}_{int(time.time())}",
             }
             
-            # Only add positionSide if it's explicitly set (not None)
+            # Add positionSide if set, otherwise add reduceOnly
+            # Note: Binance API doesn't accept both positionSide and reduceOnly together
             if position_side is not None:
                 order_kwargs["positionSide"] = position_side
+            else:
+                order_kwargs["reduceOnly"] = True
             
             new_order = self.client.futures_create_order(**order_kwargs)
 
