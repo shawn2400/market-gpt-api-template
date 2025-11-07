@@ -82,23 +82,26 @@ async def ensure_positions_protected() -> None:
                 result = await add_sl_tp_protection(symbol=symbol)
                 
                 if result.get("skipped"):
-                    logger.debug(f"⏭️ {symbol}: Protection skipped - {result.get('reason', 'unknown')}")
-                elif result.get("success"):
+                    logger.debug(f"⏭️ {symbol}: {result.get('reason', 'skipped')}")
+                elif result.get("ok"):
                     actions = []
-                    if result.get("sl_moved"):
-                        actions.append(f"SL→BE")
-                    if result.get("tp_set"):
-                        actions.append(f"TP×{result.get('tp_count', 0)}")
-                    if result.get("trail_active"):
-                        actions.append(f"Trail")
+                    if result.get("sl_updated") or result.get("sl_placed"):
+                        actions.append("SL")
+                    if result.get("tp_ladder_placed") or result.get("tp_count", 0) > 0:
+                        tp_count = result.get("tp_count", result.get("tp_ladder_count", 0))
+                        actions.append(f"TP×{tp_count}")
+                    if result.get("trail_placed"):
+                        actions.append("Trail")
                     
                     if actions:
                         logger.info(f"✅ {symbol}: Protected [{', '.join(actions)}]")
-                else:
+                    else:
+                        logger.debug(f"✓ {symbol}: Already protected")
+                elif not result.get("ok"):
                     logger.warning(f"⚠️ {symbol}: Protection failed - {result.get('error', 'unknown')}")
             
             except Exception as e:
-                logger.error(f"❌ {symbol}: Auto-protect error: {e}")
+                logger.error(f"❌ {symbol}: Auto-protect error: {e}", exc_info=True)
         
     except Exception as e:
         logger.error(f"❌ ensure_positions_protected failed: {e}")
