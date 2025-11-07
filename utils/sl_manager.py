@@ -70,6 +70,7 @@ class ZeroGapSLManager:
                 "type": "STOP_MARKET",
                 "quantity": qty,
                 "stopPrice": new_stop_price,
+                "reduceOnly": True,  # CRITICAL: Prevent opening new positions
                 "newClientOrderId": f"SL_{symbol}_{int(time.time())}",
             }
             
@@ -78,11 +79,9 @@ class ZeroGapSLManager:
             # In One-Way Mode, position_side='BOTH' and must be OMITTED
             if position_side and position_side in ("LONG", "SHORT"):
                 order_kwargs["positionSide"] = position_side
-                log.debug(f"[ZeroGapSL] {symbol} Hedge Mode detected: positionSide={position_side}")
+                log.debug(f"[ZeroGapSL] {symbol} Hedge Mode: positionSide={position_side}, reduceOnly=True")
             else:
-                # One-Way Mode: use reduceOnly instead
-                order_kwargs["reduceOnly"] = True
-                log.debug(f"[ZeroGapSL] {symbol} One-Way Mode detected: position_side={position_side}, using reduceOnly")
+                log.debug(f"[ZeroGapSL] {symbol} One-Way Mode: position_side={position_side}, reduceOnly=True")
             
             new_order = self.client.futures_create_order(**order_kwargs)
 
