@@ -31,6 +31,7 @@ from utils.db import _conn
 from utils.alerts import send_telegram_message
 from utils.dynamic_sltp_manager import DynamicSLTPManager
 from utils.live_position_manager import LivePositionManager
+from utils.position_manager import _bn_round, _get_filters
 
 logging.basicConfig(
     level=logging.INFO,
@@ -200,15 +201,26 @@ def add_missing_sl(position: Dict[str, Any]) -> bool:
         
         sl_price = recommendation.sl_price
         
-        # Place SL on Binance
+        # Get Binance filters and round to proper precision
         client = get_client()
+        tick, step = _get_filters(client, symbol)
+        sl_price_rounded = _bn_round(sl_price, tick)
+        
+        # Format as string with proper precision (SOLUSDT needs 2 decimals)
+        # Binance rejects floats with trailing zeros, so format explicitly
+        decimal_places = len(str(tick).split('.')[-1]) if '.' in str(tick) else 0
+        sl_price_str = f"{sl_price_rounded:.{decimal_places}f}"
+        
+        logger.info(f"📊 {symbol}: SL={sl_price:.4f} → {sl_price_str} (tick={tick})")
+        
+        # Place SL on Binance
         side = "SELL" if direction == "LONG" else "BUY"
         
         order = client.futures_create_order(
             symbol=symbol,
             side=side,
             type="STOP_MARKET",
-            stopPrice=sl_price,
+            stopPrice=sl_price_str,
             closePosition=True
         )
         
@@ -220,10 +232,10 @@ def add_missing_sl(position: Dict[str, Any]) -> bool:
         if not orders["SL"]:
             raise Exception("SL order not found after placement!")
         
-        logger.info(f"✅ {symbol}: Added SL @ ${sl_price:.4f} (Order #{order_id})")
+        logger.info(f"✅ {symbol}: Added SL @ ${sl_price_str} (Order #{order_id})")
         
         # Log to database
-        log_guardian_fix(symbol, "missing_sl", f"Added SL @ ${sl_price:.4f}", True)
+        log_guardian_fix(symbol, "missing_sl", f"Added SL @ ${sl_price_str}", True)
         
         # Telegram alert
         if GUARDIAN_TELEGRAM_ALERTS:
@@ -231,7 +243,7 @@ def add_missing_sl(position: Dict[str, Any]) -> bool:
                 f"🤖 <b>Trade Guardian Alert</b>\n\n"
                 f"Symbol: <code>{symbol}</code>\n"
                 f"Issue: <b>Missing SL</b>\n"
-                f"Fix: Added SL @ ${sl_price:.4f}\n"
+                f"Fix: Added SL @ ${sl_price_str}\n"
                 f"Direction: {direction}\n"
                 f"Entry: ${entry_price:.4f}\n"
                 f"Status: ✅ Success",
