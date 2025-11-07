@@ -82,12 +82,18 @@ PROFIT_LOCK_STEPS = _parse_profit_lock_steps(PROFIT_LOCK_STEPS_ENV)
 # --- math helpers (ticks/steps) ---
 def _bn_round(value: float, step: float) -> float:
     if step <= 0: return value
-    return math.floor(value / step) * step
+    rounded = math.floor(value / step) * step
+    # Format to remove floating point errors
+    precision = len(str(step).rstrip('0').split('.')[-1]) if '.' in str(step) else 0
+    return round(rounded, precision)
 
 def _round_tick_dir(value: float, step: float, direction: str) -> float:
     if step <= 0: return value
     q = value / step
-    return (math.ceil(q) if direction.lower().startswith("up") else math.floor(q)) * step
+    rounded = (math.ceil(q) if direction.lower().startswith("up") else math.floor(q)) * step
+    # Format to remove floating point errors
+    precision = len(str(step).rstrip('0').split('.')[-1]) if '.' in str(step) else 0
+    return round(rounded, precision)
 
 def _ticks_between(p1: float, p2: float, tick: float) -> int:
     if tick <= 0: return 0
@@ -275,7 +281,7 @@ async def manage_once(
     base_price = price_now or entry_price
 
     # Recent OHLC לקביעת bounce קרוב
-    kl_1m: List[List[Any]] = []
+    kl_1m: Any = []
     with suppress(Exception):
         kl_1m = client.futures_klines(symbol=symbol, interval="1m", limit=30)
 
