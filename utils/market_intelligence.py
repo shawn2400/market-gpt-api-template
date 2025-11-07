@@ -508,31 +508,52 @@ class MarketIntelligence:
         
         return intervals
     
-    def calculate_quality_score(self, context: Dict) -> float:
+    def calculate_quality_score(self, context: Dict, strategy: str = "trend_following") -> float:
         """
         Calculate dynamic quality score (0-10) based on technical indicators.
+        Now STRATEGY-AWARE to properly score different strategies!
+        
+        Args:
+            context: Market indicators (ADX, ATR, RSI, MACD)
+            strategy: Strategy type (mean_reversion, trend_following, scalping, etc.)
         
         Scoring breakdown:
-        - ADX (Trend Strength): 30%
+        - ADX (Trend Strength): 30% - INVERTED for mean_reversion!
         - ATR/Volatility Quality: 25%
         - RSI (Momentum): 25%
         - MACD (Trend Direction): 20%
         
         Returns:
-            Float 0-10 representing market setup quality
+            Float 0-10 representing market setup quality FOR THIS STRATEGY
         """
-        # 1. ADX Score (30%) - Trend strength
+        # 1. ADX Score (30%) - Strategy-Aware Trend Scoring
         adx = context.get("adx", 20.0)
-        if adx >= 35:
-            adx_score = 10.0  # Very strong trend
-        elif adx >= 25:
-            adx_score = 7.5  # Strong trend
-        elif adx >= 20:
-            adx_score = 5.0  # Moderate trend
-        elif adx >= 15:
-            adx_score = 3.0  # Weak trend
+        
+        # Mean-Reversion: LOW ADX = HIGH SCORE (no trend = perfect!)
+        if strategy == "mean_reversion":
+            if adx < 15:
+                adx_score = 10.0  # No trend = PERFECT for mean-reversion! ✅
+            elif adx < 20:
+                adx_score = 8.0  # Very weak trend = good
+            elif adx < 25:
+                adx_score = 5.0  # Weak trend = acceptable
+            elif adx < 30:
+                adx_score = 3.0  # Moderate trend = suboptimal
+            else:
+                adx_score = 1.0  # Strong trend = bad for mean-reversion
+        
+        # Trend-Following/Others: HIGH ADX = HIGH SCORE (trend = good!)
         else:
-            adx_score = 1.0  # No trend
+            if adx >= 35:
+                adx_score = 10.0  # Very strong trend
+            elif adx >= 25:
+                adx_score = 7.5  # Strong trend
+            elif adx >= 20:
+                adx_score = 5.0  # Moderate trend
+            elif adx >= 15:
+                adx_score = 3.0  # Weak trend
+            else:
+                adx_score = 1.0  # No trend
         
         # 2. ATR/Volatility Score (25%) - Volatility quality
         atr_pct = context.get("atr_percent", 2.5)

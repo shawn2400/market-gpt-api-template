@@ -561,14 +561,15 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
     
     # ========== CALCULATE DYNAMIC SCORES ==========
     # Market Intelligence quality score (based on ADX/ATR/RSI/MACD)
-    mi_quality_score = mi_engine.calculate_quality_score(ctx)
+    # 🎯 NOW STRATEGY-AWARE: ADX scoring adapts to strategy type!
+    mi_quality_score = mi_engine.calculate_quality_score(ctx, strategy=strategy_config.strategy_type)
     
     # Strategy Orchestrator setup score (based on RSI/MACD/BB/Volume)
     so_setup_score = orchestrator.calculate_setup_score(ctx)
     
     LOGGER.info(
-        f"📊 Dynamic Scores [{symbol}]: MI={mi_quality_score:.1f}/10, SO={so_setup_score:.1f}/10, "
-        f"AVG={(mi_quality_score + so_setup_score) / 2:.1f}/10"
+        f"📊 Strategy-Aware Scoring [{symbol}]: Strategy={strategy_config.strategy_type}, ADX={ctx.get('adx', 0):.1f}, "
+        f"MI={mi_quality_score:.1f}/10 (STRATEGY-AWARE ✅), SO={so_setup_score:.1f}/10, AVG={(mi_quality_score + so_setup_score) / 2:.1f}/10"
     )
     
     # Create market intelligence result
