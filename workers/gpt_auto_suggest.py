@@ -420,6 +420,21 @@ async def _emit(payload: Dict[str, Any]) -> bool:
     if not ALERT_INGEST_URL:
         LOGGER.error("❌ emit failed: ALERT_INGEST_URL not set")
         return False
+    
+    # 🧠 SAVE CONSENSUS TO REDIS for fills_watcher Telegram notifications
+    symbol = payload.get("symbol")
+    consensus_data = payload.get("consensus")
+    if symbol and consensus_data:
+        try:
+            from utils.redis_client import redis_client as RED
+            import json
+            if RED:
+                consensus_key = f"consensus:{symbol}"
+                RED.setex(consensus_key, 3600, json.dumps(consensus_data))  # 1 hour TTL
+                LOGGER.info(f"✅ Consensus saved to Redis: {consensus_key}")
+        except Exception as e:
+            LOGGER.warning(f"⚠️ Failed to save consensus to Redis: {e}")
+    
     try:
         body, headers = build_signed_outbound(
             WEBHOOK_HMAC_SECRET, payload,

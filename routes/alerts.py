@@ -500,7 +500,6 @@ async def alerts_ingest(
             from utils.redis_client import redis_client as RED
             if RED:
                 consensus_key = f"consensus:{sym}"
-                import json
                 RED.setex(consensus_key, 3600, json.dumps(req.consensus))  # 1 hour TTL
                 logger.info(f"✅ Consensus stored in Redis for {sym}")
         except Exception as e:

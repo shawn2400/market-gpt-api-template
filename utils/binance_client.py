@@ -385,6 +385,11 @@ def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         logger.error("Failed to get open orders: %s", e)
         return []
 
+# Alias for fills_watcher compatibility
+def futures_get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
+    """Alias for get_open_orders - used by fills_watcher and position_manager"""
+    return get_open_orders(symbol)
+
 @observe_http(name="binance_all_orders", include_labels=["symbol"])
 def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, Any]]:
     if not symbol or not symbol.strip():
