@@ -1224,11 +1224,46 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
         # 📊 Calculate SO Score
         so_score = 7.0  # Default conservative score for mean-reversion
         
+        # 💰 DYNAMIC SIZING: Calculate optimal leverage and position size
+        try:
+            from utils.binance_client import _init_client
+            cli = _init_client()
+            if cli:
+                acc_info = cli.futures_account()
+                account_equity = float(acc_info.get("totalWalletBalance", 10000.0)) if acc_info else 10000.0
+            else:
+                account_equity = 10000.0
+        except Exception:
+            account_equity = 10000.0
+        
+        quality_score = mi_score
+        volatility = (ctx.get("filters") or {}).get("vol_regime", "medium") or "medium"
+        market_condition = ctx.get("_market_condition")
+        
+        dynamic_sizing_engine = get_dynamic_sizing_engine()
+        sizing = dynamic_sizing_engine.calculate_position(
+            quality_score=quality_score,
+            risk_reward=float(levels["rr"]),
+            ai_confidence=float(levels.get("win_rate_expected", 70.0)),
+            volatility=volatility,
+            account_equity=account_equity,
+            market_regime=market_condition.regime if market_condition else "unknown",
+            market_mood=market_condition.mood if market_condition else "neutral"
+        )
+        
+        leverage = sizing.leverage
+        dynamic_budget = sizing.size_usd / leverage
+        notional = sizing.size_usd
+        
         LOGGER.info(
             f"✅ MEAN-REVERSION PROPOSAL {symbol}: {levels['side']} @ {levels['entry']:.4f}, "
             f"TP={levels['tp2']:.4f}, SL={levels['sl']:.4f}, RR={levels['rr']:.2f}, "
             f"VWAP={levels['vwap']:.4f}, Dev={levels['deviation_pct']:.2f}%, "
             f"MI={mi_score:.1f}, SO={so_score:.1f}"
+        )
+        LOGGER.info(
+            f"💰 Dynamic Sizing: {symbol} {levels['side']} → "
+            f"Leverage={leverage}x, Budget=${dynamic_budget:.2f}, Position=${notional:.2f}"
         )
         
         payload = {
@@ -1246,9 +1281,9 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
             "rr": float(levels["rr"]),
             "success_pct": float(levels.get("win_rate_expected", 70.0)),
             "reason": levels.get("reason", "Mean-Reversion VWAP Strategy"),
-            "leverage": 6,  # Conservative leverage for mean-reversion
-            "budget_usd": float(budget),
-            "notional_usd": float(budget),
+            "leverage": leverage,  # ✅ DYNAMIC LEVERAGE (was hardcoded 6x)
+            "budget_usd": float(dynamic_budget),
+            "notional_usd": float(notional),
             "strategy": "mean_reversion",
             "strategy_type": "mean_reversion",
             "win_rate_expected": float(levels.get("win_rate_expected", 70.0)),
