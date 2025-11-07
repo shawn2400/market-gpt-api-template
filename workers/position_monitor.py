@@ -15,7 +15,7 @@ from typing import Dict, Any, List
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.binance_client import _init_client as get_client
+from utils.binance_client import _init_client as get_client, futures_cancel_all_orders
 from utils.alerts import send_telegram_message
 
 try:
@@ -26,6 +26,28 @@ except Exception:
             def add_health_alert(self, *args, **kwargs):  # type: ignore
                 pass
         return MockDigest()
+
+def cleanup_orders_for_closed_positions(closed_symbols: List[str]) -> None:
+    """
+    Cancel all remaining orders for positions that have been closed.
+    This prevents orphaned TP/SL/Trailing orders from staying active.
+    
+    Args:
+        closed_symbols: List of symbols that have been closed
+    """
+    if not closed_symbols:
+        return
+    
+    for symbol in closed_symbols:
+        try:
+            logger.info(f"🧹 Cleaning up orders for closed position: {symbol}")
+            result = futures_cancel_all_orders(symbol)
+            if result.get("ok"):
+                logger.info(f"✅ Cancelled all orders for {symbol}")
+            else:
+                logger.warning(f"⚠️ Failed to cancel orders for {symbol}: {result.get('error')}")
+        except Exception as e:
+            logger.error(f"❌ Error cancelling orders for {symbol}: {e}")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -124,6 +146,10 @@ def detect_significant_changes(positions: List[Dict[str, Any]]) -> tuple[bool, s
     for symbol, prev_pos in _previous_positions.items():
         if symbol not in current_symbols:
             closed_positions.append(symbol)
+    
+    # 🧹 CLEANUP: Cancel all remaining orders for closed positions
+    if closed_positions:
+        cleanup_orders_for_closed_positions(closed_positions)
     
     for symbol, pos in current_symbols.items():
         if symbol in _previous_positions:
