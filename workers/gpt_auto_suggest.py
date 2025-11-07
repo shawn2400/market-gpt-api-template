@@ -58,18 +58,11 @@ async def _fetch_real_indicators(symbol: str, interval: str = "15m", limit: int 
     🎯 LIVE BINANCE DATA - Fetch real klines and calculate all indicators
     """
     try:
-        from utils.get_klines import get_klines, _last_ts, _cache_key
+        from utils.get_klines import get_klines
         from utils.symbols import normalize_symbol
         from utils.indicators import rsi, adx, atr, macd, bollinger_bands, ema
         
-        # CRITICAL FIX: Clear startTime cache before fetching large dataset
-        # This prevents "Insufficient klines data (1 candles)" issue
-        if limit > 100:
-            cache_key = _cache_key("futures", normalize_symbol(symbol), interval)
-            _last_ts.pop(cache_key, None)  # Remove cached timestamp
-            LOGGER.info(f"🔧 Cleared klines cache for {symbol} (limit={limit})")
-        
-        # Fetch real klines from Binance
+        # Fetch real klines from Binance (v3.0.0 - no caching, always fresh data)
         df = await get_klines(symbol, interval=interval, limit=limit, market_type="futures")
         
         if df.empty or len(df) < 50:
@@ -1591,6 +1584,23 @@ async def process_cycle():
     LOGGER.info("cycle finished: symbols=%d accepted=%d cap=%d", len(symbols), accepted, cap_per_cycle)
 
 async def main():
+    # ========== MODULE VERSION VERIFICATION ==========
+    # Verify get_klines module is loaded correctly (detect caching issues)
+    try:
+        from utils.get_klines import KLINES_VERSION, KLINES_MODULE_FILE, KLINES_FIX_DESCRIPTION, _get_module_hash
+        LOGGER.info(f"✅ get_klines verification: VERSION={KLINES_VERSION}, FILE={KLINES_MODULE_FILE}")
+        LOGGER.info(f"✅ get_klines module hash: {_get_module_hash()}, FIX={KLINES_FIX_DESCRIPTION}")
+        
+        # Verify we're using the correct version (no startTime caching)
+        if KLINES_VERSION != "3.0.0":
+            LOGGER.error(f"❌ STALE get_klines module detected! Expected v3.0.0, got {KLINES_VERSION}")
+            LOGGER.error(f"❌ This means Gunicorn workers are using CACHED old code!")
+            LOGGER.error(f"❌ ACTION REQUIRED: Restart all workers to load updated code")
+        else:
+            LOGGER.info(f"✅ get_klines module is up-to-date (v{KLINES_VERSION})")
+    except Exception as e:
+        LOGGER.error(f"❌ Failed to verify get_klines module version: {e}")
+    
     # Log feature toggles at startup
     LOGGER.info(f"🚀 Auto-suggest started: FUTURES={SUGGEST_FUTURES}, SPOT={SUGGEST_SPOT}, GRID={SUGGEST_GRID}")
     if not SUGGEST_ENABLED:

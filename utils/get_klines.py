@@ -1,10 +1,29 @@
 from __future__ import annotations
-import asyncio, random, os
+import asyncio, random, os, hashlib, logging
 from typing import List, Dict, Any
 import pandas as pd
 
 from utils.symbols import normalize_symbol
 from utils.http_client import safe_get
+
+# ========== VERSION TRACKING & TELEMETRY ==========
+# This helps detect module caching issues where workers load stale code
+KLINES_VERSION = "3.0.0"  # Bump this when making changes to verify workers load new code
+KLINES_MODULE_FILE = __file__
+KLINES_FIX_DESCRIPTION = "No startTime caching - always fetch latest N candles"
+
+logger = logging.getLogger(__name__)
+
+def _get_module_hash() -> str:
+    """Calculate hash of this module for cache verification"""
+    try:
+        with open(__file__, 'rb') as f:
+            return hashlib.sha256(f.read()).hexdigest()[:8]
+    except Exception:
+        return "unknown"
+
+# Log module version on import for debugging caching issues
+logger.info(f"🔧 get_klines module loaded: VERSION={KLINES_VERSION}, FILE={KLINES_MODULE_FILE}, HASH={_get_module_hash()}, FIX={KLINES_FIX_DESCRIPTION}")
 
 BINANCE_FAPI = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
 BINANCE_SPOT = os.getenv("BINANCE_SPOT_HTTP_BASE", "https://api.binance.com").rstrip("/")
@@ -13,7 +32,7 @@ _BASE_PAUSE_MS = int(os.getenv("KLINES_BASE_PAUSE_MS", "60"))
 _JITTER_MS_MIN = int(os.getenv("KLINES_JITTER_MS_MIN", "20"))
 _JITTER_MS_MAX = int(os.getenv("KLINES_JITTER_MS_MAX", "120"))
 
-# CRITICAL FIX v2: DISABLE klines caching completely
+# CRITICAL FIX v3.0.0: DISABLE klines caching completely
 # The _last_ts cache causes "Insufficient klines data (1 candles)" when:
 # - Requesting limit=200 with startTime from 30min ago
 # - Binance interprets this as incremental update and returns only 1 new candle
