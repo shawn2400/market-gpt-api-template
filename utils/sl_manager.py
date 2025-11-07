@@ -11,6 +11,13 @@ from typing import Optional, Dict, Any
 
 log = logging.getLogger(__name__)
 
+try:
+    from utils.binance_client import adapt_order_for_mode
+    _ADAPT_AVAILABLE = True
+except ImportError:
+    _ADAPT_AVAILABLE = False
+    log.warning("[ZeroGapSL] adapt_order_for_mode not available, falling back to legacy mode")
+
 
 class ZeroGapSLManager:
     """
@@ -60,8 +67,6 @@ class ZeroGapSLManager:
 
             # Step 1: Place new SL
             log.info(f"[ZeroGapSL] {symbol} placing new SL @ {new_stop_price} ({side})")
-            print(f"[DEBUG SLManager] About to call self.client.futures_create_order, client type: {type(self.client)}")
-            print(f"[DEBUG SLManager] positionSide={position_side!r}")
             
             # Build order kwargs
             order_kwargs = {
@@ -71,14 +76,22 @@ class ZeroGapSLManager:
                 "quantity": qty,
                 "stopPrice": new_stop_price,
                 "newClientOrderId": f"SL_{symbol}_{int(time.time())}",
+                "position_side": position_side,
+                "reduceOnly": None,
             }
             
-            # Add positionSide if set, otherwise add reduceOnly
-            # Note: Binance API doesn't accept both positionSide and reduceOnly together
-            if position_side is not None:
-                order_kwargs["positionSide"] = position_side
+            # Use Smart Position Mode Detection to adapt order
+            if _ADAPT_AVAILABLE:
+                order_kwargs = adapt_order_for_mode(order_kwargs)
+                log.debug(f"[ZeroGapSL] {symbol} order adapted for position mode: positionSide={order_kwargs.get('positionSide')}, reduceOnly={order_kwargs.get('reduceOnly')}")
             else:
-                order_kwargs["reduceOnly"] = True
+                # Legacy fallback: add positionSide if set, otherwise add reduceOnly
+                if position_side is not None:
+                    order_kwargs["positionSide"] = position_side
+                else:
+                    order_kwargs["reduceOnly"] = True
+                # Remove helper fields
+                order_kwargs.pop("position_side", None)
             
             new_order = self.client.futures_create_order(**order_kwargs)
 
