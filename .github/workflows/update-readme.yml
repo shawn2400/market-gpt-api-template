@@ -1,0 +1,50 @@
+name: Auto-Update README
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'utils/ai_decision_maker.py'
+      - 'utils/strategy_orchestrator.py'
+      - 'workers/*.py'
+      - 'utils/indicators*.py'
+  workflow_dispatch:
+
+jobs:
+  update-readme:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: Run README update script
+        run: |
+          python scripts/update_readme.py
+      
+      - name: Check for changes
+        id: check_changes
+        run: |
+          if git diff --quiet README.md; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Commit and push if changed
+        if: steps.check_changes.outputs.changed == 'true'
+        run: |
+          git config --global user.name "AlgoGPT Bot"
+          git config --global user.email "bot@algogpt.ai"
+          git add README.md
+          git commit -m "🤖 Auto-update README.md metrics"
+          git push

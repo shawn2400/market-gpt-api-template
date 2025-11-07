@@ -1,7 +1,7 @@
 # AlgoGPT - Algorithmic Trading Platform
 
 ## Overview
-AlgoGPT is an algorithmic trading platform for 24/7 live Binance Futures trading. It automates market scanning across 534 symbols, utilizes 100% autonomous AI-powered trade decisions via 7-Brain architecture (2 AI Scouts + 5 AI Decision Makers), and integrates GRID trading with dynamic capital management. The platform features a self-adaptive trading engine with complete data persistence, aiming for 4-10 high-quality daily trades, profitability, and autonomous operation. **MetaBrain v9.0** introduces fully autonomous, fully dynamic trading with hierarchical AI consensus, regime-driven dynamic parameters, and 100% strategic freedom (LONG/SHORT/GRID/SPOT/Scalping/Mean-Reversion) across all market conditions.
+AlgoGPT is an algorithmic trading platform for 24/7 live Binance Futures trading. It automates market scanning across 534 symbols, utilizes 100% autonomous AI-powered trade decisions via **5 AI Brains** consensus engine (GPT-5, Gemini 2 Pro, DeepSeek, Grok, Claude), and integrates **7 Trading Strategies** (Mean-Reversion, Scalping, Range-Bounce, Trend-Following, Breakout, GRID, SPOT) with dynamic capital management. The platform features a self-adaptive trading engine with complete data persistence via **8 Background Workers**, aiming for 4-10 high-quality daily trades, profitability, and autonomous operation. **MetaBrain v9.0** introduces fully autonomous, fully dynamic trading with hierarchical AI consensus, regime-driven dynamic parameters, and 100% strategic freedom across all market conditions.
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
@@ -28,9 +28,13 @@ The core application is built with FastAPI and Gunicorn, featuring modularized f
 -   **Complete Data Persistence**: All critical data is saved to a PostgreSQL database.
 
 **MetaBrain v9.0 - 100% Autonomous Dynamic Trading:**
--   **6-Brain Hierarchical Architecture**: 
-    - **2 AI Scouts**: Market Scanner (identifies opportunities across 534 symbols) + Technical Analyst (deep technical analysis)
-    - **4 AI Decision Makers**: GPT-5, Gemini 2 Pro, DeepSeek, Grok-2-latest vote independently (≥3 APPROVE required, Claude unavailable due to low credit)
+-   **5-Brain Hierarchical Consensus Architecture**: 
+    - **GPT-5** (gpt-5-2025-08-07) - Lead Orchestrator ✅
+    - **Gemini 2 Pro** (gemini-2.0-flash-exp) - Fast Multi-Modal Analyst ⚠️ (50/day quota)
+    - **DeepSeek** (deepseek-chat) - Deep Pattern Analyst ✅
+    - **Grok** (grok-2-latest) - Contrarian Analyst ✅
+    - **Claude Sonnet 3.5** (claude-3-5-sonnet-20241022) - Conservative Risk Validator ✅
+    - **Consensus Rule**: ≥3 APPROVE required out of 5 to execute trade
 -   **Dynamic Protection Manager**: Maintains 4 regime-specific parameter sets with AI consensus (Entry Quality, SL ATR, TP RR, BE Trigger, Trail ATR, Leverage)
     - TRENDING: Entry Quality ≥5.8, SL ATR×1.7, TP RR 2.0, BE +0.4%, Trail ATR×0.9, Lev 6x
     - CHOPPY: Entry Quality ≥6.5, SL ATR×1.3, TP RR 1.4, BE +0.6%, Trail ATR×0.6, Lev 3x
@@ -46,12 +50,13 @@ The core application is built with FastAPI and Gunicorn, featuring modularized f
 -   **Security & Authentication**: Uses Bearer Token (`X-API-Key`) and HMAC Signature, with anti-replay protection
 -   **Alert Management**: Auto Health Monitor uses 5 consecutive failures + 15-minute cooldown before sending CRITICAL alerts, preventing spam from intermittent database issues
 
-### AI Brains System
-The system integrates 9+ specialized AI systems with 4 active AI providers for consensus-based decisions:
--   **Multi-AI Consensus Engine**: Orchestrated by OpenAI GPT-5, supported by Google Gemini 2 Pro, DeepSeek Chat, and AI-X Grok-2-latest (Claude Sonnet 3.5 disabled due to insufficient credits).
+### AI Brains System (5 Active Brains)
+The system integrates **5 AI brains** in a hierarchical consensus architecture:
+-   **Multi-AI Consensus Engine**: Orchestrated by OpenAI GPT-5 (gpt-5-2025-08-07), supported by Google Gemini 2 Pro (gemini-2.0-flash-exp), DeepSeek Chat (deepseek-chat), AI-X Grok (grok-2-latest), and Anthropic Claude Sonnet 3.5 (claude-3-5-sonnet-20241022).
 -   **Specialized AI Systems**: Includes GPT Auto Suggest, Multi-AI Consensus Scorer, Adaptive Prompt Engine, Market Intelligence Brain, Portfolio Intelligence, News Sentiment Analyzer, and Auto-Flip System.
--   **Post-Trade AI Review System**: All 4 active AI brains independently analyze completed trades across entry quality, SL/TP placement, position management, and exit timing.
+-   **Post-Trade AI Review System**: All 5 AI brains independently analyze completed trades across entry quality, SL/TP placement, position management, and exit timing.
 -   **Autonomous Improvement System**: When 3+ brains reach a 60%+ consensus, the system automatically applies parameter improvements and commits changes to GitHub, including SL/TP multipliers, minimum RR thresholds, leverage caps, quality score filters, and BE/Trailing trigger points.
+-   **Order Cleanup on Trade Close**: Position Monitor automatically cancels all remaining TP/SL/Trailing orders when a position is closed (prevents orphaned orders).
 
 ### Validation & Safety Infrastructure
 Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates (Dual Confirmation), Data-Driven Monte Carlo simulations, a Live Health Monitor, and Circuit Breakers.
@@ -65,7 +70,17 @@ Consolidated notification system with batched reports:
 -   **Rate Limiting**: Maximum 3 immediate messages per 30-minute window; overflow queued to next digest.
 
 ### Deployment Architecture
-The production environment runs on Render.com with 8 background workers and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development and testing. The system supports a 3-phase progressive rollout for dynamic regime trading, currently in full production (Phase 3).
+The production environment runs on Render.com with **8 Background Workers** and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development and testing. The system supports a 3-phase progressive rollout for dynamic regime trading, currently in full production (Phase 3).
+
+**8 Workers:**
+1. AlgoGPT Server (FastAPI + Gunicorn)
+2. Auto Health Monitor (30s health checks)
+3. Auto Scanner (120s market scans)
+4. Daily Meeting 00:00 (daily reports)
+5. Fills Watcher (15s order tracking)
+6. GPT-5 Central Brain (orchestration)
+7. Position Monitor (30min PnL reports + order cleanup)
+8. Sentinel Security (anomaly detection)
 
 ## External Dependencies
 
