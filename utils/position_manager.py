@@ -82,10 +82,11 @@ PROFIT_LOCK_STEPS = _parse_profit_lock_steps(PROFIT_LOCK_STEPS_ENV)
 # --- math helpers (ticks/steps) ---
 def _bn_round(value: float, step: float) -> float:
     if step <= 0: return value
-    rounded = math.floor(value / step) * step
-    # Format to remove floating point errors
-    precision = len(str(step).rstrip('0').split('.')[-1]) if '.' in str(step) else 0
-    return round(rounded, precision)
+    # Calculate precision from step size
+    step_str = f"{step:.10f}".rstrip('0')
+    precision = len(step_str.split('.')[-1]) if '.' in step_str else 0
+    # Round to avoid floating point errors
+    return round(math.floor(value / step + 1e-9) * step, precision)
 
 def _round_tick_dir(value: float, step: float, direction: str) -> float:
     if step <= 0: return value
@@ -369,10 +370,24 @@ async def manage_once(
 
     targets, splits_used, merge_notes = _merge_targets_if_close(raw_targets, _splits, tick, side_txt, TP_MERGE_TICK_BAND)
 
+    # Calculate quantities - last TP gets exact remainder to avoid ReduceOnly rejection
+    tp_quantities: List[float] = []
+    qty_sum = 0.0
+    for i, split in enumerate(splits_used):
+        if i == len(splits_used) - 1:
+            # Last TP: exact remainder (rounded to step)
+            qty_i = _bn_round(qty_abs - qty_sum, step)
+        else:
+            # Regular TPs: round down
+            qty_i = _bn_round(qty_abs * float(split), step)
+            qty_sum += qty_i
+        tp_quantities.append(qty_i)
+
     placed_tp: List[Dict[str, Any]] = []
-    for i, (tp_price, split) in enumerate(zip(targets, splits_used), start=1):
-        qty_i = _bn_round(qty_abs * float(split), step)
-        if qty_i <= 0: continue
+    for i, (tp_price, qty_i) in enumerate(zip(targets, tp_quantities), start=1):
+        if qty_i <= 0: 
+            logger.warning(f"Skipping TP{i} - calculated qty={qty_i} is invalid")
+            continue
         tp_kwargs = dict(
             symbol=symbol,
             side=("SELL" if side_txt == "BUY" else "BUY"),
@@ -386,9 +401,9 @@ async def manage_once(
         try:
             tp_order = client.futures_create_order(**tp_kwargs)
             placed_tp.append({"i": i, "price": tp_price, "qty": qty_i})
-            logger.debug(f"  TP{i} @ {tp_price} (qty: {qty_i})")
+            logger.info(f"  ✅ TP{i} @ {tp_price} (qty: {qty_i})")
         except Exception as e:
-            logger.warning(f"Failed to place TP{i} for {symbol} @ {tp_price}: {e}")
+            logger.warning(f"Failed to place TP{i} for {symbol} @ {tp_price} qty={qty_i}: {e}")
 
     # --- Rearm on Bounce (כמעט נגיעה) ---
     # נבדוק high/low אחרונים אל מול היעד; אם קרוב בתוך TP_REARM_TICK — נזיז את ההזמנה טיק אחד פנימה לטובת מילוי.
