@@ -28,7 +28,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.binance_client import _init_client as get_client
 from utils.db import _conn
-from utils.alerts import send_telegram_message
 from utils.dynamic_sltp_manager import DynamicSLTPManager
 from utils.live_position_manager import LivePositionManager
 from utils.position_manager import _bn_round, _get_filters
@@ -53,7 +52,8 @@ stats = {
     "orphaned_cancelled": 0,
     "errors": 0,
     "last_run": None,
-    "total_runs": 0
+    "total_runs": 0,
+    "last_sl_attempt": {}  # Track last attempt per symbol to avoid race with Position Monitor
 }
 
 
@@ -237,18 +237,33 @@ def add_missing_sl(position: Dict[str, Any]) -> bool:
         # Log to database
         log_guardian_fix(symbol, "missing_sl", f"Added SL @ ${sl_price_str}", True)
         
-        # Telegram alert
+        # Telegram alert (use simple requests instead of async)
         if GUARDIAN_TELEGRAM_ALERTS:
-            send_telegram_message(
-                f"🤖 <b>Trade Guardian Alert</b>\n\n"
-                f"Symbol: <code>{symbol}</code>\n"
-                f"Issue: <b>Missing SL</b>\n"
-                f"Fix: Added SL @ ${sl_price_str}\n"
-                f"Direction: {direction}\n"
-                f"Entry: ${entry_price:.4f}\n"
-                f"Status: ✅ Success",
-                parse_mode="HTML"
-            )
+            try:
+                import requests
+                bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+                chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+                
+                if bot_token and chat_id:
+                    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                    payload = {
+                        "chat_id": chat_id,
+                        "text": (
+                            f"🤖 <b>Trade Guardian Alert</b>\n\n"
+                            f"Symbol: <code>{symbol}</code>\n"
+                            f"Issue: <b>Missing SL</b>\n"
+                            f"Fix: Added SL @ ${sl_price_str}\n"
+                            f"Direction: {direction}\n"
+                            f"Entry: ${entry_price:.4f}\n"
+                            f"Status: ✅ Success"
+                        ),
+                        "parse_mode": "HTML",
+                        "disable_web_page_preview": True
+                    }
+                    requests.post(url, json=payload, timeout=5)
+                    logger.info("📱 Telegram alert sent")
+            except Exception as e:
+                logger.warning(f"Failed to send Telegram alert: {e}")
         
         stats["sl_added"] += 1
         return True
@@ -437,10 +452,20 @@ async def guardian_check():
             # Get open orders
             orders = get_open_orders(symbol)
             
-            # Check SL
+            # Check SL - but don't interfere if Position Monitor is actively managing
+            # Position Monitor runs manage_once() which cancels/replaces SL every cycle
+            # We only add SL if NONE exist for 60+ seconds (2 Guardian cycles)
             if not orders["SL"]:
-                logger.warning(f"⚠️ {symbol}: NO SL FOUND!")
-                add_missing_sl(pos)
+                # Check if we recently tried to add SL for this symbol
+                last_attempt = stats.get("last_sl_attempt", {}).get(symbol, 0)
+                now = time.time()
+                
+                if now - last_attempt > 60:  # Only try once per minute
+                    logger.warning(f"⚠️ {symbol}: NO SL FOUND for 60+ seconds!")
+                    stats.setdefault("last_sl_attempt", {})[symbol] = now
+                    add_missing_sl(pos)
+                else:
+                    logger.debug(f"⏳ {symbol}: SL missing but waiting (last attempt {int(now - last_attempt)}s ago)")
             else:
                 logger.debug(f"✓ {symbol}: SL exists ({len(orders['SL'])} order(s))")
             
