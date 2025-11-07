@@ -1733,6 +1733,24 @@ try:
 except Exception as e:
     logger.warning("Failed to load AI routes: %s", e)
 
+try:
+    from routes.executor import router as executor_router
+    app.include_router(executor_router)
+except Exception as e:
+    logger.warning("Failed to load executor routes: %s", e)
+
+try:
+    from routes.public import router as public_router
+    app.include_router(public_router)
+except Exception as e:
+    logger.warning("Failed to load public routes: %s", e)
+
+try:
+    from routes.executors_grid_export import router as executors_grid_export_router
+    app.include_router(executors_grid_export_router)
+except Exception as e:
+    logger.warning("Failed to load executors_grid_export routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():
