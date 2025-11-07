@@ -35,14 +35,23 @@ The core application is built with FastAPI and Gunicorn, featuring modularized f
     - **Grok** (grok-2-latest) - Contrarian Analyst ✅
     - **Claude Sonnet 3.5** (claude-3-5-sonnet-20241022) - Conservative Risk Validator ✅
     - **Consensus Rule**: ≥3 APPROVE required out of 5 to execute trade
+-   **Dynamic Sizing Engine v2.0**: 100% dynamic leverage calculation (3x-8x) based on quality score, volatility, market regime, and AI confidence - **NO MORE HARDCODED VALUES**
+    - All strategies (Futures, Mean-Reversion, Scalping, Range-Bounce) use dynamic leverage
+    - Real-time account equity integration for position sizing
+    - Adaptive to market conditions and trade quality
 -   **Dynamic Protection Manager**: Maintains 4 regime-specific parameter sets with AI consensus (Entry Quality, SL ATR, TP RR, BE Trigger, Trail ATR, Leverage)
-    - TRENDING: Entry Quality ≥5.8, SL ATR×1.7, TP RR 2.0, BE +0.4%, Trail ATR×0.9, Lev 6x
-    - CHOPPY: Entry Quality ≥6.5, SL ATR×1.3, TP RR 1.4, BE +0.6%, Trail ATR×0.6, Lev 3x
-    - VOLATILE: Entry Quality ≥6.2, SL ATR×1.9, TP RR 2.2, BE +0.5%, Trail ATR×1.0, Lev 4x
-    - SIDEWAYS: Entry Quality ≥6.0, SL ATR×1.4, TP RR 1.3, BE +0.6%, Trail ATR×0.7, Lev 5x
+    - TRENDING: Entry Quality ≥5.8, SL ATR×1.7, TP RR 2.0, BE +0.4%, Trail ATR×0.9, Lev 3x-8x (dynamic)
+    - CHOPPY: Entry Quality ≥6.5, SL ATR×1.3, TP RR 1.4, BE +0.6%, Trail ATR×0.6, Lev 3x-8x (dynamic)
+    - VOLATILE: Entry Quality ≥6.2, SL ATR×1.9, TP RR 2.2, BE +0.5%, Trail ATR×1.0, Lev 3x-8x (dynamic)
+    - SIDEWAYS: Entry Quality ≥6.0, SL ATR×1.4, TP RR 1.3, BE +0.6%, Trail ATR×0.7, Lev 3x-8x (dynamic)
 -   **Regime-Based Quality Thresholds**: Quality requirements adapt to market regime (5.8-6.5) instead of static 8.5, enabling realistic trade generation
 -   **Regime Detector**: Automatically detects market regime using ADX, ATR, Bollinger Bands, and price range analysis
 -   **Dual Order Types**: System uses BOTH LIMIT (precision entry) and MARKET (instant execution) orders dynamically based on regime and volatility
+-   **Smart Position Mode Compatibility**: Auto-detects and adapts to BOTH Hedge Mode and One-Way Mode without manual configuration
+    - **Hedge Mode** (dualSidePosition=true): Adds positionSide (LONG/SHORT) to all orders
+    - **One-Way Mode** (dualSidePosition=false): Omits positionSide from orders (avoids -4061 errors)
+    - **Auto-detection with 5-minute cache**: Minimizes API calls while maintaining accuracy
+    - **Zero manual intervention**: Works seamlessly regardless of Binance account settings
 -   **100% Strategic Freedom**: Generates trades in EVERY market condition (LONG/SHORT/GRID/SPOT/Scalping/Mean-Reversion)
 -   **AI Consensus Parameters**: Each brain proposes parameters within base protection ranges; final values = median of all brains
 -   **Database Resilience**: 3-layer protection including auto-pause prevention, exponential backoff retries, fallback to query without 'paused' column for legacy database compatibility
