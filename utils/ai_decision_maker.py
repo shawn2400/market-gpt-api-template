@@ -302,10 +302,10 @@ class GrokBrain(AIBrain):
 
 
 class ClaudeBrain(AIBrain):
-    """Claude Sonnet 3.5 - Conservative validator."""
+    """Claude Sonnet 4.5 - Conservative validator."""
     
     def __init__(self):
-        super().__init__("Claude Sonnet 3.5", "anthropic", "claude-3-5-sonnet-20240620")
+        super().__init__("Claude Sonnet 4.5", "anthropic", "claude-sonnet-4-5")
         self.api_key = os.getenv("ANTHROPIC_API_KEY")
     
     async def vote(self, scout_data, market_data, wallet_state) -> Dict[str, Any]:
