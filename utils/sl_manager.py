@@ -91,7 +91,7 @@ class ZeroGapSLManager:
             verified = False
             for attempt in range(max_verify_attempts):
                 time.sleep(0.3)  # Brief delay
-                open_orders = self.client.get_open_orders(symbol) or []
+                open_orders = self.client.futures_get_open_orders(symbol=symbol) or []
                 for o in open_orders:
                     if o.get("orderId") == new_order_id:
                         status = (o.get("status") or "").upper()
@@ -113,7 +113,7 @@ class ZeroGapSLManager:
 
             # Step 3: Cancel old SL orders (exclude the new one)
             log.info(f"[ZeroGapSL] {symbol} new SL verified, cancelling old SLs")
-            open_orders = self.client.get_open_orders(symbol) or []
+            open_orders = self.client.futures_get_open_orders(symbol=symbol) or []
             cancelled_count = 0
             for o in open_orders:
                 oid = o.get("orderId")
@@ -128,7 +128,7 @@ class ZeroGapSLManager:
                     if order_pos_side and order_pos_side != position_side.upper():
                         continue
                 try:
-                    self.client.futures_cancel_order(symbol, oid)
+                    self.client.futures_cancel_order(symbol=symbol, orderId=oid)
                     cancelled_count += 1
                     log.info(f"[ZeroGapSL] {symbol} cancelled old SL order {oid}")
                 except Exception as e:
@@ -136,7 +136,7 @@ class ZeroGapSLManager:
 
             # Step 4: Verify old orders are gone
             time.sleep(0.2)
-            remaining_orders = self.client.get_open_orders(symbol) or []
+            remaining_orders = self.client.futures_get_open_orders(symbol=symbol) or []
             remaining_stop_count = 0
             for o in remaining_orders:
                 if o.get("orderId") == new_order_id:
