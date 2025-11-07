@@ -79,8 +79,16 @@ The production environment runs on Render.com with **8 Background Workers** and 
 4. Daily Meeting 00:00 (daily reports)
 5. Fills Watcher (15s order tracking)
 6. GPT-5 Central Brain (orchestration)
-7. Position Monitor (30min PnL reports + order cleanup)
+7. Position Monitor (30min PnL reports + 30s auto-SL/TP protection + order cleanup)
 8. Sentinel Security (anomaly detection)
+
+**Position Monitor v2.0 - Auto SL/TP Protection:**
+-   **Dual-Frequency System**: Reports every 30 minutes + Auto-Protection every 30 seconds
+-   **Auto-Protection Logic**: Automatically adds missing SL/TP to active positions using `manage_once()` from position_manager
+-   **BE-Stair Progressive System**: Breakeven Stop with profit-lock bands and TP ladder merge/rearm
+-   **ATR-Based Trailing**: Optional trailing stop based on ATR multiplier
+-   **Order Cleanup**: Cancels all remaining orders when positions are closed to prevent orphaned orders
+-   **Environment Variables**: `ENABLE_AUTO_PROTECT=1`, `AUTO_PROTECT_INTERVAL_SEC=30`, `POSITION_REPORT_INTERVAL_SEC=1800`
 
 ## External Dependencies
 
