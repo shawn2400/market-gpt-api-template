@@ -115,16 +115,45 @@ def _tick_symbol(symbol: str):
         _tp1_done[symbol] = False
         
         # Track new position
-        current_price = float(get_price(symbol) or ep)
-        side = "LONG" if current_price >= ep else "SHORT"
+        # 💎 CRITICAL: Determine side from positionAmt sign, NOT from price comparison!
+        # Price comparison is unreliable (e.g., SHORT at 100 with price=101 looks like LONG)
+        try:
+            from utils.binance_client import get_position_info
+            pos_info = get_position_info(symbol) or {}
+            position_amt = float(pos_info.get("positionAmt") or 0.0)
+            
+            # ✅ CORRECT: Use sign of positionAmt
+            # positionAmt > 0 = LONG
+            # positionAmt < 0 = SHORT
+            if position_amt > 0:
+                side = "LONG"
+            elif position_amt < 0:
+                side = "SHORT"
+            else:
+                # Fallback if positionAmt is 0 (shouldn't happen, but be safe)
+                log.warning(f"⚠️ positionAmt is 0 for {symbol}, using price comparison fallback")
+                current_price = float(get_price(symbol) or ep)
+                side = "LONG" if current_price >= ep else "SHORT"
+            
+            # 💎 Extract ACTUAL leverage from position info (Binance API)
+            # This is critical for accurate ROI calculation!
+            position_leverage = int(pos_info.get("leverage") or 0) if pos_info.get("leverage") else None
+            
+        except Exception as e:
+            log.warning(f"⚠️ Failed to get position info for {symbol}: {e}, using price comparison fallback")
+            current_price = float(get_price(symbol) or ep)
+            side = "LONG" if current_price >= ep else "SHORT"
+            position_leverage = None
+        
         _active_positions[symbol] = {
             "entry_price": ep,
-            "quantity": qty,
-            "side": side,
+            "quantity": qty,  # Absolute value
+            "side": side,     # From positionAmt sign
             "entry_time": now,
             "sl_price": None,
             "tp_prices": [],
-            "regime": "UNKNOWN"
+            "regime": "UNKNOWN",
+            "leverage": position_leverage  # Store ACTUAL leverage from Binance
         }
         
         # 🔔 IMMEDIATE Telegram Notification: Trade Opened (with 5 AI Brains consensus)
@@ -243,14 +272,34 @@ def _on_trade_completion(symbol: str, exit_time: float):
         exit_price = float(get_price(symbol) or pos_data["entry_price"])
         entry_price = pos_data["entry_price"]
         side = pos_data["side"]
+        quantity = pos_data["quantity"]
         
-        # Calculate PnL
+        # 💎 Get ACTUAL leverage from position data
+        # If unknown, assume 1x (no leverage) to be conservative
+        leverage = pos_data.get("leverage")
+        if leverage is None or leverage == 0:
+            log.warning(f"⚠️ Leverage unknown for {symbol} - assuming 1x (no leverage) for ROI calculation")
+            leverage = 1  # Conservative fallback - NO leverage assumed
+        
+        # 💎 CORRECT PNL Calculation
+        # PNL in USDT (actual profit/loss)
         if side == "LONG":
-            pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+            pnl_usd = quantity * (exit_price - entry_price)
         else:
-            pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+            pnl_usd = quantity * (entry_price - exit_price)
         
-        pnl_usd = pnl_pct * 10  # Rough estimate
+        # 💎 CORRECT ROI Calculation - on ACTUAL INVESTMENT (not on price movement!)
+        # Investment = (position_value / leverage) = (quantity * entry_price) / leverage
+        # With 1x leverage, investment = full position value
+        # With 10x leverage, investment = 10% of position value
+        actual_investment = (quantity * entry_price) / leverage
+        
+        # ROI = (PNL / Investment) * 100
+        # This is the REAL return on YOUR money, not on the leveraged position!
+        pnl_pct = (pnl_usd / actual_investment) * 100 if actual_investment > 0 else 0.0
+        
+        # Also calculate price movement % (for reference)
+        price_movement_pct = ((exit_price - entry_price) / entry_price) * 100 if side == "LONG" else ((entry_price - exit_price) / entry_price) * 100
         duration_min = int((exit_time - pos_data['entry_time']) / 60)
         duration_hours = duration_min // 60
         duration_rem_min = duration_min % 60
@@ -328,7 +377,7 @@ def _on_trade_completion(symbol: str, exit_time: float):
             msg = (
                 f"╔═══════════════════════════╗\n"
                 f"║  {header_emoji} <b>{header_text}</b> {header_emoji}  ║\n"
-                f"║   <b>{pnl_usd:+.2f}$ ({pnl_pct:+.2f}%)</b>        ║\n"
+                f"║   <b>{pnl_usd:+.2f}$ ({pnl_pct:+.2f}% ROI)</b>        ║\n"
                 f"╚═══════════════════════════╝\n\n"
                 f"📊 <b>{symbol}</b> | {side_emoji} {side} | ⚡ {trade_data['leverage']}x\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -338,7 +387,8 @@ def _on_trade_completion(symbol: str, exit_time: float):
                 f"  ⏱ Duration: <code>{duration_str}</code>\n\n"
                 f"💰 <b>Performance</b>\n"
                 f"  💎 PnL: <code>${pnl_usd:+.2f}</code>\n"
-                f"  📈 ROI: <code>{pnl_pct:+.2f}%</code>\n\n"
+                f"  📈 ROI: <code>{pnl_pct:+.2f}%</code> (on ${actual_investment:.2f} invested)\n"
+                f"  📊 Price Δ: <code>{price_movement_pct:+.2f}%</code>\n\n"
                 f"🧠 <b>Strategy</b>\n"
                 f"  📋 Type: <code>{trade_data['strategy']}</code>\n"
                 f"  🛡 Exit: <code>Position Closed</code>\n"

@@ -797,10 +797,18 @@ async def manage_open_trades():
                 
                 # ═══════════════════════════════════════════════════════════════════
                 # LEGACY PATH (Fallback if dynamic path skipped/failed)
+                # 🚨 DEPRECATED: This path should rarely execute - AI should handle all!
                 # ═══════════════════════════════════════════════════════════════════
                 profit_pct = abs((price - entry) / entry) * 100.0
 
-                be_trigger = float(os.getenv("TM_BE_MIN_PROFIT_PCT", "1.5"))
+                # 🚨 DEPRECATED: Hardcoded BE trigger - AI should decide this!
+                # This is only a safety fallback for when dynamic path fails
+                be_trigger = float(os.getenv("TM_BE_MIN_PROFIT_PCT", "999.0"))  # High default = rarely triggers
+                
+                # Log if legacy path is actually used (shouldn't happen often!)
+                if profit_pct >= be_trigger:
+                    logger.warning(f"⚠️ LEGACY BE trigger used for {sym} (profit={profit_pct:.2f}% >= {be_trigger}%) - Dynamic path should handle this!")
+                
                 if (profit_pct >= be_trigger) and (macd_now > 0 or current_adx > 20):
                     if not TP_BE_ONLY_AFTER_TP1:
                         if _set_be_native:
