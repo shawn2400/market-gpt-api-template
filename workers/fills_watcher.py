@@ -118,7 +118,6 @@ def _tick_symbol(symbol: str):
         # 💎 CRITICAL: Determine side from positionAmt sign, NOT from price comparison!
         # Price comparison is unreliable (e.g., SHORT at 100 with price=101 looks like LONG)
         try:
-            from utils.binance_client import get_position_info
             pos_info = get_position_info(symbol) or {}
             position_amt = float(pos_info.get("positionAmt") or 0.0)
             

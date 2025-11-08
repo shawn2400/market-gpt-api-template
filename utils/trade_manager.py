@@ -56,6 +56,9 @@ except Exception as _e:
     _tp_ladder = None  # type: ignore
     _DYNAMIC_TRADING_AVAILABLE = False
 
+# Create logger first, before it's used
+logger = logging.getLogger("algogpt.trade_manager")
+
 # Progressive Rollout System (v2 - Regime-based Dynamic Trading)
 try:
     from utils.regime_detector_v2 import detect_market_regime_v2
@@ -71,8 +74,6 @@ try:
 except Exception as _e:
     logger.warning(f"[Progressive Rollout] Import failed: {_e}")
     _PROGRESSIVE_ROLLOUT_AVAILABLE = False
-
-logger = logging.getLogger("algogpt.trade_manager")
 
 # Enable real-time Telegram notifications for all management actions
 TELEGRAM_NOTIFY_TRADES = os.getenv("TELEGRAM_SEND_ENABLE", "1").lower() in ("1", "true", "yes", "on")

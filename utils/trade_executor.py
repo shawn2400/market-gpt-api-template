@@ -377,8 +377,8 @@ def _place_tp_sl_for_position(
     *,
     eff_position_side: str,
     client_tag: str,
-    tp_order_kind: str = None,
-    sl_order_kind: str = None,
+    tp_order_kind: Optional[str] = None,
+    sl_order_kind: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Branch TP/SL kinds:
@@ -642,7 +642,7 @@ def execute_trade_live(plan: Dict[str, Any]) -> Dict[str, Any]:
     symbol = str(plan.get("symbol") or "").upper().strip()
     if not symbol:
         return {"ok": False, "error": "symbol_missing"}
-    side_in = _normalize_entry_side(plan.get("side"))
+    side_in = _normalize_entry_side(str(plan.get("side") or ""))
     if side_in not in ("BUY", "SELL"):
         return {"ok": False, "error": "invalid_side"}
 

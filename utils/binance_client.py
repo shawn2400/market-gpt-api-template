@@ -372,6 +372,10 @@ def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
         return p
     return None
 
+def get_position_info(symbol: str) -> Dict[str, Any]:
+    """Alias for get_single_position - used by fills_watcher and trade_manager"""
+    return get_single_position(symbol) or {}
+
 @observe_http(name="binance_open_orders", include_labels=["symbol"])
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
