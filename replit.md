@@ -52,6 +52,15 @@ The system integrates **5 AI brains** in a hierarchical consensus architecture: 
 ### Validation & Safety Infrastructure
 Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates (Dual Confirmation), Data-Driven Monte Carlo simulations, a Live Health Monitor, and Circuit Breakers.
 
+**🛡️ Emergency Protection System (3-Layer Defense):**
+-   **Layer 1 - Pre-Trade Validation**: Every trade must have SL+TP configuration before execution begins.
+-   **Layer 2 - Post-Entry Verification**: Within 2 seconds after entry, system verifies SL/TP orders exist on Binance exchange. If missing → Emergency market close + Circuit breaker activation.
+-   **Layer 3 - Continuous Monitoring**: Position Monitor checks every 30 seconds for unprotected positions. If detected → Immediate market close + System pause.
+-   **Circuit Breaker**: Auto-triggers when 2+ unprotected positions detected within 1 hour. Sets `PAUSE_AUTO_RUN=1` and sends critical Telegram alerts.
+-   **Enhanced Logging**: Full telemetry of every order (placed, filled, cancelled, expired) with detailed timestamps and status changes for forensic analysis.
+-   **Emergency Close Function**: Direct market close bypassing normal order flow, used exclusively for unprotected positions.
+-   **100% Coverage Guarantee**: No trade can remain open without verified SL+TP protection.
+
 ### Telegram Digest System
 Consolidated notification system with batched reports for Health, Trade/PnL, Critical Alerts, and AI Trade Reviews. Rate limiting ensures efficient notification delivery.
 

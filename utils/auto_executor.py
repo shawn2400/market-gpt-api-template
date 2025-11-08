@@ -1107,6 +1107,8 @@ async def auto_execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     """
     Wrapper שמקבל plan (מ-/alerts/ingest) ומבצע את הטרייד באמצעות execute_trade_live.
     מחזיר תוצאה עם ok/error + פרטי הביצוע.
+    
+    🛡️ CRITICAL: Includes Post-Entry Verification to ensure SL+TP exist!
     """
     print(f"🔧 [auto_execute_plan] ENTERED function")
     try:
@@ -1163,6 +1165,54 @@ async def auto_execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
             confirm_first=False,  # לא צריך אישור - אנחנו כבר ב-FULL AUTO
             reduce_only=False
         )
+        
+        # 🛡️ LAYER 2: Post-Entry Verification - Ensure SL+TP exist!
+        if result.get("ok") and not dry_run:
+            try:
+                from utils.emergency_protection import get_emergency_protection
+                emergency = get_emergency_protection()
+                
+                entry_qty = result.get("entry_result", {}).get("qty") or result.get("qty") or qty
+                
+                # 🛡️ CRITICAL FIX: Use Binance's positionSide AS-IS!
+                # One-Way Mode: positionSide = 'BOTH'
+                # Hedge Mode: positionSide = 'LONG' or 'SHORT'
+                entry_result = result.get("entry_result", {})
+                position_side = entry_result.get("positionSide") or result.get("position_side") or "BOTH"
+                
+                log.info(f"🔍 positionSide from Binance: {position_side}")
+                
+                if entry_qty:
+                    log.info(f"🔍 Running post-entry verification for {symbol} {side} positionSide={position_side} qty={entry_qty}")
+                    
+                    # 🛡️ CRITICAL FIX: Pass positionSide for Hedge Mode
+                    is_protected = emergency.post_entry_verification(
+                        symbol=symbol,
+                        side=side,
+                        qty=abs(float(entry_qty)),
+                        position_side=position_side
+                    )
+                    
+                    if not is_protected:
+                        log.critical(f"🚨 {symbol} {position_side} FAILED post-entry verification - position was emergency closed")
+                        result["post_entry_verification"] = "FAILED"
+                        result["emergency_closed"] = True
+                    else:
+                        log.info(f"✅ {symbol} {position_side} PASSED post-entry verification")
+                        result["post_entry_verification"] = "PASSED"
+            
+            except RuntimeError as e:
+                # 🔴 CRITICAL: Emergency close FAILED - position remains unprotected!
+                log.critical(f"🔴🔴🔴 FATAL: Emergency close FAILED for {symbol} {position_side}: {e}")
+                result["ok"] = False  # 🔴 CRITICAL FIX: Mark trade as FAILED!
+                result["post_entry_verification"] = "FAILED"
+                result["emergency_close_failed"] = True
+                result["error"] = str(e)
+                # Circuit breaker already triggered - trading will halt by emergency_protection
+                
+            except Exception as e:
+                log.error(f"Post-entry verification error for {symbol}: {e}", exc_info=True)
+                result["post_entry_verification_error"] = str(e)
         
         return result
         

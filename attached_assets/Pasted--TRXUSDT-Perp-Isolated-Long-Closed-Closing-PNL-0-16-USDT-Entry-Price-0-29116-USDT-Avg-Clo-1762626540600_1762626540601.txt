@@ -1,0 +1,504 @@
+
+TRXUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.16 USDT
+Entry Price
+0.29116 USDT
+Avg. Close Price
+0.29089 USDT
+Max Open Interest
+566 TRX
+Closed Vol.
+566 TRX
+ROI
+-0.46%
+Opened
+11/08/2025 19:17:44
+Closed
+11/08/2025 20:26:29
+
+ADAUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.71 USDT
+Entry Price
+0.56040 USDT
+Avg. Close Price
+0.55990 USDT
+Max Open Interest
+1,414 ADA
+Closed Vol.
+1,414 ADA
+ROI
+-1.07%
+Opened
+11/08/2025 20:16:39
+Closed
+11/08/2025 20:18:12
+
+LTCUSDT
+Perp
+Isolated Short
+Closed
+Closing PNL
+-0.12 USDT
+Entry Price
+100.29 USDT
+Avg. Close Price
+100.66 USDT
+Max Open Interest
+0.317 LTC
+Closed Vol.
+0.317 LTC
+ROI
+-18.44%
+Opened
+11/08/2025 20:03:57
+Closed
+11/08/2025 20:07:35
+
+ETHUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.18 USDT
+Entry Price
+3,393.80 USDT
+Avg. Close Price
+3,391.66 USDT
+Max Open Interest
+0.083 ETH
+Closed Vol.
+0.083 ETH
+ROI
+-1.26%
+Opened
+11/08/2025 19:56:52
+Closed
+11/08/2025 20:04:13
+
+LTCUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+2.89 USDT
+Entry Price
+98.96 USDT
+Avg. Close Price
+99.88 USDT
+Max Open Interest
+3.169 LTC
+Closed Vol.
+3.169 LTC
+ROI
++46.08%
+Opened
+11/08/2025 19:17:43
+Closed
+11/08/2025 20:03:57
+
+BTCUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.06 USDT
+Entry Price
+101,850.40 USDT
+Avg. Close Price
+101,797.70 USDT
+Max Open Interest
+0.001 BTC
+Closed Vol.
+0.001 BTC
+ROI
+-1.03%
+Opened
+11/08/2025 19:39:40
+Closed
+11/08/2025 19:50:59
+
+0GUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-2.78 USDT
+Entry Price
+1.3729000 USDT
+Avg. Close Price
+1.3578000 USDT
+Max Open Interest
+184 0G
+Closed Vol.
+184 0G
+ROI
+-5.49%
+Opened
+11/08/2025 19:34:06
+Closed
+11/08/2025 19:37:05
+
+0GUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.99 USDT
+Entry Price
+1.3735000 USDT
+Avg. Close Price
+1.3682000 USDT
+Max Open Interest
+186 0G
+Closed Vol.
+186 0G
+ROI
+-1.92%
+Opened
+11/08/2025 19:26:00
+Closed
+11/08/2025 19:26:07
+
+TONUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.15 USDT
+Entry Price
+2.0757000 USDT
+Avg. Close Price
+2.0738657 USDT
+Max Open Interest
+79.5 TON
+Closed Vol.
+79.5 TON
+ROI
+-0.35%
+Opened
+11/08/2025 19:12:21
+Closed
+11/08/2025 19:14:42
+
+TONUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.30 USDT
+Entry Price
+2.0732223 USDT
+Avg. Close Price
+2.0715349 USDT
+Max Open Interest
+173.7 TON
+Closed Vol.
+173.7 TON
+ROI
+-0.32%
+Opened
+11/08/2025 18:56:34
+Closed
+11/08/2025 19:02:48
+
+ADAUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.73 USDT
+Entry Price
+0.55710 USDT
+Avg. Close Price
+0.55660 USDT
+Max Open Interest
+1,457 ADA
+Closed Vol.
+1,457 ADA
+ROI
+-0.53%
+Opened
+11/08/2025 18:32:04
+Closed
+11/08/2025 18:51:05
+
+SOLUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.47 USDT
+Entry Price
+156.9100 USDT
+Avg. Close Price
+156.8200 USDT
+Max Open Interest
+5.20 SOL
+Closed Vol.
+5.20 SOL
+ROI
+-0.34%
+Opened
+11/08/2025 18:26:27
+Closed
+11/08/2025 18:28:52
+
+XRPUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.59 USDT
+Entry Price
+2.2643 USDT
+Avg. Close Price
+2.2627 USDT
+Max Open Interest
+363.1 XRP
+Closed Vol.
+363.1 XRP
+ROI
+-0.42%
+Opened
+11/08/2025 18:16:12
+Closed
+11/08/2025 18:17:35
+
+BTCUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.07 USDT
+Entry Price
+101,868.50 USDT
+Avg. Close Price
+101,807.70 USDT
+Max Open Interest
+0.001 BTC
+Closed Vol.
+0.001 BTC
+ROI
+-0.23%
+Opened
+11/08/2025 18:16:05
+Closed
+11/08/2025 18:17:15
+
+0GUSDT
+Perp
+Cross Short
+Closed
+Closing PNL
+-0.18 USDT
+Entry Price
+1.6202000 USDT
+Avg. Close Price
+1.6218000 USDT
+Max Open Interest
+107 0G
+Closed Vol.
+107 0G
+ROI
+-0.39%
+Opened
+11/08/2025 17:54:17
+Closed
+11/08/2025 17:54:34
+
+SWELLUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+28.50 USDT
+Entry Price
+0.0038270 USDT
+Avg. Close Price
+0.0040080 USDT
+Max Open Interest
+157,026 SWELL
+Closed Vol.
+157,026 SWELL
+ROI
++18.97%
+Opened
+11/07/2025 18:50:51
+Closed
+11/07/2025 21:05:24
+
+0GUSDT
+Perp
+Cross Short
+Closed
+Closing PNL
+-0.44 USDT
+Entry Price
+1.0246000 USDT
+Avg. Close Price
+1.0253390 USDT
+Max Open Interest
+585 0G
+Closed Vol.
+585 0G
+ROI
+-0.28%
+Opened
+11/07/2025 18:13:49
+Closed
+11/07/2025 18:14:03
+
+BNBUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.44 USDT
+Entry Price
+946.870 USDT
+Avg. Close Price
+946.176 USDT
+Max Open Interest
+0.63 BNB
+Closed Vol.
+0.63 BNB
+ROI
+-0.29%
+Opened
+11/07/2025 17:27:34
+Closed
+11/07/2025 17:29:47
+
+ADAUSDT
+Perp
+Isolated Short
+Closed
+Closing PNL
+-0.18 USDT
+Entry Price
+0.54000 USDT
+Avg. Close Price
+0.54040 USDT
+Max Open Interest
+440 ADA
+Closed Vol.
+440 ADA
+ROI
+-0.29%
+Opened
+11/07/2025 17:10:10
+Closed
+11/07/2025 17:13:52
+
+ADAUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+7.23 USDT
+Entry Price
+0.53000 USDT
+Avg. Close Price
+0.53640 USDT
+Max Open Interest
+1,131 ADA
+Closed Vol.
+1,131 ADA
+ROI
++4.83%
+Opened
+11/07/2025 16:47:06
+Closed
+11/07/2025 17:10:10
+
+BTCUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.35 USDT
+Entry Price
+99,960.70 USDT
+Avg. Close Price
+99,890.80 USDT
+Max Open Interest
+0.005 BTC
+Closed Vol.
+0.005 BTC
+ROI
+-0.27%
+Opened
+11/07/2025 15:16:31
+Closed
+11/07/2025 16:35:40
+
+BTCUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.46 USDT
+Entry Price
+100,501.10 USDT
+Avg. Close Price
+100,411.00 USDT
+Max Open Interest
+0.005 BTC
+Closed Vol.
+0.005 BTC
+ROI
+-0.35%
+Opened
+11/07/2025 14:06:45
+Closed
+11/07/2025 14:09:10
+
+ADAUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.46 USDT
+Entry Price
+0.53040 USDT
+Avg. Close Price
+0.53000 USDT
+Max Open Interest
+1,129 ADA
+Closed Vol.
+1,129 ADA
+ROI
+-0.30%
+Opened
+11/07/2025 14:00:28
+Closed
+11/07/2025 14:02:19
+
+SOLUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.46 USDT
+Entry Price
+156.2100 USDT
+Avg. Close Price
+156.0900 USDT
+Max Open Interest
+3.83 SOL
+Closed Vol.
+3.83 SOL
+ROI
+-0.30%
+Opened
+11/07/2025 02:11:34
+Closed
+11/07/2025 04:29:53
