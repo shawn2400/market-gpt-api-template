@@ -25,9 +25,9 @@ except Exception:
 
 # Import AI post-trade review and consensus improver
 try:
-    from utils.ai_post_trade_review import review_completed_trade
+    from utils.ai_post_trade_review import review_completed_trade, TradeReviewResult
     from utils.ai_consensus_improver import analyze_and_apply_improvements
-    from utils.telegram_digest import get_digest
+    from utils.telegram_digest import get_digest, TelegramDigest
     from utils.telegram_notifier_core import _tg_send
     
     # Wrapper for compatibility (passes parse_mode to Telegram for HTML formatting)
@@ -46,6 +46,10 @@ try:
     log.info("✅ AI Review modules loaded successfully")
 except Exception as e:
     log.warning(f"AI review modules unavailable: {e}")
+    from typing import Any as _ReviewResult
+    TradeReviewResult = _ReviewResult  # type: ignore
+    TelegramDigest = _ReviewResult  # type: ignore
+    
     async def review_completed_trade(trade_data: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore
         return {}
     async def analyze_and_apply_improvements(reviews: List[Dict[str, Any]]) -> Dict[str, Any]:  # type: ignore

@@ -101,7 +101,8 @@ def get_klines_sync(symbol: str, interval: str, limit: int = 150, market_type: s
     except RuntimeError:
         return asyncio.run(get_klines(symbol, interval, limit, market_type))
     except Exception:
-        return pd.DataFrame()
+        pass
+    return pd.DataFrame()
 
 
 
