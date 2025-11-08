@@ -57,6 +57,47 @@ def _coid(symbol: str, side: str, role: str) -> str:
         return _build_id(symbol, side, role=role)  # type: ignore
     return _build_local_id(symbol, side, role)
 
+# --- Database helper for reading original trade parameters ---
+def _get_trade_params_from_db(symbol: str) -> Optional[Dict[str, Any]]:
+    """
+    🔍 Query original trade parameters (SL, TP) from trades_log table.
+    Returns dict with 'sl', 'tp', 'entry', 'leverage' if found, else None.
+    """
+    try:
+        import psycopg2
+        
+        DATABASE_URL = os.getenv("DATABASE_URL", "")
+        if not DATABASE_URL:
+            return None
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cur = conn.cursor()
+        
+        cur.execute("""
+            SELECT entry, sl, tp, leverage
+            FROM trades_log
+            WHERE symbol = %s AND status = 'OPEN'
+            ORDER BY opened_at DESC
+            LIMIT 1
+        """, (symbol,))
+        
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if row:
+            entry, sl, tp, leverage = row
+            return {
+                "entry": float(entry) if entry else None,
+                "sl": float(sl) if sl else None,
+                "tp": float(tp) if tp else None,
+                "leverage": int(leverage) if leverage else None
+            }
+        return None
+    except Exception as e:
+        logger.debug(f"DB params not available for {symbol}: {e}")
+        return None
+
 # --- ENV knobs ---
 BE_BASE_BPS      = int(os.getenv("BE_BASE_BPS", "5") or 5)
 BE_ADX_FACTOR    = float(os.getenv("BE_ADX_FACTOR", "0.2") or 0.2)     # מוכן לשדרוג עתידי
@@ -306,12 +347,24 @@ async def manage_once(
     if any(x <= 0 for x in _pcts) or any(x <= 0 for x in _splits):
         return {"ok": False, "error": "pcts/splits must be > 0"}
 
+    # 🔍 CRITICAL: Try to read original trade parameters from DB first
+    db_params = _get_trade_params_from_db(symbol)
+    original_sl = db_params.get("sl") if db_params else None
+    original_tp = db_params.get("tp") if db_params else None
+    
+    if db_params:
+        logger.debug(f"📊 {symbol}: Found DB params - SL={original_sl}, TP={original_tp}")
+    
     # --- BE-Stair & Profit-Lock ---
     current_rr = _profit_rr(entry=float(entry_price), price_now=base_price, be_bps=_offset_bps, side=side_txt)
     stair_offset_bps = _apply_profit_lock(_offset_bps, current_rr, PROFIT_LOCK_STEPS)
 
-    # Place BE Stop (Reduce risk), עם offset משודרג
-    if side_txt == "BUY":
+    # Calculate BE Stop (Reduce risk), עם offset משודרג
+    # CRITICAL: Use original SL from DB if available, otherwise calculate
+    if original_sl and original_sl > 0:
+        be_price = float(original_sl)
+        logger.info(f"✅ {symbol}: Using original SL from DB: {be_price}")
+    elif side_txt == "BUY":
         be_price = float(entry_price) * (1.0 - (stair_offset_bps / 10_000.0))
         be_price = _round_tick_dir(be_price, tick, "down")
         if base_price and be_price >= base_price:
