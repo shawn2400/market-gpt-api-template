@@ -33,7 +33,7 @@ try:
     from utils.precision_calculator import calculate_precision_sizing, get_precision_calculator
     AI_PRECISION_AVAILABLE = True
 except ImportError:
-    LOGGER.warning("AI Precision Calculator not available, using legacy logic")
+    LOGGER.error("❌ AI Precision Calculator UNAVAILABLE - System CANNOT trade without it!")
     AI_PRECISION_AVAILABLE = False
     calculate_precision_sizing = None
 

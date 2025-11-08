@@ -1,0 +1,189 @@
+
+0GUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-2.78 USDT
+Entry Price
+1.3729000 USDT
+Avg. Close Price
+1.3578000 USDT
+Max Open Interest
+184 0G
+Closed Vol.
+184 0G
+ROI
+-5.49%
+Opened
+11/08/2025 19:34:06
+Closed
+11/08/2025 19:37:05
+
+0GUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.99 USDT
+Entry Price
+1.3735000 USDT
+Avg. Close Price
+1.3682000 USDT
+Max Open Interest
+186 0G
+Closed Vol.
+186 0G
+ROI
+-1.92%
+Opened
+11/08/2025 19:26:00
+Closed
+11/08/2025 19:26:07
+
+TONUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.15 USDT
+Entry Price
+2.0757000 USDT
+Avg. Close Price
+2.0738657 USDT
+Max Open Interest
+79.5 TON
+Closed Vol.
+79.5 TON
+ROI
+-0.35%
+Opened
+11/08/2025 19:12:21
+Closed
+11/08/2025 19:14:42
+
+TONUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.30 USDT
+Entry Price
+2.0732223 USDT
+Avg. Close Price
+2.0715349 USDT
+Max Open Interest
+173.7 TON
+Closed Vol.
+173.7 TON
+ROI
+-0.32%
+Opened
+11/08/2025 18:56:34
+Closed
+11/08/2025 19:02:48
+
+ADAUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.73 USDT
+Entry Price
+0.55710 USDT
+Avg. Close Price
+0.55660 USDT
+Max Open Interest
+1,457 ADA
+Closed Vol.
+1,457 ADA
+ROI
+-1.07%
+Opened
+11/08/2025 18:32:04
+Closed
+11/08/2025 18:51:05
+
+SOLUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.47 USDT
+Entry Price
+156.9100 USDT
+Avg. Close Price
+156.8200 USDT
+Max Open Interest
+5.20 SOL
+Closed Vol.
+5.20 SOL
+ROI
+-0.57%
+Opened
+11/08/2025 18:26:27
+Closed
+11/08/2025 18:28:52
+
+XRPUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.59 USDT
+Entry Price
+2.2643 USDT
+Avg. Close Price
+2.2627 USDT
+Max Open Interest
+363.1 XRP
+Closed Vol.
+363.1 XRP
+ROI
+-0.28%
+Opened
+11/08/2025 18:16:12
+Closed
+11/08/2025 18:17:35
+
+BTCUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.07 USDT
+Entry Price
+101,868.50 USDT
+Avg. Close Price
+101,807.70 USDT
+Max Open Interest
+0.001 BTC
+Closed Vol.
+0.001 BTC
+ROI
+-1.19%
+Opened
+11/08/2025 18:16:05
+Closed
+11/08/2025 18:17:15
+
+0GUSDT
+Perp
+Cross Short
+Closed
+Closing PNL
+-0.18 USDT
+Entry Price
+1.6202000 USDT
+Avg. Close Price
+1.6218000 USDT
+Max Open Interest
+107 0G
+Closed Vol.
+107 0G
+ROI
+-0.49%
+Opened
+11/08/2025 17:54:17
+Closed
+11/08/2025 17:54:34

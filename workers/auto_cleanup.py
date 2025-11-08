@@ -36,7 +36,7 @@ IMPROVEMENTS_RETENTION_DAYS = int(os.getenv("IMPROVEMENTS_RETENTION_DAYS", "30")
 TEMP_FILES_RETENTION_DAYS = int(os.getenv("TEMP_FILES_RETENTION_DAYS", "1"))
 
 # Directories to clean
-LOGS_DIR = Path("/tmp/logs")
+LOGS_DIR = Path("logs")  # Project logs directory
 AI_REVIEWS_DIR = Path("data/ai_reviews")
 IMPROVEMENTS_DIR = Path("data/improvements")
 LEARNING_DIR = Path("data/learning")
