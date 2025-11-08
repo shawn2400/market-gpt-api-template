@@ -34,13 +34,14 @@ The core application is built with FastAPI and Gunicorn, featuring modularized f
 -   **Deep Market Analyzer**: Multi-layer technical analysis covering trend, volatility, support/resistance, market structure, and volume.
 -   **Live Regime Detector**: Real-time market classification into TRENDING, CHOPPY, VOLATILE, or SIDEWAYS using ADX, ATR, Bollinger Bands, and price range.
 -   **Entry Timing Optimizer**: Analyzes recent price action and volatility to determine optimal entry timing, providing a confidence level and optional delay.
--   **Enhanced Trade Notifications**: Professional Telegram alerts in 70% Hebrew + 30% English with detailed entry/exit data, real-time PNL updates, and HTML formatting.
--   **Dynamic Protection Manager**: Maintains 4 regime-specific parameter sets (Entry Quality, SL ATR, TP RR, BE Trigger, Trail ATR, Leverage) determined by AI consensus.
--   **Regime-Based Quality Thresholds**: Quality requirements adapt to market regime (5.8-6.5) for realistic trade generation.
+-   **Enhanced Trade Notifications**: Professional Telegram alerts in 70% Hebrew + 30% English with detailed entry/exit data, real-time PNL updates, accurate ROI calculation, and HTML formatting.
+-   **Dynamic Protection Manager**: AI suggests 4 regime-specific parameter sets (Entry Quality, SL ATR, TP RR, Trail ATR, Leverage) - values are SUGGESTIONS, not hardcoded limits. AI has near-total freedom per-trade.
+-   **100% AI-Driven Parameters**: Wide safety ranges (quality 2-10, SL 0.5-4 ATR, TP 1-5 RR, leverage 1-15x) with downstream guardrails (order_sanity.py, leverage_policy.py, precision_calculator.py) enforcing caps. BE timing decided per-trade by AI based on volatility, trend strength, and PnL trajectory.
+-   **Accurate ROI Calculation**: ROI = (PNL_USDT / actual_investment) × 100, where investment = (position_value / leverage). Side detected from Binance positionAmt sign (not price comparison). Shows true return on capital invested, accounting for leverage effect.
 -   **Dual Order Types**: Uses both LIMIT and MARKET orders dynamically based on regime and volatility.
 -   **Smart Position Mode Compatibility**: Auto-detects and adapts to both Hedge Mode and One-Way Mode on Binance.
 -   **100% Strategic Freedom**: Generates trades for all market conditions (LONG/SHORT/GRID/SPOT/Scalping/Mean-Reversion).
--   **AI Consensus Parameters**: Final parameter values are the median of proposals from all AI brains within base protection ranges.
+-   **AI Consensus Parameters**: Final parameter values are the median of proposals from all AI brains within wide safety ranges. No hardcoded thresholds or templates.
 -   **Database Resilience**: 3-layer protection including auto-pause prevention, exponential backoff retries, and fallback queries.
 -   **Daily Trading Reports**: Comprehensive Telegram reports with PnL, Win Rate, and trade summaries (70% Hebrew, 30% English).
 -   **Security & Authentication**: Uses Bearer Token (`X-API-Key`) and HMAC Signature with anti-replay protection.
