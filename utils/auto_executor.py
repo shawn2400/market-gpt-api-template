@@ -154,6 +154,105 @@ def _lerp(a: float, b: float, t: float) -> float:
     t = max(0.0, min(1.0, t))
     return a + (b - a) * t
 
+# ─────────── Database persistence ───────────
+def save_trade_to_db(symbol: str, side: str, result: Dict[str, Any], plan: Optional[Dict[str, Any]] = None) -> bool:
+    """
+    💾 Save trade parameters to PostgreSQL database for retrieval by Fills Watcher and Position Monitor.
+    
+    This ensures original TP/SL values are accessible after entry, preventing 0.0 calculation issues.
+    
+    Args:
+        symbol: Trading symbol (e.g., "BTCUSDT")
+        side: Trade direction ("BUY" or "SELL")
+        result: Result dict from execute_trade_live containing entry_result and plan data
+        plan: Optional plan dict with additional trade parameters
+        
+    Returns:
+        bool: True if saved successfully, False otherwise
+    """
+    try:
+        import psycopg2
+        import uuid
+        from datetime import datetime
+        
+        DATABASE_URL = os.getenv("DATABASE_URL")
+        if not DATABASE_URL:
+            log.warning("[save_trade_to_db] DATABASE_URL not configured - cannot save trade")
+            return False
+        
+        # Extract entry price from result
+        entry_result = result.get("entry_result", {})
+        entry_price = entry_result.get("price") or result.get("base_price")
+        
+        if not entry_price:
+            log.warning(f"[save_trade_to_db] No entry price found for {symbol}")
+            return False
+        
+        # Extract TP/SL from plan or result
+        tp_orders = result.get("tp_orders", [])
+        sl_orders = result.get("sl_orders", [])
+        
+        # Get first TP and SL prices
+        tp_price = None
+        if tp_orders and len(tp_orders) > 0:
+            first_tp = tp_orders[0]
+            tp_price = first_tp.get("stopPrice") or first_tp.get("price")
+        
+        sl_price = None
+        if sl_orders and len(sl_orders) > 0:
+            first_sl = sl_orders[0]
+            sl_price = first_sl.get("stopPrice") or first_sl.get("price")
+        
+        # Extract other parameters
+        qty = result.get("qty") or (plan.get("qty") if plan else None)
+        leverage = result.get("leverage") or (plan.get("leverage") if plan else None)
+        budget = result.get("budget_used") or (plan.get("budget_usd") if plan else None)
+        
+        # Generate trade_id (matching Portfolio format)
+        trade_id = f"TRD-{uuid.uuid4().hex[:10]}"
+        
+        # Connect to DB
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Insert trade data
+        cursor.execute("""
+            INSERT INTO trades_log (
+                trade_id, symbol, side, entry, exit, qty, leverage,
+                sl, tp, margin, pnl, status, opened_at, closed_at, event, note
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (trade_id) DO UPDATE SET
+                updated_at = CURRENT_TIMESTAMP
+        """, (
+            trade_id,
+            symbol,
+            side,
+            float(entry_price),
+            None,  # exit - will be updated when trade closes
+            float(qty) if qty else None,
+            int(leverage) if leverage else None,
+            float(sl_price) if sl_price else None,
+            float(tp_price) if tp_price else None,
+            float(budget) if budget else None,
+            None,  # pnl - will be updated when trade closes
+            "OPEN",  # status
+            datetime.now(),  # opened_at
+            None,  # closed_at
+            "TRADE_OPENED",  # event
+            f"Entry via auto_execute_plan: TP={tp_price}, SL={sl_price}"  # note
+        ))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+        log.info(f"💾 [save_trade_to_db] Saved {symbol} {side} - Entry: {entry_price}, TP: {tp_price}, SL: {sl_price}")
+        return True
+        
+    except Exception as e:
+        log.error(f"[save_trade_to_db] Failed to save trade to PostgreSQL: {e}", exc_info=True)
+        return False
+
 # ─────────── Quantize helpers ───────────
 def _decimals(step_str: str) -> int:
     if "." not in step_str: return 0
@@ -1165,6 +1264,17 @@ async def auto_execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
             confirm_first=False,  # לא צריך אישור - אנחנו כבר ב-FULL AUTO
             reduce_only=False
         )
+        
+        # 💾 CRITICAL: Save trade parameters to database IMMEDIATELY after entry
+        if result.get("ok") and not dry_run:
+            try:
+                saved = save_trade_to_db(symbol, side, result, plan)
+                if saved:
+                    log.info(f"💾 Trade parameters saved to DB for {symbol}")
+                else:
+                    log.warning(f"⚠️ Failed to save trade parameters to DB for {symbol}")
+            except Exception as e:
+                log.error(f"Error saving trade to DB: {e}", exc_info=True)
         
         # 🛡️ LAYER 2: Post-Entry Verification - Ensure SL+TP exist!
         if result.get("ok") and not dry_run:
