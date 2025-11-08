@@ -17,6 +17,7 @@ from utils import ws_fallback
 from utils.indicators import atr, macd, adx
 from utils.binance_client import (
     get_open_positions,
+    get_position_info,  # 💎 For getting leverage info
     get_klines_df,
     close_all_positions,
     get_open_orders,
@@ -544,8 +545,18 @@ async def manage_open_trades():
                 sym = (pos.get("symbol") or "").upper()
                 qty = float(pos.get("positionAmt") or 0)
                 entry = float(pos.get("entryPrice") or 0)
-                print(f"🔍 [manage] Processing {sym}: qty={qty}, entry={entry}")
-                logger.info(f"[manage] Processing {sym}: qty={qty}, entry={entry}")
+                
+                # 💎 Get leverage from position info for accurate notifications
+                leverage = None
+                try:
+                    pos_info = get_position_info(sym)
+                    if pos_info:
+                        leverage = float(pos_info.get("leverage") or 0) or None
+                except Exception as e:
+                    logger.debug(f"Could not get leverage for {sym}: {e}")
+                
+                print(f"🔍 [manage] Processing {sym}: qty={qty}, entry={entry}, leverage={leverage}")
+                logger.info(f"[manage] Processing {sym}: qty={qty}, entry={entry}, leverage={leverage}")
                 if not sym or entry <= 0 or abs(qty) <= 0:
                     print(f"❌ [manage] Skipping {sym}: invalid data (qty={qty}, entry={entry})")
                     logger.info(f"[manage] Skipping {sym}: invalid data (qty={qty}, entry={entry})")
@@ -813,14 +824,18 @@ async def manage_open_trades():
                     if not TP_BE_ONLY_AFTER_TP1:
                         if _set_be_native:
                             try:
+                                # Calculate actual BE stop with offset
+                                offset_multiplier = 1 + (TP_BE_OFFSET_BPS / 10000) if side == "LONG" else 1 - (TP_BE_OFFSET_BPS / 10000)
+                                be_stop = entry * offset_multiplier
+                                
                                 _ = _set_be_native(sym, offset_bps=TP_BE_OFFSET_BPS)
-                                await notify_sl_tp_update(sym, side, "breakeven", f"entry±{TP_BE_OFFSET_BPS}bps")
+                                await notify_sl_tp_update(sym, side, "breakeven", be_stop, entry=entry, leverage=leverage)
                             except Exception as e:
                                 logger.error("[manage] native BE failed: %s", e)
                         else:
                             try:
                                 modify_stop_loss(sym, entry, position_side=side)
-                                await notify_sl_tp_update(sym, side, "breakeven", entry)
+                                await notify_sl_tp_update(sym, side, "breakeven", entry, entry=entry, leverage=leverage)
                             except Exception as e:
                                 logger.error("[manage] BE fallback failed: %s", e)
 
@@ -878,7 +893,7 @@ async def manage_open_trades():
                         result = modify_stop_loss(sym, target_sl, position_side=side)
                         if result.get("ok"):
                             print(f"✅ [manage] {sym} initial SL placement confirmed by Binance")
-                            await notify_sl_tp_update(sym, side, "initial_sl", target_sl)
+                            await notify_sl_tp_update(sym, side, "initial_sl", target_sl, entry=entry, leverage=leverage)
                             cur_stop = target_sl
                             initial_sl_set = True  # דגל שהוגדר כעת
                         else:
@@ -908,7 +923,7 @@ async def manage_open_trades():
                                 print(f"🔄 [manage] {sym} trailing SL: {cur_stop:.4f} → {target_sl:.4f} (Δ={abs(target_sl-cur_stop):.4f}, thresh={thresh:.4f})")
                                 logger.info(f"[manage] {sym} trailing SL update: {cur_stop} → {target_sl}")
                                 modify_stop_loss(sym, target_sl, position_side=side)
-                                await notify_sl_tp_update(sym, side, "trailing", target_sl)
+                                await notify_sl_tp_update(sym, side, "trailing", target_sl, entry=entry, leverage=leverage)
                             else:
                                 print(f"⏭️ [manage] {sym} SL delta too small (Δ={abs(target_sl-cur_stop):.4f} < {thresh:.4f}), skipping update")
                     except Exception as e:
@@ -921,7 +936,7 @@ async def manage_open_trades():
                         new_tp = (price + 4.5 * current_atr) if side == "LONG" else (price - 4.5 * current_atr)
                         if _is_finite_number(new_tp):
                             modify_take_profit(sym, new_tp, position_side=side)
-                            await notify_sl_tp_update(sym, side, "tp", new_tp)
+                            await notify_sl_tp_update(sym, side, "tp", new_tp, entry=entry, leverage=leverage)
                 except Exception as e:
                     logger.error("[manage] TP update failed for %s: %s", sym, e)
 
@@ -1005,8 +1020,23 @@ async def handle_order_filled(event: Dict[str, Any]):
 
         if _set_be_native:
             try:
+                # Get position info for entry and leverage
+                open_positions = get_open_positions() or []
+                entry_price = None
+                lev = None
+                for p in open_positions:
+                    if (p.get("symbol") or "").upper() == symbol:
+                        entry_price = float(p.get("entryPrice", "0"))
+                        try:
+                            pos_info = get_position_info(symbol)
+                            if pos_info:
+                                lev = float(pos_info.get("leverage") or 0) or None
+                        except Exception:
+                            pass
+                        break
+                
                 _ = _set_be_native(symbol, offset_bps=TP_BE_OFFSET_BPS)
-                await notify_sl_tp_update(symbol, "AUTO", "breakeven", f"entry±{TP_BE_OFFSET_BPS}bps")
+                await notify_sl_tp_update(symbol, "AUTO", "breakeven", entry_price or 0.0, entry=entry_price, leverage=lev)
                 with suppress(Exception):
                     ensure_protective_stop(symbol, prefer_mode="native")
                 return
@@ -1025,8 +1055,18 @@ async def handle_order_filled(event: Dict[str, Any]):
                 entry = float(pos.get("entryPrice", "0"))
                 if entry <= 0:
                     continue
+                
+                # Get leverage
+                leverage = None
+                try:
+                    pos_info = get_position_info(symbol)
+                    if pos_info:
+                        leverage = float(pos_info.get("leverage") or 0) or None
+                except Exception:
+                    pass
+                
                 modify_stop_loss(symbol, entry, position_side=side)
-                await notify_sl_tp_update(symbol, side, "breakeven", entry)
+                await notify_sl_tp_update(symbol, side, "breakeven", entry, entry=entry, leverage=leverage)
                 with suppress(Exception):
                     ensure_protective_stop(symbol, prefer_mode="native")
                 break
@@ -1085,12 +1125,21 @@ async def _be_guard_tick():
             if symbol in _be_set_once:
                 continue
 
+            # Get leverage for notification
+            leverage = None
+            try:
+                pos_info = get_position_info(symbol)
+                if pos_info:
+                    leverage = float(pos_info.get("leverage") or 0) or None
+            except Exception:
+                pass
+
             if _set_be_native:
                 _ = _set_be_native(symbol, offset_bps=TP_BE_OFFSET_BPS)
-                await notify_sl_tp_update(symbol, side, "breakeven", f"entry±{TP_BE_OFFSET_BPS}bps")
+                await notify_sl_tp_update(symbol, side, "breakeven", entry, entry=entry, leverage=leverage)
             else:
                 modify_stop_loss(symbol, entry, position_side=side)
-                await notify_sl_tp_update(symbol, side, "breakeven", entry)
+                await notify_sl_tp_update(symbol, side, "breakeven", entry, entry=entry, leverage=leverage)
 
             with suppress(Exception):
                 ensure_protective_stop(symbol, prefer_mode="native")

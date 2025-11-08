@@ -283,7 +283,16 @@ async def notify_ops_alert(msg: str) -> None:
     await notify_telegram(f"🛠 {msg}", level="warning", kind="ops", dedupe_key=f"ops:{hashlib.sha1(msg.encode()).hexdigest()[:8]}", cooldown_sec=60)
 
 async def notify_sl_tp_update(symbol: str, side: str, kind: str, value: Any, entry: Optional[float] = None, leverage: Optional[float] = None) -> None:
-    """דיווח בזמן אמת על עדכוני SL/TP/BE/Trailing - Enhanced version with full details"""
+    """
+    דיווח בזמן אמת על עדכוני SL/TP/BE/Trailing - Enhanced version with full details
+    
+    🚨 ALWAYS sends enhanced notifications with:
+    - Hebrew + English labels
+    - Entry context
+    - Leverage info
+    - Distance % from entry
+    - Professional formatting
+    """
     if not TELEGRAM_NOTIFY_TRADES:
         return
     
@@ -293,29 +302,54 @@ async def notify_sl_tp_update(symbol: str, side: str, kind: str, value: Any, ent
         
         try:
             value_float = float(value)
-        except Exception:
-            # Fallback for non-numeric values
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to convert value to float: {value}, error: {e}")
             value_float = 0.0
         
         # Generate enhanced notification
-        message = format_sl_tp_update(
-            symbol=symbol,
-            side=side,
-            kind=kind,
-            value=value_float,
-            entry=entry,
-            leverage=leverage
-        )
+        try:
+            message = format_sl_tp_update(
+                symbol=symbol,
+                side=side,
+                kind=kind,
+                value=value_float,
+                entry=entry,
+                leverage=leverage
+            )
+            
+            await notify_telegram(
+                message,
+                level="info",
+                kind="trade_mgmt",
+                dedupe_key=f"live:{symbol}:{kind}:{int(time.time()//15)}",
+                cooldown_sec=15
+            )
+            logger.info(f"✅ Enhanced SL/TP notification sent for {symbol}")
+            
+        except Exception as e:
+            # Log the actual error for debugging
+            logger.error(f"❌ Enhanced notification failed for {symbol}: {e}", exc_info=True)
+            
+            # Still send SOMETHING so user knows what's happening
+            try:
+                val = f"{float(value):.4f}"
+            except Exception:
+                val = str(value)
+            
+            await notify_telegram(
+                f"🔧 <b>LIVE UPDATE</b> · {kind}\n"
+                f"📊 <b>{symbol}</b> {side} → <code>{val}</code>\n"
+                f"⚠️ <i>Enhanced format failed - contact support</i>",
+                level="info",
+                kind="trade_mgmt",
+                dedupe_key=f"live:{symbol}:{kind}:{int(time.time()//15)}",
+                cooldown_sec=15
+            )
+            
+    except ImportError as e:
+        # This should never happen - enhanced_trade_notifications should always be available
+        logger.error(f"❌ CRITICAL: enhanced_trade_notifications module not found: {e}")
         
-        await notify_telegram(
-            message,
-            level="info",
-            kind="trade_mgmt",
-            dedupe_key=f"live:{symbol}:{kind}:{int(time.time()//15)}",
-            cooldown_sec=15
-        )
-    except ImportError:
-        # Fallback to simple notification if enhanced_trade_notifications not available
         try:
             val = f"{float(value):.4f}"
         except Exception:
@@ -340,14 +374,111 @@ async def notify_heartbeat() -> None:
     await notify_telegram("🫀 Heartbeat OK", level="info", kind="status", dedupe_key="hb", cooldown_sec=600)
 
 async def notify_daily_summary(summary: Dict[str, Any]) -> None:
+    """
+    🚀 Professional Daily Trading Report
+    Includes: PnL, Win Rate, Best/Worst trades, AI Performance
+    """
     pnl = summary.get("pnl", 0.0)
     t = summary.get("time", "")
-    n = len(summary.get("trades") or [])
+    trades = summary.get("trades") or []
+    n = len(trades)
+    
     try:
         pnl_fmt = f"{float(pnl):.2f}"
     except Exception:
         pnl_fmt = str(pnl)
-    await notify_telegram(f"📘 Daily Summary {t}\nPnL: <b>{pnl_fmt}</b> USDT · trades={n}", level="info", kind="ops", dedupe_key=f"eod:{t}", cooldown_sec=600)
+    
+    # Calculate win rate
+    wins = sum(1 for trade in trades if trade.get("pnl", 0) > 0)
+    losses = sum(1 for trade in trades if trade.get("pnl", 0) < 0)
+    win_rate = (wins / n * 100) if n > 0 else 0
+    
+    # Find best/worst trades
+    best_trade = max(trades, key=lambda x: x.get("pnl", 0), default=None) if trades else None
+    worst_trade = min(trades, key=lambda x: x.get("pnl", 0), default=None) if trades else None
+    
+    # Count LONG/SHORT
+    longs = sum(1 for trade in trades if trade.get("side") == "LONG")
+    shorts = sum(1 for trade in trades if trade.get("side") == "SHORT")
+    
+    # Calculate average ROI
+    rois = [trade.get("roi", 0) for trade in trades if trade.get("roi") is not None]
+    avg_roi = (sum(rois) / len(rois)) if rois else 0
+    
+    # AI Performance per brain (if available)
+    ai_performance = summary.get("ai_performance", {})
+    
+    # Build professional message
+    msg_lines = [
+        f"╔════════════════════════════════╗",
+        f"║  📊 <b>דוח מסחר יומי</b> 📊  ║",
+        f"╚════════════════════════════════╝",
+        f"",
+        f"📅 <b>{t}</b>",
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"",
+        f"💰 <b>סיכום כספי</b>",
+        f"  💵 Total PnL: <code>{pnl_fmt}</code> USDT",
+        f"  📈 Avg ROI: <code>{avg_roi:+.1f}%</code>",
+        f"",
+        f"📊 <b>סטטיסטיקות</b>",
+        f"  🎯 Trades: <code>{n}</code> ({longs} LONG, {shorts} SHORT)",
+        f"  ✅ Wins: <code>{wins}</code> ({win_rate:.1f}%)",
+        f"  ❌ Losses: <code>{losses}</code>",
+        f"",
+    ]
+    
+    # Best/Worst trades
+    if best_trade:
+        best_sym = best_trade.get("symbol", "?")
+        best_pnl = best_trade.get("pnl", 0)
+        best_roi = best_trade.get("roi", 0)
+        msg_lines.extend([
+            f"🏆 <b>Best Trade:</b> {best_sym}",
+            f"   PnL: <code>+${best_pnl:.2f}</code> (ROI: {best_roi:+.1f}%)",
+        ])
+    
+    if worst_trade and worst_trade.get("pnl", 0) < 0:
+        worst_sym = worst_trade.get("symbol", "?")
+        worst_pnl = worst_trade.get("pnl", 0)
+        worst_roi = worst_trade.get("roi", 0)
+        msg_lines.extend([
+            f"",
+            f"📉 <b>Worst Trade:</b> {worst_sym}",
+            f"   PnL: <code>${worst_pnl:.2f}</code> (ROI: {worst_roi:.1f}%)",
+        ])
+    
+    # AI Performance
+    if ai_performance:
+        msg_lines.extend([
+            f"",
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+            f"🧠 <b>AI Performance</b>",
+            f"",
+        ])
+        
+        brain_names = {
+            "gpt-5": "🧠 GPT-5",
+            "gemini": "💎 Gemini 2 Pro",
+            "deepseek": "🔍 DeepSeek",
+            "grok": "⚡ Grok",
+            "claude": "🎓 Claude Sonnet 4.5"
+        }
+        
+        for brain_key, brain_data in ai_performance.items():
+            brain_name = brain_names.get(brain_key, brain_key)
+            accuracy = brain_data.get("accuracy", 0)
+            votes = brain_data.get("votes", 0)
+            msg_lines.append(f"{brain_name}: <code>{accuracy:.1f}%</code> accuracy ({votes} votes)")
+    
+    msg_lines.extend([
+        f"",
+        f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"🎯 <b>Keep Trading Smart!</b>",
+    ])
+    
+    msg = "\n".join(msg_lines)
+    await notify_telegram(msg, level="info", kind="ops", dedupe_key=f"eod:{t}", cooldown_sec=600)
 
 # ===================== Webhook Registration =====================
 async def register_webhook() -> bool:

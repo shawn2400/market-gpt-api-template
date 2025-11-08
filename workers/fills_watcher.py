@@ -156,7 +156,7 @@ def _tick_symbol(symbol: str):
             "leverage": position_leverage  # Store ACTUAL leverage from Binance
         }
         
-        # 🔔 IMMEDIATE Telegram Notification: Trade Opened (with 5 AI Brains consensus)
+        # 🔔 IMMEDIATE Telegram Notification: Trade Opened (with FULL 5 AI Brains consensus + predictions!)
         try:
             # Try to get consensus data from Redis (stored by symbol)
             consensus_data = None
@@ -174,15 +174,28 @@ def _tick_symbol(symbol: str):
             except Exception as e:
                 log.debug(f"Failed to load consensus from Redis: {e}")
             
+            # Build professional notification with all details
             msg_lines = [
-                f"🚀 <b>טרייד נפתח</b>",
+                f"╔═══════════════════════════╗",
+                f"║   🚀 <b>טרייד נפתח!</b> 🚀   ║",
+                f"╚═══════════════════════════╝",
                 f"",
-                f"🎯 Symbol: <b>{symbol}</b>",
-                f"{'📈 LONG' if side == 'LONG' else '📉 SHORT'}",
-                f"💵 Entry: <code>{ep:.4f}</code>",
-                f"📦 Quantity: <code>{qty:.4f}</code>",
-                f"⏰ {time.strftime('%H:%M:%S', time.localtime(now))}"
+                f"📊 <b>{symbol}</b> | {'📈 LONG' if side == 'LONG' else '📉 SHORT'}",
+                f"━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"",
+                f"💎 <b>פרטי הפוזיציה</b>",
+                f"  💵 Entry: <code>{ep:.6f}</code> USDT",
+                f"  📦 Quantity: <code>{qty:.4f}</code>",
             ]
+            
+            # Add leverage if available
+            if position_leverage:
+                msg_lines.append(f"  ⚡ Leverage: <code>{position_leverage}x</code>")
+                position_value = qty * ep
+                investment = position_value / position_leverage
+                msg_lines.append(f"  💰 Investment: <code>${investment:.2f}</code>")
+            
+            msg_lines.append(f"  ⏰ {time.strftime('%H:%M:%S', time.localtime(now))}")
             
             # 🧠 Add 5 AI Brains consensus if available
             if consensus_data and isinstance(consensus_data, dict):
@@ -191,28 +204,70 @@ def _tick_symbol(symbol: str):
                 approve_count = consensus_data.get("approve_count", 0)
                 brain_votes = consensus_data.get("brain_votes", [])
                 
-                msg_lines.append("")
-                msg_lines.append(f"🧠 <b>5 AI Brains Consensus:</b>")
-                msg_lines.append(f"🗳️ Decision: <b>{final_vote}</b> ({approve_count}/5 APPROVE)")
-                msg_lines.append(f"⭐ Avg Score: <code>{final_score:.1f}/10</code>")
+                # Expected profit & duration
+                expected_profit_usd = consensus_data.get("expected_profit_usd", 0)
+                expected_profit_pct = consensus_data.get("expected_profit_pct", 0)
+                expected_duration_hours = consensus_data.get("expected_duration_hours", 0)
+                
+                msg_lines.extend([
+                    f"",
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━",
+                    f"🧠 <b>קונצנזוס 5 המוחות</b>",
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━",
+                    f"",
+                    f"🗳️ <b>החלטה:</b> {final_vote} ({approve_count}/5 אישרו)",
+                    f"⭐ <b>ציון ממוצע:</b> <code>{final_score:.1f}/10</code>",
+                ])
+                
+                # Add predictions if available
+                if expected_profit_usd > 0 or expected_profit_pct > 0:
+                    msg_lines.extend([
+                        f"",
+                        f"📈 <b>צפי רווח:</b> <code>+${expected_profit_usd:.2f}</code> ({expected_profit_pct:+.1f}%)",
+                    ])
+                
+                if expected_duration_hours > 0:
+                    if expected_duration_hours < 1:
+                        duration_str = f"{int(expected_duration_hours * 60)} דקות"
+                    elif expected_duration_hours < 24:
+                        duration_str = f"{expected_duration_hours:.1f} שעות"
+                    else:
+                        duration_str = f"{expected_duration_hours / 24:.1f} ימים"
+                    msg_lines.append(f"⏱️ <b>צפי זמן:</b> <code>{duration_str}</code>")
                 
                 if brain_votes:
-                    msg_lines.append("")
-                    msg_lines.append("<b>המוחות:</b>")
+                    msg_lines.extend([
+                        f"",
+                        f"<b>פירוט המוחות:</b>",
+                    ])
+                    
+                    # Map brain names to Hebrew + emoji
+                    brain_names = {
+                        "gpt-5": "🧠 GPT-5 (מנצח)",
+                        "gemini": "💎 Gemini 2 Pro",
+                        "deepseek": "🔍 DeepSeek",
+                        "grok": "⚡ Grok (X.AI)",
+                        "claude": "🎓 Claude Sonnet 4.5"
+                    }
+                    
                     for vote in brain_votes[:5]:
-                        brain = vote.get("brain", "Unknown")
+                        brain_key = vote.get("brain", "").lower().replace(" ", "-")
+                        brain_display = brain_names.get(brain_key, vote.get("brain", "Unknown"))
                         vote_str = vote.get("vote", "")
                         score = vote.get("score", 0.0)
-                        reasoning = vote.get("reasoning", "")[:50]
+                        reasoning = vote.get("reasoning", "")[:80]  # More characters
                         
                         emoji = "✅" if vote_str == "APPROVE" else "❌"
-                        msg_lines.append(f"{emoji} <b>{brain}</b>: {score:.1f}/10 - {reasoning}...")
+                        msg_lines.append(f"{emoji} <b>{brain_display}</b>")
+                        msg_lines.append(f"   ציון: <code>{score:.1f}/10</code>")
+                        msg_lines.append(f"   {reasoning}...")
+                        msg_lines.append("")
             
             msg = "\n".join(msg_lines)
             send_telegram(msg, parse_mode="HTML")
-            log.info(f"✅ Telegram sent: Trade opened {symbol} (with AI consensus)")
+            log.info(f"✅ Telegram sent: Trade opened {symbol} (with FULL AI consensus + predictions)")
         except Exception as e:
-            log.warning(f"Failed to send Telegram notification: {e}")
+            log.error(f"❌ Failed to send trade open notification: {e}", exc_info=True)
 
     if not (ep and qty):
         # אין פוזיציה → איפוס + detect trade completion
