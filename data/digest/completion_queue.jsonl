@@ -1,0 +1,1 @@
+{"timestamp": 1762633296.7410283, "symbol": "ETHUSDT", "side": "LONG", "entry_price": 3387.35, "exit_price": 3384.85079791, "entry_time": 1762633263.8906782, "exit_time": 1762633296.597101, "pnl_usd": -0.13745611494999593, "pnl_pct": -0.29512180199860377, "quantity": 0.055, "leverage": 4, "exit_reason": "MANUAL_CLOSE", "sl_price": null, "tp_prices": [], "regime": "UNKNOWN"}
