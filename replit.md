@@ -1,7 +1,7 @@
 # AlgoGPT - Algorithmic Trading Platform
 
 ## Overview
-AlgoGPT is an algorithmic trading platform for 24/7 live Binance Futures trading. It automates market scanning across 534 symbols, utilizes 100% autonomous AI-powered trade decisions via **5 AI Brains** consensus engine (GPT-5, Gemini 2 Pro, DeepSeek, Grok, Claude), and integrates **7 Trading Strategies** (Mean-Reversion, Scalping, Range-Bounce, Trend-Following, Breakout, GRID, SPOT) with dynamic capital management. The platform features a self-adaptive trading engine with complete data persistence via **8 Background Workers**, aiming for 4-10 high-quality daily trades, profitability, and autonomous operation. **MetaBrain v9.0** introduces fully autonomous, fully dynamic trading with hierarchical AI consensus, regime-driven dynamic parameters, and 100% strategic freedom across all market conditions.
+AlgoGPT is an algorithmic trading platform for 24/7 live Binance Futures trading. It automates market scanning across 534 symbols and uses a 100% autonomous AI-powered trade decision-making process. The platform features a consensus engine powered by 5 AI models (GPT-5, Gemini 2 Pro, DeepSeek, Grok, Claude) and integrates 7 trading strategies (Mean-Reversion, Scalping, Range-Bounce, Trend-Following, Breakout, GRID, SPOT) with dynamic capital management. AlgoGPT aims for 4-10 high-quality daily trades and autonomous operation, supported by a self-adaptive trading engine and complete data persistence via 8 background workers. Its MetaBrain v9.1 eliminates hardcoded logic, with all trade parameters (strategy, leverage, investment, entry timing) determined by hierarchical AI consensus.
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
@@ -18,7 +18,7 @@ The core application is built with FastAPI and Gunicorn, featuring modularized f
 -   **Automated Trading Modes**: Supports MARKET, HYBRID, and FULL AUTO execution.
 -   **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, and ATR-based trailing stops.
 -   **Market Scanner**: Autonomous worker performs multi-timeframe technical analysis across 531 Binance Futures markets.
--   **AI-Powered Proposals**: Utilizes 5 AI providers (GPT-5, Gemini 2 Pro, DeepSeek, Grok, Claude) for consensus-based trade decisions with adaptive Risk/Reward thresholds.
+-   **AI-Powered Proposals**: Utilizes 5 AI providers for consensus-based trade decisions with adaptive Risk/Reward thresholds.
 -   **GRID Trading**: Integrated FUTURES GRID trading.
 -   **Mean-Reversion Strategy**: Deterministic VWAP-based strategy.
 -   **Scalping & Range-Bounce Strategies**: Aggressive short-term strategies.
@@ -27,101 +27,42 @@ The core application is built with FastAPI and Gunicorn, featuring modularized f
 -   **Dynamic SL/TP Calculation**: ATR-based Stop Loss and RR-based Take Profit, adapting to market volatility.
 -   **Complete Data Persistence**: All critical data is saved to a PostgreSQL database.
 
-**MetaBrain v9.0 - 100% Autonomous Dynamic Trading:**
--   **5-Brain Hierarchical Consensus Architecture**: 
-    - **GPT-5** (gpt-5-2025-08-07) - Lead Orchestrator ✅
-    - **Gemini 2 Pro** (gemini-2.0-flash-exp) - Fast Multi-Modal Analyst ⚠️ (50/day quota)
-    - **DeepSeek** (deepseek-chat) - Deep Pattern Analyst ✅
-    - **Grok** (grok-2-latest) - Contrarian Analyst ✅
-    - **Claude Sonnet 3.5** (claude-3-5-sonnet-20241022) - Conservative Risk Validator ✅
-    - **Consensus Rule**: ≥3 APPROVE required out of 5 to execute trade
--   **Dynamic Sizing Engine v2.0**: 100% dynamic leverage calculation (3x-8x) based on quality score, volatility, market regime, and AI confidence - **NO MORE HARDCODED VALUES**
-    - All strategies (Futures, Mean-Reversion, Scalping, Range-Bounce) use dynamic leverage
-    - Real-time account equity integration for position sizing
-    - Adaptive to market conditions and trade quality
--   **Dynamic Protection Manager**: Maintains 4 regime-specific parameter sets with AI consensus (Entry Quality, SL ATR, TP RR, BE Trigger, Trail ATR, Leverage)
-    - TRENDING: Entry Quality ≥5.8, SL ATR×1.7, TP RR 2.0, BE +0.4%, Trail ATR×0.9, Lev 3x-8x (dynamic)
-    - CHOPPY: Entry Quality ≥6.5, SL ATR×1.3, TP RR 1.4, BE +0.6%, Trail ATR×0.6, Lev 3x-8x (dynamic)
-    - VOLATILE: Entry Quality ≥6.2, SL ATR×1.9, TP RR 2.2, BE +0.5%, Trail ATR×1.0, Lev 3x-8x (dynamic)
-    - SIDEWAYS: Entry Quality ≥6.0, SL ATR×1.4, TP RR 1.3, BE +0.6%, Trail ATR×0.7, Lev 3x-8x (dynamic)
--   **Regime-Based Quality Thresholds**: Quality requirements adapt to market regime (5.8-6.5) instead of static 8.5, enabling realistic trade generation
--   **Regime Detector**: Automatically detects market regime using ADX, ATR, Bollinger Bands, and price range analysis
--   **Dual Order Types**: System uses BOTH LIMIT (precision entry) and MARKET (instant execution) orders dynamically based on regime and volatility
--   **Smart Position Mode Compatibility**: Auto-detects and adapts to BOTH Hedge Mode and One-Way Mode without manual configuration
-    - **Hedge Mode** (dualSidePosition=true): Adds positionSide (LONG/SHORT) to all orders
-    - **One-Way Mode** (dualSidePosition=false): Omits positionSide from orders (avoids -4061 errors)
-    - **Auto-detection with 5-minute cache**: Minimizes API calls while maintaining accuracy
-    - **Zero manual intervention**: Works seamlessly regardless of Binance account settings
--   **100% Strategic Freedom**: Generates trades in EVERY market condition (LONG/SHORT/GRID/SPOT/Scalping/Mean-Reversion)
--   **AI Consensus Parameters**: Each brain proposes parameters within base protection ranges; final values = median of all brains
--   **Database Resilience**: 3-layer protection including auto-pause prevention, exponential backoff retries, fallback to query without 'paused' column for legacy database compatibility
--   **Daily Trading Reports**: Comprehensive Telegram reports with PnL, Win Rate, and trade summaries (70% Hebrew, 30% English)
--   **Security & Authentication**: Uses Bearer Token (`X-API-Key`) and HMAC Signature, with anti-replay protection
--   **Alert Management**: Auto Health Monitor uses 5 consecutive failures + 15-minute cooldown before sending CRITICAL alerts, preventing spam from intermittent database issues
+**MetaBrain v9.1 - 100% AI-Driven Precision Trading:**
+-   **5-Brain Hierarchical Consensus Architecture**: Orchestrated by GPT-5, supported by Gemini 2 Pro, DeepSeek, Grok, and Claude Sonnet 3.5. Requires ≥3 brains to approve for trade execution.
+-   **AI Strategy Consensus Engine**: 100% AI-driven strategy selection via a 5-brain voting system based on independent market analysis.
+-   **Precision Calculator v1.0**: Calculates exact leverage (e.g., 7.34x) and investment amounts (e.g., $487.23) based on trade quality, market volatility, regime, and balance.
+-   **Deep Market Analyzer**: Multi-layer technical analysis covering trend, volatility, support/resistance, market structure, and volume.
+-   **Live Regime Detector**: Real-time market classification into TRENDING, CHOPPY, VOLATILE, or SIDEWAYS using ADX, ATR, Bollinger Bands, and price range.
+-   **Entry Timing Optimizer**: Analyzes recent price action and volatility to determine optimal entry timing, providing a confidence level and optional delay.
+-   **Enhanced Trade Notifications**: Professional Telegram alerts in 70% Hebrew + 30% English with detailed entry/exit data, real-time PNL updates, and HTML formatting.
+-   **Dynamic Protection Manager**: Maintains 4 regime-specific parameter sets (Entry Quality, SL ATR, TP RR, BE Trigger, Trail ATR, Leverage) determined by AI consensus.
+-   **Regime-Based Quality Thresholds**: Quality requirements adapt to market regime (5.8-6.5) for realistic trade generation.
+-   **Dual Order Types**: Uses both LIMIT and MARKET orders dynamically based on regime and volatility.
+-   **Smart Position Mode Compatibility**: Auto-detects and adapts to both Hedge Mode and One-Way Mode on Binance.
+-   **100% Strategic Freedom**: Generates trades for all market conditions (LONG/SHORT/GRID/SPOT/Scalping/Mean-Reversion).
+-   **AI Consensus Parameters**: Final parameter values are the median of proposals from all AI brains within base protection ranges.
+-   **Database Resilience**: 3-layer protection including auto-pause prevention, exponential backoff retries, and fallback queries.
+-   **Daily Trading Reports**: Comprehensive Telegram reports with PnL, Win Rate, and trade summaries (70% Hebrew, 30% English).
+-   **Security & Authentication**: Uses Bearer Token (`X-API-Key`) and HMAC Signature with anti-replay protection.
+-   **Alert Management**: Auto Health Monitor uses specific failure thresholds and cooldowns to prevent alert spam.
 
-### AI Brains System (5 Active Brains)
-The system integrates **5 AI brains** in a hierarchical consensus architecture:
--   **Multi-AI Consensus Engine**: Orchestrated by OpenAI GPT-5 (gpt-5-2025-08-07), supported by Google Gemini 2 Pro (gemini-2.0-flash-exp), DeepSeek Chat (deepseek-chat), AI-X Grok (grok-2-latest), and Anthropic Claude Sonnet 3.5 (claude-3-5-sonnet-20241022).
--   **Specialized AI Systems**: Includes GPT Auto Suggest, Multi-AI Consensus Scorer, Adaptive Prompt Engine, Market Intelligence Brain, Portfolio Intelligence, News Sentiment Analyzer, and Auto-Flip System.
--   **Post-Trade AI Review System**: All 5 AI brains independently analyze completed trades across entry quality, SL/TP placement, position management, and exit timing.
--   **Autonomous Improvement System**: When 3+ brains reach a 60%+ consensus, the system automatically applies parameter improvements and commits changes to GitHub, including SL/TP multipliers, minimum RR thresholds, leverage caps, quality score filters, and BE/Trailing trigger points.
--   **Order Cleanup on Trade Close**: Position Monitor automatically cancels all remaining TP/SL/Trailing orders when a position is closed (prevents orphaned orders).
+### AI Brains System
+The system integrates **5 AI brains** in a hierarchical consensus architecture: OpenAI GPT-5 (orchestrator), Google Gemini 2 Pro, DeepSeek Chat, AI-X Grok, and Anthropic Claude Sonnet 3.5. This includes specialized AI systems for market intelligence, portfolio intelligence, news sentiment, and an auto-flip system. A **Post-Trade AI Review System** has all 5 AIs independently analyze trades. The **Autonomous Improvement System** automatically applies parameter improvements (e.g., SL/TP multipliers, leverage caps) and commits changes to GitHub when 3+ brains reach 60%+ consensus.
 
 ### Validation & Safety Infrastructure
 Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates (Dual Confirmation), Data-Driven Monte Carlo simulations, a Live Health Monitor, and Circuit Breakers.
 
 ### Telegram Digest System
-Consolidated notification system with batched reports:
--   **Health Digests**: Three daily reports on system status and worker health.
--   **Trade/PnL Digests**: Sent every 30 minutes if significant events occur.
--   **Critical Alerts**: Immediate notifications only for true emergencies.
--   **AI Trade Reviews**: Sent immediately upon trade completion.
--   **Rate Limiting**: Maximum 3 immediate messages per 30-minute window; overflow queued to next digest.
+Consolidated notification system with batched reports for Health, Trade/PnL, Critical Alerts, and AI Trade Reviews. Rate limiting ensures efficient notification delivery.
 
 ### Deployment Architecture
 The production environment runs on Render.com with **8 Background Workers** and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development and testing. The system supports a 3-phase progressive rollout for dynamic regime trading, currently in full production (Phase 3).
 
-**8 Workers:**
-1. AlgoGPT Server (FastAPI + Gunicorn)
-2. Auto Health Monitor (30s health checks)
-3. Auto Scanner (120s market scans)
-4. Daily Meeting 00:00 (daily reports)
-5. Fills Watcher v2.0 (15s order tracking + AI Post-Trade Review + Auto-Improvement)
-6. GPT-5 Central Brain (orchestration)
-7. Position Monitor (30min PnL reports + 30s auto-SL/TP protection + order cleanup)
-8. Sentinel Security (anomaly detection)
-
-**Fills Watcher v2.0 - AI Post-Trade Review + Auto-Improvement:**
--   **Trade Completion Detection**: Monitors all positions and triggers analysis when trades close
--   **Professional Telegram Notifications**: Unicode box layout with WIN/LOSS/BREAKEVEN headers, detailed PnL breakdown, duration, and strategy info
--   **5-Brain AI Review System**: Upon trade closure, automatically sends trade data to all 5 AI brains for independent analysis across:
-    - Entry Quality (0-100)
-    - SL/TP Placement (0-100)
-    - Position Management (0-100)
-    - Exit Timing (0-100)
--   **Consensus-Based Scoring**: Aggregates scores from all 5 brains to produce consensus rating and top suggestions
--   **Autonomous Improvement Engine**: When ≥3 brains reach 60%+ consensus on improvements:
-    - Automatically adjusts trading parameters (SL/TP multipliers, leverage caps, quality thresholds, BE/Trailing triggers)
-    - Commits improvements to GitHub with detailed explanation
-    - Sends Telegram notification with applied changes
--   **Background Async Processing**: AI reviews run asynchronously to avoid blocking trade monitoring
--   **HTML Formatting**: All notifications use HTML parse mode for professional presentation
--   **Resilient Error Handling**: Graceful fallbacks if AI APIs are unavailable
-
-**Position Monitor v2.1 - Auto SL/TP Protection + Hedge Mode Safety:**
--   **Dual-Frequency System**: Reports every 30 minutes + Auto-Protection every 30 seconds
--   **Auto-Protection Logic**: Automatically adds missing SL/TP to active positions using `manage_once()` from position_manager
--   **BE-Stair Progressive System**: Breakeven Stop with profit-lock bands and TP ladder merge/rearm
--   **ATR-Based Trailing**: Optional trailing stop based on ATR multiplier
--   **Order Cleanup v2**: Cancels all remaining orders when positions are closed (with full Hedge Mode safety verification)
--   **Hedge Mode Protection**: Tracks positionSide (LONG/SHORT) and skips cancelling orders for opposite leg
--   **ReduceOnly Fix**: Cancels ALL TP types (LIMIT, TAKE_PROFIT, TAKE_PROFIT_MARKET) before placing new ladder
--   **Safety Guards**: Verifies position is ZERO on all sides before cleanup, prevents accidental cancellations
--   **Environment Variables**: `ENABLE_AUTO_PROTECT=1`, `AUTO_PROTECT_INTERVAL_SEC=30`, `POSITION_REPORT_INTERVAL_SEC=1800`
+**8 Workers:** AlgoGPT Server, Auto Health Monitor, Auto Scanner, Daily Meeting 00:00, Fills Watcher v2.0 (AI Post-Trade Review + Auto-Improvement), GPT-5 Central Brain, Position Monitor (Auto SL/TP Protection), and Sentinel Security.
 
 ## External Dependencies
 
--   **Binance Futures API**: Market data, order execution, account management (Hedge Mode enforced).
+-   **Binance Futures API**: Market data, order execution, account management.
 -   **Neon PostgreSQL API**: Auto-resume endpoint management.
 -   **OpenAI API**: GPT-5 for AI trade proposals, market analysis, and post-trade reviews.
 -   **Google Gemini API**: Gemini 2 Pro for fast multi-modal reasoning and trade scoring.
