@@ -28,7 +28,20 @@ try:
     from utils.ai_post_trade_review import review_completed_trade
     from utils.ai_consensus_improver import analyze_and_apply_improvements
     from utils.telegram_digest import get_digest
-    from utils.telegram_send import send_telegram
+    from utils.telegram_notifier_core import _tg_send
+    
+    # Wrapper for compatibility
+    def send_telegram(message: str, parse_mode: str = "HTML", **kwargs):
+        """Send message via Telegram (sync wrapper for async _tg_send)"""
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        loop.run_until_complete(_tg_send(message))
+    
+    AI_REVIEW_AVAILABLE = True
+    log.info("✅ AI Review modules loaded successfully")
 except Exception as e:
     log.warning(f"AI review modules unavailable: {e}")
     async def review_completed_trade(trade_data: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore
@@ -42,6 +55,7 @@ except Exception as e:
         return MockDigest()
     def send_telegram(message: str, **kwargs):  # type: ignore
         pass
+    AI_REVIEW_AVAILABLE = False
 
 # ייבוא עדין של לקוח הבורסה
 try:
@@ -214,7 +228,7 @@ def _tick_symbol(symbol: str):
 
 
 def _on_trade_completion(symbol: str, exit_time: float):
-    """Handle trade completion - send to AI review"""
+    """Handle trade completion - send professional notification + AI review"""
     try:
         pos_data = _active_positions.get(symbol)
         if not pos_data:
@@ -231,6 +245,9 @@ def _on_trade_completion(symbol: str, exit_time: float):
             pnl_pct = ((entry_price - exit_price) / entry_price) * 100
         
         pnl_usd = pnl_pct * 10  # Rough estimate
+        duration_min = int((exit_time - pos_data['entry_time']) / 60)
+        duration_hours = duration_min // 60
+        duration_rem_min = duration_min % 60
         
         trade_data = {
             "trade_id": f"{symbol}_{int(exit_time)}",
@@ -243,14 +260,15 @@ def _on_trade_completion(symbol: str, exit_time: float):
             "pnl_usd": pnl_usd,
             "pnl_pct": pnl_pct,
             "quantity": pos_data["quantity"],
-            "leverage": 4,  # Default
-            "exit_reason": "MANUAL_CLOSE",  # Could be enhanced to detect SL/TP
+            "leverage": pos_data.get("leverage", 4),
+            "exit_reason": "MANUAL_CLOSE",
             "sl_price": pos_data.get("sl_price"),
             "tp_prices": pos_data.get("tp_prices", []),
-            "regime": pos_data.get("regime", "UNKNOWN")
+            "regime": pos_data.get("regime", "UNKNOWN"),
+            "strategy": pos_data.get("strategy", "Mean-Reversion")
         }
         
-        # Add to digest for immediate summary
+        # Add to digest for batch summary
         digest = get_digest()
         digest.add_trade_completion(
             symbol=symbol,
@@ -262,7 +280,7 @@ def _on_trade_completion(symbol: str, exit_time: float):
             pnl_usd=pnl_usd,
             pnl_pct=pnl_pct,
             quantity=pos_data["quantity"],
-            leverage=4,
+            leverage=trade_data["leverage"],
             exit_reason="MANUAL_CLOSE",
             sl_price=pos_data.get("sl_price"),
             tp_prices=pos_data.get("tp_prices", []),
@@ -272,26 +290,127 @@ def _on_trade_completion(symbol: str, exit_time: float):
         # Add to buffer for batch AI review
         _completed_trades_buffer.append(trade_data)
         
-        # 🔔 IMMEDIATE Telegram: Trade Closed + Trigger AI Review
+        # 🎨 PROFESSIONAL Telegram Notification
         try:
-            pnl_emoji = "💚" if pnl_pct > 0 else "❤️"
+            # Determine outcome
+            is_win = pnl_pct > 0
+            is_breakeven = abs(pnl_pct) < 0.1
+            
+            if is_breakeven:
+                header_emoji = "⚖️"
+                header_text = "TRADE CLOSED - BREAKEVEN"
+            elif is_win:
+                header_emoji = "🟢"
+                header_text = "TRADE CLOSED - WIN"
+            else:
+                header_emoji = "🔴"
+                header_text = "TRADE CLOSED - LOSS"
+            
+            # Format duration
+            if duration_hours > 0:
+                duration_str = f"{duration_hours}h {duration_rem_min}min"
+            else:
+                duration_str = f"{duration_min}min"
+            
+            # Format prices with thousands separator
+            entry_str = f"{entry_price:,.2f}" if entry_price >= 100 else f"{entry_price:.4f}"
+            exit_str = f"{exit_price:,.2f}" if exit_price >= 100 else f"{exit_price:.4f}"
+            
+            # Side emoji
+            side_emoji = "📈" if side == "LONG" else "📉"
+            
             msg = (
-                f"{pnl_emoji} <b>טרייד נסגר</b>\n\n"
-                f"🎯 Symbol: <b>{symbol}</b>\n"
-                f"{'📈 LONG' if side == 'LONG' else '📉 SHORT'}\n"
-                f"💵 Entry: <code>{entry_price:.4f}</code>\n"
-                f"🏁 Exit: <code>{exit_price:.4f}</code>\n"
-                f"💰 PnL: <code>{pnl_pct:+.2f}% (${pnl_usd:+.2f})</code>\n"
-                f"⏰ Duration: <code>{int((exit_time - pos_data['entry_time']) / 60)}min</code>\n"
-                f"━━━━━━━━━━━━━━━\n"
-                f"🤖 <i>AI Review coming soon...</i>"
+                f"╔═══════════════════════════╗\n"
+                f"║  {header_emoji} <b>{header_text}</b> {header_emoji}  ║\n"
+                f"║   <b>{pnl_usd:+.2f}$ ({pnl_pct:+.2f}%)</b>        ║\n"
+                f"╚═══════════════════════════╝\n\n"
+                f"📊 <b>{symbol}</b> | {side_emoji} {side} | ⚡ {trade_data['leverage']}x\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                f"📍 <b>Entry & Exit</b>\n"
+                f"  💵 In:  <code>{entry_str}</code>\n"
+                f"  🏁 Out: <code>{exit_str}</code>\n"
+                f"  ⏱ Duration: <code>{duration_str}</code>\n\n"
+                f"💰 <b>Performance</b>\n"
+                f"  💎 PnL: <code>${pnl_usd:+.2f}</code>\n"
+                f"  📈 ROI: <code>{pnl_pct:+.2f}%</code>\n\n"
+                f"🧠 <b>Strategy</b>\n"
+                f"  📋 Type: <code>{trade_data['strategy']}</code>\n"
+                f"  🛡 Exit: <code>Position Closed</code>\n"
+                f"  🌊 Regime: <code>{trade_data['regime']}</code>\n\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"🤖 <i>AI Review in progress...</i>"
             )
             send_telegram(msg, parse_mode="HTML")
-            log.info(f"✅ Telegram sent: Trade closed {symbol} PnL={pnl_pct:+.2f}%")
+            log.info(f"✅ Professional trade close notification sent: {symbol} PnL={pnl_pct:+.2f}%")
         except Exception as e:
             log.warning(f"Failed to send trade close Telegram: {e}")
         
-        log.info(f"Trade completion detected: {symbol} - PnL: ${pnl_usd:.2f} ({pnl_pct:.2f}%)")
+        # 🧠 TRIGGER AI REVIEW (Async in background)
+        if AI_REVIEW_AVAILABLE:
+            try:
+                log.info(f"🧠 Triggering AI Review for {symbol}...")
+                
+                async def run_ai_review():
+                    try:
+                        # Get review from all 5 AI brains
+                        review_result = await review_completed_trade(trade_data)
+                        
+                        if review_result and review_result.get("consensus_score"):
+                            consensus = review_result.get("consensus_score", 0)
+                            suggestions = review_result.get("top_suggestions", [])
+                            
+                            # Send AI Review summary to Telegram
+                            review_msg = (
+                                f"🧠 <b>AI REVIEW COMPLETE</b>\n\n"
+                                f"📊 Symbol: <b>{symbol}</b>\n"
+                                f"⭐ Consensus Score: <code>{consensus:.1f}/100</code>\n\n"
+                                f"📝 <b>Top Suggestions:</b>\n"
+                            )
+                            
+                            for i, suggestion in enumerate(suggestions[:3], 1):
+                                review_msg += f"  {i}. {suggestion}\n"
+                            
+                            review_msg += f"\n🤖 <i>Analyzing for auto-improvements...</i>"
+                            send_telegram(review_msg, parse_mode="HTML")
+                            
+                            # Trigger Auto-Improvement System
+                            improvement_result = await analyze_and_apply_improvements([review_result])
+                            
+                            if improvement_result and improvement_result.get("applied"):
+                                improvements = improvement_result.get("improvements", [])
+                                improv_msg = (
+                                    f"✅ <b>AUTO-IMPROVEMENT APPLIED</b>\n\n"
+                                    f"📊 {symbol} - {len(improvements)} change(s)\n"
+                                    f"━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+                                )
+                                
+                                for imp in improvements[:5]:
+                                    param = imp.get("parameter", "Unknown")
+                                    old_val = imp.get("old_value", "")
+                                    new_val = imp.get("new_value", "")
+                                    improv_msg += f"🔧 {param}: {old_val} → {new_val}\n"
+                                
+                                improv_msg += (
+                                    f"\n🧠 Consensus: {improvement_result.get('consensus_pct', 0)}%\n"
+                                    f"💾 Committed to GitHub ✅\n"
+                                    f"🎯 Active from next trade"
+                                )
+                                send_telegram(improv_msg, parse_mode="HTML")
+                                log.info(f"✅ Auto-improvements applied for {symbol}")
+                        
+                    except Exception as e:
+                        log.error(f"AI Review failed for {symbol}: {e}")
+                
+                # Run async review in background
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(run_ai_review())
+                loop.close()
+                
+            except Exception as e:
+                log.error(f"Failed to trigger AI Review for {symbol}: {e}")
+        
+        log.info(f"Trade completion processed: {symbol} - PnL: ${pnl_usd:.2f} ({pnl_pct:.2f}%)")
         
     except Exception as e:
         log.error(f"Error processing trade completion for {symbol}: {e}")
