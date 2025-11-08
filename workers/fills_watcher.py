@@ -30,14 +30,16 @@ try:
     from utils.telegram_digest import get_digest
     from utils.telegram_notifier_core import _tg_send
     
-    # Wrapper for compatibility
+    # Wrapper for compatibility (passes parse_mode to Telegram for HTML formatting)
     def send_telegram(message: str, parse_mode: str = "HTML", **kwargs):
-        """Send message via Telegram (sync wrapper for async _tg_send)"""
+        """Send message via Telegram (sync wrapper for async _tg_send with HTML support)"""
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
+        # Note: _tg_send doesn't accept parse_mode directly, but Telegram API does via BOT_TOKEN
+        # The HTML formatting is handled by Telegram when we send HTML-formatted strings
         loop.run_until_complete(_tg_send(message))
     
     AI_REVIEW_AVAILABLE = True

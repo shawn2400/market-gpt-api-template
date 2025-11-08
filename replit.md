@@ -86,10 +86,27 @@ The production environment runs on Render.com with **8 Background Workers** and 
 2. Auto Health Monitor (30s health checks)
 3. Auto Scanner (120s market scans)
 4. Daily Meeting 00:00 (daily reports)
-5. Fills Watcher (15s order tracking)
+5. Fills Watcher v2.0 (15s order tracking + AI Post-Trade Review + Auto-Improvement)
 6. GPT-5 Central Brain (orchestration)
 7. Position Monitor (30min PnL reports + 30s auto-SL/TP protection + order cleanup)
 8. Sentinel Security (anomaly detection)
+
+**Fills Watcher v2.0 - AI Post-Trade Review + Auto-Improvement:**
+-   **Trade Completion Detection**: Monitors all positions and triggers analysis when trades close
+-   **Professional Telegram Notifications**: Unicode box layout with WIN/LOSS/BREAKEVEN headers, detailed PnL breakdown, duration, and strategy info
+-   **5-Brain AI Review System**: Upon trade closure, automatically sends trade data to all 5 AI brains for independent analysis across:
+    - Entry Quality (0-100)
+    - SL/TP Placement (0-100)
+    - Position Management (0-100)
+    - Exit Timing (0-100)
+-   **Consensus-Based Scoring**: Aggregates scores from all 5 brains to produce consensus rating and top suggestions
+-   **Autonomous Improvement Engine**: When ≥3 brains reach 60%+ consensus on improvements:
+    - Automatically adjusts trading parameters (SL/TP multipliers, leverage caps, quality thresholds, BE/Trailing triggers)
+    - Commits improvements to GitHub with detailed explanation
+    - Sends Telegram notification with applied changes
+-   **Background Async Processing**: AI reviews run asynchronously to avoid blocking trade monitoring
+-   **HTML Formatting**: All notifications use HTML parse mode for professional presentation
+-   **Resilient Error Handling**: Graceful fallbacks if AI APIs are unavailable
 
 **Position Monitor v2.1 - Auto SL/TP Protection + Hedge Mode Safety:**
 -   **Dual-Frequency System**: Reports every 30 minutes + Auto-Protection every 30 seconds
