@@ -364,29 +364,36 @@ async def manage_once(
 
     # Create/Replace BE Stop (STOP_MARKET closePosition)
     sl_placed = False
-    try:
-        sl_kwargs = dict(
-            symbol=symbol,
-            side=("SELL" if side_txt == "BUY" else "BUY"),
-            type="STOP_MARKET",
-            stopPrice=be_price,
-            closePosition=True,
-            workingType=BINANCE_WORKING,
-            newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role=f"SL@BE{stair_offset_bps}"),
-        )
-        
-        # ✅ SMART POSITION MODE COMPATIBILITY
-        # Add positionSide ONLY in Hedge Mode (LONG/SHORT)
-        # In One-Way Mode, position_side='BOTH' and must be OMITTED
-        if position_side and position_side in ("LONG", "SHORT"):
-            sl_kwargs["positionSide"] = position_side
-        
-        sl_order = client.futures_create_order(**sl_kwargs)
-        sl_placed = True
-        logger.info(f"✅ {symbol}: SL placed @ {be_price} (Order #{sl_order.get('orderId')})")
-    except Exception as e:
-        logger.error(f"❌ CRITICAL: Failed to place SL for {symbol} @ {be_price}: {e}", exc_info=True)
-        return {"ok": False, "error": f"SL placement failed: {str(e)}", "symbol": symbol}
+    
+    # 🛡️ CRITICAL FIX: Skip SL placement if be_price is invalid (0 or negative)
+    if be_price <= 0:
+        logger.warning(f"⚠️ {symbol}: Skipping SL placement - invalid be_price={be_price} (entry={entry_price})")
+        # Don't fail the whole operation - Fills Watcher might have already set SL
+        sl_placed = False  # Continue with TP placement
+    else:
+        try:
+            sl_kwargs = dict(
+                symbol=symbol,
+                side=("SELL" if side_txt == "BUY" else "BUY"),
+                type="STOP_MARKET",
+                stopPrice=be_price,
+                closePosition=True,
+                workingType=BINANCE_WORKING,
+                newClientOrderId=_coid(symbol, ("SELL" if side_txt == "BUY" else "BUY"), role=f"SL@BE{stair_offset_bps}"),
+            )
+            
+            # ✅ SMART POSITION MODE COMPATIBILITY
+            # Add positionSide ONLY in Hedge Mode (LONG/SHORT)
+            # In One-Way Mode, position_side='BOTH' and must be OMITTED
+            if position_side and position_side in ("LONG", "SHORT"):
+                sl_kwargs["positionSide"] = position_side
+            
+            sl_order = client.futures_create_order(**sl_kwargs)
+            sl_placed = True
+            logger.info(f"✅ {symbol}: SL placed @ {be_price} (Order #{sl_order.get('orderId')})")
+        except Exception as e:
+            logger.error(f"❌ CRITICAL: Failed to place SL for {symbol} @ {be_price}: {e}", exc_info=True)
+            return {"ok": False, "error": f"SL placement failed: {str(e)}", "symbol": symbol}
 
     # --- TP ladder + Merge ---
     qty_abs = abs(pos_amt)
