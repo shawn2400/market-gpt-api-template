@@ -1214,6 +1214,33 @@ async def auto_execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
                 log.error(f"Post-entry verification error for {symbol}: {e}", exc_info=True)
                 result["post_entry_verification_error"] = str(e)
         
+        # 📱 Send Telegram notification for successful trade entry
+        if result.get("ok") and not dry_run:
+            try:
+                from utils.telegram_notifier import send_trade_opened
+                
+                # Build notification data
+                entry_price = result.get("entry_result", {}).get("price") or plan.get("entry") or plan.get("base_price")
+                
+                notify_data = {
+                    "plan": {
+                        "symbol": symbol,
+                        "side": side,
+                        "qty": qty,
+                        "entry_price": entry_price,
+                        "order_type": plan.get("order_type", "MARKET"),
+                        "leverage": leverage,
+                        "trade_kind": "Futures",
+                        "tp": tp_list,
+                        "sl": sl_dict,
+                    }
+                }
+                
+                await send_trade_opened(notify_data)
+                log.info(f"📱 Trade opened notification sent for {symbol}")
+            except Exception as e:
+                log.error(f"Failed to send trade opened notification: {e}", exc_info=True)
+        
         return result
         
     except Exception as e:
