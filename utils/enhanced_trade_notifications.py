@@ -359,3 +359,63 @@ def format_trade_update(
         unrealized_pnl_usd, unrealized_pnl_pct,
         position_size, leverage, sl_price, tp_hit, duration_seconds
     )
+
+
+def format_sl_tp_update(
+    symbol: str,
+    side: str,
+    kind: str,
+    value: float,
+    entry: Optional[float] = None,
+    leverage: Optional[float] = None
+) -> str:
+    """
+    Format SL/TP update notification - Enhanced version with Hebrew + English.
+    
+    Args:
+        symbol: Trading symbol
+        side: LONG/SHORT
+        kind: initial_sl/trailing/breakeven/tp/sl
+        value: New SL/TP price
+        entry: Entry price (optional, for context)
+        leverage: Leverage used (optional)
+    
+    Returns:
+        HTML-formatted message for Telegram (70% Hebrew + 30% English)
+    """
+    # Translate kind to Hebrew + emoji
+    kind_map = {
+        "initial_sl": ("🚨 הגדרת SL ראשונית", "Initial SL Set"),
+        "trailing": ("🔄 עדכון Trailing SL", "Trailing SL Update"),
+        "breakeven": ("🎯 מעבר ל-Break-Even", "Moved to Break-Even"),
+        "tp": ("💰 עדכון Take Profit", "TP Update"),
+        "sl": ("🛡️ עדכון Stop Loss", "SL Update"),
+    }
+    
+    hebrew_text, english_text = kind_map.get(kind.lower(), (kind.upper(), kind.upper()))
+    side_emoji = "🟢" if side.upper() in ("BUY", "LONG") else "🔴"
+    
+    msg = f"""<b>🔧 LIVE UPDATE</b>
+
+━━━━━━━━━━━━━━━━━━━━
+{hebrew_text}
+{english_text}
+━━━━━━━━━━━━━━━━━━━━
+
+📊 <b>{symbol}</b> {side.upper()} {side_emoji}
+💵 <b>מחיר חדש / New Price:</b> <code>{value:.6f}</code> USDT
+"""
+    
+    # Add context if available
+    if entry and entry > 0:
+        pct_move = ((value - entry) / entry * 100)
+        msg += f"""
+📍 <b>Entry:</b> {entry:.6f} USDT
+📏 <b>Distance:</b> {pct_move:+.2f}%
+"""
+    
+    if leverage:
+        msg += f"""⚖️ <b>Leverage:</b> {leverage:.2f}x
+"""
+    
+    return msg.strip()

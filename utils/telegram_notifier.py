@@ -282,33 +282,53 @@ async def notify_scan_error(reason: str) -> None:
 async def notify_ops_alert(msg: str) -> None:
     await notify_telegram(f"🛠 {msg}", level="warning", kind="ops", dedupe_key=f"ops:{hashlib.sha1(msg.encode()).hexdigest()[:8]}", cooldown_sec=60)
 
-async def notify_sl_tp_update(symbol: str, side: str, kind: str, value: Any) -> None:
-    """דיווח בזמן אמת על עדכוני SL/TP/BE/Trailing - REAL-TIME NOTIFICATIONS"""
+async def notify_sl_tp_update(symbol: str, side: str, kind: str, value: Any, entry: Optional[float] = None, leverage: Optional[float] = None) -> None:
+    """דיווח בזמן אמת על עדכוני SL/TP/BE/Trailing - Enhanced version with full details"""
     if not TELEGRAM_NOTIFY_TRADES:
         return
+    
+    # Import enhanced notification formatter
     try:
-        val = f"{float(value):.4f}"
-    except Exception:
-        val = str(value)
-    
-    # תרגום סוג הפעולה לעברית + אימוג'י
-    kind_map = {
-        "initial_sl": "🚨 הגדרת SL ראשונית",
-        "trailing": "🔄 Trailing SL",
-        "breakeven": "🎯 Break-Even",
-        "tp": "💰 Take Profit",
-        "sl": "🛡️ Stop Loss",
-    }
-    kind_text = kind_map.get(kind.lower(), kind.upper())
-    
-    await notify_telegram(
-        f"🔧 <b>LIVE UPDATE</b> · {kind_text}\n"
-        f"📊 <b>{symbol}</b> {side} → <code>{val}</code>",
-        level="info", 
-        kind="trade_mgmt", 
-        dedupe_key=f"live:{symbol}:{kind}:{int(time.time()//15)}",  # אפשר עדכונים כל 15 שניות
-        cooldown_sec=15  # קיצור cooldown ל-15 שניות במקום 60
-    )
+        from utils.enhanced_trade_notifications import format_sl_tp_update
+        
+        try:
+            value_float = float(value)
+        except Exception:
+            # Fallback for non-numeric values
+            value_float = 0.0
+        
+        # Generate enhanced notification
+        message = format_sl_tp_update(
+            symbol=symbol,
+            side=side,
+            kind=kind,
+            value=value_float,
+            entry=entry,
+            leverage=leverage
+        )
+        
+        await notify_telegram(
+            message,
+            level="info",
+            kind="trade_mgmt",
+            dedupe_key=f"live:{symbol}:{kind}:{int(time.time()//15)}",
+            cooldown_sec=15
+        )
+    except ImportError:
+        # Fallback to simple notification if enhanced_trade_notifications not available
+        try:
+            val = f"{float(value):.4f}"
+        except Exception:
+            val = str(value)
+        
+        await notify_telegram(
+            f"🔧 <b>LIVE UPDATE</b> · {kind}\n"
+            f"📊 <b>{symbol}</b> {side} → <code>{val}</code>",
+            level="info",
+            kind="trade_mgmt",
+            dedupe_key=f"live:{symbol}:{kind}:{int(time.time()//15)}",
+            cooldown_sec=15
+        )
 
 async def notify_info(text: str) -> None:
     await notify_telegram(f"ℹ️ {text}", level="info", kind="ops", dedupe_key=f"info:{hashlib.sha1(text.encode()).hexdigest()[:8]}", cooldown_sec=60)
