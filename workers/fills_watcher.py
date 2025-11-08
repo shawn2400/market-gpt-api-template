@@ -105,6 +105,58 @@ def _position_snapshot(symbol: str) -> Tuple[Optional[float], Optional[float]]:
     return None, None
 
 
+def _get_trade_params_from_db(symbol: str) -> Dict[str, Any]:
+    """
+    💾 Retrieve original TP/SL/entry parameters from database for recently opened trade.
+    
+    This prevents the 0.0 TP/SL calculation issue by reading stored values.
+    
+    Returns:
+        dict: {"tp_price": float|None, "sl_price": float|None, "entry_price": float|None, "leverage": int|None}
+    """
+    try:
+        import psycopg2
+        
+        DATABASE_URL = os.getenv("DATABASE_URL")
+        if not DATABASE_URL:
+            log.debug(f"[_get_trade_params_from_db] DATABASE_URL not configured")
+            return {}
+        
+        conn = psycopg2.connect(DATABASE_URL)
+        cursor = conn.cursor()
+        
+        # Get most recent open trade for this symbol
+        cursor.execute("""
+            SELECT tp, sl, entry, leverage
+            FROM trades_log
+            WHERE symbol = %s 
+              AND status = 'OPEN'
+            ORDER BY opened_at DESC
+            LIMIT 1
+        """, (symbol,))
+        
+        row = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        
+        if row:
+            tp, sl, entry, leverage = row
+            log.info(f"💾 [_get_trade_params_from_db] {symbol}: TP={tp}, SL={sl}, Entry={entry}, Leverage={leverage}")
+            return {
+                "tp_price": float(tp) if tp else None,
+                "sl_price": float(sl) if sl else None,
+                "entry_price": float(entry) if entry else None,
+                "leverage": int(leverage) if leverage else None
+            }
+        else:
+            log.debug(f"[_get_trade_params_from_db] No open trade found for {symbol}")
+            return {}
+            
+    except Exception as e:
+        log.error(f"[_get_trade_params_from_db] Failed to retrieve from DB: {e}", exc_info=True)
+        return {}
+
+
 def _tick_symbol(symbol: str):
     # בדיקת פוזיציה
     ep, qty = _position_snapshot(symbol)
@@ -144,16 +196,29 @@ def _tick_symbol(symbol: str):
             side = "LONG" if current_price >= ep else "SHORT"
             position_leverage = None
         
+        # 💾 Retrieve original TP/SL/entry from database
+        db_params = _get_trade_params_from_db(symbol)
+        
+        # Use DB values if available, otherwise use defaults
+        tp_price_from_db = db_params.get("tp_price")
+        sl_price_from_db = db_params.get("sl_price")
+        leverage_from_db = db_params.get("leverage")
+        
+        # Prefer leverage from DB if position_leverage is None
+        final_leverage = position_leverage if position_leverage is not None else leverage_from_db
+        
         _active_positions[symbol] = {
             "entry_price": ep,
             "quantity": qty,  # Absolute value
             "side": side,     # From positionAmt sign
             "entry_time": now,
-            "sl_price": None,
-            "tp_prices": [],
+            "sl_price": sl_price_from_db,  # 💾 From DB instead of None
+            "tp_prices": [tp_price_from_db] if tp_price_from_db else [],  # 💾 From DB instead of []
             "regime": "UNKNOWN",
-            "leverage": position_leverage  # Store ACTUAL leverage from Binance
+            "leverage": final_leverage  # 💾 Prefer DB, fallback to Binance
         }
+        
+        log.info(f"💾 Position tracked for {symbol}: TP={tp_price_from_db}, SL={sl_price_from_db}, Leverage={final_leverage}")
         
         # 🔔 IMMEDIATE Telegram Notification: Trade Opened (with FULL 5 AI Brains consensus + predictions!)
         try:
