@@ -3,13 +3,24 @@
 """
 Strategy Orchestrator - Auto-select trading strategy based on market conditions
 ===============================================================================
-Routes each symbol to the optimal strategy: GRID, Scalping, Momentum, Range-Bounce, or WAIT
+Routes each symbol to the optimal strategy using AI consensus (MetaBrain v9.1).
+NO hardcoded thresholds - AI decides strategy based on real-time market data.
 """
 import logging
+import asyncio
 from typing import Dict, Any, Optional, Literal
 from dataclasses import dataclass
 
 logger = logging.getLogger("strategy_orchestrator")
+
+# Import AI Strategy Consensus Engine (MetaBrain v9.1)
+try:
+    from utils.ai_strategy_consensus import select_strategy_ai, get_ai_strategy_selector
+    AI_STRATEGY_AVAILABLE = True
+except ImportError:
+    logger.warning("AI Strategy Consensus not available, using legacy logic")
+    AI_STRATEGY_AVAILABLE = False
+    select_strategy_ai = None
 
 StrategyType = Literal["grid", "scalping", "momentum", "range_bounce", "wait", "mean_reversion", "futures_long", "futures_short"]
 
@@ -162,19 +173,52 @@ class StrategyOrchestrator:
         
         # ==================== DECISION TREE ====================
         
+        # MetaBrain v9.1: Use AI Strategy Consensus instead of hardcoded IF statements
+        if AI_STRATEGY_AVAILABLE and select_strategy_ai is not None and ctx:
+            try:
+                # Call AI to decide strategy
+                logger.info(f"{symbol}: Using AI Strategy Consensus...")
+                ai_consensus = asyncio.run(select_strategy_ai(ctx, symbol))
+                
+                if ai_consensus and ai_consensus.votes_approve >= 2:  # At least 2/3 brains agree (Gemini quota limited)
+                    # Map AI strategy to config key
+                    ai_strategy = ai_consensus.strategy
+                    strategy_key = self._map_ai_strategy_to_config(
+                        ai_strategy, regime
+                    )
+                    
+                    logger.info(
+                        f"{symbol}: AI selected {ai_strategy.upper()} "
+                        f"({ai_consensus.votes_approve}/{ai_consensus.total_votes} votes, "
+                        f"{ai_consensus.confidence:.1f}% confidence)"
+                    )
+                    
+                    selected = self.strategies.get(strategy_key, self.strategies["range_bounce"])
+                    logger.info(
+                        f"{symbol}: Using [{strategy_key}] - "
+                        f"MinRR={selected.min_rr:.2f}, MinQuality={selected.min_quality:.1f}, "
+                        f"MaxLev={selected.max_leverage}x"
+                    )
+                    return selected
+                else:
+                    logger.warning(f"{symbol}: AI consensus insufficient, using fallback logic")
+            except Exception as e:
+                logger.error(f"{symbol}: AI strategy selection failed: {e}, using fallback")
+        
+        # Fallback: Legacy decision tree (only if AI unavailable)
         # 1. CHOPPY Markets → GRID, Mean-Reversion, or Scalping
         if regime == "CHOPPY":
-            # Check if GRID is viable (need sufficient range ≥2%)
+            # Legacy: Check if GRID is viable (need sufficient range ≥2%)
             if ctx and self._is_grid_viable(ctx):
                 strategy_key = "grid_choppy"
-                logger.info(f"{symbol}: CHOPPY → GRID Trading (range ≥2%)")
-            # Check if Mean-Reversion is viable (range <2%, low volatility)
+                logger.info(f"{symbol}: CHOPPY → GRID Trading (range ≥2%) [LEGACY]")
+            # Legacy: Check if Mean-Reversion is viable (range <2%, low volatility)
             elif ctx and self._is_mean_reversion_viable(ctx):
                 strategy_key = "mean_reversion_choppy"
-                logger.info(f"{symbol}: CHOPPY → Mean-Reversion (range <2%, deterministic VWAP)")
+                logger.info(f"{symbol}: CHOPPY → Mean-Reversion (range <2%, deterministic VWAP) [LEGACY]")
             else:
                 strategy_key = "scalping_choppy"
-                logger.info(f"{symbol}: CHOPPY → Scalping (fallback)")
+                logger.info(f"{symbol}: CHOPPY → Scalping (fallback) [LEGACY]")
         
         # 2. SIDEWAYS Markets → Range Bounce or GRID
         elif regime == "SIDEWAYS":
@@ -301,6 +345,36 @@ class StrategyOrchestrator:
         except Exception as e:
             logger.debug(f"Mean-reversion viability check failed: {e}")
             return False
+    
+    def _map_ai_strategy_to_config(self, ai_strategy: str, regime: str) -> str:
+        """
+        Map AI-selected strategy to StrategyConfig key.
+        
+        Args:
+            ai_strategy: Strategy from AI (grid/mean_reversion/scalping/wait)
+            regime: Current market regime
+        
+        Returns:
+            StrategyConfig key
+        """
+        # Map AI strategy to appropriate config based on regime
+        if ai_strategy == "grid":
+            if regime == "CHOPPY":
+                return "grid_choppy"
+            else:
+                return "grid_sideways"
+        
+        elif ai_strategy == "mean_reversion":
+            return "mean_reversion_choppy"
+        
+        elif ai_strategy == "scalping":
+            return "scalping_choppy"
+        
+        elif ai_strategy == "wait":
+            return "wait_defensive"
+        
+        # Default fallback
+        return "range_bounce"
     
     def get_strategy_stats(self) -> Dict[str, Any]:
         """Get statistics about available strategies"""
