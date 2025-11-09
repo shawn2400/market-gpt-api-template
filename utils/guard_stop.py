@@ -25,6 +25,7 @@ ENFORCE_QTY_BOUNDS     = (os.getenv("ENFORCE_QTY_BOUNDS","1").lower() in ("1","t
 ORD_ATOMIC_UPDATE      = (os.getenv("ORD_ATOMIC_UPDATE","1").lower() in ("1","true","yes","on"))
 
 FILTERS_CACHE_TTL_SEC  = int(os.getenv("FILTERS_CACHE_TTL_SEC","900"))
+HARD_STOP_LOSS_PCT     = float(os.getenv("HARD_STOP_LOSS_PCT", "1.5") or 0.0)
 
 # זיהוי מצב דו-צדדי לפי override (פשוט ומהיר)
 _MODE_OVERRIDE = (os.getenv("POSITION_MODE_OVERRIDE","") or os.getenv("HEDGE_MODE","")).strip().lower()
@@ -238,6 +239,16 @@ def _profit_ok(entry: float, last: float, side: str, min_pct: float) -> bool:
     move = (last-entry)/entry*100.0 if side=="BUY" else (entry-last)/entry*100.0
     return move >= min_pct
 
+def _clamp_hard_stop(entry: float, side: str, price: float) -> float:
+    if HARD_STOP_LOSS_PCT <= 0 or entry <= 0:
+        return float(price)
+    pct = HARD_STOP_LOSS_PCT / 100.0
+    if side == "BUY":
+        min_stop = entry * (1.0 - pct)
+        return max(float(price), min_stop)
+    max_stop = entry * (1.0 + pct)
+    return min(float(price), max_stop)
+
 # ATR(14,1m)
 def _atr_1m(cli, symbol: str, lookback: int = 16) -> float:
     with suppress(Exception):
@@ -331,6 +342,7 @@ def _target_sl_price(cli, symbol: str, side: str, entry: float, last: float, tp1
 
     if tgt is None:
         tgt = entry if entry>0 else last
+    tgt = _clamp_hard_stop(entry, side, float(tgt))
     tgt = _qprice(symbol, float(tgt), flt)
 
     # monotonic tightening

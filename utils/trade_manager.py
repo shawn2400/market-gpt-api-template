@@ -70,6 +70,8 @@ SL_BREATH_ATR_MULT = float(os.getenv("SL_BREATH_ATR_MULT", "1.0"))
 LOCK_PROFIT_KEEP_RATIO = float(os.getenv("LOCK_PROFIT_KEEP_RATIO", "0.8"))
 BREATH_COND_MIN_PROFIT_PCT = float(os.getenv("BREATH_COND_MIN_PROFIT_PCT", "0.8"))
 
+HARD_STOP_LOSS_PCT = float(os.getenv("HARD_STOP_LOSS_PCT", "1.5") or 0.0)
+
 DAILY_LOSS_CAP = float(os.getenv("DAILY_HARD_LOSS_USD", "-150"))
 _daily_pnl = 0.0
 _trades_today: List[dict] = []
@@ -147,6 +149,21 @@ def _round_to_tick(price: float, tick: float, *, up: bool) -> float:
     if up:
         return math.ceil(steps) * tick
     return math.floor(steps) * tick
+
+def _clamp_to_hard_stop(entry: Optional[float], position_side: str, price: float) -> float:
+    if HARD_STOP_LOSS_PCT <= 0:
+        return float(price)
+    if entry is None or entry <= 0:
+        return float(price)
+    pct = HARD_STOP_LOSS_PCT / 100.0
+    pos_side = position_side.upper()
+    if pos_side in ("LONG", "BUY"):
+        min_stop = entry * (1.0 - pct)
+        return max(float(price), min_stop)
+    if pos_side in ("SHORT", "SELL"):
+        max_stop = entry * (1.0 + pct)
+        return min(float(price), max_stop)
+    return float(price)
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers: order management
@@ -228,19 +245,24 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
     _cancel_closing_orders(sym, ("STOP", "STOP_MARKET"))
-    stop_str, _ = _q_price(sym, float(new_price))
+    entry_price: Optional[float] = None
     qty = qty_hint
-    if not qty or qty <= 0:
-        try:
-            for p in get_open_positions(sym):
-                amt = float(p.get("positionAmt") or 0.0)
-                if abs(amt) > 0:
+    try:
+        for p in get_open_positions(sym):
+            amt = float(p.get("positionAmt") or 0.0)
+            if abs(amt) > 0:
+                if not qty or qty <= 0:
                     qty = abs(amt)
-                    break
-        except Exception:
-            pass
+                entry_candidate = float(p.get("entryPrice") or 0.0)
+                if entry_candidate > 0:
+                    entry_price = entry_candidate
+                break
+    except Exception:
+        pass
     if not qty or qty <= 0:
         return {"ok": False, "error": "qty_missing_for_modify_sl"}
+    adj_price = _clamp_to_hard_stop(entry_price, position_side, float(new_price))
+    stop_str, _ = _q_price(sym, float(adj_price))
     qty_str, _ = _q_qty(sym, float(qty))
     try:
         resp = futures_create_order(
@@ -391,15 +413,16 @@ def _compute_safe_sl(symbol: str, position_side: str, last_price: float, atr_now
     decs = _decimals(str(f.get("tickSize") or DEFAULT_TICK))
     return float(f"{safe:.{decs}f()}".replace("()", ""))  # safe format
 
-def _detect_position_qty(symbol: str) -> Optional[float]:
+def _detect_position_snapshot(symbol: str) -> Tuple[Optional[float], Optional[float]]:
     try:
         for p in get_open_positions(symbol):
             amt = float(p.get("positionAmt") or 0.0)
             if abs(amt) > 0:
-                return abs(amt)
+                entry = float(p.get("entryPrice") or 0.0)
+                return abs(amt), (entry if entry > 0 else None)
     except Exception:
         pass
-    return None
+    return None, None
 
 def safe_replace_sl(symbol: str, position_side: str, last_price: float, atr_now: float, desired_sl: float, qty_hint: Optional[float] = None) -> Dict[str, Any]:
     """
@@ -412,11 +435,14 @@ def safe_replace_sl(symbol: str, position_side: str, last_price: float, atr_now:
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
 
-    new_stop = _compute_safe_sl(sym, position_side, last_price, atr_now, desired_sl)
-
-    qty = qty_hint if qty_hint and qty_hint > 0 else _detect_position_qty(sym)
+    detected_qty, entry_price = _detect_position_snapshot(sym)
+    qty = qty_hint if qty_hint and qty_hint > 0 else detected_qty
     if not qty or qty <= 0:
         return {"ok": False, "kept_old": True, "error": "qty_missing_for_safe_replace"}
+
+    target_sl = _clamp_to_hard_stop(entry_price, position_side, float(desired_sl))
+    new_stop = _compute_safe_sl(sym, position_side, last_price, atr_now, target_sl)
+    new_stop = _clamp_to_hard_stop(entry_price, position_side, new_stop)
 
     qty_str, _ = _q_qty(sym, float(qty))
     stop_str, _ = _q_price(sym, float(new_stop))
@@ -674,6 +700,8 @@ async def manage_open_trades():
                 else:
                     if (cur_stop <= entry) and (target_sl > entry):
                         target_sl = min(entry, target_sl)
+
+                target_sl = _clamp_to_hard_stop(entry, side, float(target_sl))
 
                 # Update decision (threshold vs current stop)
                 try:

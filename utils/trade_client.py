@@ -1,12 +1,21 @@
 # utils/trade_client.py
 from __future__ import annotations
-import os, math, time
+
+import asyncio
+import logging
+import os
+import math
+import time
 from typing import Any, Dict, Optional
+
 from utils.binance_futures_exec import BinanceFuturesExec
+
+logger = logging.getLogger("algogpt.trade_client")
 
 USE_EXCHANGE_FILTERS = os.getenv("USE_EXCHANGE_FILTERS","1").lower() in ("1","true","yes","on")
 ORDER_ROUND_TO_TICK  = os.getenv("ORDER_ROUND_TO_TICK","1").lower() in ("1","true","yes","on")
 EXCHANGE_INFO_TTL    = int(os.getenv("EXCHANGE_INFO_TTL_SEC","900"))
+HARD_STOP_LOSS_PCT   = float(os.getenv("HARD_STOP_LOSS_PCT", "1.5") or 0.0)
 
 def _env_override_float(key: str) -> Optional[float]:
     v = os.getenv(key, "").strip()
@@ -82,12 +91,36 @@ class TradeClient:
         return None
 
     async def place_stop_loss_or_be(self, symbol: str, side: str, stop_price: float, trigger: str = "mark") -> Dict[str, Any]:
-        sp = self._round_price(symbol, float(stop_price))
-        pos = await self.get_position(symbol)
-        qty = self._round_qty(symbol, abs(float(pos.get("positionAmt") or 0.0)))
-        if qty <= 0: raise RuntimeError("no position qty to protect")
-        close_side = "SELL" if side.upper() == "BUY" else "BUY"
-        return self.cli.order_tp_or_sl_market(symbol.upper(), close_side, sp, qty, kind="STOP_MARKET", position_side="BOTH", reduce_only=True)
+        sym = symbol.upper()
+        side_u = side.upper()
+        sp_raw = float(stop_price)
+        pos = await self.get_position(sym)
+        qty = self._round_qty(sym, abs(float(pos.get("positionAmt") or 0.0)))
+        if qty <= 0:
+            raise RuntimeError("no position qty to protect")
+        entry_price = float(pos.get("entryPrice") or 0.0)
+        pct = HARD_STOP_LOSS_PCT / 100.0 if HARD_STOP_LOSS_PCT > 0 else 0.0
+        if entry_price > 0 and pct > 0.0:
+            if side_u == "BUY":
+                min_stop = entry_price * (1.0 - pct)
+                if sp_raw < min_stop:
+                    logger.debug("[trade_client] clamp SL for %s long: %.8f -> %.8f", sym, sp_raw, min_stop)
+                    sp_raw = min_stop
+            else:
+                max_stop = entry_price * (1.0 + pct)
+                if sp_raw > max_stop:
+                    logger.debug("[trade_client] clamp SL for %s short: %.8f -> %.8f", sym, sp_raw, max_stop)
+                    sp_raw = max_stop
+        sp = self._round_price(sym, sp_raw)
+        close_side = "SELL" if side_u == "BUY" else "BUY"
+        trigger_u = (trigger or "MARK_PRICE").strip().upper()
+        if trigger_u in ("MARK", "MARK_PRICE"):
+            working_type = "MARK_PRICE"
+        elif trigger_u in ("LAST", "LAST_PRICE"):
+            working_type = "LAST_PRICE"
+        else:
+            working_type = trigger_u
+        return self.cli.order_tp_or_sl_market(sym, close_side, sp, qty, kind="STOP_MARKET", position_side="BOTH", reduce_only=True, working_type=working_type)
 
     async def place_take_profit(self, symbol: str, side: str, tp_price: float, split: Optional[float], idx: int, trigger: str="mark") -> Dict[str, Any]:
         pp = self._round_price(symbol, float(tp_price))
@@ -110,7 +143,38 @@ class TradeClient:
             if q > 0: self.cli.order_market(s, "BUY", q, position_side="BOTH", reduce_only=True)
 
     async def open_market(self, symbol: str, side: str, qty: float, leverage: int) -> Dict[str, Any]:
-        self.cli.set_leverage(symbol.upper(), int(leverage))
-        q = self._round_qty(symbol, float(qty))
-        if q <= 0: raise RuntimeError("qty after rounding is 0")
-        return self.cli.order_market(symbol.upper(), side.upper(), q, position_side="BOTH", reduce_only=False)
+        sym = symbol.upper()
+        side_u = side.upper()
+        self.cli.set_leverage(sym, int(leverage))
+        q = self._round_qty(sym, float(qty))
+        if q <= 0:
+            raise RuntimeError("qty after rounding is 0")
+        res = self.cli.order_market(sym, side_u, q, position_side="BOTH", reduce_only=False)
+        if HARD_STOP_LOSS_PCT > 0:
+            try:
+                await self._arm_hard_stop(sym, side_u)
+            except Exception as e:
+                logger.warning("[trade_client] hard SL arm failed for %s: %s", sym, e)
+        return res
+
+    async def _arm_hard_stop(self, symbol: str, side: str) -> Optional[Dict[str, Any]]:
+        if HARD_STOP_LOSS_PCT <= 0:
+            return None
+        pct = HARD_STOP_LOSS_PCT / 100.0
+        entry_price: float = 0.0
+        attempts = int(os.getenv("HARD_SL_POSITION_RETRIES", "5") or 5)
+        delay = float(os.getenv("HARD_SL_POSITION_DELAY_SEC", "0.2") or 0.2)
+        pos: Dict[str, Any] = {}
+        for attempt in range(max(1, attempts)):
+            pos = await self.get_position(symbol)
+            entry_price = float(pos.get("entryPrice") or 0.0)
+            amt = abs(float(pos.get("positionAmt") or 0.0))
+            if entry_price > 0 and amt > 0:
+                break
+            if attempt < attempts - 1:
+                await asyncio.sleep(max(0.05, delay))
+        else:
+            logger.debug("[trade_client] no position snapshot for %s, skip hard SL", symbol)
+            return None
+        target = entry_price * (1.0 - pct) if side == "BUY" else entry_price * (1.0 + pct)
+        return await self.place_stop_loss_or_be(symbol, side, target)

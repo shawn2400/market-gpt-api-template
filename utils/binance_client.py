@@ -58,6 +58,7 @@ _HEDGE_MODE_CACHE: Dict[str, Any] = {"ts": 0.0, "val": None}
 ORDER_ID_PREFIX = os.getenv("ORDER_ID_PREFIX", "").strip()
 CANCEL_ONLY_PREFIXED_ORDERS = os.getenv("CANCEL_ONLY_PREFIXED_ORDERS", "0").lower() in ("1", "true", "yes", "on")
 CANCEL_PREFIX_OVERRIDE = os.getenv("CANCEL_PREFIX_OVERRIDE", "").strip()
+HARD_STOP_LOSS_PCT = float(os.getenv("HARD_STOP_LOSS_PCT", "1.5") or 0.0)
 
 def _now() -> float: return time.time()
 def _ms() -> int: return int(time.time() * 1000)
@@ -440,6 +441,75 @@ def get_price_coalesced(symbol: str) -> Optional[float]:
         return float(v)
     return futures_index_price(symbol)
 
+def _truthy(val: Any) -> bool:
+    if isinstance(val, bool):
+        return val
+    return str(val).strip().lower() in ("1", "true", "yes", "on")
+
+def _clamp_stop_loss(sym: str, kwargs: Dict[str, Any], stop_price: float) -> float:
+    if HARD_STOP_LOSS_PCT <= 0 or stop_price <= 0:
+        return float(stop_price)
+    typ = str(kwargs.get("type") or "").upper()
+    if "STOP" not in typ:
+        return float(stop_price)
+    if not (_truthy(kwargs.get("reduceOnly")) or _truthy(kwargs.get("closePosition"))):
+        return float(stop_price)
+    try:
+        positions = get_open_positions(sym)
+    except Exception:
+        positions = []
+    if not positions:
+        return float(stop_price)
+    side = str(kwargs.get("side") or "").upper()
+    pos_side_hint = str(kwargs.get("positionSide") or "").upper()
+    entry_price: Optional[float] = None
+    position_side: Optional[str] = None
+
+    def _match_position(pos: Dict[str, Any]) -> bool:
+        amt = float(pos.get("positionAmt") or 0.0)
+        if abs(amt) <= 1e-12:
+            return False
+        pos_side = str(pos.get("positionSide") or "").upper()
+        if pos_side_hint and pos_side and pos_side != pos_side_hint:
+            return False
+        if not pos_side_hint:
+            if side == "SELL" and amt <= 0:
+                return False
+            if side == "BUY" and amt >= 0:
+                return False
+        return True
+
+    for pos in positions:
+        if not _match_position(pos):
+            continue
+        entry_candidate = float(pos.get("entryPrice") or 0.0)
+        if entry_candidate <= 0:
+            continue
+        entry_price = entry_candidate
+        amt = float(pos.get("positionAmt") or 0.0)
+        position_side = "LONG" if amt > 0 else "SHORT"
+        break
+
+    if entry_price is None:
+        # fallback: pick any position with entry
+        for pos in positions:
+            entry_candidate = float(pos.get("entryPrice") or 0.0)
+            amt = float(pos.get("positionAmt") or 0.0)
+            if entry_candidate > 0 and abs(amt) > 0:
+                entry_price = entry_candidate
+                position_side = "LONG" if amt > 0 else "SHORT"
+                break
+
+    if entry_price is None or position_side is None:
+        return float(stop_price)
+
+    pct = HARD_STOP_LOSS_PCT / 100.0
+    if position_side == "LONG":
+        min_stop = entry_price * (1.0 - pct)
+        return float(max(stop_price, min_stop))
+    max_stop = entry_price * (1.0 + pct)
+    return float(min(stop_price, max_stop))
+
 # ──────────────────────────────────────────────────────────────────────────────
 # יצירת הזמנות נוחות לשימוש (כולל עטיפות תאימות־שם לראוטים)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -461,7 +531,8 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
         # guard
         kwargs["price"] = p_str
     if stop is not None:
-        s_str = _quantize_price(sym, float(stop))
+        stop_f = _clamp_stop_loss(sym, kwargs, float(stop))
+        s_str = _quantize_price(sym, float(stop_f))
         kwargs["stopPrice"] = s_str
     if activation is not None:
         a_str = _quantize_price(sym, float(activation))
