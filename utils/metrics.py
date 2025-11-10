@@ -1,17 +1,31 @@
 # utils/metrics.py
 from __future__ import annotations
-import time, threading
-from typing import Dict, Any, Optional, Tuple
 
-try:
-    from prometheus_client import Counter as _PromCounter  # type: ignore
-except Exception:  # pragma: no cover - prometheus optional
-    _PromCounter = None
+import time
+import threading
+from typing import Dict, Any, Optional
+
+try:  # pragma: no cover - Prometheus is optional in some environments
+    from prometheus_client import Counter, Gauge  # type: ignore
+except Exception:  # pragma: no cover
+    class _NoopCounter:
+        def inc(self, amount: float = 1.0) -> None:
+            return None
+    class _NoopGauge:
+        def set(self, value: float) -> None:
+            return None
+        def set_function(self, fn):  # noqa: ANN001 - keep signature simple
+            return None
+    def Counter(*_args, **_kwargs):  # type: ignore
+        return _NoopCounter()
+    def Gauge(*_args, **_kwargs):  # type: ignore
+        return _NoopGauge()
+
 
 class _MetricsTracker:
     """
-    טרקר קל משקל למטריקות JSON פנימיות (מקביל/משלים ל-Prometheus).
-    תומך: counter, gauge, עם/בלי labels (לייבלים נשמרים כמפתח משורשר).
+    Tracker קל משקל למטריקות JSON פנימיות (מקביל/משלים ל-Prometheus).
+    משמר ספירות וגייג'ים לזמינות גם ללא Prometheus.
     """
 
     def __init__(self, max_series: int = 500):
@@ -24,8 +38,8 @@ class _MetricsTracker:
     # --- helpers ---
     @staticmethod
     def _lblkey(labels: Optional[Dict[str, Any]]) -> str:
-        if not labels: return ""
-        # סדר דטרמיניסטי כדי ליצור מפתח יציב
+        if not labels:
+            return ""
         items = sorted((str(k), str(v)) for k, v in labels.items())
         return "|".join(f"{k}={v}" for k, v in items)
 
@@ -35,13 +49,11 @@ class _MetricsTracker:
         return name if not lk else f"{name}|{lk}"
 
     def _gc_if_needed(self, store: Dict[str, float]) -> None:
-        # הגבלת קרדינליות פנימית (failsafe)
         if len(store) > self._max_series:
-            # מוחקים את הישנים ביותר לפי זמן התחלה (פשוט: נחתוך חצי)
-            # לשמירה על פשטות, נמחק את החצי הראשון של הרשימה הממוינת אלפביתית.
-            for i, k in enumerate(sorted(store.keys())):
-                if i * 2 >= len(store): break
-                store.pop(k, None)
+            for i, key in enumerate(sorted(store.keys())):
+                if i * 2 >= len(store):
+                    break
+                store.pop(key, None)
 
     # --- counters ---
     def inc_counter(self, name: str, value: float = 1.0, labels: Optional[Dict[str, Any]] = None) -> None:
@@ -68,79 +80,36 @@ class _MetricsTracker:
                 "gauges": dict(self._gauges),
             }
 
-# סינגלטון
+
+# סינגלטון לשימוש פנימי/legacy
 metrics_tracker = _MetricsTracker()
 
 
-class _CounterHandle:
-    __slots__ = ("_name", "_labels", "_prom_child")
+# Prometheus counters (לפי ההנחיות; Prometheus מוסיף _total ברילוד)
+SL_REPLACE_ATTEMPT = Counter(
+    "algogpt_sl_replace_attempt",
+    "Safe SL replace attempts (place-then-cancel strategy).",
+)
+STOP_VALIDATION_FAIL = Counter(
+    "algogpt_stop_validation_fail",
+    "Failed stop validation (distance/tick) rejects.",
+)
+RISK_BLOCK = Counter(
+    "algogpt_risk_block",
+    "Requests blocked by risk/cooldown/BTC gate.",
+)
 
-    def __init__(self, name: str, labels: Dict[str, Any], prom_child: Any):
-        self._name = name
-        self._labels = labels
-        self._prom_child = prom_child
-
-    def inc(self, amount: float = 1.0) -> None:
-        if self._prom_child is not None:
-            try:
-                self._prom_child.inc(amount)
-            except Exception:
-                pass
-        metrics_tracker.inc_counter(self._name, amount, labels=self._labels)
-
-
-class _CounterWrapper:
-    __slots__ = ("_name", "_labelnames", "_prom_counter")
-
-    def __init__(self, name: str, documentation: str, labelnames: Tuple[str, ...]):
-        self._name = name
-        self._labelnames = tuple(labelnames)
-        if _PromCounter is not None:
-            try:
-                self._prom_counter = _PromCounter(name, documentation, list(labelnames))  # type: ignore[arg-type]
-            except Exception:
-                self._prom_counter = None
-        else:
-            self._prom_counter = None
-
-    def labels(self, **labels: Any) -> _CounterHandle:
-        # normalize labels to declared label names
-        normalized = {k: str(labels.get(k, "")) for k in self._labelnames}
-        prom_child = None
-        if self._prom_counter is not None:
-            try:
-                prom_child = self._prom_counter.labels(**normalized)  # type: ignore[misc]
-            except Exception:
-                prom_child = None
-        return _CounterHandle(self._name, normalized, prom_child)
+ALGOGPT_UPTIME_SECONDS = Gauge(
+    "algogpt_uptime_seconds",
+    "Process uptime seconds.",
+)
+ALGOGPT_UPTIME_SECONDS.set_function(lambda: time.time() - metrics_tracker._meta.get("started_ts", time.time()))
 
 
-class _MetricsNamespace:
-    def __init__(self) -> None:
-        self.sl_replace_attempt = _CounterWrapper(
-            "algogpt_sl_replace_attempt_total",
-            "SL replace attempts",
-            ("result",),
-        )
-        self.stop_validation_fail = _CounterWrapper(
-            "algogpt_stop_validation_fail_total",
-            "Stop validation failures",
-            ("reason",),
-        )
-        self.risk_block = _CounterWrapper(
-            "algogpt_risk_block_total",
-            "Risk gate blocked trade",
-            ("reason",),
-        )
-
-
-METRICS = _MetricsNamespace()
-
-
-
-
-
-
-
-
-
+__all__ = [
+    "metrics_tracker",
+    "SL_REPLACE_ATTEMPT",
+    "STOP_VALIDATION_FAIL",
+    "RISK_BLOCK",
+    "ALGOGPT_UPTIME_SECONDS",
+]

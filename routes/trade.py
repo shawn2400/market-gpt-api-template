@@ -59,7 +59,7 @@ except Exception:
     def record_trade_approval(action: str, ok: bool):  # type: ignore
         pass
 
-from utils.metrics import METRICS
+from utils.metrics import RISK_BLOCK
 
 try:
     from utils.risk import can_execute_trade, note_trade_execution, evaluate_trade_request  # type: ignore
@@ -474,12 +474,11 @@ async def trade_execute(
 
     gate_info = can_execute_trade(req.symbol)
     if not gate_info.get("ok", True):
-        reason = gate_info.get("reason", "blocked")
-        METRICS.risk_block.labels(reason=reason).inc()
+        RISK_BLOCK.inc()
         raise HTTPException(status_code=429, detail=gate_info)
 
     if not _btc_gate_allows(req.side):
-        METRICS.risk_block.labels(reason="btc_gate").inc()
+        RISK_BLOCK.inc()
         raise HTTPException(status_code=409, detail={"ok": False, "reason": "btc_gate"})
 
     ticket_exec = dict(
@@ -513,8 +512,7 @@ async def trade_execute(
         budget_usd=req.budget_usd,
     )
     if not risk_eval.get("ok", True):
-        reason = risk_eval.get("reason", "risk_block")
-        METRICS.risk_block.labels(reason=reason).inc()
+        RISK_BLOCK.inc()
         raise HTTPException(status_code=409, detail=risk_eval)
 
     res = await (_execute_trade_direct(ticket_exec) if flow == "MARKET" else _execute_trade_hybrid(ticket_exec))
@@ -548,12 +546,11 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
 
     gate_info = can_execute_trade(symbol)
     if not gate_info.get("ok", True):
-        reason = gate_info.get("reason", "blocked")
-        METRICS.risk_block.labels(reason=reason).inc()
+        RISK_BLOCK.inc()
         return {"ok": False, "error": "risk_block", "detail": gate_info}
 
     if not _btc_gate_allows(side):
-        METRICS.risk_block.labels(reason="btc_gate").inc()
+        RISK_BLOCK.inc()
         return {"ok": False, "error": "btc_gate"}
 
     risk_eval = evaluate_trade_request(
@@ -566,8 +563,7 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
         budget_usd=it.get("budget") or it.get("budget_usd"),
     )
     if not risk_eval.get("ok", True):
-        reason = risk_eval.get("reason", "risk_block")
-        METRICS.risk_block.labels(reason=reason).inc()
+        RISK_BLOCK.inc()
         return {"ok": False, "error": "risk_block", "detail": risk_eval}
 
     res = await (_execute_trade_hybrid(it) if flow == "HYBRID" else _execute_trade_direct(it))

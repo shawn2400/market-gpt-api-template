@@ -2,7 +2,20 @@
 from __future__ import annotations
 import os
 from fastapi import APIRouter, Header, HTTPException, Response
-from utils.metrics_tracker import render_prometheus_text  # מייצר את ה-Exposition Text
+from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
+_PROM_MULTIPROC_DIR = os.getenv("PROMETHEUS_MULTIPROC_DIR")
+if _PROM_MULTIPROC_DIR:
+    from prometheus_client import CollectorRegistry, multiprocess
+
+    def _prom_registry():
+        registry = CollectorRegistry()
+        multiprocess.MultiProcessCollector(registry)
+        return registry
+else:
+    from prometheus_client import REGISTRY  # type: ignore
+
+    def _prom_registry():
+        return REGISTRY
 
 router = APIRouter(prefix="", tags=["metrics"])
 
@@ -29,9 +42,8 @@ def _auth_ok(auth_header: str) -> bool:
 async def metrics(authorization: str = Header(default="")):
     if not _auth_ok(authorization):
         raise HTTPException(status_code=401, detail="Unauthorized")
-    body = render_prometheus_text()
-    # הפורמט התקני של Prometheus exposition
-    return Response(content=body, media_type="text/plain; version=0.0.4; charset=utf-8")
+    body = generate_latest(_prom_registry())
+    return Response(content=body, media_type=CONTENT_TYPE_LATEST)
 
 
 

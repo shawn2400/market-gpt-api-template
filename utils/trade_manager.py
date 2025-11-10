@@ -110,7 +110,7 @@ from utils.telegram_notifier import (
     notify_heartbeat,
     notify_daily_summary,
 )
-from utils.metrics import METRICS
+from utils.metrics import SL_REPLACE_ATTEMPT
 
 DEFAULT_QTY_STEP = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
 DEFAULT_TICK = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
@@ -268,6 +268,7 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
     adj_price = _clamp_to_hard_stop(entry_price, position_side, float(new_price))
     stop_str, _ = _q_price(sym, float(adj_price))
     qty_str, _ = _q_qty(sym, float(qty))
+    SL_REPLACE_ATTEMPT.inc()
     existing_orders = list_active_stop_orders(sym, position_side.upper())
     try:
         resp = futures_create_order(
@@ -281,10 +282,8 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
             timeInForce="GTC",
         )
         if isinstance(resp, dict) and resp.get("skipped"):
-            METRICS.sl_replace_attempt.labels(result="skipped_invalid").inc()
             return {"ok": False, "error": resp.get("reason", "place_skipped"), "detail": resp}
     except Exception as e:
-        METRICS.sl_replace_attempt.labels(result="kept_old").inc()
         return {"ok": False, "error": str(e)}
 
     cancel_errors: List[str] = []
@@ -308,7 +307,6 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
     except Exception as exc:
         logger.warning("[tm.modify_stop_loss] verify active SL failed %s: %s", sym, exc)
 
-    METRICS.sl_replace_attempt.labels(result="placed_new").inc()
     out: Dict[str, Any] = {"ok": True, "response": resp, "stop_price": float(stop_str)}
     if cancel_errors:
         out["cancel_errors"] = cancel_errors
@@ -473,7 +471,6 @@ def safe_replace_sl(symbol: str, position_side: str, last_price: float, atr_now:
     detected_qty, entry_price = _detect_position_snapshot(sym)
     qty = qty_hint if qty_hint and qty_hint > 0 else detected_qty
     if not qty or qty <= 0:
-        METRICS.sl_replace_attempt.labels(result="skipped_invalid").inc()
         return {"ok": False, "kept_old": True, "error": "qty_missing_for_safe_replace"}
 
     target_sl = _clamp_to_hard_stop(entry_price, position_side, float(desired_sl))
@@ -483,6 +480,7 @@ def safe_replace_sl(symbol: str, position_side: str, last_price: float, atr_now:
     qty_str, _ = _q_qty(sym, float(qty))
     stop_str, _ = _q_price(sym, float(new_stop))
 
+    SL_REPLACE_ATTEMPT.inc()
     existing_orders = list_active_stop_orders(sym, position_side.upper())
     new_oid: Optional[int] = None
     try:
@@ -497,11 +495,9 @@ def safe_replace_sl(symbol: str, position_side: str, last_price: float, atr_now:
             timeInForce="GTC",
         )
         if isinstance(place_res, dict) and place_res.get("skipped"):
-            METRICS.sl_replace_attempt.labels(result="skipped_invalid").inc()
             return {"ok": False, "kept_old": True, "error": place_res.get("reason", "place_skipped"), "detail": place_res}
         new_oid = place_res.get("orderId")
     except Exception as e:
-        METRICS.sl_replace_attempt.labels(result="kept_old").inc()
         return {"ok": False, "kept_old": True, "error": f"place_failed: {e}"}
 
     cancel_errors: List[str] = []
@@ -524,7 +520,6 @@ def safe_replace_sl(symbol: str, position_side: str, last_price: float, atr_now:
     except Exception as exc:
         logger.warning("[tm.safe_replace_sl] verify active SL failed %s: %s", sym, exc)
 
-    METRICS.sl_replace_attempt.labels(result="placed_new").inc()
     out: Dict[str, Any] = {"ok": True, "new_sl": float(stop_str), "order": place_res}
     if cancel_errors:
         out["cancel_errors"] = cancel_errors

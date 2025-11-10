@@ -6,7 +6,7 @@ from contextlib import suppress
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 from utils.metrics_tracker import observe_http, observe_http_ctx  # מדידת לטנסי/HTTP
-from utils.metrics import METRICS
+from utils.metrics import SL_REPLACE_ATTEMPT, STOP_VALIDATION_FAIL
 
 logger = logging.getLogger("algogpt.binance")
 
@@ -508,19 +508,24 @@ def _derive_position_side_from_close(close_side: str) -> Optional[str]:
 def validate_stop_distance(symbol: str, position_side: str, stop_price: float, mark_price: float, min_gap_pct: float) -> tuple[bool, str]:
     try:
         if stop_price <= 0 or mark_price <= 0:
+            STOP_VALIDATION_FAIL.inc()
             return False, "bad_price"
         side = (position_side or "").upper()
         gap = max(0.0, float(min_gap_pct or 0.0))
         if side == "LONG":
             if stop_price >= mark_price * (1.0 - gap):
+                STOP_VALIDATION_FAIL.inc()
                 return False, "would_trigger"
         elif side == "SHORT":
             if stop_price <= mark_price * (1.0 + gap):
+                STOP_VALIDATION_FAIL.inc()
                 return False, "would_trigger"
         else:
+            STOP_VALIDATION_FAIL.inc()
             return False, "side_mismatch"
         return True, "ok"
     except Exception as exc:  # pragma: no cover - defensive
+        STOP_VALIDATION_FAIL.inc()
         return False, f"error:{exc}"
 
 def _truthy(val: Any) -> bool:
@@ -626,7 +631,6 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
                     "[SL] Skip placing stop (symbol=%s side=%s) reason=%s stop=%s mark=%s",
                     sym, position_side, reason, stop, mark
                 )
-                METRICS.stop_validation_fail.labels(reason=reason).inc()
                 return {"ok": False, "skipped": True, "reason": reason}
             tick = _get_tick_precision(sym)
             if tick > 0:
@@ -760,13 +764,12 @@ def set_breakeven_stop(
         close_side = "SELL" if side_u in ("BUY", "LONG") else "BUY"
         be = float(entry_price) * (1.0 + (offset_bps / 10000.0 if close_side == "SELL" else -offset_bps / 10000.0))
         position_side_eff = (positionSide or ("LONG" if close_side == "SELL" else "SHORT"))
+        SL_REPLACE_ATTEMPT.inc()
         existing_orders = list_active_stop_orders(symbol, position_side_eff)
         new_res = place_stop_market(symbol, close_side, be, float(q), positionSide=position_side_eff)
         if not isinstance(new_res, dict):
-            METRICS.sl_replace_attempt.labels(result="kept_old").inc()
             return {"ok": False, "error": "place_failed", "detail": new_res}
         if new_res.get("skipped"):
-            METRICS.sl_replace_attempt.labels(result="skipped_invalid").inc()
             return new_res
         new_order_id = new_res.get("orderId")
         cancel_errors: List[str] = []
@@ -787,7 +790,6 @@ def set_breakeven_stop(
                 logger.warning("[SL] Multiple SL active after breakeven replace (%d)", len(active))
         except Exception as exc:
             logger.warning("[SL] Verify active SL failed: %s", exc)
-        METRICS.sl_replace_attempt.labels(result="placed_new").inc()
         if cancel_errors:
             new_res["cancel_errors"] = cancel_errors
         return new_res
