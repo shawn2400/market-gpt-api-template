@@ -1,6 +1,6 @@
 # utils/risk.py
 from __future__ import annotations
-import logging, os
+import logging, os, time, threading
 from typing import Optional, Dict, Any
 
 log = logging.getLogger("algogpt.risk")
@@ -33,6 +33,117 @@ except Exception:
         notional = float(budget_usdt) * lev
         qty = notional / px
         return round(qty, 8)
+
+MAX_RISK_PER_TRADE_PCT = float(os.getenv("MAX_RISK_PER_TRADE_PCT", "1.0"))
+MAX_DAILY_TRADES = int(os.getenv("MAX_DAILY_TRADES", "10"))
+TRADE_COOLDOWN_SECONDS = int(os.getenv("TRADE_COOLDOWN_SECONDS", "1800"))
+ACCOUNT_EQUITY_USDT = float(os.getenv("ACCOUNT_EQUITY_USDT", os.getenv("DEFAULT_ACCOUNT_EQUITY_USDT", "1000")))
+
+_state_lock = threading.RLock()
+_daily_state: Dict[str, Any] = {"date": None, "count": 0}
+_last_trade_ts_global: float = 0.0
+_last_trade_ts_per_symbol: Dict[str, float] = {}
+
+def _today_str(now: Optional[float] = None) -> str:
+    return time.strftime("%Y-%m-%d", time.gmtime(now or time.time()))
+
+def _reset_daily_locked(now: float) -> None:
+    today = _today_str(now)
+    if _daily_state["date"] != today:
+        _daily_state["date"] = today
+        _daily_state["count"] = 0
+
+def can_execute_trade(symbol: str, now: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Checks daily limits and cooldown windows without mutating counters.
+    """
+    now_ts = now or time.time()
+    with _state_lock:
+        _reset_daily_locked(now_ts)
+        if MAX_DAILY_TRADES > 0 and _daily_state["count"] >= MAX_DAILY_TRADES:
+            remaining = max(0, MAX_DAILY_TRADES - _daily_state["count"])
+            return {"ok": False, "reason": "max_daily", "remaining": remaining}
+        if TRADE_COOLDOWN_SECONDS > 0 and _last_trade_ts_global:
+            diff = now_ts - _last_trade_ts_global
+            if diff < TRADE_COOLDOWN_SECONDS:
+                return {"ok": False, "reason": "cooldown", "retry_after": int(TRADE_COOLDOWN_SECONDS - diff)}
+        sym_last = _last_trade_ts_per_symbol.get(symbol.upper())
+        if TRADE_COOLDOWN_SECONDS > 0 and sym_last:
+            diff = now_ts - sym_last
+            if diff < TRADE_COOLDOWN_SECONDS:
+                return {"ok": False, "reason": "cooldown_symbol", "retry_after": int(TRADE_COOLDOWN_SECONDS - diff)}
+    return {"ok": True}
+
+def note_trade_execution(symbol: str, now: Optional[float] = None) -> None:
+    """
+    Records a trade execution (increments daily count + updates cooldown timestamps).
+    """
+    now_ts = now or time.time()
+    with _state_lock:
+        _reset_daily_locked(now_ts)
+        _daily_state["count"] += 1
+        if MAX_DAILY_TRADES > 0:
+            _daily_state["count"] = min(_daily_state["count"], MAX_DAILY_TRADES)
+        global _last_trade_ts_global
+        _last_trade_ts_global = now_ts
+        _last_trade_ts_per_symbol[symbol.upper()] = now_ts
+
+def _estimate_risk_pct(entry_price: float, stop_price: Optional[float], qty: float) -> Optional[float]:
+    if stop_price is None or stop_price <= 0 or qty <= 0 or entry_price <= 0 or ACCOUNT_EQUITY_USDT <= 0:
+        return None
+    risk_usd = abs(entry_price - float(stop_price)) * float(qty)
+    if risk_usd <= 0:
+        return 0.0
+    return (risk_usd / ACCOUNT_EQUITY_USDT) * 100.0
+
+def evaluate_trade_request(
+    *,
+    symbol: str,
+    side: str,
+    entry_price: Optional[float],
+    stop_price: Optional[float],
+    quantity: Optional[float],
+    leverage: float,
+    budget_usd: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Estimate risk percentage for requested trade. Returns {"ok": bool, ...}.
+    If data missing (no entry/stop), returns ok=True with reason.
+    """
+    try:
+        entry = float(entry_price) if entry_price else None
+    except Exception:
+        entry = None
+    stop = float(stop_price) if stop_price else None
+    qty = quantity if quantity and quantity > 0 else None
+
+    if entry is None or entry <= 0:
+        try:
+            from utils.binance_client import get_price_coalesced  # type: ignore
+            entry = get_price_coalesced(symbol)
+        except Exception:
+            entry = None
+    if entry is None or entry <= 0:
+        return {"ok": True, "reason": "price_missing"}
+
+    if qty is None:
+        if budget_usd and budget_usd > 0:
+            try:
+                qty = calculate_quantity(
+                    symbol=symbol,
+                    entry_price=float(entry),
+                    leverage=float(leverage or 1.0),
+                    budget_usdt=float(budget_usd),
+                )
+            except Exception as exc:
+                return {"ok": False, "reason": "qty_error", "detail": str(exc)}
+        else:
+            return {"ok": True, "reason": "qty_missing"}
+
+    risk_pct = _estimate_risk_pct(float(entry), stop, float(qty))
+    if risk_pct is not None and risk_pct > MAX_RISK_PER_TRADE_PCT:
+        return {"ok": False, "reason": "risk_pct", "risk_pct": risk_pct}
+    return {"ok": True, "risk_pct": risk_pct}
 
 # ===== Public API =====
 def choose_trade_budget(
@@ -92,6 +203,20 @@ def compute_position_size(
         log.error("calculate_quantity error: %s", e)
         return {"ok": False, "error": str(e), "explain": bdg}
 
+    risk_eval = evaluate_trade_request(
+        symbol=symbol,
+        side=side,
+        entry_price=float(entry_price),
+        stop_price=stop_price,
+        quantity=qty,
+        leverage=float(leverage),
+        budget_usd=budget,
+    )
+    if not risk_eval.get("ok", True):
+        detail = risk_eval.copy()
+        detail.pop("ok", None)
+        return {"ok": False, "error": detail.get("reason", "risk_blocked"), "detail": detail}
+
     return {
         "ok": True,
         "symbol": symbol.upper(),
@@ -102,6 +227,7 @@ def compute_position_size(
         "stop_price": float(stop_price) if stop_price else None,
         "leverage": float(leverage),
         "explain": bdg,
+        "risk_pct": risk_eval.get("risk_pct"),
     }
 
 def suggest_risk(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -136,7 +262,14 @@ def suggest_risk(payload: Dict[str, Any]) -> Dict[str, Any]:
         out = {"ok": True, "suggestion": {"max_leverage": 10, "budget": 25.0}, "explain": bdg}
     return out
 
-__all__ = ["choose_trade_budget", "compute_position_size", "suggest_risk"]
+__all__ = [
+    "choose_trade_budget",
+    "compute_position_size",
+    "suggest_risk",
+    "can_execute_trade",
+    "note_trade_execution",
+    "evaluate_trade_request",
+]
 
 
 

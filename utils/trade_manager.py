@@ -24,6 +24,7 @@ from utils.binance_client import (
     futures_mark_price,
     futures_create_order,
     get_symbol_filters,
+    list_active_stop_orders,
 )
 
 # Guard (optional, safe if missing)
@@ -70,6 +71,9 @@ SL_BREATH_ATR_MULT = float(os.getenv("SL_BREATH_ATR_MULT", "1.0"))
 LOCK_PROFIT_KEEP_RATIO = float(os.getenv("LOCK_PROFIT_KEEP_RATIO", "0.8"))
 BREATH_COND_MIN_PROFIT_PCT = float(os.getenv("BREATH_COND_MIN_PROFIT_PCT", "0.8"))
 
+MIN_HOLD_SECONDS = int(os.getenv("MIN_HOLD_SECONDS", "900"))
+TRAIL_MIN_PROFIT_PCT = float(os.getenv("TRAIL_MIN_PROFIT_PCT", "1.0"))
+
 HARD_STOP_LOSS_PCT = float(os.getenv("HARD_STOP_LOSS_PCT", "1.5") or 0.0)
 
 DAILY_LOSS_CAP = float(os.getenv("DAILY_HARD_LOSS_USD", "-150"))
@@ -106,6 +110,7 @@ from utils.telegram_notifier import (
     notify_heartbeat,
     notify_daily_summary,
 )
+from utils.metrics import METRICS
 
 DEFAULT_QTY_STEP = float(os.getenv("DEFAULT_QTY_STEP", "0.001"))
 DEFAULT_TICK = float(os.getenv("DEFAULT_PRICE_TICK", "0.01"))
@@ -244,7 +249,6 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
     """
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
-    _cancel_closing_orders(sym, ("STOP", "STOP_MARKET"))
     entry_price: Optional[float] = None
     qty = qty_hint
     try:
@@ -264,6 +268,7 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
     adj_price = _clamp_to_hard_stop(entry_price, position_side, float(new_price))
     stop_str, _ = _q_price(sym, float(adj_price))
     qty_str, _ = _q_qty(sym, float(qty))
+    existing_orders = list_active_stop_orders(sym, position_side.upper())
     try:
         resp = futures_create_order(
             symbol=sym,
@@ -275,9 +280,39 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
             workingType="MARK_PRICE",
             timeInForce="GTC",
         )
-        return {"ok": True, "response": resp}
+        if isinstance(resp, dict) and resp.get("skipped"):
+            METRICS.sl_replace_attempt.labels(result="skipped_invalid").inc()
+            return {"ok": False, "error": resp.get("reason", "place_skipped"), "detail": resp}
     except Exception as e:
+        METRICS.sl_replace_attempt.labels(result="kept_old").inc()
         return {"ok": False, "error": str(e)}
+
+    cancel_errors: List[str] = []
+    new_oid = resp.get("orderId") if isinstance(resp, dict) else None
+    for old in existing_orders:
+        oid = old.get("orderId")
+        if oid is None or (new_oid is not None and int(oid) == int(new_oid)):
+            continue
+        try:
+            futures_cancel_order(sym, oid)
+        except Exception as exc:
+            logger.warning("[tm.modify_stop_loss] cancel old stop failed %s/%s: %s", sym, oid, exc)
+            cancel_errors.append(str(exc))
+
+    try:
+        active_after = list_active_stop_orders(sym, position_side.upper())
+        if not active_after:
+            logger.error("[tm.modify_stop_loss] No active SL after modify (symbol=%s)", sym)
+        elif len(active_after) > 1:
+            logger.warning("[tm.modify_stop_loss] Multiple SL active after modify (symbol=%s, count=%d)", sym, len(active_after))
+    except Exception as exc:
+        logger.warning("[tm.modify_stop_loss] verify active SL failed %s: %s", sym, exc)
+
+    METRICS.sl_replace_attempt.labels(result="placed_new").inc()
+    out: Dict[str, Any] = {"ok": True, "response": resp, "stop_price": float(stop_str)}
+    if cancel_errors:
+        out["cancel_errors"] = cancel_errors
+    return out
 
 def modify_take_profit(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
     """
@@ -438,6 +473,7 @@ def safe_replace_sl(symbol: str, position_side: str, last_price: float, atr_now:
     detected_qty, entry_price = _detect_position_snapshot(sym)
     qty = qty_hint if qty_hint and qty_hint > 0 else detected_qty
     if not qty or qty <= 0:
+        METRICS.sl_replace_attempt.labels(result="skipped_invalid").inc()
         return {"ok": False, "kept_old": True, "error": "qty_missing_for_safe_replace"}
 
     target_sl = _clamp_to_hard_stop(entry_price, position_side, float(desired_sl))
@@ -447,6 +483,8 @@ def safe_replace_sl(symbol: str, position_side: str, last_price: float, atr_now:
     qty_str, _ = _q_qty(sym, float(qty))
     stop_str, _ = _q_price(sym, float(new_stop))
 
+    existing_orders = list_active_stop_orders(sym, position_side.upper())
+    new_oid: Optional[int] = None
     try:
         place_res = futures_create_order(
             symbol=sym,
@@ -458,17 +496,39 @@ def safe_replace_sl(symbol: str, position_side: str, last_price: float, atr_now:
             workingType="MARK_PRICE",
             timeInForce="GTC",
         )
+        if isinstance(place_res, dict) and place_res.get("skipped"):
+            METRICS.sl_replace_attempt.labels(result="skipped_invalid").inc()
+            return {"ok": False, "kept_old": True, "error": place_res.get("reason", "place_skipped"), "detail": place_res}
         new_oid = place_res.get("orderId")
     except Exception as e:
+        METRICS.sl_replace_attempt.labels(result="kept_old").inc()
         return {"ok": False, "kept_old": True, "error": f"place_failed: {e}"}
 
-    try:
-        exclude = {int(new_oid)} if new_oid else set()
-        _cancel_closing_orders(sym, ("STOP", "STOP_MARKET"), exclude_ids=exclude)
-    except Exception as e:
-        logger.warning("[tm.safe_replace_sl] cancel old stops failed %s: %s", sym, e)
+    cancel_errors: List[str] = []
+    for order in existing_orders:
+        oid = order.get("orderId")
+        if oid is None or (new_oid is not None and int(oid) == int(new_oid)):
+            continue
+        try:
+            futures_cancel_order(sym, oid)
+        except Exception as exc:
+            logger.warning("[tm.safe_replace_sl] cancel old stop failed %s/%s: %s", sym, oid, exc)
+            cancel_errors.append(str(exc))
 
-    return {"ok": True, "new_sl": float(stop_str), "order": place_res}
+    try:
+        active_after = list_active_stop_orders(sym, position_side.upper())
+        if not active_after:
+            logger.error("[tm.safe_replace_sl] No active SL after replace (symbol=%s)", sym)
+        elif len(active_after) > 1:
+            logger.warning("[tm.safe_replace_sl] Multiple SL active after replace (symbol=%s, count=%d)", sym, len(active_after))
+    except Exception as exc:
+        logger.warning("[tm.safe_replace_sl] verify active SL failed %s: %s", sym, exc)
+
+    METRICS.sl_replace_attempt.labels(result="placed_new").inc()
+    out: Dict[str, Any] = {"ok": True, "new_sl": float(stop_str), "order": place_res}
+    if cancel_errors:
+        out["cancel_errors"] = cancel_errors
+    return out
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Review & closure detection
@@ -627,11 +687,32 @@ async def manage_open_trades():
                 if not _is_finite_number(macd_now):
                     continue
 
+                opened_raw = None
+                for key in ("positionUpdateTime", "updateTime", "openTime", "updateTimestamp"):
+                    val = pos.get(key)
+                    if val not in (None, "", 0, "0"):
+                        try:
+                            opened_raw = float(val)
+                            break
+                        except Exception:
+                            opened_raw = None
+                age_sec: Optional[float] = None
+                if opened_raw:
+                    if opened_raw > 10_000_000_000:
+                        opened_raw /= 1000.0
+                    elif opened_raw > 1_000_000_000:
+                        opened_raw /= 1000.0
+                    if opened_raw > 0:
+                        age_sec = max(0.0, now - float(opened_raw))
+
                 profit_pct = abs((price - entry) / entry) * 100.0
+                min_hold_ok = (age_sec is None) or (age_sec >= MIN_HOLD_SECONDS)
+                trail_profit_ok = profit_pct >= TRAIL_MIN_PROFIT_PCT
+                allow_sl_updates = min_hold_ok and trail_profit_ok
 
                 # Breakeven move (optional)
                 be_trigger = float(os.getenv("TM_BE_MIN_PROFIT_PCT", "1.5"))
-                if (profit_pct >= be_trigger) and (macd_now > 0 or current_adx > 20):
+                if allow_sl_updates and (profit_pct >= be_trigger) and (macd_now > 0 or current_adx > 20):
                     if not TP_BE_ONLY_AFTER_TP1:
                         if _set_be_native:
                             try:
@@ -645,6 +726,11 @@ async def manage_open_trades():
                                 await notify_sl_tp_update(sym, side, "breakeven", entry)
                             except Exception as e:
                                 logger.error("[manage] BE fallback failed: %s", e)
+                elif not allow_sl_updates:
+                    if not min_hold_ok and age_sec is not None:
+                        logger.debug("[manage] %s skip BE/trail: age %.1fs < %ds", sym, age_sec, MIN_HOLD_SECONDS)
+                    elif not trail_profit_ok:
+                        logger.debug("[manage] %s skip BE/trail: profit %.3f%% < %.3f%%", sym, profit_pct, TRAIL_MIN_PROFIT_PCT)
 
                 # Freeze trailing on spikes
                 if _maybe_freeze_trailing(sym, df, current_atr, current_adx, macd_now):
@@ -653,76 +739,77 @@ async def manage_open_trades():
                         ensure_protective_stop(sym, prefer_mode="native")
                     continue
 
-                # Baseline SL from swing ± 0.6ATR
-                try:
-                    if side == "LONG":
-                        recent_low = float(df["low"].iloc[-3:].min())
-                        baseline_sl = recent_low - 0.6 * current_atr
-                    else:
-                        recent_high = float(df["high"].iloc[-3:].max())
-                        baseline_sl = recent_high + 0.6 * current_atr
-                except Exception as e:
-                    logger.error("[manage] baseline build failed for %s: %s", sym, e)
-                    _last_update[sym] = now
-                    with suppress(Exception):
-                        ensure_protective_stop(sym, prefer_mode="native")
-                    continue
-
-                # Breathing logic
-                target_sl = baseline_sl
-                try:
-                    if SL_BREATH_ALLOW and profit_pct >= BREATH_COND_MIN_PROFIT_PCT:
+                if allow_sl_updates:
+                    # Baseline SL from swing ± 0.6ATR
+                    try:
                         if side == "LONG":
-                            keep_floor = entry + LOCK_PROFIT_KEEP_RATIO * max(0.0, price - entry)
-                            relax = price - SL_BREATH_ATR_MULT * current_atr
-                            target_sl = min(baseline_sl, relax)
-                            target_sl = max(target_sl, keep_floor)
+                            recent_low = float(df["low"].iloc[-3:].min())
+                            baseline_sl = recent_low - 0.6 * current_atr
                         else:
-                            keep_ceiling = entry - LOCK_PROFIT_KEEP_RATIO * max(0.0, entry - price)
-                            relax = price + SL_BREATH_ATR_MULT * current_atr
-                            target_sl = max(baseline_sl, relax)
-                            target_sl = min(target_sl, keep_ceiling)
-                        if (macd_now < 0 and current_adx >= 22):
+                            recent_high = float(df["high"].iloc[-3:].max())
+                            baseline_sl = recent_high + 0.6 * current_atr
+                    except Exception as e:
+                        logger.error("[manage] baseline build failed for %s: %s", sym, e)
+                        _last_update[sym] = now
+                        with suppress(Exception):
+                            ensure_protective_stop(sym, prefer_mode="native")
+                        continue
+
+                    # Breathing logic
+                    target_sl = baseline_sl
+                    try:
+                        if SL_BREATH_ALLOW and profit_pct >= BREATH_COND_MIN_PROFIT_PCT:
                             if side == "LONG":
-                                target_sl = min(target_sl, price - 1.2 * SL_BREATH_ATR_MULT * current_atr)
+                                keep_floor = entry + LOCK_PROFIT_KEEP_RATIO * max(0.0, price - entry)
+                                relax = price - SL_BREATH_ATR_MULT * current_atr
+                                target_sl = min(baseline_sl, relax)
                                 target_sl = max(target_sl, keep_floor)
                             else:
-                                target_sl = max(target_sl, price + 1.2 * SL_BREATH_ATR_MULT * current_atr)
+                                keep_ceiling = entry - LOCK_PROFIT_KEEP_RATIO * max(0.0, entry - price)
+                                relax = price + SL_BREATH_ATR_MULT * current_atr
+                                target_sl = max(baseline_sl, relax)
                                 target_sl = min(target_sl, keep_ceiling)
-                except Exception as e:
-                    logger.debug("[manage] breathing compute failed %s: %s", sym, e)
+                            if (macd_now < 0 and current_adx >= 22):
+                                if side == "LONG":
+                                    target_sl = min(target_sl, price - 1.2 * SL_BREATH_ATR_MULT * current_atr)
+                                    target_sl = max(target_sl, keep_floor)
+                                else:
+                                    target_sl = max(target_sl, price + 1.2 * SL_BREATH_ATR_MULT * current_atr)
+                                    target_sl = min(target_sl, keep_ceiling)
+                    except Exception as e:
+                        logger.debug("[manage] breathing compute failed %s: %s", sym, e)
 
-                # Entry-protection clamp
-                cur_stop = _current_stop(sym, side) or entry
-                if side == "LONG":
-                    if (cur_stop >= entry) and (target_sl < entry):
-                        target_sl = max(entry, target_sl)
-                else:
-                    if (cur_stop <= entry) and (target_sl > entry):
-                        target_sl = min(entry, target_sl)
+                    # Entry-protection clamp
+                    cur_stop = _current_stop(sym, side) or entry
+                    if side == "LONG":
+                        if (cur_stop >= entry) and (target_sl < entry):
+                            target_sl = max(entry, target_sl)
+                    else:
+                        if (cur_stop <= entry) and (target_sl > entry):
+                            target_sl = min(entry, target_sl)
 
-                target_sl = _clamp_to_hard_stop(entry, side, float(target_sl))
+                    target_sl = _clamp_to_hard_stop(entry, side, float(target_sl))
 
-                # Update decision (threshold vs current stop)
-                try:
-                    if _is_finite_number(target_sl) and _is_finite_number(cur_stop):
-                        thresh = 0.25 * current_atr
-                        need_update = (abs(target_sl - float(cur_stop)) >= thresh)
-                        if need_update:
-                            res = safe_replace_sl(
-                                symbol=sym,
-                                position_side=side,
-                                last_price=price,
-                                atr_now=current_atr,
-                                desired_sl=float(target_sl),
-                                qty_hint=None
-                            )
-                            if not res.get("ok"):
-                                logger.warning("[manage] kept old SL %s: %s", sym, res)
-                            else:
-                                await notify_sl_tp_update(sym, side, "trailing", res["new_sl"])
-                except Exception as e:
-                    logger.error("[manage] trailing update failed for %s: %s", sym, e)
+                    # Update decision (threshold vs current stop)
+                    try:
+                        if _is_finite_number(target_sl) and _is_finite_number(cur_stop):
+                            thresh = 0.25 * current_atr
+                            need_update = (abs(target_sl - float(cur_stop)) >= thresh)
+                            if need_update:
+                                res = safe_replace_sl(
+                                    symbol=sym,
+                                    position_side=side,
+                                    last_price=price,
+                                    atr_now=current_atr,
+                                    desired_sl=float(target_sl),
+                                    qty_hint=None
+                                )
+                                if not res.get("ok"):
+                                    logger.warning("[manage] kept old SL %s: %s", sym, res)
+                                else:
+                                    await notify_sl_tp_update(sym, side, "trailing", res["new_sl"])
+                    except Exception as e:
+                        logger.error("[manage] trailing update failed for %s: %s", sym, e)
 
                 # Opportunistic TP refresh (respects LADDER_TP_KIND)
                 try:

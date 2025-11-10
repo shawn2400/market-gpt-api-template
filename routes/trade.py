@@ -59,6 +59,28 @@ except Exception:
     def record_trade_approval(action: str, ok: bool):  # type: ignore
         pass
 
+from utils.metrics import METRICS
+
+try:
+    from utils.risk import can_execute_trade, note_trade_execution, evaluate_trade_request  # type: ignore
+except Exception:  # pragma: no cover - graceful degradation
+    def can_execute_trade(symbol: str, now: Optional[float] = None):  # type: ignore
+        return {"ok": True}
+    def note_trade_execution(symbol: str, now: Optional[float] = None) -> None:  # type: ignore
+        return None
+    def evaluate_trade_request(**_kwargs: Any):  # type: ignore
+        return {"ok": True}
+
+try:
+    from utils.binance_client import get_klines_df  # type: ignore
+except Exception:
+    get_klines_df = None  # type: ignore
+
+try:
+    from utils.indicators import ema  # type: ignore
+except Exception:
+    ema = None  # type: ignore
+
 # --------- ConfirmStore (fallbacks) ----------
 try:
     from utils.trade_executor import ConfirmStore  # type: ignore
@@ -137,6 +159,28 @@ def _filter_kwargs_for_callable(fn: Callable[..., Any], kwargs: Dict[str, Any]) 
     except Exception:
         bad = {"tp_kind", "sl_kind", "entry_kind", "entry_offset", "tp_offset", "sl_offset"}
         return {k: v for k, v in kwargs.items() if k not in bad and v is not None}
+
+def _btc_gate_allows(side: str) -> bool:
+    if get_klines_df is None or ema is None:
+        return True
+    try:
+        df = get_klines_df("BTCUSDT", interval="15m", limit=60)
+        if df is None or getattr(df, "empty", False):
+            return True
+        closes = df["close"].astype(float)
+        ema_series = ema(closes, 50)
+        if ema_series is None or getattr(ema_series, "empty", False):
+            return True
+        ema_val = float(ema_series.iloc[-1])
+        price_val = float(closes.iloc[-1])
+        if side.upper() == "BUY":
+            return price_val >= ema_val
+        if side.upper() == "SELL":
+            return price_val <= ema_val
+    except Exception as exc:
+        logger.debug("btc_gate_eval_failed: %s", exc)
+        return True
+    return True
 
 # --------- execution paths ----------
 async def _execute_trade_direct(ticket: Dict[str, Any]) -> Dict[str, Any]:
@@ -428,6 +472,16 @@ async def trade_execute(
         # if MARKET but no qty -> promote to HYBRID (budget-based execution)
         flow = "HYBRID"
 
+    gate_info = can_execute_trade(req.symbol)
+    if not gate_info.get("ok", True):
+        reason = gate_info.get("reason", "blocked")
+        METRICS.risk_block.labels(reason=reason).inc()
+        raise HTTPException(status_code=429, detail=gate_info)
+
+    if not _btc_gate_allows(req.side):
+        METRICS.risk_block.labels(reason="btc_gate").inc()
+        raise HTTPException(status_code=409, detail={"ok": False, "reason": "btc_gate"})
+
     ticket_exec = dict(
         symbol=req.symbol,
         side=req.side,
@@ -449,9 +503,25 @@ async def trade_execute(
             record_trade_fail(flow)
             raise HTTPException(status_code=400, detail="quantity required for MARKET flow")
 
+    risk_eval = evaluate_trade_request(
+        symbol=req.symbol,
+        side=req.side,
+        entry_price=None,
+        stop_price=req.sl,
+        quantity=(float(ticket_exec["qty"]) if ticket_exec.get("qty") is not None else None),
+        leverage=req.leverage,
+        budget_usd=req.budget_usd,
+    )
+    if not risk_eval.get("ok", True):
+        reason = risk_eval.get("reason", "risk_block")
+        METRICS.risk_block.labels(reason=reason).inc()
+        raise HTTPException(status_code=409, detail=risk_eval)
+
     res = await (_execute_trade_direct(ticket_exec) if flow == "MARKET" else _execute_trade_hybrid(ticket_exec))
     ok = bool(res.get("ok"))
     (record_trade_ok if ok else record_trade_fail)(flow)
+    if ok:
+        note_trade_execution(req.symbol)
     return {"ok": ok, "flow": flow, "result": res}
 
 @router.get("/approve")
@@ -473,6 +543,33 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
         return {"ok": False, "error": "not_found"}
 
     flow = "HYBRID" if any(it.get(k) for k in ("tp1", "tp2", "tp3", "sl")) or (it.get("budget") is not None) else "MARKET"
+    symbol = str(it.get("symbol") or "").upper()
+    side = str(it.get("side") or ("BUY" if it.get("position_side", "LONG").upper() == "LONG" else "SELL")).upper()
+
+    gate_info = can_execute_trade(symbol)
+    if not gate_info.get("ok", True):
+        reason = gate_info.get("reason", "blocked")
+        METRICS.risk_block.labels(reason=reason).inc()
+        return {"ok": False, "error": "risk_block", "detail": gate_info}
+
+    if not _btc_gate_allows(side):
+        METRICS.risk_block.labels(reason="btc_gate").inc()
+        return {"ok": False, "error": "btc_gate"}
+
+    risk_eval = evaluate_trade_request(
+        symbol=symbol,
+        side=side,
+        entry_price=it.get("entry") or it.get("entry_price") or it.get("price"),
+        stop_price=it.get("sl"),
+        quantity=(float(it.get("qty") or it.get("quantity") or 0) or None),
+        leverage=float(it.get("leverage") or it.get("lev") or 1),
+        budget_usd=it.get("budget") or it.get("budget_usd"),
+    )
+    if not risk_eval.get("ok", True):
+        reason = risk_eval.get("reason", "risk_block")
+        METRICS.risk_block.labels(reason=reason).inc()
+        return {"ok": False, "error": "risk_block", "detail": risk_eval}
+
     res = await (_execute_trade_hybrid(it) if flow == "HYBRID" else _execute_trade_direct(it))
     ok = bool(res.get("ok"))
 
@@ -483,6 +580,8 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
 
     record_trade_approval("approve", ok)
     (record_trade_ok if ok else record_trade_fail)(flow)
+    if ok:
+        note_trade_execution(symbol)
 
     return {"ok": ok, "flow": flow, "result": res}
 
