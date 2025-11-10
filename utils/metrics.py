@@ -87,15 +87,15 @@ metrics_tracker = _MetricsTracker()
 
 # Prometheus counters (לפי ההנחיות; Prometheus מוסיף _total ברילוד)
 SL_REPLACE_ATTEMPT = Counter(
-    "algogpt_sl_replace_attempt",
+    "algogpt_sl_replace_attempt_total",
     "Safe SL replace attempts (place-then-cancel strategy).",
 )
 STOP_VALIDATION_FAIL = Counter(
-    "algogpt_stop_validation_fail",
+    "algogpt_stop_validation_fail_total",
     "Failed stop validation (distance/tick) rejects.",
 )
 RISK_BLOCK = Counter(
-    "algogpt_risk_block",
+    "algogpt_risk_block_total",
     "Requests blocked by risk/cooldown/BTC gate.",
 )
 
@@ -112,4 +112,19 @@ __all__ = [
     "STOP_VALIDATION_FAIL",
     "RISK_BLOCK",
     "ALGOGPT_UPTIME_SECONDS",
+    "register_metrics",
 ]
+
+_REGISTERED = False
+
+
+def register_metrics() -> bool:
+    """
+    Placeholder hook so the host process can ensure module import occurred.
+    Prometheus counters are singletons per process, so this function simply
+    toggles a flag the first time it's called.
+    """
+    global _REGISTERED  # noqa: PLW0603
+    if not _REGISTERED:
+        _REGISTERED = True
+    return _REGISTERED

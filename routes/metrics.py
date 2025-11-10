@@ -1,7 +1,7 @@
 # routes/metrics.py
 from __future__ import annotations
 import os
-from fastapi import APIRouter, Header, HTTPException, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 _PROM_MULTIPROC_DIR = os.getenv("PROMETHEUS_MULTIPROC_DIR")
 if _PROM_MULTIPROC_DIR:
@@ -18,6 +18,7 @@ else:
         return REGISTRY
 
 router = APIRouter(prefix="", tags=["metrics"])
+dev_metrics = APIRouter(prefix="/metrics/dev", tags=["metrics-dev"])
 
 # אופציונלי: הגנה ב-Bearer
 _METRICS_BEARER = (os.getenv("METRICS_BEARER") or "").strip()
@@ -44,6 +45,30 @@ async def metrics(authorization: str = Header(default="")):
         raise HTTPException(status_code=401, detail="Unauthorized")
     body = generate_latest(_prom_registry())
     return Response(content=body, media_type=CONTENT_TYPE_LATEST)
+
+
+def _dev_guard():
+    if os.getenv("ALLOW_DEV_METRICS_BUMP", "0").lower() not in ("1", "true", "yes", "on"):
+        raise HTTPException(status_code=403, detail="DEV metrics bump disabled")
+
+
+@dev_metrics.get("/bump", summary="DEV helper to bump Prometheus counters")
+def bump_metrics(kind: str = "all", _=Depends(_dev_guard)):
+    from utils.metrics import RISK_BLOCK, SL_REPLACE_ATTEMPT, STOP_VALIDATION_FAIL
+
+    if kind in ("all", "*"):
+        RISK_BLOCK.inc()
+        SL_REPLACE_ATTEMPT.inc()
+        STOP_VALIDATION_FAIL.inc()
+    elif kind == "risk":
+        RISK_BLOCK.inc()
+    elif kind == "sl":
+        SL_REPLACE_ATTEMPT.inc()
+    elif kind == "stop":
+        STOP_VALIDATION_FAIL.inc()
+    else:
+        raise HTTPException(status_code=400, detail="unknown kind")
+    return {"ok": True, "kind": kind}
 
 
 

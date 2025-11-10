@@ -38,6 +38,8 @@ try:
 except Exception as e:
     raise RuntimeError("httpx is required") from e
 
+from utils.metrics import register_metrics
+
 # ======== Utility: safe string headers ========
 def _to_str_header(val: Any) -> str:
     try:
@@ -104,6 +106,9 @@ UI_IDLE_STOP_SEC = int(os.getenv("UI_IDLE_STOP_SEC", "900") or 900)
 
 ETA_SMART_ENABLE = os.getenv("ETA_SMART_ENABLE", "1").lower() in ("1","true","yes","on")
 ETA_VELOCITY_WINDOW = float(os.getenv("ETA_VELOCITY_WINDOW", "22.0") or 22.0)
+
+# ensure Prometheus metrics are registered early
+register_metrics()
 
 # =============== App init ===============
 app = FastAPI(
@@ -1613,8 +1618,9 @@ except Exception as e:
     logger.warning("Failed to load telegram callbacks routes: %s", e)
 
 try:
-    from routes.metrics import router as metrics_router
+    from routes.metrics import router as metrics_router, dev_metrics
     app.include_router(metrics_router)
+    app.include_router(dev_metrics)
 except Exception as e:
     logger.warning("Failed to load metrics routes: %s", e)
 
