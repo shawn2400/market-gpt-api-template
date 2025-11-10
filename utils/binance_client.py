@@ -6,6 +6,7 @@ from contextlib import suppress
 from typing import Any, Dict, List, Optional, Tuple, cast
 
 from utils.metrics_tracker import observe_http, observe_http_ctx  # מדידת לטנסי/HTTP
+from utils.metrics import METRICS
 
 logger = logging.getLogger("algogpt.binance")
 
@@ -383,6 +384,32 @@ def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
         logger.error("Failed to get open orders: %s", e)
         return []
 
+def list_active_stop_orders(symbol: str, position_side: Optional[str] = None) -> List[Dict[str, Any]]:
+    orders = []
+    try:
+        orders = get_open_orders(symbol) or []
+    except Exception:
+        return []
+    close_side = None
+    if position_side:
+        ps = position_side.upper()
+        if ps == "LONG":
+            close_side = "SELL"
+        elif ps == "SHORT":
+            close_side = "BUY"
+    active: List[Dict[str, Any]] = []
+    for order in orders:
+        typ = (order.get("type") or "").upper()
+        status = (order.get("status") or "").upper()
+        if "STOP" not in typ:
+            continue
+        if status not in ("NEW", "PARTIALLY_FILLED"):
+            continue
+        if close_side and (order.get("side") or "").upper() != close_side:
+            continue
+        active.append(order)
+    return active
+
 @observe_http(name="binance_all_orders", include_labels=["symbol"])
 def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, Any]]:
     if not symbol or not symbol.strip():
@@ -440,6 +467,61 @@ def get_price_coalesced(symbol: str) -> Optional[float]:
     if v is not None:
         return float(v)
     return futures_index_price(symbol)
+
+def _get_tick_precision_from_filters(filters: Dict[str, Any]) -> float:
+    try:
+        tick = float(filters.get("tickSize") or filters.get("tick") or 0.0)
+        return tick if tick > 0 else 0.0
+    except Exception:
+        return 0.0
+
+def _get_tick_precision(symbol: str) -> float:
+    try:
+        info = get_symbol_info(symbol)
+        if not info:
+            return 0.0
+        for f in info.get("filters", []):
+            if f.get("filterType") == "PRICE_FILTER":
+                return _get_tick_precision_from_filters(f)
+    except Exception:
+        pass
+    try:
+        filters = get_symbol_filters(symbol) or {}
+        return _get_tick_precision_from_filters(filters)
+    except Exception:
+        return 0.0
+
+def _round_to_tick_floor(price: float, tick: float) -> float:
+    if tick <= 0:
+        return float(price)
+    steps = math.floor(float(price) / tick)
+    return float(f"{steps * tick:.10f}")
+
+def _derive_position_side_from_close(close_side: str) -> Optional[str]:
+    cs = (close_side or "").upper()
+    if cs == "SELL":
+        return "LONG"
+    if cs == "BUY":
+        return "SHORT"
+    return None
+
+def validate_stop_distance(symbol: str, position_side: str, stop_price: float, mark_price: float, min_gap_pct: float) -> tuple[bool, str]:
+    try:
+        if stop_price <= 0 or mark_price <= 0:
+            return False, "bad_price"
+        side = (position_side or "").upper()
+        gap = max(0.0, float(min_gap_pct or 0.0))
+        if side == "LONG":
+            if stop_price >= mark_price * (1.0 - gap):
+                return False, "would_trigger"
+        elif side == "SHORT":
+            if stop_price <= mark_price * (1.0 + gap):
+                return False, "would_trigger"
+        else:
+            return False, "side_mismatch"
+        return True, "ok"
+    except Exception as exc:  # pragma: no cover - defensive
+        return False, f"error:{exc}"
 
 def _truthy(val: Any) -> bool:
     if isinstance(val, bool):
@@ -531,6 +613,24 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
         # guard
         kwargs["price"] = p_str
     if stop is not None:
+        is_stop_type = "STOP" in typ
+        if is_stop_type:
+            position_side = str(kwargs.get("positionSide") or "").upper()
+            if not position_side:
+                position_side = _derive_position_side_from_close(str(kwargs.get("side") or "")) or ""
+            mark = futures_mark_price(sym) or 0.0
+            min_gap_pct = float(os.getenv("SL_MIN_GAP_PCT", "0.001") or 0.0)
+            ok, reason = validate_stop_distance(sym, position_side, float(stop), float(mark), min_gap_pct)
+            if not ok:
+                logger.warning(
+                    "[SL] Skip placing stop (symbol=%s side=%s) reason=%s stop=%s mark=%s",
+                    sym, position_side, reason, stop, mark
+                )
+                METRICS.stop_validation_fail.labels(reason=reason).inc()
+                return {"ok": False, "skipped": True, "reason": reason}
+            tick = _get_tick_precision(sym)
+            if tick > 0:
+                stop = _round_to_tick_floor(float(stop), tick)
         stop_f = _clamp_stop_loss(sym, kwargs, float(stop))
         s_str = _quantize_price(sym, float(stop_f))
         kwargs["stopPrice"] = s_str
@@ -659,17 +759,38 @@ def set_breakeven_stop(
         side_u = side_opened.upper()
         close_side = "SELL" if side_u in ("BUY", "LONG") else "BUY"
         be = float(entry_price) * (1.0 + (offset_bps / 10000.0 if close_side == "SELL" else -offset_bps / 10000.0))
+        position_side_eff = (positionSide or ("LONG" if close_side == "SELL" else "SHORT"))
+        existing_orders = list_active_stop_orders(symbol, position_side_eff)
+        new_res = place_stop_market(symbol, close_side, be, float(q), positionSide=position_side_eff)
+        if not isinstance(new_res, dict):
+            METRICS.sl_replace_attempt.labels(result="kept_old").inc()
+            return {"ok": False, "error": "place_failed", "detail": new_res}
+        if new_res.get("skipped"):
+            METRICS.sl_replace_attempt.labels(result="skipped_invalid").inc()
+            return new_res
+        new_order_id = new_res.get("orderId")
+        cancel_errors: List[str] = []
+        for old in existing_orders:
+            oid = old.get("orderId")
+            if oid is None or oid == new_order_id:
+                continue
+            try:
+                futures_cancel_order(symbol, oid)
+            except Exception as exc:
+                logger.warning("[SL] New BE stop placed but cancel old failed %s (%s)", oid, exc)
+                cancel_errors.append(str(exc))
         try:
-            for o in get_open_orders(symbol):
-                typ = (o.get("type") or "").upper()
-                st = (o.get("status") or "").upper()
-                if "STOP" in typ and st in ("NEW", "PARTIALLY_FILLED"):
-                    oid = o.get("orderId")
-                    if oid is not None:
-                        futures_cancel_order(symbol, oid)
-        except Exception:
-            pass
-        return place_stop_market(symbol, close_side, be, float(q), positionSide=positionSide)
+            active = list_active_stop_orders(symbol, position_side_eff)
+            if not active:
+                logger.error("[SL] No active SL after breakeven replace (symbol=%s)", symbol)
+            elif len(active) > 1:
+                logger.warning("[SL] Multiple SL active after breakeven replace (%d)", len(active))
+        except Exception as exc:
+            logger.warning("[SL] Verify active SL failed: %s", exc)
+        METRICS.sl_replace_attempt.labels(result="placed_new").inc()
+        if cancel_errors:
+            new_res["cancel_errors"] = cancel_errors
+        return new_res
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
@@ -777,6 +898,7 @@ __all__ = [
     "futures_open_positions_safe",
     "get_single_position",
     "get_open_orders",
+    "list_active_stop_orders",
     "get_all_orders",
     "futures_cancel_order",
     "futures_cancel_all_orders",   # ✔ עבור routes.grid

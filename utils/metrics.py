@@ -3,6 +3,11 @@ from __future__ import annotations
 import time, threading
 from typing import Dict, Any, Optional, Tuple
 
+try:
+    from prometheus_client import Counter as _PromCounter  # type: ignore
+except Exception:  # pragma: no cover - prometheus optional
+    _PromCounter = None
+
 class _MetricsTracker:
     """
     טרקר קל משקל למטריקות JSON פנימיות (מקביל/משלים ל-Prometheus).
@@ -65,6 +70,71 @@ class _MetricsTracker:
 
 # סינגלטון
 metrics_tracker = _MetricsTracker()
+
+
+class _CounterHandle:
+    __slots__ = ("_name", "_labels", "_prom_child")
+
+    def __init__(self, name: str, labels: Dict[str, Any], prom_child: Any):
+        self._name = name
+        self._labels = labels
+        self._prom_child = prom_child
+
+    def inc(self, amount: float = 1.0) -> None:
+        if self._prom_child is not None:
+            try:
+                self._prom_child.inc(amount)
+            except Exception:
+                pass
+        metrics_tracker.inc_counter(self._name, amount, labels=self._labels)
+
+
+class _CounterWrapper:
+    __slots__ = ("_name", "_labelnames", "_prom_counter")
+
+    def __init__(self, name: str, documentation: str, labelnames: Tuple[str, ...]):
+        self._name = name
+        self._labelnames = tuple(labelnames)
+        if _PromCounter is not None:
+            try:
+                self._prom_counter = _PromCounter(name, documentation, list(labelnames))  # type: ignore[arg-type]
+            except Exception:
+                self._prom_counter = None
+        else:
+            self._prom_counter = None
+
+    def labels(self, **labels: Any) -> _CounterHandle:
+        # normalize labels to declared label names
+        normalized = {k: str(labels.get(k, "")) for k in self._labelnames}
+        prom_child = None
+        if self._prom_counter is not None:
+            try:
+                prom_child = self._prom_counter.labels(**normalized)  # type: ignore[misc]
+            except Exception:
+                prom_child = None
+        return _CounterHandle(self._name, normalized, prom_child)
+
+
+class _MetricsNamespace:
+    def __init__(self) -> None:
+        self.sl_replace_attempt = _CounterWrapper(
+            "algogpt_sl_replace_attempt_total",
+            "SL replace attempts",
+            ("result",),
+        )
+        self.stop_validation_fail = _CounterWrapper(
+            "algogpt_stop_validation_fail_total",
+            "Stop validation failures",
+            ("reason",),
+        )
+        self.risk_block = _CounterWrapper(
+            "algogpt_risk_block_total",
+            "Risk gate blocked trade",
+            ("reason",),
+        )
+
+
+METRICS = _MetricsNamespace()
 
 
 
