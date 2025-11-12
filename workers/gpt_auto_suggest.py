@@ -87,9 +87,17 @@ async def _fetch_real_indicators(symbol: str, interval: str = "15m", limit: int 
         # ATR as percentage of price
         atr_pct = (float(atr_val.iloc[-1]) / price * 100.0) if not atr_val.empty else 2.0
         
+        # 🎯 Calculate 24H high/low for AI Strategy Consensus
+        candles_24h = 96 if interval == "15m" else (24 if interval == "1h" else 6)
+        recent_klines = df.tail(min(len(df), candles_24h))
+        high_24h = float(recent_klines["high"].max()) if len(recent_klines) > 0 else price
+        low_24h = float(recent_klines["low"].min()) if len(recent_klines) > 0 else price
+        
         indicators = {
             "price": price,
             "close": price,
+            "high_24h": high_24h,
+            "low_24h": low_24h,
             "rsi": round(float(rsi_val.iloc[-1]), 2) if not rsi_val.empty else 50.0,
             "adx": round(float(adx_val.iloc[-1]), 2) if not adx_val.empty else 25.0,
             "atr": round(float(atr_val.iloc[-1]), 6),
@@ -207,8 +215,8 @@ async def _fetch_context_batch(
         If use_multi_tf=True, context includes "multi_tf" field with all timeframes
     """
     if not CONTEXT_URL:
-        LOGGER.warning("CONTEXT_URL not set – worker running without context (reduced gating).")
-        return {}
+        LOGGER.warning("CONTEXT_URL not set – using local context fallback")
+        return await _build_local_context(symbols, interval)
     
     # 🎯 CRITICAL: Use compact=False to get indicators (high_24h, low_24h, volume) for AI Strategy Consensus
     payload = {"symbols": symbols, "interval": interval, "compact": False}
@@ -275,7 +283,7 @@ async def _build_local_context(symbols: List[str], interval: str = "15m") -> Dic
     Fetches candlestick data and calculates indicators on-the-fly.
     """
     try:
-        from utils.binance import get_binance
+        from utils.binance_client import get_binance
         from utils.indicators import calculate_indicators
         
         binance = get_binance()
@@ -651,6 +659,9 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
         market_condition = mi_engine.analyze_market(ctx)
     
     ctx["_market_condition"] = market_condition
+    
+    # 🔍 DEBUG: Log what AI receives
+    LOGGER.info(f"🔍 AI Strategy Context [{symbol}]: high_24h={ctx.get('high_24h')}, low_24h={ctx.get('low_24h')}, close={ctx.get('close')}, has_indicators={'adx' in ctx}")
     
     # ========== SCOUT 2: STRATEGY ORCHESTRATOR ==========
     orchestrator = get_strategy_orchestrator()
