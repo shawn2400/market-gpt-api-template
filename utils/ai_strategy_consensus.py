@@ -91,19 +91,16 @@ class AIStrategySelector:
         self.logger = logger
         
         # API keys
-        self.openai_key = os.getenv("OPENAI_API_KEY")
         self.deepseek_key = os.getenv("DEEPSEEK_API_KEY")
         self.xai_key = os.getenv("XAI_API_KEY")
         self.gemini_key = os.getenv("GEMINI_API_KEY")
-        self.anthropic_key = os.getenv("ANTHROPIC_API_KEY")
         
-        # Brain availability
+        # 🚀 COST OPTIMIZATION: Only 3 cheap brains enabled
+        # GPT-5 and Claude DISABLED to avoid $500/month costs
         self.brains_available = {
-            "GPT-5": bool(self.openai_key),
             "Gemini": ENABLE_GEMINI and call_gemini,
             "DeepSeek": bool(self.deepseek_key) and llm_chat_completion,
-            "Grok": ENABLE_XAI and call_xai,
-            "Claude": ENABLE_ANTHROPIC and call_anthropic
+            "Grok": ENABLE_XAI and call_xai
         }
         
         active_brains = [name for name, available in self.brains_available.items() if available]
@@ -196,39 +193,6 @@ Your analysis:"""
         
         return prompt
     
-    async def _call_gpt5(self, prompt: str) -> Optional[StrategyVote]:
-        """GPT-5 strategy vote"""
-        try:
-            if not self.openai_key:
-                return None
-            
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    "https://api.openai.com/v1/chat/completions",
-                    headers={"Authorization": f"Bearer {self.openai_key}"},
-                    json={
-                        "model": "gpt-4",  # GPT-5 endpoint
-                        "messages": [
-                            {"role": "system", "content": "You are GPT-5, lead AI trading strategist. Analyze market data and select optimal strategy."},
-                            {"role": "user", "content": prompt}
-                        ],
-                        "temperature": 0.7,
-                        "max_tokens": 500
-                    }
-                )
-                
-                if response.status_code == 200:
-                    data = response.json()
-                    analysis = data["choices"][0]["message"]["content"]
-                    return self._parse_strategy_response(analysis, "GPT-5")
-                else:
-                    self.logger.error(f"GPT-5 API error: {response.status_code}")
-                    return None
-        
-        except Exception as e:
-            self.logger.error(f"GPT-5 strategy vote failed: {e}")
-            return None
-    
     async def _call_gemini(self, prompt: str) -> Optional[StrategyVote]:
         """Gemini 2 Pro strategy vote"""
         try:
@@ -294,27 +258,6 @@ Your analysis:"""
                 
         except Exception as e:
             self.logger.error(f"Grok strategy vote failed: {e}")
-            return None
-    
-    async def _call_claude(self, prompt: str) -> Optional[StrategyVote]:
-        """Claude Sonnet 3.5 strategy vote"""
-        try:
-            if not ENABLE_ANTHROPIC or not call_anthropic:
-                return None
-            
-            response = await call_anthropic(
-                prompt,
-                system="You are Claude Sonnet 3.5, conservative risk validator. Analyze market carefully and select safest strategy.",
-                temperature=0.5,
-                max_tokens=400
-            )
-            
-            if response:
-                return self._parse_strategy_response(response, "Claude Sonnet 3.5")
-            return None
-                
-        except Exception as e:
-            self.logger.error(f"Claude strategy vote failed: {e}")
             return None
     
     def _parse_strategy_response(self, analysis: str, brain_name: str) -> StrategyVote:
