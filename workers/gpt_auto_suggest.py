@@ -1435,8 +1435,10 @@ async def process_cycle():
         LOGGER.debug(f"Margin check failed (proceeding anyway): {e}")
 
     # בנה Pool חכם (משקלול איכות+היסטוריית winrate)
+    # 🎯 Two-Tier Strategy: High-quality core (6+) + Exploratory symbols (4-5)
+    # Smart Filter stage 2 will still block <6.0 setups, but we scan 50 symbols for market breadth
     try:
-        pool_syms = build_symbol_pool(k=topk, min_quality=6, include_anchor=True, include_shorts=True, balanced=True)
+        pool_syms = build_symbol_pool(k=topk, min_quality=4, include_anchor=True, include_shorts=True, balanced=True)  # 🔄 Lowered to 4 for market coverage
     except Exception:
         wl = load_watchlist(min_quality=None)
         pool_syms = [it["symbol"] for it in wl if it.get("symbol")] or ["BTCUSDT","ETHUSDT"]
