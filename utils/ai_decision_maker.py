@@ -7,7 +7,7 @@ After 2 Scouts propose, 3 AI brains vote on whether to execute.
 3 AI Providers (95% cost reduction):
 1. DeepSeek - Deep market analysis (cheap + reliable)
 2. Grok (XAI) - Contrarian perspective
-3. GPT-4o-mini - Cost-efficient OpenAI (60x cheaper than GPT-5)
+3. Gemini 2 Pro - Fast multi-modal analysis (ultra-cheap)
 
 Each provides:
 - Vote: APPROVE ✅ or REJECT ❌
@@ -346,15 +346,17 @@ class AIConsensusEngine:
     3 Brains (95% cost reduction):
     - DeepSeek (cheap + reliable)
     - Grok (contrarian perspective)
-    - GPT-4o-mini (cost-efficient OpenAI)
+    - Gemini 2 Pro (ultra-cheap, fast multi-modal)
     """
     
     def __init__(self):
         self.logger = logger
+        # 🚀 COST OPTIMIZATION: Use only 3 cheap brains
+        # GPT-4o-mini DISABLED to avoid OpenAI quota/costs
         self.brains: List[AIBrain] = [
             DeepSeekBrain(),
             GrokBrain(),
-            GPT4oMiniBrain()
+            GeminiBrain()
         ]
         self.logger.info(f"AI Consensus Engine initialized with {len(self.brains)} brains (cost-optimized)")
     
