@@ -247,6 +247,70 @@ async def _fetch_context_batch(
             return out
     except Exception as e:
         LOGGER.warning("context batch failed: %s", e)
+        # 🔄 FALLBACK: Build context locally from Binance if API fails
+        LOGGER.info("🔄 Building context locally for %d symbols (API fallback)", len(symbols))
+        return await _build_local_context(symbols, interval)
+
+async def _build_local_context(symbols: List[str], interval: str = "15m") -> Dict[str, Dict[str, Any]]:
+    """
+    Build context data locally from Binance when API unavailable.
+    Fetches candlestick data and calculates indicators on-the-fly.
+    """
+    try:
+        from utils.binance import get_binance
+        from utils.indicators import calculate_indicators
+        
+        binance = get_binance()
+        out = {}
+        
+        for symbol in symbols:
+            try:
+                # Fetch candlestick data
+                klines = await binance.fetch_klines(symbol, interval, limit=200)
+                if not klines or len(klines) < 50:
+                    LOGGER.warning(f"{symbol}: Insufficient klines for indicators")
+                    continue
+                
+                # Calculate indicators
+                indicators = calculate_indicators(klines)
+                if not indicators:
+                    continue
+                
+                # Build context dict (minimal version)
+                current_price = float(klines[-1]["close"])
+                out[symbol] = {
+                    "symbol": symbol,
+                    "price": current_price,
+                    "interval": interval,
+                    "rsi": indicators.get("rsi"),
+                    "macd": indicators.get("macd"),
+                    "macd_signal": indicators.get("macd_signal"),
+                    "adx": indicators.get("adx"),
+                    "atr": indicators.get("atr"),
+                    "atr_pct": (indicators.get("atr") / current_price * 100) if indicators.get("atr") and current_price else 0,
+                    "bb_upper": indicators.get("bb_upper"),
+                    "bb_middle": indicators.get("bb_middle"),
+                    "bb_lower": indicators.get("bb_lower"),
+                    "volume": float(klines[-1]["volume"]),
+                    "volume_sma_20": indicators.get("volume_sma_20"),
+                    "vwap": indicators.get("vwap"),
+                    "ema_9": indicators.get("ema_9"),
+                    "ema_21": indicators.get("ema_21"),
+                    "ema_50": indicators.get("ema_50"),
+                    "ema_200": indicators.get("ema_200"),
+                }
+                
+                LOGGER.debug(f"{symbol}: Built local context - Price={current_price}, RSI={indicators.get('rsi', 0):.1f}, ADX={indicators.get('adx', 0):.1f}")
+                
+            except Exception as e:
+                LOGGER.warning(f"{symbol}: Failed to build local context: {e}")
+                continue
+        
+        LOGGER.info(f"📊 Built local context for {len(out)}/{len(symbols)} symbols")
+        return out
+        
+    except Exception as e:
+        LOGGER.error(f"Failed to build local context: {e}", exc_info=True)
         return {}
 
 def _cooldown_key(symbol: str, ttype: str) -> str:

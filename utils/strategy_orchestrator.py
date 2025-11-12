@@ -289,7 +289,7 @@ class StrategyOrchestrator:
             )
         elif strategy_name in ["futures_short", "futures_long"]:
             return StrategyConfig(
-                strategy_type=strategy_name,
+                strategy_type=strategy_name,  # type: ignore
                 min_rr=1.8,
                 min_quality=4.0,
                 min_success_pct=0.6,
