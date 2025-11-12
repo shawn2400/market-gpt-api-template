@@ -15,7 +15,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp").strip()
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
-ENABLE_GEMINI = os.getenv("ENABLE_GEMINI", "1").lower() in ("1", "true", "yes") and bool(GEMINI_API_KEY)
+# 🚀 COST OPTIMIZATION: Gemini disabled by default (quota issues + cost)
+# Set ENABLE_GEMINI=1 in environment to re-enable if needed
+ENABLE_GEMINI = os.getenv("ENABLE_GEMINI", "0").lower() in ("1", "true", "yes") and bool(GEMINI_API_KEY)
 
 
 async def call_gemini(
