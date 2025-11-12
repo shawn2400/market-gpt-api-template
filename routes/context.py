@@ -169,6 +169,13 @@ def _compute_context_from_df(symbol: str, df, interval: str = "15m") -> ContextI
     # שים לב: זה רק רמז, הוורקר יטפל בהתניות בפועל
     rr_bias_adj = -0.1 * abs(funding_bias)  # bias תומך → אפשר טיפה לרכך RR מ- baseline
 
+    # 📊 Calculate 24H data (high, low, volume) from last 96 candles (~24h for 15m interval)
+    lookback_24h = min(96, len(df))
+    df_24h = df.tail(lookback_24h)
+    high_24h = float(df_24h["high"].max())
+    low_24h = float(df_24h["low"].min())
+    volume_24h = float(df_24h.get("volume", pd.Series([0]*len(df_24h))).sum())
+
     filters = {
         "vol_regime": vol_reg,
         **ema_flags,
@@ -183,6 +190,9 @@ def _compute_context_from_df(symbol: str, df, interval: str = "15m") -> ContextI
     indicators = {
         **last,
         "atr_pct": atr_pct,
+        "high_24h": high_24h,
+        "low_24h": low_24h,
+        "volume": volume_24h,
     }
 
     return ContextItem(symbol=s, price=price, indicators=indicators, filters=filters)

@@ -210,7 +210,8 @@ async def _fetch_context_batch(
         LOGGER.warning("CONTEXT_URL not set – worker running without context (reduced gating).")
         return {}
     
-    payload = {"symbols": symbols, "interval": interval, "compact": True}
+    # 🎯 CRITICAL: Use compact=False to get indicators (high_24h, low_24h, volume) for AI Strategy Consensus
+    payload = {"symbols": symbols, "interval": interval, "compact": False}
     
     # Add multi-TF support if enabled
     if use_multi_tf and intervals:
@@ -238,12 +239,22 @@ async def _fetch_context_batch(
             # Single-TF mode (backward compatible)
             if not use_multi_tf or "multi_tf_items" not in resp_data:
                 for it in resp_data.get("items", []):
-                    out[it["symbol"]] = it
+                    symbol = it["symbol"]
+                    ctx = {"symbol": symbol, "price": it.get("price")}
+                    ctx.update(it.get("indicators", {}))
+                    ctx.update(it.get("filters", {}))
+                    ctx["close"] = it.get("price")
+                    out[symbol] = ctx
                 return out
             
             # Multi-TF mode - combine multi_tf data with primary context
             for it in resp_data.get("items", []):
-                out[it["symbol"]] = it
+                symbol = it["symbol"]
+                ctx = {"symbol": symbol, "price": it.get("price")}
+                ctx.update(it.get("indicators", {}))
+                ctx.update(it.get("filters", {}))
+                ctx["close"] = it.get("price")
+                out[symbol] = ctx
             
             # Add multi_tf data to each symbol's context
             for mt_item in resp_data.get("multi_tf_items", []):
