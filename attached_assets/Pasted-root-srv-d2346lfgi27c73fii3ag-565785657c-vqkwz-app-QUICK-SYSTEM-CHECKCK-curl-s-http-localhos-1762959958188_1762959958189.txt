@@ -1,0 +1,413 @@
+root@srv-d2346lfgi27c73fii3ag-565785657c-vqkwz:/app# ⚡ QUICK SYSTEM CHECKCK
+curl -s http://localhost:5000/health > /dev/null && echo "✅ API Healthy" || echo "❌ API Down"
+python3 -c "import psycopg2; print('✅ DB OK')" 2>/dev/null || echo "❌ DB Error"
+env | grep BINANCE_API_KEY > /dev/null && echo "✅ Binance OK" || echo "❌ Binance Missing"
+bash: curl: command not found
+❌ API Down
+✅ DB OK
+✅ Binance OK
+root@srv-d2346lfgi27c73fii3ag-565785657c-vqkwz:/app# # 1. 🎯 מתקין curl
+apt-get update && apt-get install -y curl
+
+# 2. 🔍 בודק איזה פורט המערכת רצה
+netstat -tulpn | grep python
+
+# 3. 🌐 בודק API עם הפורט הנכון
+curl -s http://localhost:8000/health && echo "✅ API Healthy" || echo "❌ API Down"
+
+# 4. 📊 בדיקה מלאה
+echo "🔍 AlgoGPT System Status:"
+env | grep BINANCE_API_KEY > /dev/null && echo "✅ Binance Configured" || echo "❌ Binance Missing""pondi
+Hit:1 http://deb.debian.org/debian trixie InRelease
+Get:2 http://deb.debian.org/debian trixie-updates InRelease [47.3 kB]
+Get:3 http://deb.debian.org/debian-security trixie-security InRelease [43.4 kB]
+Get:4 http://deb.debian.org/debian trixie/main amd64 Packages [9669 kB]
+Get:5 http://deb.debian.org/debian trixie-updates/main amd64 Packages [5412 B]
+Get:6 http://deb.debian.org/debian-security trixie-security/main amd64 Packages [69.7 kB]
+Fetched 9835 kB in 1s (13.0 MB/s)                        
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+The following additional packages will be installed:
+  bash-completion krb5-locales libbrotli1 libcom-err2 libcurl4t64 libgnutls30t64 libgssapi-krb5-2
+  libidn2-0 libk5crypto3 libkeyutils1 libkrb5-3 libkrb5support0 libldap-common libldap2 libnghttp2-14
+  libnghttp3-9 libp11-kit0 libpsl5t64 librtmp1 libsasl2-2 libsasl2-modules libsasl2-modules-db
+  libssh2-1t64 libtasn1-6 libunistring5 publicsuffix
+Suggested packages:
+  gnutls-bin krb5-doc krb5-user libsasl2-modules-gssapi-mit | libsasl2-modules-gssapi-heimdal
+  libsasl2-modules-ldap libsasl2-modules-otp libsasl2-modules-sql
+The following NEW packages will be installed:
+  bash-completion curl krb5-locales libbrotli1 libcom-err2 libcurl4t64 libgnutls30t64 libgssapi-krb5-2
+  libidn2-0 libk5crypto3 libkeyutils1 libkrb5-3 libkrb5support0 libldap-common libldap2 libnghttp2-14
+  libnghttp3-9 libp11-kit0 libpsl5t64 librtmp1 libsasl2-2 libsasl2-modules libsasl2-modules-db
+  libssh2-1t64 libtasn1-6 libunistring5 publicsuffix
+0 upgraded, 27 newly installed, 0 to remove and 0 not upgraded.
+Need to get 5699 kB of archives.
+After this operation, 18.3 MB of additional disk space will be used.
+Get:1 http://deb.debian.org/debian trixie/main amd64 bash-completion all 1:2.16.0-7 [319 kB]
+Get:2 http://deb.debian.org/debian trixie/main amd64 krb5-locales all 1.21.3-5 [101 kB]
+Get:3 http://deb.debian.org/debian trixie/main amd64 libbrotli1 amd64 1.1.0-2+b7 [307 kB]
+Get:4 http://deb.debian.org/debian trixie/main amd64 libkrb5support0 amd64 1.21.3-5 [33.0 kB]
+Get:5 http://deb.debian.org/debian trixie/main amd64 libcom-err2 amd64 1.47.2-3+b3 [25.0 kB]
+Get:6 http://deb.debian.org/debian trixie/main amd64 libk5crypto3 amd64 1.21.3-5 [81.5 kB]
+Get:7 http://deb.debian.org/debian trixie/main amd64 libkeyutils1 amd64 1.6.3-6 [9456 B]
+Get:8 http://deb.debian.org/debian trixie/main amd64 libkrb5-3 amd64 1.21.3-5 [326 kB]
+Get:9 http://deb.debian.org/debian trixie/main amd64 libgssapi-krb5-2 amd64 1.21.3-5 [138 kB]
+Get:10 http://deb.debian.org/debian trixie/main amd64 libunistring5 amd64 1.3-2 [477 kB]
+Get:11 http://deb.debian.org/debian trixie/main amd64 libidn2-0 amd64 2.3.8-2 [109 kB]
+Get:12 http://deb.debian.org/debian trixie/main amd64 libsasl2-modules-db amd64 2.1.28+dfsg1-9 [19.8 kB]
+Get:13 http://deb.debian.org/debian trixie/main amd64 libsasl2-2 amd64 2.1.28+dfsg1-9 [57.5 kB]
+Get:14 http://deb.debian.org/debian trixie/main amd64 libldap2 amd64 2.6.10+dfsg-1 [194 kB]
+Get:15 http://deb.debian.org/debian trixie/main amd64 libnghttp2-14 amd64 1.64.0-1.1 [76.0 kB]
+Get:16 http://deb.debian.org/debian trixie/main amd64 libnghttp3-9 amd64 1.8.0-1 [67.7 kB]
+Get:17 http://deb.debian.org/debian trixie/main amd64 libpsl5t64 amd64 0.21.2-1.1+b1 [57.2 kB]
+Get:18 http://deb.debian.org/debian trixie/main amd64 libp11-kit0 amd64 0.25.5-3 [425 kB]
+Get:19 http://deb.debian.org/debian trixie/main amd64 libtasn1-6 amd64 4.20.0-2 [49.9 kB]
+Get:20 http://deb.debian.org/debian trixie/main amd64 libgnutls30t64 amd64 3.8.9-3 [1465 kB]
+Get:21 http://deb.debian.org/debian trixie/main amd64 librtmp1 amd64 2.4+20151223.gitfa8646d.1-2+b5 [58.8 kB]
+Get:22 http://deb.debian.org/debian trixie/main amd64 libssh2-1t64 amd64 1.11.1-1 [245 kB]
+Get:23 http://deb.debian.org/debian trixie/main amd64 libcurl4t64 amd64 8.14.1-2 [391 kB]
+Get:24 http://deb.debian.org/debian trixie/main amd64 curl amd64 8.14.1-2 [269 kB]
+Get:25 http://deb.debian.org/debian trixie/main amd64 libldap-common all 2.6.10+dfsg-1 [35.1 kB]
+Get:26 http://deb.debian.org/debian trixie/main amd64 libsasl2-modules amd64 2.1.28+dfsg1-9 [66.7 kB]
+Get:27 http://deb.debian.org/debian trixie/main amd64 publicsuffix all 20250328.1952-0.1 [296 kB]
+Fetched 5699 kB in 0s (90.0 MB/s)       
+debconf: unable to initialize frontend: Dialog
+debconf: (No usable dialog-like program is installed, so the dialog based frontend cannot be used. at /usr/share/perl5/Debconf/FrontEnd/Dialog.pm line 79, <STDIN> line 27.)
+debconf: falling back to frontend: Readline
+debconf: unable to initialize frontend: Readline
+debconf: (Can't locate Term/ReadLine.pm in @INC (you may need to install the Term::ReadLine module) (@INC entries checked: /etc/perl /usr/local/lib/x86_64-linux-gnu/perl/5.40.1 /usr/local/share/perl/5.40.1 /usr/lib/x86_64-linux-gnu/perl5/5.40 /usr/share/perl5 /usr/lib/x86_64-linux-gnu/perl-base /usr/lib/x86_64-linux-gnu/perl/5.40 /usr/share/perl/5.40 /usr/local/lib/site_perl) at /usr/share/perl5/Debconf/FrontEnd/Readline.pm line 8, <STDIN> line 27.)
+debconf: falling back to frontend: Teletype
+Selecting previously unselected package bash-completion.
+(Reading database ... 5644 files and directories currently installed.)
+Preparing to unpack .../00-bash-completion_1%3a2.16.0-7_all.deb ...
+Unpacking bash-completion (1:2.16.0-7) ...
+Selecting previously unselected package krb5-locales.
+Preparing to unpack .../01-krb5-locales_1.21.3-5_all.deb ...
+Unpacking krb5-locales (1.21.3-5) ...
+Selecting previously unselected package libbrotli1:amd64.
+Preparing to unpack .../02-libbrotli1_1.1.0-2+b7_amd64.deb ...
+Unpacking libbrotli1:amd64 (1.1.0-2+b7) ...
+Selecting previously unselected package libkrb5support0:amd64.
+Preparing to unpack .../03-libkrb5support0_1.21.3-5_amd64.deb ...
+Unpacking libkrb5support0:amd64 (1.21.3-5) ...
+Selecting previously unselected package libcom-err2:amd64.
+Preparing to unpack .../04-libcom-err2_1.47.2-3+b3_amd64.deb ...
+Unpacking libcom-err2:amd64 (1.47.2-3+b3) ...
+Selecting previously unselected package libk5crypto3:amd64.
+Preparing to unpack .../05-libk5crypto3_1.21.3-5_amd64.deb ...
+Unpacking libk5crypto3:amd64 (1.21.3-5) ...
+Selecting previously unselected package libkeyutils1:amd64.
+Preparing to unpack .../06-libkeyutils1_1.6.3-6_amd64.deb ...
+Unpacking libkeyutils1:amd64 (1.6.3-6) ...
+Selecting previously unselected package libkrb5-3:amd64.
+Preparing to unpack .../07-libkrb5-3_1.21.3-5_amd64.deb ...
+Unpacking libkrb5-3:amd64 (1.21.3-5) ...
+Selecting previously unselected package libgssapi-krb5-2:amd64.
+Preparing to unpack .../08-libgssapi-krb5-2_1.21.3-5_amd64.deb ...
+Unpacking libgssapi-krb5-2:amd64 (1.21.3-5) ...
+Selecting previously unselected package libunistring5:amd64.
+Preparing to unpack .../09-libunistring5_1.3-2_amd64.deb ...
+Unpacking libunistring5:amd64 (1.3-2) ...
+Selecting previously unselected package libidn2-0:amd64.
+Preparing to unpack .../10-libidn2-0_2.3.8-2_amd64.deb ...
+Unpacking libidn2-0:amd64 (2.3.8-2) ...
+Selecting previously unselected package libsasl2-modules-db:amd64.
+Preparing to unpack .../11-libsasl2-modules-db_2.1.28+dfsg1-9_amd64.deb ...
+Unpacking libsasl2-modules-db:amd64 (2.1.28+dfsg1-9) ...
+Selecting previously unselected package libsasl2-2:amd64.
+Preparing to unpack .../12-libsasl2-2_2.1.28+dfsg1-9_amd64.deb ...
+Unpacking libsasl2-2:amd64 (2.1.28+dfsg1-9) ...
+Selecting previously unselected package libldap2:amd64.
+Preparing to unpack .../13-libldap2_2.6.10+dfsg-1_amd64.deb ...
+Unpacking libldap2:amd64 (2.6.10+dfsg-1) ...
+Selecting previously unselected package libnghttp2-14:amd64.
+Preparing to unpack .../14-libnghttp2-14_1.64.0-1.1_amd64.deb ...
+Unpacking libnghttp2-14:amd64 (1.64.0-1.1) ...
+Selecting previously unselected package libnghttp3-9:amd64.
+Preparing to unpack .../15-libnghttp3-9_1.8.0-1_amd64.deb ...
+Unpacking libnghttp3-9:amd64 (1.8.0-1) ...
+Selecting previously unselected package libpsl5t64:amd64.
+Preparing to unpack .../16-libpsl5t64_0.21.2-1.1+b1_amd64.deb ...
+Unpacking libpsl5t64:amd64 (0.21.2-1.1+b1) ...
+Selecting previously unselected package libp11-kit0:amd64.
+Preparing to unpack .../17-libp11-kit0_0.25.5-3_amd64.deb ...
+Unpacking libp11-kit0:amd64 (0.25.5-3) ...
+Selecting previously unselected package libtasn1-6:amd64.
+Preparing to unpack .../18-libtasn1-6_4.20.0-2_amd64.deb ...
+Unpacking libtasn1-6:amd64 (4.20.0-2) ...
+Selecting previously unselected package libgnutls30t64:amd64.
+Preparing to unpack .../19-libgnutls30t64_3.8.9-3_amd64.deb ...
+Unpacking libgnutls30t64:amd64 (3.8.9-3) ...
+Selecting previously unselected package librtmp1:amd64.
+Preparing to unpack .../20-librtmp1_2.4+20151223.gitfa8646d.1-2+b5_amd64.deb ...
+Unpacking librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b5) ...
+Selecting previously unselected package libssh2-1t64:amd64.
+Preparing to unpack .../21-libssh2-1t64_1.11.1-1_amd64.deb ...
+Unpacking libssh2-1t64:amd64 (1.11.1-1) ...
+Selecting previously unselected package libcurl4t64:amd64.
+Preparing to unpack .../22-libcurl4t64_8.14.1-2_amd64.deb ...
+Unpacking libcurl4t64:amd64 (8.14.1-2) ...
+Selecting previously unselected package curl.
+Preparing to unpack .../23-curl_8.14.1-2_amd64.deb ...
+Unpacking curl (8.14.1-2) ...
+Selecting previously unselected package libldap-common.
+Preparing to unpack .../24-libldap-common_2.6.10+dfsg-1_all.deb ...
+Unpacking libldap-common (2.6.10+dfsg-1) ...
+Selecting previously unselected package libsasl2-modules:amd64.
+Preparing to unpack .../25-libsasl2-modules_2.1.28+dfsg1-9_amd64.deb ...
+Unpacking libsasl2-modules:amd64 (2.1.28+dfsg1-9) ...
+Selecting previously unselected package publicsuffix.
+Preparing to unpack .../26-publicsuffix_20250328.1952-0.1_all.deb ...
+Unpacking publicsuffix (20250328.1952-0.1) ...
+Setting up libkeyutils1:amd64 (1.6.3-6) ...
+Setting up libbrotli1:amd64 (1.1.0-2+b7) ...
+Setting up libsasl2-modules:amd64 (2.1.28+dfsg1-9) ...
+Setting up libnghttp2-14:amd64 (1.64.0-1.1) ...
+Setting up krb5-locales (1.21.3-5) ...
+Setting up libcom-err2:amd64 (1.47.2-3+b3) ...
+Setting up libldap-common (2.6.10+dfsg-1) ...
+Setting up libkrb5support0:amd64 (1.21.3-5) ...
+Setting up libsasl2-modules-db:amd64 (2.1.28+dfsg1-9) ...
+Setting up bash-completion (1:2.16.0-7) ...
+Setting up libp11-kit0:amd64 (0.25.5-3) ...
+Setting up libunistring5:amd64 (1.3-2) ...
+Setting up libk5crypto3:amd64 (1.21.3-5) ...
+Setting up libsasl2-2:amd64 (2.1.28+dfsg1-9) ...
+Setting up libnghttp3-9:amd64 (1.8.0-1) ...
+Setting up libtasn1-6:amd64 (4.20.0-2) ...
+Setting up libkrb5-3:amd64 (1.21.3-5) ...
+Setting up libssh2-1t64:amd64 (1.11.1-1) ...
+Setting up publicsuffix (20250328.1952-0.1) ...
+Setting up libldap2:amd64 (2.6.10+dfsg-1) ...
+Setting up libidn2-0:amd64 (2.3.8-2) ...
+Setting up libgssapi-krb5-2:amd64 (1.21.3-5) ...
+Setting up libgnutls30t64:amd64 (3.8.9-3) ...
+Setting up libpsl5t64:amd64 (0.21.2-1.1+b1) ...
+Setting up librtmp1:amd64 (2.4+20151223.gitfa8646d.1-2+b5) ...
+Setting up libcurl4t64:amd64 (8.14.1-2) ...
+Setting up curl (8.14.1-2) ...
+Processing triggers for libc-bin (2.41-12) ...
+bash: netstat: command not found
+❌ API Down
+🔍 AlgoGPT System Status:
+==========================
+bash: ps: command not found
+❌ No Processes
+❌ API Not Responding
+✅ Database Connected
+✅ Binance Configured
+root@srv-d2346lfgi27c73fii3ag-565785657c-vqkwz:/app# # 🎯 FIX & CHECK SCRIPT
+echo "🔧 Installing curl..."
+apt-get update > /dev/null 2>&1 && apt-get install -y curl > /dev/null 2>&1
+
+echo "🔍 Checking system..."
+echo "======================"
+
+# Check processes
+echo "1. Process Check:"
+if ps aux | grep -E "(python|algogpt|scan)" | grep -v grep > /dev/null; then
+    echo "   ✅ Python processes running"
+echo "🎯 System check complete"dev/null 2>&1 && echo "   ✅ Internet connection OK" || echo "   ❌ No inte
+🔧 Installing curl...
+🔍 Checking system...
+======================
+1. Process Check:
+bash: ps: command not found
+   ❌ No trading processes found
+2. API Check:
+3. Dependencies:
+   ✅ PostgreSQL OK
+   ✅ Binance configured
+4. Network:
+   ❌ No internet
+======================
+🎯 System check complete
+root@srv-d2346lfgi27c73fii3ag-565785657c-vqkwz:/app# # 🚀 RUN THE FIX
+apt-get update && apt-get install -y curl
+bash -c '
+echo "🔍 AlgoGPT Quick Check:"
+ps aux | grep python | grep -v grep | head -3
+for port in 8000 5000 8080 3000; do
+    if curl -s http://localhost:$port/health > /dev/null; then
+        echo "✅ API on port $port"
+        break
+    fi
+done
+'nv | grep BINANCE_API_KEY && echo "✅ Binance OK" || echo "❌ Binance Missing"ror"
+Hit:1 http://deb.debian.org/debian trixie InRelease
+Hit:2 http://deb.debian.org/debian trixie-updates InRelease
+Hit:3 http://deb.debian.org/debian-security trixie-security InRelease
+Reading package lists... Done
+Reading package lists... Done
+Building dependency tree... Done
+Reading state information... Done
+curl is already the newest version (8.14.1-2).
+0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.
+🔍 AlgoGPT Quick Check:
+bash: line 3: ps: command not found
+✅ DB OK
+BINANCE_API_KEY=Sfuayi92Z3CqcjPuFoWGGqX41eTiSR5VXq0CSycDHH8Wz144sa1JzQmqT9lqe16U
+✅ Binance OK
+root@srv-d2346lfgi27c73fii3ag-565785657c-vqkwz:/app# # 🔧 אם API לא עונה - נבדוק את הקוד
+find . -name "*.py" -type f | head -5
+ls -la
+cat requirements.txt 2>/dev/null | head -10
+./trigger_render_deploy.py
+./ws_stream.py
+./scan_runner.py
+./data/_extract_top1.py
+./data/_pretty_ticket.py
+total 936
+drwxr-sr-x 1 root root  4096 Nov 12 14:52  .
+drwxr-xr-x 1 root root  4096 Nov 12 14:57  ..
+-rw-r--r-- 1 root root   721 Nov 12 14:52  .dockerignore
+drwxr-sr-x 4 root root  4096 Nov 12 14:52  .github
+-rw-r--r-- 1 root root   324 Nov 12 14:52  .gitignore
+-rw-r--r-- 1 root root   757 Nov 12 14:52  .pre-commit-config.yaml
+-rw-r--r-- 1 root root  6412 Nov 12 14:52  .replit
+-rw-r--r-- 1 root root   835 Nov 12 14:52 '.well-known ai-plugin.json'
+-rw-r--r-- 1 root root  5575 Nov 12 14:52  AUTONOMOUS_AGENTS_SETUP.md
+-rw-r--r-- 1 root root  5040 Nov 12 14:52  AUTONOMOUS_NETWORK.md
+-rw-r--r-- 1 root root 16005 Nov 12 14:52  CHANGELOG
+-rw-r--r-- 1 root root  8055 Nov 12 14:52  DEPLOYMENT.md
+-rw-r--r-- 1 root root  6949 Nov 12 14:52  DEPLOYMENT_GUIDE.md
+-rw-r--r-- 1 root root  2136 Nov 12 14:52  DEPLOYMENT_INSTRUCTIONS.md
+-rw-r--r-- 1 root root  1331 Nov 12 14:52  Dockerfile
+-rw-r--r-- 1 root root   902 Nov 12 14:52  Dockerfile.ops
+-rw-r--r-- 1 root root 10157 Nov 12 14:52  Makefile
+-rw-r--r-- 1 root root 12519 Nov 12 14:52  PHASE_1_FINAL_REPORT.md
+drwxr-sr-x 3 root root  4096 Nov 12 14:52 'POST '
+-rw-r--r-- 1 root root   759 Nov 12 14:52  Procfile
+-rwxr-xr-x 1 root root  1101 Nov 12 14:52  QUICK_DEPLOY.sh
+-rw-r--r-- 1 root root 22142 Nov 12 14:52  README.md
+-rw-r--r-- 1 root root  4111 Nov 12 14:52  RENDER_DEPLOYMENT_GUIDE.md
+-rw-r--r-- 1 root root  7752 Nov 12 14:52  RENDER_DEPLOYMENT_GUIDE_v2.md
+-rw-r--r-- 1 root root  8922 Nov 12 14:52  RENDER_FILES_SUMMARY.md
+-rw-r--r-- 1 root root 49199 Nov 12 14:52  ROADMAP.md
+-rw-r--r-- 1 root root 17925 Nov 12 14:52  ROADMAP_PHASED.md
+-rw-r--r-- 1 root root  3932 Nov 12 14:52  SCRIPTS_GUIDE.md
+-rw-r--r-- 1 root root 10112 Nov 12 14:52  TEST_SUMMARY_REPORT.md
+-rw-r--r-- 1 root root 10394 Nov 12 14:52  VALIDATION_REPORT.md
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  accounts
+-rw-r--r-- 1 root root  1351 Nov 12 14:52  alerts_app.py
+-rw-r--r-- 1 root root  2276 Nov 12 14:52  alerts_ingest.py
+-rw-r--r-- 1 root root  3367 Nov 12 14:52  alerts_update.py
+-rw-r--r-- 1 root root  3271 Nov 12 14:52  algo_helpers.sh
+-rw-r--r-- 1 root root  3010 Nov 12 14:52  algo_min.sh
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  api
+drwxr-sr-x 4 root root  4096 Nov 12 14:52  app
+-rw-r--r-- 1 root root 14019 Nov 12 14:52  app_single.py
+-rw-r--r-- 1 root root  3529 Nov 12 14:52  approveSigned.ts
+-rw-r--r-- 1 root root  4784 Nov 12 14:52  approve_signed.py
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  attached_assets
+-rw-r--r-- 1 root root   228 Nov 12 14:52  auto-pick-daemon.sh
+-rw-r--r-- 1 root root  8099 Nov 12 14:52  auto-pick.sh
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  backup
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  bin
+-rw-r--r-- 1 root root  1220 Nov 12 14:52  binance-watcher.sh
+-rw-r--r-- 1 root root  1889 Nov 12 14:52  binance_guard.sh
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  calibration
+-rw-r--r-- 1 root root   563 Nov 12 14:52  check_env.py
+-rw-r--r-- 1 root root  2635 Nov 12 14:52  check_render_status.py
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  clients
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  config
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  core
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  dashboard
+drwxrwsr-x 5 root 1000  4096 Nov  5 21:55  data
+-rw-r--r-- 1 root root   587 Nov 12 14:52  deploy_log.txt
+-rw-r--r-- 1 root root  1719 Nov 12 14:52  do_push.py
+-rw-r--r-- 1 root root   370 Nov 12 14:52  docker-compose.override.yml
+-rw-r--r-- 1 root root  7819 Nov 12 14:52  docker-compose.yml
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  docs
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  exchange
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  executors
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  export
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  fixbot
+-rw-r--r-- 1 root root   673 Nov 12 14:52  get_chat_id.py
+-rw-r--r-- 1 root root  1198 Nov 12 14:52  git_sync.ps1
+-rw-r--r-- 1 root root    18 Nov 12 14:52  grid_tracker.json
+-rw-r--r-- 1 root root  2741 Nov 12 14:52  gunicorn_conf.py
+-rw-r--r-- 1 root root  1065 Nov 12 14:52  health_full.sh
+-rw-r--r-- 1 root root   695 Nov 12 14:52  http_check.py
+-rw-r--r-- 1 root root   877 Nov 12 14:52  init_database.py
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  jobs
+-rw-r--r-- 1 root root 88575 Nov 12 14:52  main.py
+-rw-r--r-- 1 root root  9675 Nov 12 14:52 'main.py  ops-approval-web'
+-rw-r--r-- 1 root root  7083 Nov 12 14:52  manage_brackets.sh
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  manager
+-rw-r--r-- 1 root root  2025 Nov 12 14:52  market-gpt-api-template
+-rwxr-xr-x 1 root root    89 Nov 12 14:52  menu.sh
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  middleware
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  middlewares
+-rw-r--r-- 1 root root   469 Nov 12 14:52  mm.sh
+drwxr-sr-x 5 root root  4096 Nov 12 14:52  monitoring
+-rw-r--r-- 1 root root     3 Nov 12 14:52  open_trades.json
+-rw-r--r-- 1 root root 25956 Nov 12 14:52  openapi.yaml
+-rw-r--r-- 1 root root  2015 Nov 12 14:52  ops_toolkit_safe.sh
+-rw-r--r-- 1 root root  6825 Nov 12 14:52  orders_utils.py
+drwxr-sr-x 3 root root  4096 Nov 12 14:52  params
+-rw-r--r-- 1 root root  1347 Nov 12 14:52  parse_exchange_info.awk
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  policies
+-rw-r--r-- 1 root root  4674 Nov 12 14:52  pre_deploy_check.ps1
+-rw-r--r-- 1 root root  4113 Nov 12 14:52  preflight_check.ps1
+-rw-r--r-- 1 root root  1018 Nov 12 14:52  preset.txt
+-rw-r--r-- 1 root root  1982 Nov 12 14:52  prestart.sh
+-rw-r--r-- 1 root root  1119 Nov 12 14:52  pyproject.toml
+-rw-r--r-- 1 root root 12629 Nov 12 14:52  replit.md
+-rw-r--r-- 1 root root   358 Nov 12 14:52  requirements-dev.txt
+-rw-r--r-- 1 root root   402 Nov 12 14:52  requirements-worker.txt
+-rw-r--r-- 1 root root    71 Nov 12 14:52  requirements.ops.txt
+-rw-r--r-- 1 root root  1601 Nov 12 14:52  requirements.txt
+drwxr-sr-x 3 root root  4096 Nov 12 14:52  routes
+-rw-r--r-- 1 root root  2623 Nov 12 14:52  run_executor.py
+-rw-r--r-- 1 root root     8 Nov 12 14:52  runtime.txt
+-rw-r--r-- 1 root root  3269 Nov 12 14:52  safe_ops.sh
+-rw-r--r-- 1 root root  4509 Nov 12 14:52  sanity.sh
+-rw-r--r-- 1 root root   961 Nov 12 14:52  scan_runner.py
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  schemas
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  scripts
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  security
+drwxr-sr-x 3 root root  4096 Nov 12 14:52  server
+-rw-r--r-- 1 root root  7214 Nov 12 14:52  server_routes.py
+-rw-r--r-- 1 root root  2202 Nov 12 14:52  server_signing.py
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  services
+-rw-r--r-- 1 root root   876 Nov 12 14:52  setup_auth.sh
+-rw-r--r-- 1 root root   661 Nov 12 14:52  sig_manage.sh
+-rw-r--r-- 1 root root   830 Nov 12 14:52  sign.sh
+-rw-r--r-- 1 root root  1552 Nov 12 14:52  sign_request.py
+-rw-r--r-- 1 root root   470 Nov 12 14:52  sm.sh
+-rw-r--r-- 1 root root  8905 Nov 12 14:52  smart_manage.py
+-rw-r--r-- 1 root root  5044 Nov 12 14:52  smart_pick_and_approve.py
+-rw-r--r-- 1 root root  2174 Nov 12 14:52  smoketest.sh
+drwxr-sr-x 2 root root  4096 Nov 12 14:52 'source .'
+-rwxr-xr-x 1 root root  3023 Nov 12 14:52  start.sh
+drwxr-sr-x 5 root root  4096 Nov 12 14:52  static
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  storage
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  telegram
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  templates
+-rw-r--r-- 1 root root   581 Nov 12 14:52  test_ai.sh
+-rw-r--r-- 1 root root  1951 Nov 12 14:52  test_algogpt.ps1
+-rw-r--r-- 1 root root  4327 Nov 12 14:52  test_results_summary.json
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  tools
+drwxr-sr-x 2 root root  4096 Nov 12 14:52 'touch tests'
+-rw-r--r-- 1 root root  2004 Nov 12 14:52  trigger_render_deploy.py
+-rw-r--r-- 1 root root  3994 Nov 12 14:52  update_binance_env.ps1
+drwxr-sr-x 4 root root 12288 Nov 12 14:52  utils
+-rw-r--r-- 1 root root  3469 Nov 12 14:52  verify_api.py
+-rw-r--r-- 1 root root  1239 Nov 12 14:52  watchlist.json
+-rw-r--r-- 1 root root   432 Nov 12 14:52  watchlist_fallback.json
+drwxr-sr-x 2 root root  4096 Nov 12 14:52  workers
+-rw-r--r-- 1 root root  9420 Nov 12 14:52  ws_stream.py
+# =========================
+# Core Web
+# =========================
+fastapi==0.111.0
+starlette==0.37.2
+uvicorn==0.30.6
+gunicorn==22.0.0
+pydantic==2.8.2
+pydantic-core==2.20.1
+python-multipart==0.0.9
+root@srv-d2346lfgi27c73fii3ag-565785657c-vqkwz:/app# 
