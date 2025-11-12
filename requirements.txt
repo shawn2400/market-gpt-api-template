@@ -13,6 +13,7 @@ python-multipart==0.0.9
 # Database (MetaBrain v8.0)
 # =========================
 psycopg[binary]>=3.2.1
+sqlalchemy>=2.0.0
 
 # =========================
 # Exchange / Trading
@@ -44,11 +45,13 @@ openai>=2.0.0
 # Utils / Infra
 # =========================
 python-dotenv==1.0.1
+python-dateutil>=2.8.0
 redis==4.6.0
 orjson==3.10.6
 psutil==5.9.8
 PyYAML==6.0.2
 typing-extensions==4.12.2
+requests>=2.31.0
 
 # =========================
 # Logging / Monitoring
@@ -68,98 +71,3 @@ matplotlib==3.9.2
 # =========================
 pytest==8.2.2
 jsonschema==4.23.0
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-aiohttp
-binance
-dateparser
-fastapi
-fpdf
-gunicorn
-httpx[http2]
-jsonschema
-matplotlib
-numpy
-openai
-orjson
-pandas
-Pillow
-prometheus-client
-psutil
-pydantic
-pydantic-core
-pytest
-python-binance
-python-dotenv
-python-multipart
-PyYAML
-redis
-requests
-scipy
-starlette
-structlog
-ta
-typing-extensions
-uvicorn
-websockets
-psycopg2-binary
-sqlalchemy
-psutil
-python-dateutil
-psycopg[binary]
-openai>=1.54.0
