@@ -22,7 +22,7 @@
 ![License](https://img.shields.io/badge/License-Private-red?style=for-the-badge)
 ![Status](https://img.shields.io/badge/Status-Live%2024/7-success?style=for-the-badge)
 
-**Version:** `9.1.0` | **AI Brains:** 2 (Cost-Optimized) | **Workers:** 10 | **Strategies:** 7 | **Markets:** 534 | **Cost Savings:** 95%
+**Version:** `9.1.0` | **AI Brains:** 3 (Cost-Optimized: DeepSeek+Grok+Gemini) | **Workers:** 10 | **Strategies:** 7 | **Markets:** 534 | **Cost Savings:** 90%
 
 [🎯 Features](#-features) • [🧠 AI Brains](#-ai-brains-multi-model-consensus) • [⚙️ Workers](#️-workers-background-processes) • [📊 Strategies](#-trading-strategies) • [🔐 Security](#-security-hmac-signature)
 
@@ -32,40 +32,40 @@
 
 ## 🌟 Overview | סקירה כללית
 
-**AlgoGPT v9.1** היא פלטפורמת מסחר אלגוריתמי אוטונומית המבוססת על **2 מודלי AI זולים** (DeepSeek + Grok) שפועלים במערך קונצנזוס מהיר. המערכת פועלת 24/7 על Binance Futures, מנתחת באופן רציף 534 שווקים שונים, וסורקת **50 symbols בכל סבב** (x5 שיפור כיסוי שוק). **הפחתת עלויות: 95%** (מ-$500/חודש ל-~$25/חודש).
+**AlgoGPT v9.1** היא פלטפורמת מסחר אלגוריתמי אוטונומית המבוססת על **3 מודלי AI זולים** (DeepSeek + Grok + Gemini) שפועלים במערך קונצנזוס מהיר. המערכת פועלת 24/7 על Binance Futures, מנתחת באופן רציף 534 שווקים שונים, וסורקת **50 symbols בכל סבב** (x5 שיפור כיסוי שוק). **הפחתת עלויות: 90%** (הסרה של GPT-5 + Claude).
 
-**AlgoGPT v9.1** is a cutting-edge autonomous algorithmic trading platform powered by **2 cost-optimized AI brains** (DeepSeek + Grok) operating in fast consensus. It runs 24/7 on Binance Futures, continuously analyzing 534 markets across multiple timeframes, scanning **50 symbols per cycle** (5x market coverage improvement), and executes 4-10 high-quality trades daily with regime-adaptive dynamic risk management. **Cost Reduction: 95%** (from $500/month to ~$25/month).
+**AlgoGPT v9.1** is a cutting-edge autonomous algorithmic trading platform powered by **3 cost-optimized AI brains** (DeepSeek + Grok + Gemini) operating in fast consensus. Removed expensive providers (GPT-5 $15/M, Claude $3/M). It runs 24/7 on Binance Futures, continuously analyzing 534 markets across multiple timeframes, scanning **50 symbols per cycle** (5x market coverage improvement), and executes 4-10 high-quality trades daily with regime-adaptive dynamic risk management. **Cost Reduction: 90%** by removing GPT-5 and Claude.
 
 ### 🎯 Core Capabilities | יכולות ליבה
 
 - ⚡ **24/7 Automated Trading** — מסחר אוטומטי מלא עם ביצוע מיידי (LIMIT + MARKET)
-- 🧠 **2-Brain AI Consensus (Cost-Optimized)** — DeepSeek + Grok בלבד | **95% הפחתת עלויות**
+- 🧠 **3-Brain AI Consensus (Cost-Optimized)** — DeepSeek + Grok + Gemini | **90% cost reduction** (removed GPT-5 + Claude)
 - 📊 **534 Markets Scanning (50/cycle)** — סריקה של 50 symbols בכל סבב (x5 שיפור כיסוי)
-- 🛡️ **3-Layer Emergency Protection** — 100% SL+TP coverage guarantee | Pre-trade → Post-entry → Continuous monitoring
+- 🛡️ **Multi-Layer Protection System** — SL+TP validation + Post-entry verification + Continuous monitoring
 - 🔄 **7 Trading Strategies** — Mean-Reversion, Scalping, Range-Bounce, Trend-Following, Breakout, GRID, SPOT
 - 📈 **Dynamic SL/TP System** — ATR-based Stop Loss, RR-based Take Profit, Regime-adaptive parameters
 - 🎯 **Smart Filter (Quality 6.0)** — Stage 2 gating blocks low-quality trades before AI spend
 - 🔐 **HMAC Signature Security** — חתימה דינמית לכל בקשה + anti-replay protection
-- 💰 **Daily Cost: $0.00** — Only cheap AI brains (DeepSeek $0.14/M tokens, Grok free tier)
+- 💰 **Low Daily Cost** — Only cheap AI brains (DeepSeek $0.14/M, Grok free, Gemini 50 calls/day free)
 
 ---
 
 ## 🧠 AI Brains (Cost-Optimized Consensus)
 
-**AlgoGPT v9.1** uses **ONLY 2 CHEAP AI BRAINS** for maximum cost efficiency. This achieves **95% cost reduction** (from $500/month to ~$25/month) while maintaining high-quality trade decisions through fast dual-brain consensus.
+**AlgoGPT v9.1** uses **3 COST-OPTIMIZED AI BRAINS** for maximum efficiency. By **removing expensive providers** (GPT-5, Claude), we achieve **90% cost reduction** while maintaining high-quality trade decisions through fast triple-brain consensus.
 
-### 💎 Why Only 2 Brains?
+### 💎 Cost Optimization Strategy
 
-**The Problem with 5 Brains:**
-- GPT-5: $15/M tokens ($300-400/month)
-- Claude Sonnet 3.5: $3/M tokens ($50-100/month)
-- Gemini 2 Pro: 50 calls/day limit
-- **Total Cost: ~$500/month**
+**Removed Expensive Brains:**
+- ❌ GPT-5: $15/M tokens (~$300-400/month) - **REMOVED**
+- ❌ Claude Sonnet 3.5: $3/M tokens (~$50-100/month) - **REMOVED**
 
-**The Solution:**
-- DeepSeek: $0.14/M tokens (~$10/month)
-- Grok: Free tier (generous limits)
-- **Total Cost: ~$10-25/month = 95% savings!**
+**Kept Only Cheap Brains:**
+- ✅ DeepSeek: $0.14/M tokens (~$10-20/month)
+- ✅ Grok (XAI): Free tier (generous limits)
+- ✅ Gemini 2 Pro: 50 calls/day free tier (fallback/tiebreaker)
+
+**Result: 90% cost reduction!**
 
 ### 🧠 AI Brain #1: DeepSeek
 - **Model**: `deepseek-chat`
@@ -85,79 +85,86 @@
 - **Status**: ✅ Active
 - **Performance**: Strong contrarian analysis, real-time insights
 
-### 🗳️ Fast Dual-Brain Consensus (v9.1)
+### 🌟 AI Brain #3: Gemini 2 Pro (Google)
+- **Model**: `gemini-2.0-flash-exp`
+- **Role**: Tiebreaker & Fallback - פותר תיקו וגיבוי
+- **Temperature**: 0.7
+- **Max Tokens**: 300
+- **Cost**: FREE (50 calls/day limit)
+- **Status**: ✅ Active (fallback mode)
+- **Performance**: Fast multi-modal reasoning, used as tiebreaker
+
+### 🗳️ Fast Triple-Brain Consensus (v9.1)
 
 ```python
 # Optimized Voting Flow:
 1. Scout generates trade proposal (MI + SO scores)
-2. Both AI brains analyze proposal independently
+2. All 3 AI brains analyze proposal independently:
+   - DeepSeek (primary analyst)
+   - Grok/XAI (contrarian validator)
+   - Gemini (tiebreaker/fallback)
 3. Each brain votes APPROVE/REJECT with score (0-10)
 4. Consensus decision:
-   - 2/2 APPROVE → ✅ Execute Trade (unanimous)
-   - 1/2 APPROVE → ⚠️ Quality-based decision
-   - 0/2 APPROVE → ❌ Reject Proposal
-5. Final score = average(DeepSeek_score, Grok_score)
-6. Gemini 2 Pro acts as tiebreaker (fallback only)
+   - ≥2/3 APPROVE → ✅ Execute Trade
+   - <2/3 APPROVE → ❌ Reject Proposal
+5. Final score = median(all_brain_scores)
 ```
 
 **Example Consensus (v9.1):**
 ```
 DeepSeek:       APPROVE (7.5/10) ✅
 Grok:           APPROVE (8.1/10) ✅
-Gemini (fallback): APPROVE (7.8/10)
+Gemini:         REJECT  (5.8/10) ❌
 
-Result: 2/2 APPROVE (100%) → ✅ EXECUTE
-Final Score: 7.8/10 (average)
-Cost: $0.0001 (vs $0.05 with 5 brains)
+Result: 2/3 APPROVE (67%) → ✅ EXECUTE
+Final Score: 7.5/10 (median)
+Cost: $0.0002 (vs $0.05 with 5 brains including GPT-5+Claude)
 Speed: 2-3 seconds (vs 5-7 seconds)
 ```
 
 **Smart Filter Integration:**
 - Stage 1: Volume spike validation (>1.5x)
 - Stage 2: Quality threshold (≥6.0/10) **← BLOCKS before AI spend**
-- Stage 3: AI consensus (2 cheap brains)
-- Result: **90% cost reduction** by filtering before AI calls
+- Stage 3: AI consensus (3 cheap brains)
+- Result: **90% cost reduction** by removing expensive providers
 
 ---
 
-## 🛡️ Emergency Protection System (3-Layer Defense)
+## 🛡️ Multi-Layer Protection System
 
-**AlgoGPT v9.1** implements a **3-Layer Emergency Protection System** that guarantees **100% SL+TP coverage** for every open position. NO TRADE can remain unprotected.
+**AlgoGPT v9.1** implements a **Multi-Layer Protection System** to minimize unprotected positions. While we strive for maximum SL+TP coverage, the system uses validation + verification + continuous monitoring.
 
-### 🔴 Layer 1: Pre-Trade Validation
-**When**: Before trade execution begins
+### 🔹 Layer 1: SL/TP Configuration Validation
+**When**: During trade proposal generation
 **File**: `utils/auto_executor.py`, `utils/trade_execution_core.py`
 
-Every trade MUST have SL+TP configuration before execution:
+Trade proposals include SL+TP configuration:
 ```python
-# Validation checks:
-1. Stop Loss (SL) must be defined
-2. Take Profit (TP) must be defined
-3. SL price must be valid (not too tight, not too wide)
-4. TP price must achieve minimum RR ratio
-5. Both orders must pass Binance validation
-
-If validation fails → Trade is REJECTED before execution
+# Configuration in proposal:
+1. Stop Loss (SL) calculated using ATR
+2. Take Profit (TP) calculated using RR ratio
+3. SL price validated (not too tight, not too wide)
+4. TP price ensures minimum RR ratio
+5. Parameters adapt to market regime
 ```
 
 **Protection:**
-- Prevents launching unprotected positions
 - ATR-based SL calculation (0.5-4.0 ATR multiplier)
 - RR-based TP calculation (1.0-5.0 RR ratio)
 - Dynamic adjustment based on market regime
+- Regime-specific parameters (TRENDING/CHOPPY/VOLATILE/SIDEWAYS)
 
-### 🟠 Layer 2: Post-Entry Verification (2 seconds)
-**When**: Within 2 seconds after position entry
-**File**: `utils/emergency_protection.py`
+### 🔹 Layer 2: Post-Entry Verification
+**When**: After position entry (monitored by Position Monitor)
+**File**: `utils/emergency_protection.py`, `workers/position_monitor.py`
 
-After position is opened, system verifies SL/TP orders exist on Binance:
+After position is opened, system verifies SL/TP orders exist:
 ```python
 # Verification flow:
 1. Position entry confirmed (positionAmt ≠ 0)
-2. Wait 2 seconds for orders to propagate
-3. Fetch all open orders from Binance
-4. Check for STOP_MARKET order (SL)
-5. Check for TAKE_PROFIT_MARKET order (TP)
+2. Fetch all open orders from Binance
+3. Check for STOP_MARKET order (SL)
+4. Check for TAKE_PROFIT_MARKET order (TP)
 
 If SL or TP missing:
 → Emergency market close immediately
@@ -167,11 +174,11 @@ If SL or TP missing:
 ```
 
 **Protection:**
-- Catches failed SL/TP order placement
+- Detects failed SL/TP order placement
 - Immediate emergency exit if protection missing
 - Prevents runaway losses
 
-### 🟡 Layer 3: Continuous Monitoring (30 seconds)
+### 🔹 Layer 3: Continuous Monitoring (Every 30 seconds)
 **When**: Every 30 seconds while position is open
 **File**: `workers/position_monitor.py`
 
@@ -197,22 +204,9 @@ Circuit Breaker:
 
 **Protection:**
 - Continuous safety net for all positions
-- Catches edge cases (exchange errors, network failures)
+- Catches edge cases (exchange errors, network failures, order rejections)
 - Auto-pause prevents cascading failures
-
-### ✅ 100% Coverage Guarantee
-
-**Mathematical Proof:**
-```
-Coverage = (Positions with SL+TP) / (Total Open Positions) = 100%
-
-Reasoning:
-1. Layer 1 blocks trades without SL+TP → No unprotected entries
-2. Layer 2 closes positions if SL+TP missing → 2-second window
-3. Layer 3 continuously monitors → Catches any edge cases
-
-Result: ZERO unprotected positions possible
-```
+- 30-second check interval ensures rapid detection
 
 ### 📊 Enhanced Logging & Telemetry
 
@@ -272,7 +266,7 @@ AlgoGPT מריצה **10 workers** בפרלל, כל אחד אחראי על תפק
 - **File**: `workers/gpt_auto_suggest.py`
 - **Command**: `python workers/gpt_auto_suggest.py`
 - **Port**: None
-- **Description**: סורק **50 symbols בכל סבב** (x5 improvement!), מציע trades באמצעות 7 אסטרטגיות + 2 AI brains consensus
+- **Description**: סורק **50 symbols בכל סבב** (x5 improvement!), מציע trades באמצעות 7 אסטרטגיות + 3 AI brains consensus (DeepSeek + Grok + Gemini)
 - **Two-Tier Strategy**:
   - **Tier 1**: Scans symbols with quality 4-10 (market breadth)
   - **Tier 2**: Smart Filter blocks <6.0 quality before AI spend
@@ -282,6 +276,8 @@ AlgoGPT מריצה **10 workers** בפרלל, כל אחד אחראי על תפק
   - `SUGGEST_SPOT=1`
   - `SUGGEST_GRID=1` ✅ **NOW ENABLED**
   - `AUTO_RUN=1`
+  - `ENABLE_DEEPSEEK=1`, `ENABLE_XAI=1`, `ENABLE_GEMINI=1`
+  - `ENABLE_OPENAI=0` (cost optimization)
 
 ### 📅 Worker #4: Daily Meeting 00:00
 - **File**: `workers/daily_meeting.py`
@@ -1007,6 +1003,6 @@ For questions or support, contact the development team.
 
 **Made with ❤️ by AlgoGPT Team**
 
-**Last Updated**: 2025-01-06 | **Version**: 9.0.0
+**Last Updated**: 2025-11-12 | **Version**: 9.1.0
 
 </div>
