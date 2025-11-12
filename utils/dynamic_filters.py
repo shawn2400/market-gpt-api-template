@@ -89,6 +89,7 @@ def get_dynamic_thresholds(
     symbol: str,
     ctx: Optional[Dict[str, Any]] = None,
     market_score: Optional[float] = None,
+    tier_override: Optional[int] = None,
 ) -> Dict[str, float]:
     """
     מחזיר סינונים דינמיים לפי תנאי השוק.
@@ -97,6 +98,10 @@ def get_dynamic_thresholds(
     - +1.0 = שוק מצוין → סינונים מורחבים (Aggressive)
     -  0.0 = שוק בינוני → סינונים בסיסיים (Balanced)
     - -1.0 = שוק גרוע → סינונים מחמירים (Conservative)
+    
+    tier_override: Optional tier number (1, 2, or 3) from Smart Tiered System
+    - If provided, enforces that tier's min_quality threshold
+    - Tier 1: 4.4, Tier 2: 4.5, Tier 3: 6.0
     """
     # חשב market score אם לא סופק
     if market_score is None and ctx:
@@ -129,15 +134,34 @@ def get_dynamic_thresholds(
     quality = BASE_QUALITY - (adjustment * (quality_range / 2))
     quality = _clamp(quality, QUALITY_MIN, QUALITY_MAX)
     
+    # Apply tier override if provided (Smart Tiered System)
+    tier_name = None
+    if tier_override is not None:
+        if tier_override == 1:
+            quality = max(quality, 4.4)  # Tier 1: Strong Market
+            tier_name = "Tier 1 (Strong Market)"
+        elif tier_override == 2:
+            quality = max(quality, 4.5)  # Tier 2: Normal + Smart Filters
+            tier_name = "Tier 2 (Normal + Filters)"
+        elif tier_override == 3:
+            quality = max(quality, 6.0)  # Tier 3: Weak Market
+            tier_name = "Tier 3 (Weak Market)"
+    
     # Return fully dynamic thresholds (no ENV overrides to enforce dynamic behavior)
-    return {
+    result = {
         "success_pct_min": success_pct,
         "rr_top10_min": rr_top10,
         "rr_alt_min": rr_alt,
-        "quality_min": quality,  # ALWAYS use dynamic quality (4.0-8.0 range)
+        "quality_min": quality,  # ALWAYS use dynamic quality (4.0-8.0 range) or tier override
         "market_score": market_score,
         "regime": (ctx.get("filters") or {}).get("regime", "") if ctx else "",
     }
+    
+    # Add tier info if overridden
+    if tier_name:
+        result["active_tier"] = tier_name
+    
+    return result
 
 
 def explain_filters(thresholds: Dict[str, float]) -> str:
