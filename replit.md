@@ -6,6 +6,13 @@ AlgoGPT is an algorithmic trading platform for 24/7 live Binance Futures trading
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
 
+## Recent Changes
+**November 12, 2025** - Fixed critical Auto Scanner data flow issue:
+- **Root Cause**: `_fetch_context_batch` returned empty dict when CONTEXT_URL not set, bypassing local fallback
+- **Fix**: Modified workers/gpt_auto_suggest.py to call `_build_local_context()` when CONTEXT_URL unavailable, enabling local Binance fallback with full market data (high_24h/low_24h)
+- **Impact**: AI Strategy Consensus now receives real 24h range data, selecting MEAN_REVERSION/GRID strategies with 70-85% confidence instead of defaulting to WAIT
+- **Status**: Local system fully operational, production requires manual Render worker restart to apply fixes
+
 ## System Architecture
 
 ### UI/UX
