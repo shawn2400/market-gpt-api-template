@@ -282,45 +282,43 @@ class MarketIntelligence:
         """
         Select optimal trading strategy based on market conditions.
         
-        Strategy Selection Logic:
-        - Mean Reversion: RSI extremes (oversold/overbought) in any regime
-        - Strong Trend + Bullish → Futures Long
-        - Strong Trend + Bearish → Futures Short  
-        - Sideways/Choppy → GRID Trading or Mean-Reversion
+        Strategy Selection Logic (Regime-First Approach):
         - Volatile → Wait (too risky)
+        - Trending → Mean-Reversion (RSI extremes) OR Directional (futures_long/short)
+        - Sideways/Choppy → GRID (neutral RSI) OR Mean-Reversion (RSI extremes)
         
-        🆕 MEAN-REVERSION SUPPORT: Recognizes reversal opportunities!
+        🎯 REGIME-FIRST: Check regime, then apply RSI-based overrides within each regime
         """
         if regime == "volatile":
             return "wait"
         
-        # 🆕 MEAN-REVERSION: Check for RSI extremes (strong reversal signals)
-        if rsi is not None:
-            # Oversold (strong buy signal) or Overbought (strong sell signal)
-            if rsi <= 30 or rsi >= 70:
-                # Mean-reversion is optimal when RSI shows extremes
+        # TRENDING: Check for mean-reversion opportunities OR directional trades
+        if regime == "trending":
+            # Mean-reversion if RSI shows EXTREME oversold/overbought in strong trend
+            if rsi is not None and (rsi <= 30 or rsi >= 70):
                 return "mean_reversion"
+            
+            # Otherwise: Directional trades based on trend
+            if trend_strength > 40:
+                if mood == "bullish":
+                    return "futures_long"
+                elif mood == "bearish":
+                    return "futures_short"
         
-        # TRENDING: Directional trades
-        if regime == "trending" and trend_strength > 40:
-            if mood == "bullish":
-                return "futures_long"
-            elif mood == "bearish":
-                return "futures_short"
-        
-        # SIDEWAYS: GRID or Mean-Reversion (both work in ranges)
+        # SIDEWAYS: GRID for neutral RSI, Mean-Reversion for extremes
         if regime == "sideways":
-            # Prefer mean-reversion if RSI shows opportunity, else GRID
+            # Mean-reversion if RSI shows opportunity
             if rsi is not None and (rsi <= 35 or rsi >= 65):
                 return "mean_reversion"
+            # GRID for neutral RSI (range-bound trading)
             return "grid"
         
-        # CHOPPY: GRID or Mean-Reversion
+        # CHOPPY: GRID for neutral RSI, Mean-Reversion for extremes
         if regime == "choppy":
-            # Choppy + RSI extremes = Mean-Reversion
+            # Mean-reversion if RSI shows extremes
             if rsi is not None and (rsi <= 35 or rsi >= 65):
                 return "mean_reversion"
-            # Otherwise: GRID trading for range-bound
+            # GRID for neutral RSI (range-bound trading)
             if trend_strength < 60:
                 return "grid"
             else:

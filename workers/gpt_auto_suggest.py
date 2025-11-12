@@ -435,8 +435,45 @@ def _build_user_ctx(symbol: str, ctx: Dict[str, Any]) -> str:
     return json.dumps(data, ensure_ascii=False)
 
 def _parse_json_safe(text: str) -> Optional[Dict[str, Any]]:
-    try: return json.loads(text)
-    except Exception: return None
+    """
+    Parse JSON from LLM response, handling markdown code fences and extra text.
+    Returns None if parsing fails completely.
+    """
+    if not text or not isinstance(text, str):
+        return None
+    
+    # Strip whitespace
+    text = text.strip()
+    
+    # Remove markdown code fences (```json ... ``` or ``` ... ```)
+    if text.startswith("```"):
+        # Find the first newline after opening fence
+        first_newline = text.find("\n")
+        if first_newline > 0:
+            # Remove opening fence line
+            text = text[first_newline + 1:]
+        # Remove closing fence
+        if text.endswith("```"):
+            text = text[:-3].strip()
+    
+    # Try to extract JSON from text (in case there's commentary before/after)
+    # Look for first { and last }
+    json_start = text.find("{")
+    json_end = text.rfind("}")
+    
+    if json_start >= 0 and json_end > json_start:
+        text = text[json_start:json_end + 1]
+    
+    # Try parsing
+    try:
+        result = json.loads(text)
+        # Validate it's a dict
+        if isinstance(result, dict):
+            return result
+        return None
+    except Exception as e:
+        LOGGER.debug(f"JSON parse failed: {e}, text preview: {text[:100]}")
+        return None
 
 def _to_float(x) -> Optional[float]:
     try:
@@ -760,13 +797,17 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
         
         if response and "choices" in response:
             content = response["choices"][0]["message"]["content"]
-            data = _parse_json_safe(content) or {}
-            LOGGER.info(f"✅ DeepSeek generated proposal for {symbol}")
+            LOGGER.debug(f"📝 DeepSeek raw response for {symbol}: {content[:200]}...")
+            data = _parse_json_safe(content)
+            if data:
+                LOGGER.info(f"✅ DeepSeek generated proposal for {symbol}")
+            else:
+                LOGGER.warning(f"⚠️ DeepSeek response parsing failed for {symbol}")
     except Exception as e:
         LOGGER.warning(f"DeepSeek proposal generation failed for {symbol}: {e}")
     
     # Fallback to Grok if DeepSeek failed
-    if not data:
+    if data is None:
         try:
             from utils.xai_client import call_xai
             response = await call_xai(
@@ -777,12 +818,16 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
             )
             
             if response:
-                data = _parse_json_safe(response) or {}
-                LOGGER.info(f"✅ Grok generated proposal for {symbol} (DeepSeek fallback)")
+                LOGGER.debug(f"📝 Grok raw response for {symbol}: {response[:200]}...")
+                data = _parse_json_safe(response)
+                if data:
+                    LOGGER.info(f"✅ Grok generated proposal for {symbol} (DeepSeek fallback)")
+                else:
+                    LOGGER.warning(f"⚠️ Grok response parsing failed for {symbol}")
         except Exception as e:
             LOGGER.warning(f"Grok proposal generation failed for {symbol}: {e}")
     
-    if not data:
+    if data is None:
         LOGGER.warning(f"NO PROPOSAL from AI for {symbol}")
         return None
     
