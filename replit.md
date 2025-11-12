@@ -1,7 +1,7 @@
 # AlgoGPT - Algorithmic Trading Platform
 
 ## Overview
-AlgoGPT is an autonomous algorithmic trading platform designed for 24/7 Binance Futures trading. It automatically scans 534 symbols, making AI-powered trade decisions through a consensus engine of 3 cost-optimized AI models (DeepSeek, Grok, Gemini 2 Pro - 95% cheaper than GPT-5 only). The platform integrates 7 trading strategies (Mean-Reversion, Scalping, Range-Bounce, Trend-Following, Breakout, GRID, SPOT) with dynamic capital management, aiming for 4-10 high-quality daily trades. Its MetaBrain v9.1 eliminates hardcoded logic, with all trade parameters determined by AI consensus (2/3 majority vote). The system operates autonomously, supported by a self-adaptive engine and complete data persistence across 8 background workers.
+AlgoGPT is an autonomous algorithmic trading platform designed for 24/7 Binance Futures trading. It automatically scans 534 symbols, making AI-powered trade decisions through a consensus engine of 3 ultra-cost-optimized AI models (DeepSeek, Qwen 2.5 Turbo FREE, Gemini 2 Pro - 98.5% cheaper than GPT-5 only, ~$3-5/month total cost). The platform integrates 7 trading strategies (Mean-Reversion, Scalping, Range-Bounce, Trend-Following, Breakout, GRID, SPOT) with dynamic capital management, aiming for 4-10 high-quality daily trades. Its MetaBrain v9.1 eliminates hardcoded logic, with all trade parameters determined by AI consensus (2/3 majority vote). The system features intelligent brain management with auto-suspend/resume for failed providers, ensuring continuous operation. The system operates autonomously, supported by a self-adaptive engine and complete data persistence across 8 background workers.
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
@@ -18,7 +18,7 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Automated Trading Modes**: Supports MARKET, HYBRID, and FULL AUTO execution.
 -   **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, and ATR-based trailing stops.
 -   **Market Scanner**: Autonomous worker performs multi-timeframe technical analysis across Binance Futures markets.
--   **AI-Powered Proposals**: Utilizes 3 cost-optimized AI providers (DeepSeek, Grok, Gemini) for consensus-based trade decisions with adaptive Risk/Reward thresholds.
+-   **AI-Powered Proposals**: Utilizes 3 ultra-cost-optimized AI providers (DeepSeek, Qwen 2.5 Turbo, Gemini 2 Pro) for consensus-based trade decisions with adaptive Risk/Reward thresholds and intelligent brain management.
 -   **GRID Trading**: Integrated FUTURES GRID trading.
 -   **Risk Management**: Implements quality filters, dynamic filters, liquidity checks, cooldowns, daily trade caps, and a circuit breaker.
 -   **Dynamic Budget System**: Real-time trade budget calculation based on account equity, trade quality, volatility, and defined floors/ceilings.
@@ -26,7 +26,9 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Complete Data Persistence**: All critical data is saved to a PostgreSQL database.
 
 **MetaBrain v9.1 - 100% AI-Driven Precision Trading:**
--   **3-Brain Cost-Optimized Consensus Architecture**: Uses DeepSeek (ultra-cheap), Grok (cheap), and Gemini 2 Pro (ultra-cheap) for 95% cost reduction. Requires ≥2/3 brains (66% majority) to approve for trade execution.
+-   **3-Brain Cost-Optimized Consensus Architecture**: Uses DeepSeek (ultra-cheap $0.0001/call), Qwen 2.5 Turbo (FREE!), and Gemini 2 Pro (ultra-cheap $0.00005/call) for 98.5% cost reduction (~$3-5/month vs $600-800 with GPT-5). Requires ≥2/3 brains (66% majority) to approve for trade execution.
+-   **Intelligent Brain Management System**: Auto-suspend/resume for failed providers (429 errors, timeouts, API failures). System continues with remaining brains. Dynamic consensus threshold adjusts automatically (2/3 of active brains). Includes cost tracking and token budgeting.
+-   **Optional Fallback Brain**: Grok (XAI) suspended by default, auto-resumes when credits available. System maintains stability with 3 active brains.
 -   **AI Strategy Consensus Engine**: 100% AI-driven strategy selection via a 3-brain voting system based on independent market analysis.
 -   **Precision Calculator v1.0**: Calculates exact leverage and investment amounts based on trade quality, market volatility, regime, and balance.
 -   **Deep Market Analyzer**: Multi-layer technical analysis covering trend, volatility, support/resistance, market structure, and volume.
@@ -40,7 +42,26 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Database Resilience**: 3-layer protection including auto-pause prevention, exponential backoff retries, and fallback queries.
 
 ### AI Brains System
-The system integrates **3 AI brains** in a hierarchical consensus architecture: DeepSeek Chat (ultra-cheap primary), AI-X Grok (cheap contrarian), and Google Gemini 2 Pro (ultra-cheap fast multi-modal). This cost-optimized selection achieves 95% cost reduction compared to GPT-5-only approach while maintaining high-quality decisions through 2/3 majority voting. Includes specialized AI systems for market intelligence, portfolio intelligence, news sentiment, and a **Post-Trade AI Review System**. An **Autonomous Improvement System** automatically applies parameter improvements with 60%+ consensus from 3+ brains.
+The system integrates **3 AI brains** in a hierarchical consensus architecture with intelligent management:
+
+**Active Brains (98.5% cost reduction vs GPT-5):**
+1. **DeepSeek Chat** - Deep market analysis ($0.0001/call, ultra-cheap + reliable)
+2. **Qwen 2.5 Turbo** - Fast reasoning (FREE! - Alibaba Cloud DashScope)
+3. **Gemini 2 Pro** - Multi-modal analysis ($0.00005/call, ultra-cheap + fast)
+
+**Suspended/Fallback Brains:**
+- **Grok (XAI)** - Contrarian analysis ($0.001/call) - Suspended by default, auto-resumes when credits available
+
+**Brain Management Features:**
+- **Auto-Suspend/Resume**: Automatically suspends brains on failures (429, timeout, API errors). Auto-resumes when API recovers (checked hourly).
+- **Dynamic Consensus**: Threshold adjusts automatically based on active brains (always ≥2/3 majority).
+- **Cost Tracking**: Real-time monitoring of API costs and token usage per brain.
+- **Fault Tolerance**: System continues with remaining brains if one fails. Minimum 2 brains required for consensus.
+- **Token Budgeting**: Max 300 tokens/call for cost optimization.
+
+**Monthly Cost Estimate:** ~$3-5/month (vs $600-800 with GPT-5 only) = **98.5% cost savings!**
+
+The system also includes specialized AI systems for market intelligence, portfolio intelligence, news sentiment, and a **Post-Trade AI Review System**. An **Autonomous Improvement System** automatically applies parameter improvements with 60%+ consensus from 3+ brains.
 
 **Note:** Claude Sonnet and GPT-4o-mini are available but disabled by default to preserve cost savings ($0.003/call for Claude would increase consensus cost by 260%).
 
@@ -65,8 +86,9 @@ The production environment runs on Render.com with **8 Background Workers** and 
 -   **Neon PostgreSQL API**: Auto-resume endpoint management.
 -   **OpenAI API**: GPT-5 for AI trade proposals, market analysis, post-trade reviews.
 -   **Google Gemini API**: Gemini 2 Pro for fast multi-modal reasoning and trade scoring.
--   **DeepSeek API**: AI provider for trade optimization and post-trade analysis.
--   **AI-X/Grok API**: AI provider for system supervision and trade reviews.
+-   **DeepSeek API**: Ultra-cheap AI provider for trade optimization and consensus voting.
+-   **Alibaba Cloud DashScope API**: Qwen 2.5 Turbo (FREE) for fast AI reasoning and consensus.
+-   **AI-X/Grok API**: Optional fallback AI provider (suspended by default, auto-resumes when credits available).
 -   **Anthropic Claude API**: Claude Sonnet 3.5 for consensus validation and post-trade scoring.
 -   **GitHub API**: Auto-commit system improvements.
 -   **Telegram Bot API**: Notifications, approval workflows, interactive callbacks, digest reports.
