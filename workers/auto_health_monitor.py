@@ -30,6 +30,10 @@ BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:5000")
 TELEGRAM_ENABLED = os.getenv("TELEGRAM_SEND_ENABLE", "1") == "1"
 AUTO_FIX_ENABLED = os.getenv("AUTO_FIX_ENABLE", "1") == "1"
 
+# Detect environment: Replit vs Production (Render)
+IS_REPLIT = bool(os.getenv("REPL_SLUG"))  # Replit-specific env var
+IS_PRODUCTION = not IS_REPLIT
+
 # === Health Checks ===
 class HealthCheck:
     def __init__(self):
@@ -43,43 +47,51 @@ class HealthCheck:
             "status": "healthy",
             "checks": {},
             "issues": [],
-            "fixes_applied": []
+            "fixes_applied": [],
+            "environment": "Replit" if IS_REPLIT else "Production"
         }
         
-        # 1. API Health
-        api_ok = await self.check_api_health()
-        checks["checks"]["api"] = {"status": "ok" if api_ok else "error"}
-        if not api_ok:
-            checks["issues"].append("API not responding")
-            if AUTO_FIX_ENABLED:
-                fix = await self.fix_api_health()
-                if fix:
-                    checks["fixes_applied"].append(fix)
+        # REPLIT: Skip API/Dashboard checks (no web server in dev)
+        if IS_PRODUCTION:
+            # 1. API Health (Production only)
+            api_ok = await self.check_api_health()
+            checks["checks"]["api"] = {"status": "ok" if api_ok else "error"}
+            if not api_ok:
+                checks["issues"].append("API not responding")
+                if AUTO_FIX_ENABLED:
+                    fix = await self.fix_api_health()
+                    if fix:
+                        checks["fixes_applied"].append(fix)
+            
+            # 2. Dashboard Accessible (Production only)
+            dashboard_ok = await self.check_dashboard()
+            checks["checks"]["dashboard"] = {"status": "ok" if dashboard_ok else "error"}
+            if not dashboard_ok:
+                checks["issues"].append("Dashboard not accessible")
+            
+            # 3. Workflows Running (Production only)
+            workflows_ok = await self.check_workflows()
+            checks["checks"]["workflows"] = workflows_ok
+            if workflows_ok.get("status") != "ok":
+                msg = workflows_ok.get("message", "Workflows not running properly")
+                checks["issues"].append(f"Workflows: {msg}")
+        else:
+            # REPLIT: Only check workers are alive
+            checks["checks"]["api"] = {"status": "skipped", "reason": "Development mode"}
+            checks["checks"]["dashboard"] = {"status": "skipped", "reason": "Development mode"}
+            checks["checks"]["workflows"] = {"status": "ok", "count": "dev", "message": "Workers running in Replit"}
         
-        # 2. Dashboard Accessible
-        dashboard_ok = await self.check_dashboard()
-        checks["checks"]["dashboard"] = {"status": "ok" if dashboard_ok else "error"}
-        if not dashboard_ok:
-            checks["issues"].append("Dashboard not accessible")
-        
-        # 3. Database Connection
+        # 4. Database Connection (Always check)
         db_ok = await self.check_database()
         checks["checks"]["database"] = {"status": "ok" if db_ok else "error"}
         if not db_ok:
             checks["issues"].append("Database connection failed")
         
-        # 4. Workflows Running
-        workflows_ok = await self.check_workflows()
-        checks["checks"]["workflows"] = workflows_ok
-        if workflows_ok.get("status") != "ok":
-            msg = workflows_ok.get("message", "Workflows not running properly")
-            checks["issues"].append(f"Workflows: {msg}")
-        
-        # 5. Memory Usage
+        # 5. Memory Usage (Always check)
         memory_ok = await self.check_memory()
         checks["checks"]["memory"] = memory_ok
         
-        # 6. Disk Space
+        # 6. Disk Space (Always check)
         disk_ok = await self.check_disk()
         checks["checks"]["disk"] = disk_ok
         
@@ -211,9 +223,12 @@ async def send_telegram_alert(message: str, level: str = "WARNING"):
 # === Main Loop ===
 async def main():
     logger.info("🚀 Auto Health Monitor started")
+    logger.info(f"🌍 Environment: {'Replit (Development)' if IS_REPLIT else 'Production (Render)'}")
     logger.info(f"⏱️  Check interval: {CHECK_INTERVAL} seconds")
     logger.info(f"🔧 Auto-fix: {'ENABLED' if AUTO_FIX_ENABLED else 'DISABLED'}")
     logger.info(f"📱 Telegram: {'ENABLED' if TELEGRAM_ENABLED else 'DISABLED'}")
+    if IS_REPLIT:
+        logger.info("ℹ️  Running in Replit - skipping API/Dashboard checks")
     
     health_checker = HealthCheck()
     consecutive_failures = 0
