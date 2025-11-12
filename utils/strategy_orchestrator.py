@@ -51,7 +51,7 @@ class StrategyOrchestrator:
     def __init__(self):
         logger.info("Strategy Orchestrator v9.1: AI-driven (NO static tables)")
     
-    def select_strategy(
+    async def select_strategy(
         self, 
         market_condition: Optional[Any] = None,
         symbol: str = "",
@@ -77,8 +77,8 @@ class StrategyOrchestrator:
         
         try:
             # Call AI to decide strategy - NO fallback allowed!
-            logger.info(f"{symbol}: Calling AI Strategy Consensus (5 brains)...")
-            ai_consensus = asyncio.run(select_strategy_ai(ctx, symbol))
+            logger.info(f"{symbol}: Calling AI Strategy Consensus (3 cheap brains)...")
+            ai_consensus = await select_strategy_ai(ctx, symbol)
             
             if not ai_consensus:
                 logger.error(f"{symbol}: AI consensus returned None!")

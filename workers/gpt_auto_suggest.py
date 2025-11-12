@@ -570,7 +570,7 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
     
     # ========== SCOUT 2: STRATEGY ORCHESTRATOR ==========
     orchestrator = get_strategy_orchestrator()
-    strategy_config = orchestrator.select_strategy(market_condition, symbol, ctx)
+    strategy_config = await orchestrator.select_strategy(market_condition, symbol, ctx)
     
     # ========== BUILD SCOUT DATA ==========
     from utils.scout_data_builder import build_scout_data
@@ -847,7 +847,7 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     # 🎯 STRATEGY ORCHESTRATOR: Auto-select optimal strategy based on market conditions
     market_condition = ctx.get("_market_condition")  # Stored by _gpt_suggest
     orchestrator = get_strategy_orchestrator()
-    strategy_config = orchestrator.select_strategy(market_condition, symbol, ctx)
+    strategy_config = await orchestrator.select_strategy(market_condition, symbol, ctx)
     
     # Use strategy-specific thresholds instead of generic dynamic filters
     min_rr = strategy_config.min_rr
@@ -1597,7 +1597,7 @@ async def process_cycle():
             
             # Get strategy recommendation
             orchestrator = get_strategy_orchestrator()
-            strategy_config = orchestrator.select_strategy(market_condition, sym, ctx)
+            strategy_config = await orchestrator.select_strategy(market_condition, sym, ctx)
             
             # 🚀 EXECUTE STRATEGY BASED ON ORCHESTRATOR DECISION
             if strategy_config.grid_mode and SUGGEST_GRID:
