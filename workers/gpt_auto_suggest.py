@@ -296,10 +296,20 @@ async def _build_local_context(symbols: List[str], interval: str = "15m") -> Dic
                 
                 # Build context dict (minimal version)
                 current_price = float(klines[-1]["close"])
+                
+                # Calculate 24H high/low for AI Strategy Consensus
+                candles_24h = 96 if interval == "15m" else (24 if interval == "1h" else 6)
+                recent_klines = klines[-min(len(klines), candles_24h):]
+                high_24h = max(float(k["high"]) for k in recent_klines) if recent_klines else current_price
+                low_24h = min(float(k["low"]) for k in recent_klines) if recent_klines else current_price
+                
                 out[symbol] = {
                     "symbol": symbol,
                     "price": current_price,
+                    "close": current_price,
                     "interval": interval,
+                    "high_24h": high_24h,
+                    "low_24h": low_24h,
                     "rsi": indicators.get("rsi"),
                     "macd": indicators.get("macd"),
                     "macd_signal": indicators.get("macd_signal"),
