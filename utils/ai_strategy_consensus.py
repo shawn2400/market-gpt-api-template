@@ -402,18 +402,15 @@ Your analysis:"""
         # Build prompt
         prompt = self._build_strategy_prompt(market_ctx, symbol)
         
-        # Call all brains in parallel
+        # 🚀 COST OPTIMIZATION: Use only 3 cheap brains (DeepSeek + Grok + Gemini)
+        # Skip OpenAI (429) and Claude (insufficient credits)
         tasks = []
-        if self.brains_available.get("GPT-5"):
-            tasks.append(self._call_gpt5(prompt))
         if self.brains_available.get("Gemini"):
             tasks.append(self._call_gemini(prompt))
         if self.brains_available.get("DeepSeek"):
             tasks.append(self._call_deepseek(prompt))
         if self.brains_available.get("Grok"):
             tasks.append(self._call_grok(prompt))
-        if self.brains_available.get("Claude"):
-            tasks.append(self._call_claude(prompt))
         
         # Wait for all votes
         votes_raw = await asyncio.gather(*tasks, return_exceptions=True)
