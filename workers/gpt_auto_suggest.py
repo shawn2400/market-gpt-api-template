@@ -552,13 +552,11 @@ async def _apply_funding_bias_req(side: str, symbol: str, min_rr: float, success
     
     return (min_rr, success_min, reason)  # אין שינוי בסף!
 
-async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Optional[Dict[str, Any]]:
+async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Optional[Dict[str, Any]]:
     """
-    🧠 AI CONSENSUS ENGINE - 5 Brains vote on trade proposal
-    Workflow: Market Intelligence + Strategy Orchestrator → 5 AI Brains → ≥3 APPROVE = Execute
+    🧠 AI CONSENSUS ENGINE v2 - Cost-optimized with 3 cheap brains
+    Workflow: Market Intelligence + Strategy Orchestrator → DeepSeek/Gemini/Grok → ≥2 APPROVE = Execute
     """
-    # 🚀 COST OPTIMIZATION: OpenAI removed, quota check unnecessary
-    
     # Ensure symbol is in ctx
     if ctx is None:
         ctx = {}
@@ -824,10 +822,10 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
 
 async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Optional[Dict[str, Any]]:
     """
-    LEGACY FUNCTION - Calls _ai_consensus_suggest
-    Kept for backward compatibility
+    COST-OPTIMIZED FUNCTION - Calls _ai_consensus_suggest_v2
+    Uses 3 cheap brains: DeepSeek, Gemini, Grok
     """
-    return await _ai_consensus_suggest(symbol, ctx, for_spot)
+    return await _ai_consensus_suggest_v2(symbol, ctx, for_spot)
     
     # 📝 Generate adaptive prompt based on market regime
     prompt_engine = get_adaptive_prompt_engine()

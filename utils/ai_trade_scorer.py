@@ -33,32 +33,29 @@ except ImportError:
     GEMINI_MODEL = "gemini-2.0-flash-exp"
     call_gemini = None  # type: ignore
 
-# API Keys
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "").strip()
+# 🚀 COST OPTIMIZATION: OpenAI removed - using only 3 cheap brains
+# API Keys (OpenAI removed)
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 XAI_API_KEY = os.getenv("XAI_API_KEY", "").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 
-# Models
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-2025-08-07")
+# Models (OpenAI removed)
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 XAI_MODEL = os.getenv("XAI_MODEL", "grok-2-latest")
 
-# API Endpoints
-OPENAI_BASE_URL = "https://api.openai.com/v1"
+# API Endpoints (OpenAI removed)
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
 XAI_BASE_URL = "https://api.x.ai/v1"
 
-# Budget tracking (in USD)
-OPENAI_BUDGET = float(os.getenv("OPENAI_BUDGET", "40.0"))
+# Budget tracking (in USD) - OpenAI removed
 DEEPSEEK_BUDGET = float(os.getenv("DEEPSEEK_BUDGET", "10.0"))
 XAI_BUDGET = float(os.getenv("XAI_BUDGET", "-15.0"))  # Can have credit/debit
 GEMINI_BUDGET = float(os.getenv("GEMINI_BUDGET", "0.0"))  # Free tier
 
-# Feature flags
+# Feature flags - Cost optimized: 3 cheap brains only
 ENABLE_MULTI_AI_CONSENSUS = os.getenv("ENABLE_MULTI_AI_CONSENSUS", "1").lower() in ("1", "true", "yes")
 CONSENSUS_MIN_PROVIDERS = int(os.getenv("CONSENSUS_MIN_PROVIDERS", "2"))
-ENABLE_OPENAI = os.getenv("ENABLE_OPENAI", "1").lower() in ("1", "true", "yes") and bool(OPENAI_API_KEY)
+ENABLE_OPENAI = False  # 🚀 REMOVED - too expensive
 ENABLE_DEEPSEEK = os.getenv("ENABLE_DEEPSEEK", "1").lower() in ("1", "true", "yes") and bool(DEEPSEEK_API_KEY)
 ENABLE_XAI = os.getenv("ENABLE_XAI", "1").lower() in ("1", "true", "yes") and bool(XAI_API_KEY)
 ENABLE_GEMINI = GEMINI_CLIENT_AVAILABLE and GEMINI_ENABLED and bool(GEMINI_API_KEY)
@@ -83,14 +80,15 @@ class MultiAIScorer:
     """
     
     def __init__(self):
+        # 🚀 COST OPTIMIZATION: OpenAI removed
         self.providers_enabled = {
-            "openai": ENABLE_OPENAI,
+            "openai": False,
             "deepseek": ENABLE_DEEPSEEK,
             "xai": ENABLE_XAI,
             "gemini": ENABLE_GEMINI
         }
         self.budgets = {
-            "openai": OPENAI_BUDGET,
+            "openai": 0.0,
             "deepseek": DEEPSEEK_BUDGET,
             "xai": XAI_BUDGET,
             "gemini": GEMINI_BUDGET
@@ -101,50 +99,11 @@ class MultiAIScorer:
             "xai": 0.0,
             "gemini": 0.0
         }
-        logger.info(f"Multi-AI Scorer initialized: OpenAI={ENABLE_OPENAI}, DeepSeek={ENABLE_DEEPSEEK}, XAI={ENABLE_XAI}, Gemini={ENABLE_GEMINI}")
+        logger.info(f"🚀 Multi-AI Scorer initialized (cost-optimized): DeepSeek={ENABLE_DEEPSEEK}, Grok={ENABLE_XAI}, Gemini={ENABLE_GEMINI}")
     
     async def _call_openai(self, prompt: str, max_tokens: int = 500) -> AIResponse:
-        """Call OpenAI GPT-5 API"""
-        if not ENABLE_OPENAI:
-            return AIResponse("openai", 0, 0, "", False, "OpenAI disabled")
-        
-        try:
-            headers = {
-                "Authorization": f"Bearer {OPENAI_API_KEY}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": OPENAI_MODEL,
-                "messages": [
-                    {"role": "system", "content": "You are an expert trading analyst. Provide numerical scores 0-100."},
-                    {"role": "user", "content": prompt}
-                ],
-                "max_tokens": max_tokens
-            }
-            
-            async with httpx.AsyncClient(timeout=30.0) as client:
-                response = await client.post(
-                    f"{OPENAI_BASE_URL}/chat/completions",
-                    headers=headers,
-                    json=payload
-                )
-                response.raise_for_status()
-                data = response.json()
-                content = data["choices"][0]["message"]["content"]
-                
-                # Parse score and confidence from response
-                score, confidence, reasoning = self._parse_ai_response(content)
-                
-                # Track usage (rough estimate: $0.01 per 1K tokens)
-                tokens = data.get("usage", {}).get("total_tokens", 1000)
-                cost = (tokens / 1000) * 0.01
-                self.usage_tracking["openai"] += cost
-                
-                return AIResponse("openai", score, confidence, reasoning, True)
-        
-        except Exception as e:
-            logger.error(f"OpenAI API error: {e}")
-            return AIResponse("openai", 0, 0, "", False, str(e))
+        """🚀 REMOVED - OpenAI too expensive"""
+        return AIResponse("openai", 0, 0, "", False, "OpenAI removed for cost optimization")
     
     async def _call_deepseek(self, prompt: str, max_tokens: int = 500) -> AIResponse:
         """Call DeepSeek API"""
@@ -495,13 +454,13 @@ Reasoning: [2-3 sentences explaining your score]
             return "AVOID"
     
     def get_budget_status(self) -> Dict[str, Any]:
-        """Get current budget usage status"""
+        """Get current budget usage status - Cost optimized (3 cheap brains)"""
         return {
             "openai": {
-                "budget": OPENAI_BUDGET,
-                "used": self.usage_tracking["openai"],
-                "remaining": OPENAI_BUDGET - self.usage_tracking["openai"],
-                "enabled": ENABLE_OPENAI
+                "budget": 0.0,
+                "used": 0.0,
+                "remaining": 0.0,
+                "enabled": False
             },
             "deepseek": {
                 "budget": DEEPSEEK_BUDGET,
