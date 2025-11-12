@@ -340,19 +340,21 @@ class AIConsensusEngine:
     Workflow:
     1. 2 Scouts propose → send to 3 AI brains
     2. Each brain votes independently
-    3. Consensus: ≥2 APPROVE = Execute (majority vote)
+    3. Consensus: ≥2/3 APPROVE = Execute (66% majority vote)
     4. Final score = weighted average
     
-    3 Brains (95% cost reduction):
-    - DeepSeek (cheap + reliable)
-    - Grok (contrarian perspective)
+    3 Brains (95% cost reduction vs GPT-5 only):
+    - DeepSeek (ultra-cheap + reliable)
+    - Grok (cheap + contrarian perspective)
     - Gemini 2 Pro (ultra-cheap, fast multi-modal)
+    
+    Note: Claude and GPT-4o-mini disabled to maintain 95% cost reduction target.
     """
     
     def __init__(self):
         self.logger = logger
-        # 🚀 COST OPTIMIZATION: Use only 3 cheap brains
-        # GPT-4o-mini DISABLED to avoid OpenAI quota/costs
+        # 🚀 COST OPTIMIZATION: Use only 3 ultra-cheap brains
+        # Claude ($0.003/call) and GPT-4o-mini disabled to preserve cost savings
         self.brains: List[AIBrain] = [
             DeepSeekBrain(),
             GrokBrain(),

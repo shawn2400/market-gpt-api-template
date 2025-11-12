@@ -1,7 +1,7 @@
 # AlgoGPT - Algorithmic Trading Platform
 
 ## Overview
-AlgoGPT is an autonomous algorithmic trading platform designed for 24/7 Binance Futures trading. It automatically scans 534 symbols, making AI-powered trade decisions through a consensus engine of 5 advanced AI models (GPT-5, Gemini 2 Pro, DeepSeek, Grok, Claude). The platform integrates 7 trading strategies (Mean-Reversion, Scalping, Range-Bounce, Trend-Following, Breakout, GRID, SPOT) with dynamic capital management, aiming for 4-10 high-quality daily trades. Its MetaBrain v9.1 eliminates hardcoded logic, with all trade parameters determined by hierarchical AI consensus. The system operates autonomously, supported by a self-adaptive engine and complete data persistence across 8 background workers.
+AlgoGPT is an autonomous algorithmic trading platform designed for 24/7 Binance Futures trading. It automatically scans 534 symbols, making AI-powered trade decisions through a consensus engine of 3 cost-optimized AI models (DeepSeek, Grok, Gemini 2 Pro - 95% cheaper than GPT-5 only). The platform integrates 7 trading strategies (Mean-Reversion, Scalping, Range-Bounce, Trend-Following, Breakout, GRID, SPOT) with dynamic capital management, aiming for 4-10 high-quality daily trades. Its MetaBrain v9.1 eliminates hardcoded logic, with all trade parameters determined by AI consensus (2/3 majority vote). The system operates autonomously, supported by a self-adaptive engine and complete data persistence across 8 background workers.
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
@@ -18,7 +18,7 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Automated Trading Modes**: Supports MARKET, HYBRID, and FULL AUTO execution.
 -   **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, and ATR-based trailing stops.
 -   **Market Scanner**: Autonomous worker performs multi-timeframe technical analysis across Binance Futures markets.
--   **AI-Powered Proposals**: Utilizes 5 AI providers for consensus-based trade decisions with adaptive Risk/Reward thresholds.
+-   **AI-Powered Proposals**: Utilizes 3 cost-optimized AI providers (DeepSeek, Grok, Gemini) for consensus-based trade decisions with adaptive Risk/Reward thresholds.
 -   **GRID Trading**: Integrated FUTURES GRID trading.
 -   **Risk Management**: Implements quality filters, dynamic filters, liquidity checks, cooldowns, daily trade caps, and a circuit breaker.
 -   **Dynamic Budget System**: Real-time trade budget calculation based on account equity, trade quality, volatility, and defined floors/ceilings.
@@ -26,8 +26,8 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Complete Data Persistence**: All critical data is saved to a PostgreSQL database.
 
 **MetaBrain v9.1 - 100% AI-Driven Precision Trading:**
--   **5-Brain Hierarchical Consensus Architecture**: Orchestrated by GPT-5, supported by Gemini 2 Pro, DeepSeek, Grok, and Claude Sonnet 3.5. Requires ≥3 brains to approve for trade execution.
--   **AI Strategy Consensus Engine**: 100% AI-driven strategy selection via a 5-brain voting system based on independent market analysis.
+-   **3-Brain Cost-Optimized Consensus Architecture**: Uses DeepSeek (ultra-cheap), Grok (cheap), and Gemini 2 Pro (ultra-cheap) for 95% cost reduction. Requires ≥2/3 brains (66% majority) to approve for trade execution.
+-   **AI Strategy Consensus Engine**: 100% AI-driven strategy selection via a 3-brain voting system based on independent market analysis.
 -   **Precision Calculator v1.0**: Calculates exact leverage and investment amounts based on trade quality, market volatility, regime, and balance.
 -   **Deep Market Analyzer**: Multi-layer technical analysis covering trend, volatility, support/resistance, market structure, and volume.
 -   **Live Regime Detector**: Real-time market classification (TRENDING, CHOPPY, VOLATILE, SIDEWAYS) using ADX, ATR, Bollinger Bands, and price range.
@@ -40,7 +40,9 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Database Resilience**: 3-layer protection including auto-pause prevention, exponential backoff retries, and fallback queries.
 
 ### AI Brains System
-Integrates **5 AI brains** in a hierarchical consensus architecture: OpenAI GPT-5 (orchestrator), Google Gemini 2 Pro, DeepSeek Chat, AI-X Grok, and Anthropic Claude Sonnet 3.5. Includes specialized AI systems for market intelligence, portfolio intelligence, news sentiment, auto-flip, and a **Post-Trade AI Review System**. An **Autonomous Improvement System** automatically applies parameter improvements with 60%+ consensus from 3+ brains.
+The system integrates **3 AI brains** in a hierarchical consensus architecture: DeepSeek Chat (ultra-cheap primary), AI-X Grok (cheap contrarian), and Google Gemini 2 Pro (ultra-cheap fast multi-modal). This cost-optimized selection achieves 95% cost reduction compared to GPT-5-only approach while maintaining high-quality decisions through 2/3 majority voting. Includes specialized AI systems for market intelligence, portfolio intelligence, news sentiment, and a **Post-Trade AI Review System**. An **Autonomous Improvement System** automatically applies parameter improvements with 60%+ consensus from 3+ brains.
+
+**Note:** Claude Sonnet and GPT-4o-mini are available but disabled by default to preserve cost savings ($0.003/call for Claude would increase consensus cost by 260%).
 
 ### Validation & Safety Infrastructure
 Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates (Dual Confirmation), Data-Driven Monte Carlo simulations, a Live Health Monitor, and Circuit Breakers.

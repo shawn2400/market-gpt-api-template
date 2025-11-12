@@ -206,7 +206,7 @@ def validate_rr_smart(rr_ratio: float, min_rr: float, consensus_result: Optional
     Logic:
         1. HARD FLOOR (0.8): Absolute safety net - reject if RR < 0.8
         2. AUTO APPROVE (≥min_rr): Meets regime-specific requirement
-        3. CONSENSUS ZONE (0.8 to min_rr): Requires 3/5 AI consensus
+        3. CONSENSUS ZONE (0.8 to min_rr): Requires 2/3 AI consensus (66%)
     """
     HARD_FLOOR = 0.8
     
@@ -224,10 +224,10 @@ def validate_rr_smart(rr_ratio: float, min_rr: float, consensus_result: Optional
         return False, f"NO_CONSENSUS_DATA: RR={rr_ratio:.3f} < {min_rr:.2f}, consensus unavailable"
     
     approve_count = consensus_result.get("approve_count", 0)
-    if approve_count >= 3:
-        return True, f"CONSENSUS_APPROVE: RR={rr_ratio:.3f}, {approve_count}/5 AI approved"
+    if approve_count >= 2:
+        return True, f"CONSENSUS_APPROVE: RR={rr_ratio:.3f}, {approve_count}/3 AI approved (66% majority)"
     else:
-        return False, f"INSUFFICIENT_CONSENSUS: RR={rr_ratio:.3f}, only {approve_count}/5 AI approved (need ≥3)"
+        return False, f"INSUFFICIENT_CONSENSUS: RR={rr_ratio:.3f}, only {approve_count}/3 AI approved (need ≥2 for 66%)"
 
 def _hash_proposal(key_fields: Dict[str, Any]) -> str:
     key = f"{key_fields.get('trade_type','')}|{key_fields.get('symbol','')}|{key_fields.get('side','')}|" \
@@ -816,7 +816,7 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
     except Exception as e:
         LOGGER.warning(f"⚠️ Failed to fetch real balance, using fallback: {e}")
     
-    LOGGER.info(f"🧠 Requesting consensus from 5 AI Brains for {symbol}...")
+    LOGGER.info(f"🧠 Requesting consensus from 3 AI Brains for {symbol}...")
     
     consensus_result = await consensus_engine.get_consensus(
         scout_data=scout_data,
@@ -1767,7 +1767,7 @@ async def process_cycle():
             # Use ctx if provided, otherwise build minimal context
             market_data = ctx or {"symbol": symbol, "price": payload.get("entry")}
             
-            LOGGER.info(f"🧠 Requesting consensus from 5 AI Brains for {symbol} ({ttype})...")
+            LOGGER.info(f"🧠 Requesting consensus from 3 AI Brains for {symbol} ({ttype})...")
             
             consensus_result = await consensus_engine.get_consensus(
                 scout_data=scout_data,
