@@ -65,6 +65,10 @@ args = "Telegram Digest Reporter"
 task = "workflow.run"
 args = "Auto Cleanup"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Auto Scanner"
+
 [[workflows.workflow]]
 name = "Auto Health Monitor"
 author = "agent"
@@ -153,6 +157,17 @@ args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG CLEANUP
 [workflows.workflow.metadata]
 outputType = "console"
 
+[[workflows.workflow]]
+name = "Auto Scanner"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG POOL_PER_CYCLE=50 SUGGEST_GRID=1 AUTO_RUN=1 python workers/gpt_auto_suggest.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
 [[ports]]
 localPort = 5000
 externalPort = 80
@@ -160,6 +175,10 @@ externalPort = 80
 [[ports]]
 localPort = 43087
 externalPort = 3000
+
+[[ports]]
+localPort = 43333
+externalPort = 5000
 
 [[ports]]
 localPort = 43365

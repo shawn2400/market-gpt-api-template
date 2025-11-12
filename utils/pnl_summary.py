@@ -21,6 +21,18 @@ def summarize_pnl(trades: List[Dict[str, Any]]) -> Dict[str, Any]:
         "avg_pnl": round(avg_pnl, 2),
     }
 
+def get_pnl_summary(account_id: str = None, days: int = 7, limit_days: int = 7) -> Dict[str, Any]:
+    """Get PnL summary for the specified account and time period."""
+    # Placeholder implementation - integrate with actual database queries
+    return {
+        "total_trades": 0,
+        "win_rate": 0.0,
+        "total_pnl": 0.0,
+        "avg_pnl": 0.0,
+        "best_trade": 0.0,
+        "worst_trade": 0.0,
+    }
+
 
 
 
