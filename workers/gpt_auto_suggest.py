@@ -158,7 +158,7 @@ WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET","").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", os.getenv("ADMIN_CHAT_ID","")).strip()
 
 SUGGEST_ENABLED   = os.getenv("TRADE_AUTO_SUGGEST","1").lower() in ("1","true","yes")
-POOL_PER_CYCLE    = int(os.getenv("SYMBOLS_PER_CYCLE","10"))
+POOL_PER_CYCLE    = int(os.getenv("SYMBOLS_PER_CYCLE","50"))  # 🚀 Increased from 10 to 50 for better market coverage
 MAX_CONCURRENCY   = int(os.getenv("OPENAI_MAX_CONCURRENCY","2"))
 CAP_PER_CYCLE_ENV = int(os.getenv("SUGGEST_CAP_PER_CYCLE","5"))
 
