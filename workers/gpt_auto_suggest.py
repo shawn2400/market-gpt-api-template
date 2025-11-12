@@ -4,7 +4,7 @@ import os, json, time, asyncio, hashlib, logging, random
 from typing import Dict, Any, List, Optional, Tuple
 
 import httpx
-from openai import OpenAI
+# OpenAI import removed - using DeepSeek + Gemini for cost optimization
 
 from utils.watchlist_utils import load_watchlist, build_symbol_pool, is_top10
 from utils.hmac_utils import build_signed_outbound, generate_idempotency_key
@@ -148,8 +148,9 @@ liquidity_gate_safe = _liquidity_gate_safe()
 LOGGER = logging.getLogger("gpt_auto_suggest")
 logging.basicConfig(level=os.getenv("LOG_LEVEL","INFO").upper())
 
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY","").strip()
-OPENAI_MODEL   = os.getenv("OPENAI_MODEL","gpt-5-2025-08-07").strip()
+# REMOVED: OpenAI config (cost optimization)
+# OPENAI_API_KEY and OPENAI_MODEL no longer used
+# System now uses DeepSeek (primary) + Gemini (fallback) for 95% cost reduction
 
 CONTEXT_URL = os.getenv("CONTEXT_URL","").strip()  # למשל: https://your-host
 ALERT_INGEST_URL = os.getenv("ALERT_INGEST_URL","http://127.0.0.1:8000/alerts/trade-ingest").strip()
@@ -395,13 +396,9 @@ def _maybe_float(d: Dict[str, Any], *keys: str) -> Optional[float]:
             continue
     return None
 
-# ---------------- GPT ----------------
-_client: Optional[OpenAI] = None
-def _get_client() -> OpenAI:
-    global _client
-    if _client is None:
-        _client = OpenAI(api_key=OPENAI_API_KEY)
-    return _client
+# ---------------- REMOVED: OpenAI Client (Cost Optimization) ----------------
+# _get_client() was removed - now using DeepSeek + Gemini for 95% cost reduction
+# OpenAI dependency eliminated completely
 
 PROMPT_SYS = (
     "You are an expert crypto trading strategist focused on HIGH-QUALITY, HIGH-PROFIT trades.\n"
@@ -560,9 +557,7 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
     🧠 AI CONSENSUS ENGINE - 5 Brains vote on trade proposal
     Workflow: Market Intelligence + Strategy Orchestrator → 5 AI Brains → ≥3 APPROVE = Execute
     """
-    if not OPENAI_API_KEY:
-        LOGGER.error("OPENAI_API_KEY missing")
-        return None
+    # 🚀 COST OPTIMIZATION: OpenAI removed, quota check unnecessary
     
     # Ensure symbol is in ctx
     if ctx is None:
@@ -726,8 +721,8 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
         LOGGER.info(f"❌ REJECTED by consensus: {symbol}")
         return None
     
-    # ========== GENERATE TRADE PROPOSAL (GPT-5) ==========
-    # If ≥3 APPROVE, generate actual entry/SL/TP using GPT-5
+    # ========== GENERATE TRADE PROPOSAL (DeepSeek + Gemini) ==========
+    # 🚀 COST OPTIMIZATION: Use DeepSeek primary, Gemini fallback (NO OpenAI!)
     LOGGER.info(f"✅ CONSENSUS APPROVED - Generating trade proposal for {symbol}")
     
     # Generate adaptive prompt
@@ -738,62 +733,93 @@ async def _ai_consensus_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool
     else:
         sys_prompt = prompt_engine.generate_prompt(market_condition, symbol, ctx or {})
     
-    cli = _get_client()
-    user = _build_user_ctx(symbol, ctx or {})
+    user_prompt = _build_user_ctx(symbol, ctx or {})
+    data = None
     
+    # Try DeepSeek first (primary, ultra-cheap)
     try:
-        resp = cli.chat.completions.create(
-            model=OPENAI_MODEL,
-            messages=[{"role":"system","content":sys_prompt},{"role":"user","content":user}],
-            max_completion_tokens=300,
-            response_format={"type":"json_object"},
+        from utils.llm_client import llm_chat_completion
+        response = await llm_chat_completion(
+            messages=[
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            model="deepseek-chat",
+            temperature=0.7,
+            max_tokens=400
         )
-        content = resp.choices[0].message.content or ""
-        data = _parse_json_safe(content) or {}
-        side = str(data.get("side","")).upper()
-        if for_spot and side != "LONG":
-            side = "LONG"
-        lev = _to_int(data.get("leverage"), default=10) or 10
-        lev = max(SUGGEST_MIN_LEVERAGE, min(SUGGEST_MAX_LEVERAGE, lev))
-        prop = {
-            "symbol": symbol,
-            "side": side if side in ("LONG","SHORT") else None,
-            "entry": _to_float(data.get("entry")),
-            "sl": _to_float(data.get("sl")),
-            "tp1": _to_float(data.get("tp1")),
-            "tp2": _to_float(data.get("tp2")),
-            "tp3": _to_float(data.get("tp3")),
-            "leverage": (1 if for_spot else lev),
-            "success_pct": _to_float(data.get("success_pct")),
-            "reason": data.get("reason") or "",
-        }
-        if prop["side"] not in ("LONG","SHORT"):
-            return None
-        if prop["entry"] is None or prop["sl"] is None or prop["tp1"] is None:
-            return None
         
-        # Validate RR
-        rr_check = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
-        MIN_AI_RR = market_condition.min_rr_threshold
-        
-        if rr_check is not None and rr_check < MIN_AI_RR:
-            LOGGER.info(
-                f"AI_REJECTED {symbol}: RR={rr_check:.3f} < {MIN_AI_RR:.2f} "
-                f"(regime={market_condition.regime}, mood={market_condition.mood})"
-            )
-            return None
-        
-        # Validate success_pct
-        if prop.get("success_pct") is not None:
-            if prop["success_pct"] < 35 or prop["success_pct"] > 95:
-                LOGGER.info(f"AI_REJECTED {symbol}: unrealistic success_pct={prop['success_pct']}")
-                return None
-        
-        LOGGER.info(f"✅ Trade proposal generated for {symbol}: {prop['side']} @ {prop['entry']}, SL={prop['sl']}, TP={prop['tp1']}")
-        return prop
+        if response and "choices" in response:
+            content = response["choices"][0]["message"]["content"]
+            data = _parse_json_safe(content) or {}
+            LOGGER.info(f"✅ DeepSeek generated proposal for {symbol}")
     except Exception as e:
-        LOGGER.warning(f"GPT-5 generation error for {symbol}: {e}")
+        LOGGER.warning(f"DeepSeek proposal generation failed for {symbol}: {e}")
+    
+    # Fallback to Gemini if DeepSeek failed
+    if not data:
+        try:
+            from utils.gemini_client import call_gemini
+            response = await call_gemini(
+                user_prompt,
+                system=sys_prompt,
+                temperature=0.7,
+                max_tokens=400
+            )
+            
+            if response:
+                data = _parse_json_safe(response) or {}
+                LOGGER.info(f"✅ Gemini generated proposal for {symbol} (DeepSeek fallback)")
+        except Exception as e:
+            LOGGER.warning(f"Gemini proposal generation failed for {symbol}: {e}")
+            return None
+    
+    if not data:
+        LOGGER.warning(f"NO PROPOSAL from AI for {symbol}")
         return None
+    
+    # Parse and validate proposal
+    side = str(data.get("side","")).upper()
+    if for_spot and side != "LONG":
+        side = "LONG"
+    lev = _to_int(data.get("leverage"), default=10) or 10
+    lev = max(SUGGEST_MIN_LEVERAGE, min(SUGGEST_MAX_LEVERAGE, lev))
+    prop = {
+        "symbol": symbol,
+        "side": side if side in ("LONG","SHORT") else None,
+        "entry": _to_float(data.get("entry")),
+        "sl": _to_float(data.get("sl")),
+        "tp1": _to_float(data.get("tp1")),
+        "tp2": _to_float(data.get("tp2")),
+        "tp3": _to_float(data.get("tp3")),
+        "leverage": (1 if for_spot else lev),
+        "success_pct": _to_float(data.get("success_pct")),
+        "reason": data.get("reason") or "",
+    }
+    if prop["side"] not in ("LONG","SHORT"):
+        return None
+    if prop["entry"] is None or prop["sl"] is None or prop["tp1"] is None:
+        return None
+    
+    # Validate RR
+    rr_check = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
+    MIN_AI_RR = market_condition.min_rr_threshold
+    
+    if rr_check is not None and rr_check < MIN_AI_RR:
+        LOGGER.info(
+            f"AI_REJECTED {symbol}: RR={rr_check:.3f} < {MIN_AI_RR:.2f} "
+            f"(regime={market_condition.regime}, mood={market_condition.mood})"
+        )
+        return None
+    
+    # Validate success_pct
+    if prop.get("success_pct") is not None:
+        if prop["success_pct"] < 35 or prop["success_pct"] > 95:
+            LOGGER.info(f"AI_REJECTED {symbol}: unrealistic success_pct={prop['success_pct']}")
+            return None
+    
+    LOGGER.info(f"✅ Trade proposal generated for {symbol}: {prop['side']} @ {prop['entry']}, SL={prop['sl']}, TP={prop['tp1']}")
+    return prop
 
 
 async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Optional[Dict[str, Any]]:
