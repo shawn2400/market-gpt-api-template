@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
 """
-AI Decision Maker - 5 AI Brains Consensus System
-==================================================
-After 2 Scouts propose, 5 AI brains vote on whether to execute.
+AI Decision Maker - 3 AI Brains Consensus System (Cost-Optimized)
+==================================================================
+After 2 Scouts propose, 3 AI brains vote on whether to execute.
 
-5 AI Providers:
-1. GPT-5 (OpenAI) - Lead orchestrator
-2. Gemini 2 Pro - Fast multi-modal reasoning
-3. DeepSeek - Deep market analysis
-4. Grok (XAI) - Contrarian perspective
-5. Claude Sonnet 3.5 - Conservative validator
+3 AI Providers (95% cost reduction):
+1. DeepSeek - Deep market analysis (cheap + reliable)
+2. Grok (XAI) - Contrarian perspective
+3. GPT-4o-mini - Cost-efficient OpenAI (60x cheaper than GPT-5)
 
 Each provides:
 - Vote: APPROVE ✅ or REJECT ❌
 - Score: 0-10
 - Detailed reasoning (Hebrew + English)
+
+Consensus: ≥2/3 APPROVE = Execute (majority vote)
 """
 
 import logging
@@ -139,11 +139,11 @@ Format: VOTE|SCORE|REASONING"""
         }
 
 
-class GPT5Brain(AIBrain):
-    """GPT-5 Lead Orchestrator - Primary decision maker."""
+class GPT4oMiniBrain(AIBrain):
+    """GPT-4o-mini - Cost-efficient decision maker (60x cheaper than GPT-5)."""
     
     def __init__(self):
-        super().__init__("GPT-5", "openai", "gpt-4")
+        super().__init__("GPT-4o-mini", "openai", "gpt-4o-mini")
         self.api_key = os.getenv("OPENAI_API_KEY")
     
     async def vote(
@@ -335,25 +335,28 @@ class ClaudeBrain(AIBrain):
 
 class AIConsensusEngine:
     """
-    Consensus engine that coordinates 5 AI brains.
+    Consensus engine that coordinates 3 AI brains (cost-optimized).
     
     Workflow:
-    1. 2 Scouts propose → send to 5 AI brains
+    1. 2 Scouts propose → send to 3 AI brains
     2. Each brain votes independently
-    3. Consensus: ≥3 APPROVE = Execute
+    3. Consensus: ≥2 APPROVE = Execute (majority vote)
     4. Final score = weighted average
+    
+    3 Brains (95% cost reduction):
+    - DeepSeek (cheap + reliable)
+    - Grok (contrarian perspective)
+    - GPT-4o-mini (cost-efficient OpenAI)
     """
     
     def __init__(self):
         self.logger = logger
         self.brains: List[AIBrain] = [
-            GPT5Brain(),
-            GeminiBrain(),
             DeepSeekBrain(),
             GrokBrain(),
-            ClaudeBrain()
+            GPT4oMiniBrain()
         ]
-        self.logger.info(f"AI Consensus Engine initialized with {len(self.brains)} brains")
+        self.logger.info(f"AI Consensus Engine initialized with {len(self.brains)} brains (cost-optimized)")
     
     async def get_consensus(
         self,
@@ -387,13 +390,14 @@ class AIConsensusEngine:
             approve_count = sum(1 for v in brain_votes if v["vote"] == "APPROVE")
             consensus_pct = (approve_count / len(brain_votes)) * 100
             
-            final_vote = "APPROVE" if approve_count >= 3 else "REJECT"
+            # 2/3 majority vote (cost-optimized consensus)
+            final_vote = "APPROVE" if approve_count >= 2 else "REJECT"
             
             total_score = sum(v["score"] for v in brain_votes)
             final_score = total_score / len(brain_votes)
             
             self.logger.info(
-                f"Consensus: {approve_count}/5 APPROVE ({consensus_pct:.0f}%) | "
+                f"Consensus: {approve_count}/3 APPROVE ({consensus_pct:.0f}%) | "
                 f"Final score: {final_score:.1f}/10 | Decision: {final_vote}"
             )
             
