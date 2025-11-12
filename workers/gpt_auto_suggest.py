@@ -789,6 +789,7 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
         "strategy": strategy_config.strategy_type,
         "score": so_setup_score,  # ← DYNAMIC score from technical signals!
         "min_rr": strategy_config.min_rr,
+        "min_quality": strategy_config.min_quality,  # ← DYNAMIC quality threshold (tier-adjusted)
         "leverage": strategy_config.max_leverage,
         "sl_atr_mult": 1.5,  # Default, will be overridden by brains
         "tp_rr": strategy_config.min_rr,

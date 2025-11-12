@@ -53,6 +53,7 @@ def build_scout_data(
         "avg_score": avg_score,
         
         "min_rr": strategy_orchestrator_result.get("min_rr", 1.1),
+        "min_quality": strategy_orchestrator_result.get("min_quality", 6.0),  # Dynamic quality threshold
         "leverage": strategy_orchestrator_result.get("leverage", 5),
         "sl_atr_mult": strategy_orchestrator_result.get("sl_atr_mult", 1.5),
         "tp_rr": strategy_orchestrator_result.get("tp_rr", 1.5),

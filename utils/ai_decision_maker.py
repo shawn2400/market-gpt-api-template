@@ -100,11 +100,13 @@ class AIBrain:
         strategy = scout_data.get("strategy", "NONE")
         scanner_score = scout_data.get("market_scanner", {}).get("score", 0)
         analyst_score = scout_data.get("technical_analyst", {}).get("score", 0)
+        min_quality = scout_data.get("min_quality", 6.0)  # Dynamic quality threshold
+        min_rr = scout_data.get("min_rr", 2.0)
         
         # Strategy context explanation
         strategy_context = ""
         if strategy == "wait":
-            strategy_context = "\n⚠️ WAIT Strategy = Ultra-conservative mode (still tradeable!):\n   Only approve exceptional setups with Quality≥7.5 and RR≥2.0\n   Lower leverage (max 3x), higher quality threshold\n   This is NOT 'don't trade' - it's 'be very selective'\n"
+            strategy_context = f"\n⚠️ WAIT Strategy = Ultra-conservative mode (still tradeable!):\n   Only approve exceptional setups with Quality≥{min_quality:.1f} and RR≥{min_rr:.1f}\n   Lower leverage (max 3x), higher quality threshold\n   This is NOT 'don't trade' - it's 'be very selective'\n"
         
         return f"""Analyze this trade proposal:
 
