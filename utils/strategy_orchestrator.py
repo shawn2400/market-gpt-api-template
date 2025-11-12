@@ -356,15 +356,29 @@ class StrategyOrchestrator:
                 trend_following=True
             )
         elif strategy_name == "wait":
-            # WAIT strategy = ultra-conservative mode
-            # Only approve exceptional setups (quality 7.5+, RR 2.0+) when market is unclear
+            # WAIT strategy = ultra-conservative mode (dynamic quality based on tier)
+            # Tier 1 (Strong): 4.4 + 0.6 = 5.0
+            # Tier 2 (Normal): 4.5 + 1.0 = 5.5
+            # Tier 3 (Weak): 6.0 + 0.5 = 6.5
+            if active_tier:
+                base_quality = active_tier.min_quality
+                tier_num = active_tier.tier_number
+                if tier_num == 1:
+                    wait_quality = base_quality + 0.6  # 4.4 + 0.6 = 5.0
+                elif tier_num == 2:
+                    wait_quality = base_quality + 1.0  # 4.5 + 1.0 = 5.5
+                else:  # tier_num == 3
+                    wait_quality = base_quality + 0.5  # 6.0 + 0.5 = 6.5
+            else:
+                wait_quality = 6.0  # Fallback when no tier available
+            
             return StrategyConfig(
                 strategy_type="wait",
                 min_rr=round(2.0 * rr_mult, 2),  # Conservative RR requirement
-                min_quality=round(7.5 * quality_mult, 1),  # High quality only
+                min_quality=round(wait_quality, 1),  # Dynamic quality based on tier
                 min_success_pct=0.7,
                 max_leverage=max(1, int(3 * leverage_mult)),  # Low leverage (max 3x)
-                description=f"WAIT - ultra-conservative (high quality only) (Tier {active_tier.tier_number if active_tier else '?'})",
+                description=f"WAIT - ultra-conservative (Quality≥{round(wait_quality, 1)}) (Tier {active_tier.tier_number if active_tier else '?'})",
                 defensive=True
             )
         else:
