@@ -56,11 +56,11 @@ class StrategyOrchestrator:
         market_condition: Optional[Any] = None,
         symbol: str = "",
         ctx: Optional[Dict[str, Any]] = None
-    ) -> str:
+    ) -> StrategyConfig:
         """
         MetaBrain v9.1: AI-driven strategy selection (NO static tables)
         
-        Returns strategy name (e.g., "futures_long", "mean_reversion", "scalping")
+        Returns StrategyConfig object with strategy and parameters
         ALL parameters (leverage, SL, TP) determined by AI Precision Calculator
         
         Args:
@@ -69,11 +69,11 @@ class StrategyOrchestrator:
             ctx: Additional context data
             
         Returns:
-            Strategy name string (AI-selected)
+            StrategyConfig object (AI-selected)
         """
         if not AI_STRATEGY_AVAILABLE or select_strategy_ai is None or not ctx:
             logger.error(f"{symbol}: AI Strategy Consensus unavailable - CANNOT select strategy!")
-            return "futures_long"  # Emergency fallback only
+            return self._build_strategy_config("futures_long", market_condition, ctx)
         
         try:
             # Call AI to decide strategy - NO fallback allowed!
@@ -82,7 +82,7 @@ class StrategyOrchestrator:
             
             if not ai_consensus:
                 logger.error(f"{symbol}: AI consensus returned None!")
-                return "futures_long"  # Emergency fallback
+                return self._build_strategy_config("futures_long", market_condition, ctx)
             
             # Check consensus threshold: ≥2 votes (for 3 active brains) or ≥3 votes (for 5 brains)
             min_votes = 2 if ai_consensus.total_votes <= 3 else 3
@@ -93,18 +93,18 @@ class StrategyOrchestrator:
                     f"({ai_consensus.votes_approve}/{ai_consensus.total_votes} votes, "
                     f"{ai_consensus.confidence:.1f}% confidence)"
                 )
-                return ai_consensus.strategy
+                return self._build_strategy_config(ai_consensus.strategy, market_condition, ctx)
             else:
                 logger.warning(
                     f"{symbol}: AI consensus insufficient "
                     f"({ai_consensus.votes_approve}/{ai_consensus.total_votes} votes < {min_votes}), "
                     f"using top strategy anyway: {ai_consensus.strategy}"
                 )
-                return ai_consensus.strategy  # Use top strategy even if below threshold
+                return self._build_strategy_config(ai_consensus.strategy, market_condition, ctx)
                 
         except Exception as e:
             logger.error(f"{symbol}: AI strategy selection FAILED: {e}", exc_info=True)
-            return "futures_long"  # Emergency fallback
+            return self._build_strategy_config("futures_long", market_condition, ctx)
     
     def calculate_setup_score(self, ctx: Dict[str, Any]) -> float:
         """
@@ -208,6 +208,116 @@ class StrategyOrchestrator:
         )
         
         return round(setup_score, 1)
+    
+    def _build_strategy_config(
+        self, 
+        strategy_name: str, 
+        market_condition: Optional[Any] = None,
+        ctx: Optional[Dict[str, Any]] = None
+    ) -> StrategyConfig:
+        """
+        Build StrategyConfig object from AI-selected strategy name.
+        
+        Maps strategy name to configuration with appropriate parameters.
+        Parameters are GUIDELINES - AI Precision Calculator has final say.
+        """
+        ctx = ctx or {}
+        
+        # Base parameters (wide ranges for AI flexibility)
+        base_config = {
+            "min_rr": 1.5,
+            "min_quality": 2.0,
+            "min_success_pct": 0.5,
+            "max_leverage": 10,
+            "tight_stops": False,
+            "grid_mode": False,
+            "mean_reversion_mode": False,
+            "trend_following": False,
+            "defensive": False
+        }
+        
+        # Strategy-specific adjustments
+        if strategy_name == "grid":
+            return StrategyConfig(
+                strategy_type="grid",
+                min_rr=1.1,
+                min_quality=2.0,
+                min_success_pct=0.5,
+                max_leverage=5,
+                description="GRID trading - range-bound markets",
+                grid_mode=True
+            )
+        elif strategy_name == "scalping":
+            return StrategyConfig(
+                strategy_type="scalping",
+                min_rr=1.2,
+                min_quality=3.0,
+                min_success_pct=0.55,
+                max_leverage=15,
+                description="Scalping - quick profits on small moves",
+                tight_stops=True
+            )
+        elif strategy_name == "mean_reversion":
+            return StrategyConfig(
+                strategy_type="mean_reversion",
+                min_rr=1.8,
+                min_quality=4.0,
+                min_success_pct=0.6,
+                max_leverage=8,
+                description="Mean-Reversion - VWAP deviation trades",
+                mean_reversion_mode=True
+            )
+        elif strategy_name == "range_bounce":
+            return StrategyConfig(
+                strategy_type="range_bounce",
+                min_rr=2.0,
+                min_quality=5.0,
+                min_success_pct=0.65,
+                max_leverage=10,
+                description="Range-Bounce - support/resistance bounces",
+                defensive=False
+            )
+        elif strategy_name == "momentum":
+            return StrategyConfig(
+                strategy_type="momentum",
+                min_rr=2.5,
+                min_quality=6.0,
+                min_success_pct=0.65,
+                max_leverage=12,
+                description="Momentum - trend continuation",
+                trend_following=True
+            )
+        elif strategy_name in ["futures_short", "futures_long"]:
+            return StrategyConfig(
+                strategy_type=strategy_name,
+                min_rr=1.8,
+                min_quality=4.0,
+                min_success_pct=0.6,
+                max_leverage=10,
+                description=f"Futures {strategy_name.split('_')[1].upper()} - directional trade",
+                trend_following=True
+            )
+        elif strategy_name == "wait":
+            return StrategyConfig(
+                strategy_type="wait",
+                min_rr=999.0,  # Impossibly high to prevent trades
+                min_quality=999.0,
+                min_success_pct=0.99,
+                max_leverage=1,
+                description="WAIT - market conditions not favorable",
+                defensive=True
+            )
+        else:
+            # Default fallback
+            return StrategyConfig(
+                strategy_type="futures_long",
+                min_rr=1.8,
+                min_quality=4.0,
+                min_success_pct=0.6,
+                max_leverage=10,
+                description="Default - futures long position",
+                trend_following=True
+            )
 
 
 # ==================== GLOBAL INSTANCE ====================
