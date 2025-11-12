@@ -170,7 +170,7 @@ BUDGET_USD_FALLBK = float(os.getenv("MAX_TRADE_BUDGET","100"))
 # סוגי הצעות להפעלה
 SUGGEST_FUTURES   = os.getenv("SUGGEST_FUTURES","1").strip().lower() in ("1","true","yes")
 SUGGEST_SPOT      = os.getenv("SUGGEST_SPOT","0").strip().lower() in ("1","true","yes")
-SUGGEST_GRID      = os.getenv("SUGGEST_GRID","0").strip().lower() in ("1","true","yes")
+SUGGEST_GRID      = os.getenv("SUGGEST_GRID","1").strip().lower() in ("1","true","yes")  # ✅ Enabled GRID by default
 
 DEFAULT_INTERVAL  = os.getenv("DEFAULT_INTERVAL","15m")
 

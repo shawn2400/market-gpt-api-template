@@ -29,6 +29,29 @@ def export_trades_csv(trades: List[Dict[str, Any]]) -> FileResponse:
             writer.writerow({k: t.get(k) for k in fieldnames})
     return FileResponse(fname, filename="trades_export.csv")
 
+def export_daily_csv(date: str = None) -> str:
+    """Export daily GRID trades to CSV."""
+    import datetime
+    if not date:
+        date = datetime.datetime.now().strftime("%Y-%m-%d")
+    fname = EXPORT_DIR / f"grid_daily_{date}.csv"
+    # Placeholder - implement actual GRID data export
+    with open(fname, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        writer.writerow(["symbol", "side", "entry", "exit", "pnl", "timestamp"])
+    return str(fname)
+
+def export_daily_pdf(date: str = None) -> str:
+    """Export daily GRID trades to PDF."""
+    import datetime
+    if not date:
+        date = datetime.datetime.now().strftime("%Y-%m-%d")
+    fname = EXPORT_DIR / f"grid_daily_{date}.pdf"
+    # Placeholder - implement actual PDF generation
+    with open(fname, "w") as f:
+        f.write(f"GRID Daily Report - {date}\n")
+    return str(fname)
+
 
 
 
