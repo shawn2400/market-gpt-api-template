@@ -264,11 +264,11 @@ class StrategyOrchestrator:
                 rr_mult = 1.0  # Standard RR
                 logger.debug(f"Tier 2 multipliers: Standard parameters (no adjustment)")
             
-            # Tier 3 (Weak Market): Strict constraints
+            # Tier 3 (Weak Market): Moderately strict (allows trades, but with reduced leverage)
             else:  # tier_num == 3
-                quality_mult = 1.3  # Higher quality required (e.g., 4.0 → 5.2)
-                leverage_mult = 0.7  # Lower leverage (e.g., 10x → 7x)
-                rr_mult = 1.2  # Higher RR required (e.g., 1.8 → 2.2)
+                quality_mult = 1.05  # Slightly higher quality (e.g., 4.0 → 4.2)
+                leverage_mult = 0.75  # Lower leverage (e.g., 10x → 7.5x)
+                rr_mult = 1.1  # Slightly higher RR (e.g., 1.8 → 2.0)
                 logger.debug(f"Tier 3 multipliers: quality×{quality_mult}, leverage×{leverage_mult}, RR×{rr_mult}")
         else:
             # No tier data available - use conservative defaults

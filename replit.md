@@ -12,11 +12,12 @@ I prefer iterative development with clear, concise communication. Please ask for
 - **Phase 2 - AI Enhancement Complete**: Updated StrategyOrchestrator._build_strategy_config() with tier-aware parameter multipliers:
   - Tier 1 (Strong Market): quality×0.8, leverage×1.2, RR×0.9 (relaxed constraints)
   - Tier 2 (Moderate Market): Standard parameters (×1.0)
-  - Tier 3 (Weak Market): quality×1.3, leverage×0.7, RR×1.2 (strict constraints)
+  - Tier 3 (Weak Market): quality×1.05, leverage×0.75, RR×1.1 (moderately strict - allows trades with reduced risk)
 - **System Behavior**: Auto-switches between 3 tiers based on market strength (0-10 scale), applies tier-specific constraints to min_quality, max_leverage, min_rr for all strategies
-- **Logs**: Clean logging shows tier selection, market strength, regime detection (TRENDING/CHOPPY/VOLATILE/SIDEWAYS), regime shift detection with trading impact assessment
-- **Example**: Tier 3 Mean-Reversion now requires Quality≥5.2 (vs 4.0), Leverage≤5x (vs 8x), RR≥2.16 (vs 1.8) - significantly more conservative in weak markets
-- **Status**: ✅ Phase 1+2 complete and tested locally, Phase 3-5 pending (logging enhancement, testing, Architect review)
+- **Logs**: Clean logging shows tier selection, market strength, regime detection (TRENDING/CHOPPY/VOLATILE/SIDEWAYS), regime shift detection with trading impact assessment, tier adjustments applied
+- **Example**: Tier 3 Mean-Reversion now requires Quality≥4.2 (vs 4.0), Leverage≤6x (vs 8x), RR≥2.0 (vs 1.8) - balanced approach that allows quality trades while reducing risk
+- **Trade Generation Fix**: Adjusted Tier 3 multipliers from overly strict (quality×1.3 blocked all trades) to balanced (quality×1.05 allows trades in 4.5-6.0/10 range)
+- **Status**: ✅ All phases complete, Architect approved, deployed to production
 
 **November 12, 2025 AM** - Fixed critical Auto Scanner data flow and cleaned up error logging:
 - **Root Cause**: `_fetch_context_batch` returned empty dict when CONTEXT_URL not set, causing AI Strategy Consensus to receive incomplete market data (high_24h/low_24h = None)
