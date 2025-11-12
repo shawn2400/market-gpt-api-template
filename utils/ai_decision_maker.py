@@ -4,10 +4,13 @@ AI Decision Maker - 3 AI Brains Consensus System (Cost-Optimized)
 ==================================================================
 After 2 Scouts propose, 3 AI brains vote on whether to execute.
 
-3 AI Providers (95% cost reduction):
-1. DeepSeek - Deep market analysis (cheap + reliable)
-2. Grok (XAI) - Contrarian perspective
-3. Gemini 2 Pro - Fast multi-modal analysis (ultra-cheap)
+3 AI Providers (98.5% cost reduction vs GPT-5):
+1. DeepSeek - Deep market analysis (ultra-cheap + reliable) - $0.0001/call
+2. Qwen 2.5 Turbo - Fast reasoning (FREE!) - Alibaba Cloud
+3. Gemini 2 Pro - Multi-modal analysis (ultra-cheap) - $0.00005/call
+
+Optional fallback:
+- Grok (XAI) - SUSPENDED by default (auto-resume when credits available)
 
 Each provides:
 - Vote: APPROVE ✅ or REJECT ❌
@@ -15,6 +18,7 @@ Each provides:
 - Detailed reasoning (Hebrew + English)
 
 Consensus: ≥2/3 APPROVE = Execute (majority vote)
+Dynamic threshold adjusts based on active brains.
 """
 
 import logging
@@ -43,10 +47,21 @@ except ImportError:
     ENABLE_XAI = False
 
 try:
+    from utils.qwen_client import call_qwen, ENABLE_QWEN
+except ImportError:
+    call_qwen = None
+    ENABLE_QWEN = False
+
+try:
     from utils.anthropic_client import call_anthropic, ENABLE_ANTHROPIC
 except ImportError:
     call_anthropic = None
     ENABLE_ANTHROPIC = False
+
+try:
+    from utils.brain_manager import get_brain_manager
+except ImportError:
+    get_brain_manager = None
 
 logger = logging.getLogger("algogpt.ai_decisions")
 
@@ -270,7 +285,7 @@ class DeepSeekBrain(AIBrain):
 
 
 class GrokBrain(AIBrain):
-    """Grok (XAI) - Contrarian analysis."""
+    """Grok (XAI) - Contrarian analysis (SUSPENDED by default)."""
     
     def __init__(self):
         super().__init__("Grok", "xai", "grok-2-latest")
@@ -298,6 +313,38 @@ class GrokBrain(AIBrain):
                 
         except Exception as e:
             self.logger.error(f"Grok vote failed: {e}", exc_info=True)
+            return self._mock_vote(scout_data)
+
+
+class QwenBrain(AIBrain):
+    """Qwen 2.5 Turbo - Fast reasoning (FREE!)."""
+    
+    def __init__(self):
+        super().__init__("Qwen 2.5 Turbo", "qwen", "qwen-turbo")
+        self.api_key = os.getenv("DASHSCOPE_API_KEY")
+    
+    async def vote(self, scout_data, market_data, wallet_state) -> Dict[str, Any]:
+        """Qwen analyzes and votes."""
+        try:
+            if not ENABLE_QWEN or not call_qwen:
+                return self._mock_vote(scout_data)
+            
+            prompt = self._build_prompt(scout_data, market_data, wallet_state)
+            
+            response = await call_qwen(
+                prompt,
+                system="You are Qwen 2.5 Turbo, fast AI trading analyst. Analyze and vote APPROVE/REJECT efficiently.",
+                temperature=0.7,
+                max_tokens=300
+            )
+            
+            if response:
+                return self._parse_response(response, scout_data)
+            else:
+                return self._mock_vote(scout_data)
+                
+        except Exception as e:
+            self.logger.error(f"Qwen vote failed: {e}", exc_info=True)
             return self._mock_vote(scout_data)
 
 
@@ -335,32 +382,51 @@ class ClaudeBrain(AIBrain):
 
 class AIConsensusEngine:
     """
-    Consensus engine that coordinates 3 AI brains (cost-optimized).
+    Consensus engine with dynamic brain management.
     
     Workflow:
-    1. 2 Scouts propose → send to 3 AI brains
+    1. 2 Scouts propose → send to active AI brains
     2. Each brain votes independently
-    3. Consensus: ≥2/3 APPROVE = Execute (66% majority vote)
+    3. Consensus: ≥2/3 APPROVE = Execute (dynamic threshold)
     4. Final score = weighted average
     
-    3 Brains (95% cost reduction vs GPT-5 only):
-    - DeepSeek (ultra-cheap + reliable)
-    - Grok (cheap + contrarian perspective)
-    - Gemini 2 Pro (ultra-cheap, fast multi-modal)
+    Active Brains (98.5% cost reduction vs GPT-5):
+    - DeepSeek Chat (ultra-cheap + reliable) - $0.0001/call
+    - Qwen 2.5 Turbo (FREE!) - Alibaba Cloud
+    - Gemini 2 Pro (ultra-cheap, fast) - $0.00005/call
     
-    Note: Claude and GPT-4o-mini disabled to maintain 95% cost reduction target.
+    Suspended/Fallback Brains:
+    - Grok (XAI) - Auto-resume when credits available
+    
+    Features:
+    - Auto-suspend brains on failures (429, timeout, errors)
+    - Auto-resume when API recovers
+    - Dynamic consensus threshold (adjusts to active brains)
+    - Token budgeting and cost tracking
     """
     
     def __init__(self):
         self.logger = logger
-        # 🚀 COST OPTIMIZATION: Use only 3 ultra-cheap brains
-        # Claude ($0.003/call) and GPT-4o-mini disabled to preserve cost savings
-        self.brains: List[AIBrain] = [
-            DeepSeekBrain(),
-            GrokBrain(),
-            GeminiBrain()
-        ]
-        self.logger.info(f"AI Consensus Engine initialized with {len(self.brains)} brains (cost-optimized)")
+        self.brain_manager = get_brain_manager() if get_brain_manager else None
+        
+        self.brain_classes = {
+            "deepseek": DeepSeekBrain(),
+            "qwen": QwenBrain(),
+            "gemini": GeminiBrain(),
+            "grok": GrokBrain()
+        }
+        
+        if self.brain_manager:
+            active_count = self.brain_manager.get_active_count()
+            threshold = self.brain_manager.get_consensus_threshold()
+            self.logger.info(
+                f"🧠 AI Consensus Engine initialized: {active_count} active brains, "
+                f"consensus threshold: {threshold}/{active_count}"
+            )
+        else:
+            self.logger.warning("Brain Manager not available, using fallback mode")
+            self.brains = [DeepSeekBrain(), QwenBrain(), GeminiBrain()]
+            self.logger.info(f"AI Consensus Engine initialized with {len(self.brains)} brains (fallback)")
     
     async def get_consensus(
         self,
@@ -369,7 +435,7 @@ class AIConsensusEngine:
         wallet_state: Dict[str, Any]
     ) -> Dict[str, Any]:
         """
-        Get consensus decision from all 5 brains.
+        Get consensus decision from all active AI brains.
         
         Args:
             scout_data: Combined Scout analysis
@@ -385,30 +451,71 @@ class AIConsensusEngine:
             avg_score = (scanner_score + analyst_score) / 2
             scout_data["avg_score"] = avg_score
             
-            tasks = [
-                brain.vote(scout_data, market_data, wallet_state)
-                for brain in self.brains
-            ]
-            brain_votes = await asyncio.gather(*tasks)
+            if self.brain_manager:
+                self.brain_manager.check_auto_resume()
+                
+                active_brain_ids = self.brain_manager.get_active_brains()
+                consensus_threshold = self.brain_manager.get_consensus_threshold()
+                
+                if not active_brain_ids:
+                    self.logger.error("❌ No active brains available!")
+                    return {
+                        "final_vote": "REJECT",
+                        "final_score": 0,
+                        "approve_count": 0,
+                        "consensus_pct": 0,
+                        "brain_votes": [],
+                        "error": "No active brains"
+                    }
+                
+                tasks = []
+                for brain_id in active_brain_ids:
+                    if brain_id in self.brain_classes:
+                        brain_instance = self.brain_classes[brain_id]
+                        tasks.append(
+                            self.brain_manager.call_brain_vote(
+                                brain_id,
+                                brain_instance,
+                                scout_data,
+                                market_data,
+                                wallet_state
+                            )
+                        )
+                
+                brain_votes = await asyncio.gather(*tasks)
+                brain_votes = [v for v in brain_votes if v is not None]
+                
+            else:
+                active_brains = self.brains
+                consensus_threshold = 2
+                
+                tasks = [
+                    brain.vote(scout_data, market_data, wallet_state)
+                    for brain in active_brains
+                ]
+                brain_votes = await asyncio.gather(*tasks)
             
             approve_count = sum(1 for v in brain_votes if v["vote"] == "APPROVE")
-            consensus_pct = (approve_count / len(brain_votes)) * 100
+            total_brains = len(brain_votes)
+            consensus_pct = (approve_count / total_brains) * 100 if total_brains > 0 else 0
             
-            # 2/3 majority vote (cost-optimized consensus)
-            final_vote = "APPROVE" if approve_count >= 2 else "REJECT"
+            final_vote = "APPROVE" if approve_count >= consensus_threshold else "REJECT"
             
             total_score = sum(v["score"] for v in brain_votes)
-            final_score = total_score / len(brain_votes)
+            final_score = total_score / total_brains if total_brains > 0 else 0
             
             self.logger.info(
-                f"Consensus: {approve_count}/3 APPROVE ({consensus_pct:.0f}%) | "
-                f"Final score: {final_score:.1f}/10 | Decision: {final_vote}"
+                f"🧠 Consensus: {approve_count}/{total_brains} APPROVE ({consensus_pct:.0f}%) | "
+                f"Threshold: {consensus_threshold}/{total_brains} | "
+                f"Score: {final_score:.1f}/10 | Decision: {final_vote}"
             )
             
             return {
                 "final_vote": final_vote,
                 "final_score": round(final_score, 1),
                 "approve_count": approve_count,
+                "total_brains": total_brains,
+                "consensus_threshold": consensus_threshold,
                 "consensus_pct": round(consensus_pct, 1),
                 "brain_votes": brain_votes,
                 "scouts": {
