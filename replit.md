@@ -7,13 +7,24 @@ AlgoGPT is an algorithmic trading platform for 24/7 live Binance Futures trading
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
 
 ## Recent Changes
-**November 12, 2025** - Fixed critical Auto Scanner data flow and cleaned up error logging:
+**November 12, 2025 PM** - Implemented Hybrid Adaptive Architecture with Smart Tier System + AI Regime Analyzer:
+- **Phase 1 - Integration Complete**: Integrated SmartTieredSystem + AIRegimeAnalyzer into gpt_auto_suggest.py (lines 609-643) before StrategyOrchestrator calls
+- **Phase 2 - AI Enhancement Complete**: Updated StrategyOrchestrator._build_strategy_config() with tier-aware parameter multipliers:
+  - Tier 1 (Strong Market): quality×0.8, leverage×1.2, RR×0.9 (relaxed constraints)
+  - Tier 2 (Moderate Market): Standard parameters (×1.0)
+  - Tier 3 (Weak Market): quality×1.3, leverage×0.7, RR×1.2 (strict constraints)
+- **System Behavior**: Auto-switches between 3 tiers based on market strength (0-10 scale), applies tier-specific constraints to min_quality, max_leverage, min_rr for all strategies
+- **Logs**: Clean logging shows tier selection, market strength, regime detection (TRENDING/CHOPPY/VOLATILE/SIDEWAYS), regime shift detection with trading impact assessment
+- **Example**: Tier 3 Mean-Reversion now requires Quality≥5.2 (vs 4.0), Leverage≤5x (vs 8x), RR≥2.16 (vs 1.8) - significantly more conservative in weak markets
+- **Status**: ✅ Phase 1+2 complete and tested locally, Phase 3-5 pending (logging enhancement, testing, Architect review)
+
+**November 12, 2025 AM** - Fixed critical Auto Scanner data flow and cleaned up error logging:
 - **Root Cause**: `_fetch_context_batch` returned empty dict when CONTEXT_URL not set, causing AI Strategy Consensus to receive incomplete market data (high_24h/low_24h = None)
 - **Fix 1**: Modified `_fetch_context_batch` (line 220-222) to call `_build_local_context()` instead of returning empty dict when Context API unavailable
 - **Fix 2**: Replaced `_build_local_context` implementation with clean placeholder - actual indicators calculated by `_fetch_real_indicators` later in pipeline (eliminates import errors)
 - **Impact**: AI Strategy Consensus now receives complete 24h range data, selecting MEAN_REVERSION/GRID strategies with 70-85% confidence instead of defaulting to WAIT
 - **Result**: System logs are clean (no import/module errors), all data flows correctly through the pipeline
-- **Status**: ✅ Local system fully operational and verified, production deployment ready (Git committed, requires Render worker restart)
+- **Status**: ✅ Deployed to production (Render)
 
 ## System Architecture
 

@@ -93,7 +93,19 @@ class StrategyOrchestrator:
                     f"({ai_consensus.votes_approve}/{ai_consensus.total_votes} votes, "
                     f"{ai_consensus.confidence:.1f}% confidence)"
                 )
-                return self._build_strategy_config(ai_consensus.strategy, market_condition, ctx)
+                strategy_config = self._build_strategy_config(ai_consensus.strategy, market_condition, ctx)
+                
+                # Log tier-adjusted parameters
+                active_tier = ctx.get("_active_tier")
+                if active_tier:
+                    logger.info(
+                        f"{symbol}: 🎛️ Tier {active_tier.tier_number} Adjustments: "
+                        f"Quality≥{strategy_config.min_quality}, "
+                        f"Leverage≤{strategy_config.max_leverage}x, "
+                        f"RR≥{strategy_config.min_rr}"
+                    )
+                
+                return strategy_config
             else:
                 logger.warning(
                     f"{symbol}: AI consensus insufficient "
@@ -218,10 +230,52 @@ class StrategyOrchestrator:
         """
         Build StrategyConfig object from AI-selected strategy name.
         
+        Hybrid Adaptive System Integration:
+        - Uses tier data to adjust parameter constraints (quality, leverage, RR)
+        - Tier 1 (Strong): Relaxed constraints, higher leverage
+        - Tier 2 (Moderate): Balanced constraints  
+        - Tier 3 (Weak): Strict constraints, lower leverage, higher quality required
+        
         Maps strategy name to configuration with appropriate parameters.
         Parameters are GUIDELINES - AI Precision Calculator has final say.
         """
         ctx = ctx or {}
+        
+        # Extract tier data from context (set by Hybrid System in gpt_auto_suggest)
+        active_tier = ctx.get("_active_tier")
+        market_strength = ctx.get("_market_strength")
+        regime_snapshot = ctx.get("_regime_snapshot")
+        
+        # Tier-based parameter multipliers
+        if active_tier:
+            tier_num = active_tier.tier_number
+            
+            # Tier 1 (Strong Market): Relaxed constraints
+            if tier_num == 1:
+                quality_mult = 0.8  # Lower quality requirement (e.g., 4.0 → 3.2)
+                leverage_mult = 1.2  # Higher leverage allowed (e.g., 10x → 12x)
+                rr_mult = 0.9  # Slightly lower RR required (e.g., 1.8 → 1.6)
+                logger.debug(f"Tier 1 multipliers: quality×{quality_mult}, leverage×{leverage_mult}, RR×{rr_mult}")
+            
+            # Tier 2 (Moderate Market): Balanced
+            elif tier_num == 2:
+                quality_mult = 1.0  # Standard quality
+                leverage_mult = 1.0  # Standard leverage
+                rr_mult = 1.0  # Standard RR
+                logger.debug(f"Tier 2 multipliers: Standard parameters (no adjustment)")
+            
+            # Tier 3 (Weak Market): Strict constraints
+            else:  # tier_num == 3
+                quality_mult = 1.3  # Higher quality required (e.g., 4.0 → 5.2)
+                leverage_mult = 0.7  # Lower leverage (e.g., 10x → 7x)
+                rr_mult = 1.2  # Higher RR required (e.g., 1.8 → 2.2)
+                logger.debug(f"Tier 3 multipliers: quality×{quality_mult}, leverage×{leverage_mult}, RR×{rr_mult}")
+        else:
+            # No tier data available - use conservative defaults
+            quality_mult = 1.0
+            leverage_mult = 0.9
+            rr_mult = 1.0
+            logger.debug("No tier data - using conservative defaults")
         
         # Base parameters (wide ranges for AI flexibility)
         base_config = {
@@ -236,65 +290,65 @@ class StrategyOrchestrator:
             "defensive": False
         }
         
-        # Strategy-specific adjustments
+        # Strategy-specific adjustments (with tier-based multipliers applied)
         if strategy_name == "grid":
             return StrategyConfig(
                 strategy_type="grid",
-                min_rr=1.1,
-                min_quality=2.0,
+                min_rr=round(1.1 * rr_mult, 2),
+                min_quality=round(2.0 * quality_mult, 1),
                 min_success_pct=0.5,
-                max_leverage=5,
-                description="GRID trading - range-bound markets",
+                max_leverage=max(1, int(5 * leverage_mult)),
+                description=f"GRID trading - range-bound markets (Tier {active_tier.tier_number if active_tier else '?'})",
                 grid_mode=True
             )
         elif strategy_name == "scalping":
             return StrategyConfig(
                 strategy_type="scalping",
-                min_rr=1.2,
-                min_quality=3.0,
+                min_rr=round(1.2 * rr_mult, 2),
+                min_quality=round(3.0 * quality_mult, 1),
                 min_success_pct=0.55,
-                max_leverage=15,
-                description="Scalping - quick profits on small moves",
+                max_leverage=max(1, int(15 * leverage_mult)),
+                description=f"Scalping - quick profits on small moves (Tier {active_tier.tier_number if active_tier else '?'})",
                 tight_stops=True
             )
         elif strategy_name == "mean_reversion":
             return StrategyConfig(
                 strategy_type="mean_reversion",
-                min_rr=1.8,
-                min_quality=4.0,
+                min_rr=round(1.8 * rr_mult, 2),
+                min_quality=round(4.0 * quality_mult, 1),
                 min_success_pct=0.6,
-                max_leverage=8,
-                description="Mean-Reversion - VWAP deviation trades",
+                max_leverage=max(1, int(8 * leverage_mult)),
+                description=f"Mean-Reversion - VWAP deviation trades (Tier {active_tier.tier_number if active_tier else '?'})",
                 mean_reversion_mode=True
             )
         elif strategy_name == "range_bounce":
             return StrategyConfig(
                 strategy_type="range_bounce",
-                min_rr=2.0,
-                min_quality=5.0,
+                min_rr=round(2.0 * rr_mult, 2),
+                min_quality=round(5.0 * quality_mult, 1),
                 min_success_pct=0.65,
-                max_leverage=10,
-                description="Range-Bounce - support/resistance bounces",
+                max_leverage=max(1, int(10 * leverage_mult)),
+                description=f"Range-Bounce - support/resistance bounces (Tier {active_tier.tier_number if active_tier else '?'})",
                 defensive=False
             )
         elif strategy_name == "momentum":
             return StrategyConfig(
                 strategy_type="momentum",
-                min_rr=2.5,
-                min_quality=6.0,
+                min_rr=round(2.5 * rr_mult, 2),
+                min_quality=round(6.0 * quality_mult, 1),
                 min_success_pct=0.65,
-                max_leverage=12,
-                description="Momentum - trend continuation",
+                max_leverage=max(1, int(12 * leverage_mult)),
+                description=f"Momentum - trend continuation (Tier {active_tier.tier_number if active_tier else '?'})",
                 trend_following=True
             )
         elif strategy_name in ["futures_short", "futures_long"]:
             return StrategyConfig(
                 strategy_type=strategy_name,  # type: ignore
-                min_rr=1.8,
-                min_quality=4.0,
+                min_rr=round(1.8 * rr_mult, 2),
+                min_quality=round(4.0 * quality_mult, 1),
                 min_success_pct=0.6,
-                max_leverage=10,
-                description=f"Futures {strategy_name.split('_')[1].upper()} - directional trade",
+                max_leverage=max(1, int(10 * leverage_mult)),
+                description=f"Futures {strategy_name.split('_')[1].upper()} - directional trade (Tier {active_tier.tier_number if active_tier else '?'})",
                 trend_following=True
             )
         elif strategy_name == "wait":
@@ -311,11 +365,11 @@ class StrategyOrchestrator:
             # Default fallback
             return StrategyConfig(
                 strategy_type="futures_long",
-                min_rr=1.8,
-                min_quality=4.0,
+                min_rr=round(1.8 * rr_mult, 2),
+                min_quality=round(4.0 * quality_mult, 1),
                 min_success_pct=0.6,
-                max_leverage=10,
-                description="Default - futures long position",
+                max_leverage=max(1, int(10 * leverage_mult)),
+                description=f"Default - futures long position (Tier {active_tier.tier_number if active_tier else '?'})",
                 trend_following=True
             )
 
