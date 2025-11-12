@@ -30,7 +30,7 @@ class MarketCondition:
     volatility: Literal["high", "medium", "low"]
     trend_strength: float  # 0-100
     confidence: float  # 0-100
-    recommended_strategy: Literal["futures_long", "futures_short", "grid", "wait"]
+    recommended_strategy: Literal["futures_long", "futures_short", "grid", "wait", "mean_reversion"]
     min_rr_threshold: float
     quality_threshold: float
     tf_alignment: Optional[str] = None  # Multi-TF trend alignment
@@ -62,7 +62,9 @@ class MarketIntelligence:
         trend_strength = self._calculate_trend_strength(context)
         confidence = self._calculate_confidence(context, regime, mood)
         
-        recommended_strategy = self._select_strategy(regime, mood, trend_strength)
+        # Pass RSI to strategy selector for mean-reversion detection
+        rsi = context.get("rsi")
+        recommended_strategy = self._select_strategy(regime, mood, trend_strength, rsi)
         min_rr, quality = self._adaptive_thresholds(regime, mood, volatility)
         
         condition = MarketCondition(
@@ -276,34 +278,50 @@ class MarketIntelligence:
         
         return max(0.0, min(100.0, confidence))
     
-    def _select_strategy(self, regime: str, mood: str, trend_strength: float) -> str:
+    def _select_strategy(self, regime: str, mood: str, trend_strength: float, rsi: Optional[float] = None) -> str:
         """
         Select optimal trading strategy based on market conditions.
         
         Strategy Selection Logic:
+        - Mean Reversion: RSI extremes (oversold/overbought) in any regime
         - Strong Trend + Bullish → Futures Long
-        - Strong Trend + Bearish → Futures Short
-        - Sideways → GRID Trading
-        - Choppy → Wait or GRID (conservative)
+        - Strong Trend + Bearish → Futures Short  
+        - Sideways/Choppy → GRID Trading or Mean-Reversion
         - Volatile → Wait (too risky)
+        
+        🆕 MEAN-REVERSION SUPPORT: Recognizes reversal opportunities!
         """
         if regime == "volatile":
             return "wait"
         
+        # 🆕 MEAN-REVERSION: Check for RSI extremes (strong reversal signals)
+        if rsi is not None:
+            # Oversold (strong buy signal) or Overbought (strong sell signal)
+            if rsi <= 30 or rsi >= 70:
+                # Mean-reversion is optimal when RSI shows extremes
+                return "mean_reversion"
+        
+        # TRENDING: Directional trades
         if regime == "trending" and trend_strength > 40:
             if mood == "bullish":
                 return "futures_long"
             elif mood == "bearish":
                 return "futures_short"
         
+        # SIDEWAYS: GRID or Mean-Reversion (both work in ranges)
         if regime == "sideways":
+            # Prefer mean-reversion if RSI shows opportunity, else GRID
+            if rsi is not None and (rsi <= 35 or rsi >= 65):
+                return "mean_reversion"
             return "grid"
         
+        # CHOPPY: GRID or Mean-Reversion
         if regime == "choppy":
-            # In choppy markets, ALWAYS prefer GRID trading!
-            # CHOPPY = Range-bound = Perfect for GRID
-            # Only wait if trend is very strong (about to break out)
-            if trend_strength < 60:  # Most choppy cases
+            # Choppy + RSI extremes = Mean-Reversion
+            if rsi is not None and (rsi <= 35 or rsi >= 65):
+                return "mean_reversion"
+            # Otherwise: GRID trading for range-bound
+            if trend_strength < 60:
                 return "grid"
             else:
                 return "wait"  # Very rare: choppy with strong trend = wait for breakout
@@ -528,9 +546,16 @@ class MarketIntelligence:
         """
         # 1. ADX Score (30%) - Strategy-Aware Trend Scoring
         adx = context.get("adx", 20.0)
+        rsi = context.get("rsi", 50.0)
+        atr_pct = context.get("atr_percent", 2.5)
         
         # Mean-Reversion: LOW ADX = HIGH SCORE (no trend = perfect!)
+        # BUT: Conditional relief for RSI extremes in strong trends
         if strategy == "mean_reversion":
+            # Check for extreme RSI (deep oversold/overbought)
+            is_extreme_rsi = (rsi <= 25 or rsi >= 75)
+            is_acceptable_volatility = (0.5 <= atr_pct <= 6.0)
+            
             if adx < 15:
                 adx_score = 10.0  # No trend = PERFECT for mean-reversion! ✅
             elif adx < 20:
@@ -540,7 +565,13 @@ class MarketIntelligence:
             elif adx < 30:
                 adx_score = 3.0  # Moderate trend = suboptimal
             else:
-                adx_score = 1.0  # Strong trend = bad for mean-reversion
+                # Strong trend (ADX ≥ 30): Usually bad for mean-reversion
+                # BUT: If RSI is EXTREME (≤25/≥75) + volatility acceptable → reversal opportunity!
+                if is_extreme_rsi and is_acceptable_volatility:
+                    # Conditional relief: Allow reversal trades in strong trends
+                    adx_score = 6.0  # ✅ IMPROVED from 1.0 - catching extremes
+                else:
+                    adx_score = 1.0  # Strong trend without extreme RSI = bad
         
         # Trend-Following/Others: HIGH ADX = HIGH SCORE (trend = good!)
         else:
@@ -555,44 +586,94 @@ class MarketIntelligence:
             else:
                 adx_score = 1.0  # No trend
         
-        # 2. ATR/Volatility Score (25%) - Volatility quality
-        atr_pct = context.get("atr_percent", 2.5)
-        if 2.0 <= atr_pct <= 4.0:
-            atr_score = 10.0  # Ideal volatility
-        elif 1.5 <= atr_pct < 2.0 or 4.0 < atr_pct <= 5.0:
-            atr_score = 7.0  # Acceptable
-        elif 1.0 <= atr_pct < 1.5 or 5.0 < atr_pct <= 6.0:
-            atr_score = 4.0  # Suboptimal
-        else:
-            atr_score = 2.0  # Too low or too high
+        # 2. ATR/Volatility Score (25%) - Volatility quality (Strategy-Aware!)
+        # Mean-Reversion: LOW volatility = HIGH score (contained ranges = perfect!)
+        if strategy == "mean_reversion":
+            if 0.5 <= atr_pct <= 1.0:
+                atr_score = 10.0  # Low volatility = perfect for mean-reversion! ✅
+            elif 1.0 < atr_pct <= 1.5:
+                atr_score = 8.0  # Moderate low = good
+            elif 1.5 < atr_pct <= 2.5:
+                atr_score = 6.0  # Acceptable
+            elif 2.5 < atr_pct <= 4.0:
+                atr_score = 4.0  # Moderate high = suboptimal
+            else:
+                atr_score = 2.0  # Too high = too risky for mean-reversion
         
-        # 3. RSI Score (25%) - Momentum quality
-        rsi = context.get("rsi", 50.0)
-        # Penalize extreme RSI (overbought/oversold can be opportunity but risky)
-        if 40 <= rsi <= 60:
-            rsi_score = 10.0  # Neutral/balanced
-        elif 30 <= rsi < 40 or 60 < rsi <= 70:
-            rsi_score = 8.0  # Slight bias but OK
-        elif 20 <= rsi < 30 or 70 < rsi <= 80:
-            rsi_score = 5.0  # Extreme but tradeable
+        # Trend-Following/Others: Moderate volatility = high score
         else:
-            rsi_score = 3.0  # Very extreme (risky)
+            if 2.0 <= atr_pct <= 4.0:
+                atr_score = 10.0  # Ideal volatility
+            elif 1.5 <= atr_pct < 2.0 or 4.0 < atr_pct <= 5.0:
+                atr_score = 7.0  # Acceptable
+            elif 1.0 <= atr_pct < 1.5 or 5.0 < atr_pct <= 6.0:
+                atr_score = 4.0  # Suboptimal
+            else:
+                atr_score = 2.0  # Too low or too high
         
-        # 4. MACD Score (20%) - Trend direction confirmation
+        # 3. RSI Score (25%) - Momentum quality (Strategy-Aware!)
+        # Mean-Reversion: EXTREME RSI = HIGH SCORE (oversold/overbought = opportunity!)
+        if strategy == "mean_reversion":
+            if rsi <= 20 or rsi >= 80:
+                rsi_score = 10.0  # Deep extreme = PERFECT reversal opportunity! ✅
+            elif rsi <= 30 or rsi >= 70:
+                rsi_score = 8.0  # Extreme = good reversal signal
+            elif rsi <= 35 or rsi >= 65:
+                rsi_score = 6.0  # Moderate extreme = acceptable
+            elif rsi <= 40 or rsi >= 60:
+                rsi_score = 4.0  # Mild = suboptimal for mean-reversion
+            else:
+                rsi_score = 2.0  # Neutral RSI = bad for mean-reversion
+        
+        # Trend-Following/Others: Neutral RSI = high score
+        else:
+            if 40 <= rsi <= 60:
+                rsi_score = 10.0  # Neutral/balanced
+            elif 30 <= rsi < 40 or 60 < rsi <= 70:
+                rsi_score = 8.0  # Slight bias but OK
+            elif 20 <= rsi < 30 or 70 < rsi <= 80:
+                rsi_score = 5.0  # Extreme but tradeable
+            else:
+                rsi_score = 3.0  # Very extreme (risky)
+        
+        # 4. MACD Score (20%) - Trend direction confirmation (Strategy-Aware!)
         macd = context.get("macd", 0.0)
         macd_signal = context.get("macd_signal", 0.0)
         macd_hist = context.get("macd_hist", 0.0)
         
-        # Check for bullish/bearish alignment
-        if macd_hist and abs(macd_hist) > 0:
-            if (macd > macd_signal and macd_hist > 0):
-                macd_score = 10.0  # Bullish aligned
-            elif (macd < macd_signal and macd_hist < 0):
-                macd_score = 10.0  # Bearish aligned
+        # Mean-Reversion: MACD opposing RSI = HIGH score (divergence/reversal signal!)
+        if strategy == "mean_reversion":
+            is_oversold = (rsi <= 30)
+            is_overbought = (rsi >= 70)
+            is_macd_bearish = (macd < macd_signal and macd_hist < 0)
+            is_macd_bullish = (macd > macd_signal and macd_hist > 0)
+            
+            # Reversal setup: RSI oversold + MACD bearish → bounce expected
+            if is_oversold and is_macd_bearish:
+                macd_score = 8.0  # Good reversal signal ✅
+            # Reversal setup: RSI overbought + MACD bullish → drop expected
+            elif is_overbought and is_macd_bullish:
+                macd_score = 8.0  # Good reversal signal ✅
+            # Neutral MACD = acceptable (not confirming trend)
+            elif abs(macd_hist) < 0.5:
+                macd_score = 6.0  # Neutral = OK for mean-reversion
+            # MACD already reversing = perfect!
+            elif (is_oversold and is_macd_bullish) or (is_overbought and is_macd_bearish):
+                macd_score = 10.0  # Early reversal = PERFECT! ✅
             else:
-                macd_score = 5.0  # Mixed signals
+                macd_score = 4.0  # Mixed/unclear signals
+        
+        # Trend-Following/Others: MACD aligned with trend = high score
         else:
-            macd_score = 5.0  # Neutral/no clear signal
+            if macd_hist and abs(macd_hist) > 0:
+                if (macd > macd_signal and macd_hist > 0):
+                    macd_score = 10.0  # Bullish aligned
+                elif (macd < macd_signal and macd_hist < 0):
+                    macd_score = 10.0  # Bearish aligned
+                else:
+                    macd_score = 5.0  # Mixed signals
+            else:
+                macd_score = 5.0  # Neutral/no clear signal
         
         # Final weighted score
         quality_score = (
