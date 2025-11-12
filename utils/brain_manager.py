@@ -8,14 +8,14 @@ Manages multiple AI providers with:
 - Token budgeting and cost tracking
 - Dynamic consensus threshold adjustment
 
-Brains Configuration (2-Brain Consensus):
+Brains Configuration (1-Brain Setup):
 1. DeepSeek Chat - Ultra-cheap, reliable ($0.0001/call) ✅ ACTIVE
-2. Qwen 2.5 Turbo - FREE, fast (Alibaba Cloud) ✅ ACTIVE
 
-Optional Brains (SUSPENDED - can be enabled):
-3. Gemini 2 Pro - Ultra-cheap, multi-modal ($0.00005/call)
-4. Grok (XAI) - Optional fallback
-5. Claude Sonnet - High quality ($0.003/call)
+All Other Brains SUSPENDED (can be enabled when ready):
+2. Qwen 2.5 Turbo - FREE (needs valid API key)
+3. Gemini 2 Pro - Ultra-cheap ($0.00005/call, rate limited)
+4. Claude Sonnet - High quality ($0.003/call, needs credits)
+5. Grok (XAI) - Optional fallback
 """
 
 import logging
@@ -90,7 +90,7 @@ class BrainManager:
                     model="qwen-turbo",
                     cost_per_call=0.0,
                     max_tokens=300,
-                    status=BrainStatus.ACTIVE if ENABLE_QWEN else BrainStatus.DISABLED,
+                    status=BrainStatus.SUSPENDED,
                     enabled_env_var="ENABLE_QWEN",
                     call_function=call_qwen
                 ),

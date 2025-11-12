@@ -6,7 +6,7 @@ Uses Telegram Digest System - sends alerts to digest queue instead of immediate 
 """
 import os, sys, time, logging, asyncio, json
 from datetime import datetime
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Protocol
 
 # Add project to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -14,15 +14,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("auto_health_monitor")
 
+# Digest protocol for type safety
+class DigestProtocol(Protocol):
+    def add_health_alert(self, level: str, message: str, details: Optional[Dict[str, Any]] = None) -> None: ...
+
 # Import digest system
 try:
     from utils.telegram_digest import get_digest
 except Exception:
-    def get_digest():  # type: ignore
-        class MockDigest:
-            def add_health_alert(self, *args, **kwargs):  # type: ignore
-                pass
-        return MockDigest()
+    class MockDigest:
+        def add_health_alert(self, level: str = "INFO", message: str = "", details: Optional[Dict[str, Any]] = None) -> None:
+            pass
+    
+    def get_digest() -> DigestProtocol:
+        return MockDigest()  # type: ignore[return-value]
 
 # === Configuration ===
 CHECK_INTERVAL = int(os.getenv("HEALTH_CHECK_INTERVAL", "30"))  # 30 seconds

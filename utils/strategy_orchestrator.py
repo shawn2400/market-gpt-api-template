@@ -84,8 +84,12 @@ class StrategyOrchestrator:
                 logger.error(f"{symbol}: AI consensus returned None!")
                 return self._build_strategy_config("futures_long", market_condition, ctx)
             
-            # Check consensus threshold: ≥2 votes (for 3 active brains) or ≥3 votes (for 5 brains)
-            min_votes = 2 if ai_consensus.total_votes <= 3 else 3
+            # Check consensus threshold: dynamic based on active brains
+            # 1 brain: need 1 vote (100%)
+            # 2 brains: need 2 votes (100%)
+            # 3+ brains: need ceil(2/3) = 2 or 3 votes
+            import math
+            min_votes = max(1, math.ceil(ai_consensus.total_votes * 2 / 3))
             
             if ai_consensus.votes_approve >= min_votes:
                 logger.info(
