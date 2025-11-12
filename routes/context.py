@@ -117,6 +117,38 @@ def _danger_chop(adx: float, rsi: float, ema21: float, ema50: float, close: floa
 def _rr_min_for_symbol(symbol: str) -> float:
     return MIN_RR_TOP10 if is_top10(symbol) else MIN_RR_ALT
 
+def _candles_per_24h(interval: str) -> int:
+    """
+    Calculate how many candles are in 24 hours for given interval.
+    
+    Note: For high-frequency intervals (1m, 5m), the actual available data
+    may be less than 24h due to fetch limits. This function returns the
+    theoretical candles needed, and the caller should min() with available data.
+    """
+    try:
+        interval = interval.lower().strip()
+        
+        # Parse interval (e.g., "15m", "1h", "4h", "1d")
+        if interval.endswith('m'):
+            minutes = int(interval[:-1])
+            if minutes <= 0:
+                return 96  # Fallback to 15m default
+            return max(1, 1440 // minutes)  # 1440 minutes in 24h
+        elif interval.endswith('h'):
+            hours = int(interval[:-1])
+            if hours <= 0:
+                return 96  # Fallback to 15m default
+            # For intervals >24h, use at least 1 candle
+            return max(1, 24 // hours)  # 24 hours in 24h
+        elif interval.endswith('d'):
+            return 1  # 1 day = 1 candle
+        else:
+            # Default to 15m if unknown format
+            return 96
+    except (ValueError, ZeroDivisionError):
+        # Fallback on parse errors
+        return 96
+
 # ------------------------- Core -------------------------
 
 def _compute_context_from_df(symbol: str, df, interval: str = "15m") -> ContextItem:
@@ -169,8 +201,9 @@ def _compute_context_from_df(symbol: str, df, interval: str = "15m") -> ContextI
     # שים לב: זה רק רמז, הוורקר יטפל בהתניות בפועל
     rr_bias_adj = -0.1 * abs(funding_bias)  # bias תומך → אפשר טיפה לרכך RR מ- baseline
 
-    # 📊 Calculate 24H data (high, low, volume) from last 96 candles (~24h for 15m interval)
-    lookback_24h = min(96, len(df))
+    # 📊 Calculate 24H data (high, low, volume) dynamically based on interval
+    candles_24h = _candles_per_24h(interval)
+    lookback_24h = min(candles_24h, len(df))
     df_24h = df.tail(lookback_24h)
     high_24h = float(df_24h["high"].max())
     low_24h = float(df_24h["low"].min())
