@@ -152,7 +152,7 @@ class GPT4oMiniBrain(AIBrain):
         market_data: Dict[str, Any],
         wallet_state: Dict[str, Any]
     ) -> Dict[str, Any]:
-        """GPT-5 analyzes and votes."""
+        """GPT-4o-mini analyzes and votes."""
         try:
             if not self.api_key:
                 return self._mock_vote(scout_data)
@@ -166,7 +166,7 @@ class GPT4oMiniBrain(AIBrain):
                     json={
                         "model": self.model,
                         "messages": [
-                            {"role": "system", "content": "You are GPT-5, lead AI trading strategist."},
+                            {"role": "system", "content": "You are GPT-4o-mini, cost-efficient AI trading strategist."},
                             {"role": "user", "content": prompt}
                         ],
                         "temperature": 0.7,

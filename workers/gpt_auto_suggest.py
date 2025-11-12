@@ -1412,8 +1412,44 @@ async def process_cycle():
             )
             return
         
-        # 🧠 AI CONSENSUS: Validate proposal with 5 AI Brains (≥3/5 required)
+        # 🎯 SMART 3-STAGE FILTER: Check quality BEFORE expensive AI calls (95% cost reduction)
+        try:
+            from utils.smart_filter import smart_pre_filter
+            
+            # Use ctx if available, otherwise build minimal context from payload
+            filter_ctx = ctx if ctx else {
+                "symbol": symbol,
+                "price": payload.get("entry"),
+                "volume": payload.get("volume", 0),
+                "volume_sma_20": payload.get("volume_sma_20", 1000000),
+                "rsi": payload.get("rsi", 50),
+                "adx": payload.get("adx", 25),
+                "atr_percent": payload.get("atr_percent", 2.0),
+                "bb_upper": payload.get("bb_upper", payload.get("entry", 100) * 1.02),
+                "bb_lower": payload.get("bb_lower", payload.get("entry", 100) * 0.98),
+                "ema_20": payload.get("entry")
+            }
+            
+            filter_result = smart_pre_filter(symbol, filter_ctx)
+            
+            if not filter_result["passed"]:
+                LOGGER.info(
+                    f"🚫 Smart Filter BLOCKED {symbol} at Stage {filter_result['stage']}: "
+                    f"{filter_result['reason']} (quality={filter_result['quality_score']:.1f}/10)"
+                )
+                return  # Skip AI consensus entirely - HUGE cost savings!
+            
+            # Store quality score in payload for logging
+            payload["quality_score"] = filter_result["quality_score"]
+            LOGGER.info(f"✅ Smart Filter PASSED {symbol} - Quality={filter_result['quality_score']:.1f}/10, proceeding to AI consensus")
+            
+        except Exception as e:
+            LOGGER.warning(f"⚠️ Smart Filter error for {symbol}: {e} - proceeding to AI consensus anyway")
+            payload["quality_score"] = 6.0  # Default
+        
+        # 🧠 AI CONSENSUS: Validate proposal with 3 AI Brains (≥2/3 required)
         # This applies to ALL proposal types: MEAN_REVERSION, GRID, FUTURES, SPOT
+        # ONLY called if Smart Filter PASSED (10% of proposals)
         try:
             from utils.ai_decision_maker import AIConsensusEngine
             
@@ -1480,7 +1516,7 @@ async def process_cycle():
             
             # Log consensus
             LOGGER.info(
-                f"🗳️ CONSENSUS [{symbol}]: {consensus_result['approve_count']}/5 APPROVE | "
+                f"🗳️ CONSENSUS [{symbol}]: {consensus_result['approve_count']}/3 APPROVE | "
                 f"Decision: {consensus_result['final_vote']} | "
                 f"Avg Score: {consensus_result['final_score']:.1f}/10"
             )
@@ -1497,9 +1533,9 @@ async def process_cycle():
             
             # Update payload with consensus scores
             payload["consensus_score"] = consensus_result["final_score"]
-            payload["consensus_votes"] = f"{consensus_result['approve_count']}/5"
+            payload["consensus_votes"] = f"{consensus_result['approve_count']}/3"
             
-            LOGGER.info(f"✅ APPROVED by AI consensus: {symbol} ({ttype}) - {consensus_result['approve_count']}/5 votes")
+            LOGGER.info(f"✅ APPROVED by AI consensus: {symbol} ({ttype}) - {consensus_result['approve_count']}/3 votes")
             
         except Exception as e:
             LOGGER.error(f"⚠️ AI Consensus failed for {symbol} ({ttype}): {e}")
@@ -1691,11 +1727,28 @@ async def main():
     LOGGER.info(f"🚀 Auto-suggest started: FUTURES={SUGGEST_FUTURES}, SPOT={SUGGEST_SPOT}, GRID={SUGGEST_GRID}")
     if not SUGGEST_ENABLED:
         LOGGER.warning("Auto-suggest disabled (TRADE_AUTO_SUGGEST=0)")
-    interval_sec = int(float(os.getenv("SUGGEST_INTERVAL_SEC","600")))   # 10m דיפולט
+    interval_sec = int(float(os.getenv("SUGGEST_INTERVAL_SEC","300")))   # 5m דיפולט (was 600s/10m)
+    LOGGER.info(f"🔄 Auto Scanner starting with interval={interval_sec}s ({interval_sec/60:.1f} minutes)")
+    
     while True:
         try:
             if SUGGEST_ENABLED:
+                # Track cycle cost
+                from utils.cost_tracker import get_cost_tracker
+                tracker = get_cost_tracker()
+                
+                cycle_start = time.time()
                 await process_cycle()
+                cycle_duration = time.time() - cycle_start
+                
+                # Reset cycle counter and log cost
+                cycle_cost = tracker.reset_cycle()
+                LOGGER.info(
+                    f"💰 Cycle completed in {cycle_duration:.1f}s | "
+                    f"Cost: ${cycle_cost:.4f} | "
+                    f"Daily Total: ${tracker.daily_total:.3f}"
+                )
+            
             await asyncio.sleep(interval_sec)
         except Exception as e:
             LOGGER.exception("cycle error: %s", e)
