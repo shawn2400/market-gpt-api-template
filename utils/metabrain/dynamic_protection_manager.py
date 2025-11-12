@@ -51,28 +51,28 @@ class DynamicProtectionManager:
         """
         return {
             "TRENDING": {
-                "entry_quality_min": 4.0,  # AI suggestion - NOT enforced
+                "entry_quality_min": 6.0,  # AI suggestion - NOT enforced
                 "sl_atr_multiplier": 1.5,  # AI suggestion - NOT enforced
                 "tp_rr_ratio": 1.8,         # AI suggestion - NOT enforced
                 "trail_atr_multiplier": 0.8, # AI suggestion - NOT enforced
                 "default_leverage": 5       # AI suggestion - NOT enforced
             },
             "CHOPPY": {
-                "entry_quality_min": 4.0,
+                "entry_quality_min": 6.0,
                 "sl_atr_multiplier": 1.5,
                 "tp_rr_ratio": 1.8,
                 "trail_atr_multiplier": 0.7,
                 "default_leverage": 4
             },
             "VOLATILE": {
-                "entry_quality_min": 4.0,
+                "entry_quality_min": 6.0,
                 "sl_atr_multiplier": 1.8,
                 "tp_rr_ratio": 2.0,
                 "trail_atr_multiplier": 0.9,
                 "default_leverage": 4
             },
             "SIDEWAYS": {
-                "entry_quality_min": 4.0,
+                "entry_quality_min": 6.0,
                 "sl_atr_multiplier": 1.5,
                 "tp_rr_ratio": 1.6,
                 "trail_atr_multiplier": 0.7,

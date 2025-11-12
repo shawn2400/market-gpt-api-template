@@ -557,9 +557,8 @@
 {"timestamp": 1762936338.1878543, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
 {"timestamp": 1762938800.7586648, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
 {"timestamp": 1762940610.4890938, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
-{"timestamp": 1762942765.93172, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 2\n*Details:*\n\u2022 API not responding\n\u2022 Dashboard not accessible", "details": {}}
-{"timestamp": 1762942797.0019062, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
-{"timestamp": 1762948127.4400084, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 1\n*Details:*\n\u2022 API not responding", "details": {}}
-{"timestamp": 1762948158.509667, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
-{"timestamp": 1762948820.5462973, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 1\n*Details:*\n\u2022 API not responding", "details": {}}
-{"timestamp": 1762948851.5960164, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
+{"timestamp": 1762942756.5906243, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
+{"timestamp": 1762944567.3907785, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
+{"timestamp": 1762946375.0887597, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
+{"timestamp": 1762948181.6901116, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
+{"timestamp": 1762949987.6167169, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}

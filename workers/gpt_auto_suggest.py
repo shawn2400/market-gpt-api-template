@@ -215,11 +215,17 @@ async def _fetch_context_batch(
     if use_multi_tf and intervals:
         payload["intervals"] = intervals
     
-    # Get API key from environment for authentication
-    api_key = os.getenv("API_BEARER_TOKEN") or os.getenv("PRIMARY_API_TOKEN") or os.getenv("API_TOKEN") or ""
+    # Get API key for authentication (prefer Bearer token for internal calls)
+    bearer_token = os.getenv("API_BEARER_TOKEN") or ""
+    primary_token = os.getenv("PRIMARY_API_TOKEN") or os.getenv("API_TOKEN") or ""
+    
     headers = {}
-    if api_key:
-        headers["X-API-Key"] = api_key
+    if bearer_token:
+        # Use Authorization: Bearer for internal worker → main app calls
+        headers["Authorization"] = f"Bearer {bearer_token}"
+    elif primary_token:
+        # Fallback to X-API-Key if PRIMARY_API_TOKEN is set
+        headers["X-API-Key"] = primary_token
     try:
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(CONTEXT_URL.rstrip("/") + "/context/batch", json=payload, headers=headers)
