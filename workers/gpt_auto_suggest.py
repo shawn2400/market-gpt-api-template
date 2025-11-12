@@ -754,11 +754,11 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
     except Exception as e:
         LOGGER.warning(f"DeepSeek proposal generation failed for {symbol}: {e}")
     
-    # Fallback to Gemini if DeepSeek failed
+    # Fallback to Grok if DeepSeek failed
     if not data:
         try:
-            from utils.gemini_client import call_gemini
-            response = await call_gemini(
+            from utils.xai_client import call_xai
+            response = await call_xai(
                 user_prompt,
                 system=sys_prompt,
                 temperature=0.7,
@@ -767,10 +767,9 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
             
             if response:
                 data = _parse_json_safe(response) or {}
-                LOGGER.info(f"✅ Gemini generated proposal for {symbol} (DeepSeek fallback)")
+                LOGGER.info(f"✅ Grok generated proposal for {symbol} (DeepSeek fallback)")
         except Exception as e:
-            LOGGER.warning(f"Gemini proposal generation failed for {symbol}: {e}")
-            return None
+            LOGGER.warning(f"Grok proposal generation failed for {symbol}: {e}")
     
     if not data:
         LOGGER.warning(f"NO PROPOSAL from AI for {symbol}")
