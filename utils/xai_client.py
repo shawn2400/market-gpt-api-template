@@ -14,7 +14,9 @@ XAI_API_KEY = os.getenv("XAI_API_KEY", "").strip()
 XAI_MODEL = os.getenv("XAI_MODEL", "grok-2-latest").strip()
 XAI_BASE_URL = "https://api.x.ai/v1"
 
-ENABLE_XAI = os.getenv("ENABLE_XAI", "1").lower() in ("1", "true", "yes") and bool(XAI_API_KEY)
+# ⚠️ SUSPENDED: Grok API out of credits (429 errors)
+# Can be re-enabled by setting ENABLE_XAI=1 env var when credits added
+ENABLE_XAI = os.getenv("ENABLE_XAI", "0").lower() in ("1", "true", "yes") and bool(XAI_API_KEY)
 
 
 async def call_xai(

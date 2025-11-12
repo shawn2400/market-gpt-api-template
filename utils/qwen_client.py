@@ -14,7 +14,9 @@ DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "").strip()
 QWEN_MODEL = os.getenv("QWEN_MODEL", "qwen-turbo").strip()
 QWEN_BASE_URL = "https://dashscope.aliyuncs.com/api/v1/services/aigc/text-generation/generation"
 
-ENABLE_QWEN = os.getenv("ENABLE_QWEN", "1").lower() in ("1", "true", "yes") and bool(DASHSCOPE_API_KEY)
+# ⚠️ SUSPENDED: Invalid Qwen API key (needs DashScope API key, not Access Key)
+# Can be re-enabled by setting ENABLE_QWEN=1 env var with valid DashScope key
+ENABLE_QWEN = os.getenv("ENABLE_QWEN", "0").lower() in ("1", "true", "yes") and bool(DASHSCOPE_API_KEY)
 
 
 async def call_qwen(

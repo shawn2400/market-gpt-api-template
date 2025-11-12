@@ -15,9 +15,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp").strip()
 GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta"
 
-# 🚀 COST OPTIMIZATION: Gemini enabled for 3-brain consensus
-# Part of ultra-cheap 3-brain architecture (DeepSeek + Qwen + Gemini)
-ENABLE_GEMINI = os.getenv("ENABLE_GEMINI", "1").lower() in ("1", "true", "yes") and bool(GEMINI_API_KEY)
+# ⚠️ SUSPENDED: Gemini API quota exceeded (429 errors)
+# Can be re-enabled by setting ENABLE_GEMINI=1 env var when quota resets
+ENABLE_GEMINI = os.getenv("ENABLE_GEMINI", "0").lower() in ("1", "true", "yes") and bool(GEMINI_API_KEY)
 
 
 async def call_gemini(
