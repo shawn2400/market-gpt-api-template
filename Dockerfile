@@ -1,4 +1,4 @@
-# Dockerfile.sign
+# Production Dockerfile for AlgoGPT
 FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -9,8 +9,15 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     TZ=Asia/Jerusalem \
     PORT=8000
 
+# Install system dependencies including monitoring tools
 RUN apt-get update -y \
- && apt-get install -y --no-install-recommends tini ca-certificates tzdata curl procps net-tools \
+ && apt-get install -y --no-install-recommends \
+    tini \
+    ca-certificates \
+    tzdata \
+    curl \
+    procps \
+    net-tools \
  && ln -fs /usr/share/zoneinfo/$TZ /etc/localtime \
  && dpkg-reconfigure -f noninteractive tzdata \
  && rm -rf /var/lib/apt/lists/*
@@ -27,5 +34,4 @@ HEALTHCHECK --interval=30s --timeout=8s --retries=5 \
   CMD curl -fsS http://127.0.0.1:${PORT}/readyz || exit 1
 
 ENTRYPOINT ["/usr/bin/tini","--"]
-CMD ["gunicorn","-k","uvicorn.workers.UvicornWorker","-w","2","-b","0.0.0.0:8000","main:app","--timeout","90"]
-
+CMD ["gunicorn","-c","gunicorn_conf.py","main:app"]
