@@ -190,6 +190,45 @@ SUGGEST_MAX_LEVERAGE = int(os.getenv("SUGGEST_MAX_LEVERAGE","10"))
 SUGGEST_MIN_LEVERAGE = max(1, int(os.getenv("SUGGEST_MIN_LEVERAGE","1")))
 
 # ---------------- Helpers ----------------
+def validate_rr_smart(rr_ratio: float, min_rr: float, consensus_result: Optional[Dict], symbol: str) -> Tuple[bool, str]:
+    """
+    🎯 Smart RR Validation with regime-aware dynamic thresholds
+    
+    Args:
+        rr_ratio: Calculated RR from rr_from_levels()
+        min_rr: Dynamic minimum RR from market_condition.min_rr_threshold
+        consensus_result: AI consensus data from ctx["_consensus_result"]
+        symbol: Symbol name for logging
+        
+    Returns:
+        (is_valid, reason_message)
+    
+    Logic:
+        1. HARD FLOOR (0.8): Absolute safety net - reject if RR < 0.8
+        2. AUTO APPROVE (≥min_rr): Meets regime-specific requirement
+        3. CONSENSUS ZONE (0.8 to min_rr): Requires 3/5 AI consensus
+    """
+    HARD_FLOOR = 0.8
+    
+    # 1. HARD FLOOR - absolute minimum safety net
+    if rr_ratio < HARD_FLOOR:
+        return False, f"HARD_FLOOR_REJECT: RR={rr_ratio:.3f} < {HARD_FLOOR}"
+    
+    # 2. AUTO APPROVE - meets dynamic regime requirement
+    if rr_ratio >= min_rr:
+        return True, f"AUTO_APPROVE: RR={rr_ratio:.3f} ≥ {min_rr:.2f}"
+    
+    # 3. CONSENSUS ZONE (0.8 to min_rr)
+    # Check if consensus data is available
+    if not consensus_result:
+        return False, f"NO_CONSENSUS_DATA: RR={rr_ratio:.3f} < {min_rr:.2f}, consensus unavailable"
+    
+    approve_count = consensus_result.get("approve_count", 0)
+    if approve_count >= 3:
+        return True, f"CONSENSUS_APPROVE: RR={rr_ratio:.3f}, {approve_count}/5 AI approved"
+    else:
+        return False, f"INSUFFICIENT_CONSENSUS: RR={rr_ratio:.3f}, only {approve_count}/5 AI approved (need ≥3)"
+
 def _hash_proposal(key_fields: Dict[str, Any]) -> str:
     key = f"{key_fields.get('trade_type','')}|{key_fields.get('symbol','')}|{key_fields.get('side','')}|" \
           f"{key_fields.get('entry')}|{key_fields.get('sl')}|{key_fields.get('tp1')}|{key_fields.get('tp2')}|{key_fields.get('tp3')}"
@@ -901,16 +940,30 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
         LOGGER.warning(f"❌ {symbol} REJECTED: Missing levels - entry={prop['entry']}, sl={prop['sl']}, tp1={prop['tp1']}")
         return None
     
-    # Validate RR
+    # 🎯 Smart RR Validation with AI Consensus support
     rr_check = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
-    MIN_AI_RR = market_condition.min_rr_threshold
     
-    if rr_check is not None and rr_check < MIN_AI_RR:
-        LOGGER.info(
-            f"AI_REJECTED {symbol}: RR={rr_check:.3f} < {MIN_AI_RR:.2f} "
-            f"(regime={market_condition.regime}, mood={market_condition.mood})"
-        )
+    if rr_check is None:
+        LOGGER.warning(f"❌ {symbol} REJECTED: Unable to calculate RR ratio")
         return None
+    
+    # Get consensus data and dynamic threshold
+    consensus_data = ctx.get("_consensus_result")
+    min_rr = market_condition.min_rr_threshold
+    
+    # Use Smart RR Validation (HARD FLOOR 0.8, CONSENSUS ZONE, AUTO APPROVE)
+    is_valid, reason = validate_rr_smart(
+        rr_ratio=rr_check,
+        min_rr=min_rr,
+        consensus_result=consensus_data,
+        symbol=symbol
+    )
+    
+    if not is_valid:
+        LOGGER.info(f"🚫 {symbol}: {reason} (regime={market_condition.regime}, mood={market_condition.mood})")
+        return None
+    else:
+        LOGGER.info(f"✅ {symbol}: {reason}")
     
     # Validate success_pct
     if prop.get("success_pct") is not None:
@@ -973,16 +1026,26 @@ async def _gpt_suggest(symbol: str, ctx: Dict[str, Any], for_spot: bool) -> Opti
         if prop["entry"] is None or prop["sl"] is None or prop["tp1"] is None:
             return None
         
-        # ✨ ADAPTIVE AI Response Validation - Dynamic RR threshold!
-        # Use market-intelligent minimum RR (adapts to conditions)
+        # 🎯 Smart RR Validation (LEGACY CODE - NOT USED, but kept for consistency)
         rr_check = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
-        MIN_AI_RR = market_condition.min_rr_threshold  # 🎯 DYNAMIC threshold
         
-        if rr_check is not None and rr_check < MIN_AI_RR:
-            LOGGER.info(
-                f"AI_REJECTED {symbol}: RR={rr_check:.3f} < {MIN_AI_RR:.2f} "
-                f"(regime={market_condition.regime}, mood={market_condition.mood})"
-            )
+        if rr_check is None:
+            return None
+        
+        # NOTE: This code is unreachable (early return at line 983)
+        # If re-enabled, use Smart RR Validation with AI consensus
+        consensus_data = ctx.get("_consensus_result")
+        min_rr = market_condition.min_rr_threshold
+        
+        is_valid, reason = validate_rr_smart(
+            rr_ratio=rr_check,
+            min_rr=min_rr,
+            consensus_result=consensus_data,
+            symbol=symbol
+        )
+        
+        if not is_valid:
+            LOGGER.info(f"🚫 {symbol}: {reason} (LEGACY PATH)")
             return None
         
         # בדיקת success_pct סביר (לא 0 או 100)
