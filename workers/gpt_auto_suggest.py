@@ -283,16 +283,15 @@ async def _build_local_context(symbols: List[str], interval: str = "15m") -> Dic
     Fetches candlestick data and calculates indicators on-the-fly.
     """
     try:
-        from utils.binance_client import get_binance
+        from utils.get_klines import get_klines
         from utils.indicators import calculate_indicators
         
-        binance = get_binance()
         out = {}
         
         for symbol in symbols:
             try:
                 # Fetch candlestick data
-                klines = await binance.fetch_klines(symbol, interval, limit=200)
+                klines = await get_klines(symbol, interval, limit=200)
                 if not klines or len(klines) < 50:
                     LOGGER.warning(f"{symbol}: Insufficient klines for indicators")
                     continue
