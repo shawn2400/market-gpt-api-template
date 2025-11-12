@@ -356,13 +356,15 @@ class StrategyOrchestrator:
                 trend_following=True
             )
         elif strategy_name == "wait":
+            # WAIT strategy = ultra-conservative mode
+            # Only approve exceptional setups (quality 7.5+, RR 2.0+) when market is unclear
             return StrategyConfig(
                 strategy_type="wait",
-                min_rr=999.0,  # Impossibly high to prevent trades
-                min_quality=999.0,
-                min_success_pct=0.99,
-                max_leverage=1,
-                description="WAIT - market conditions not favorable",
+                min_rr=round(2.0 * rr_mult, 2),  # Conservative RR requirement
+                min_quality=round(7.5 * quality_mult, 1),  # High quality only
+                min_success_pct=0.7,
+                max_leverage=max(1, int(3 * leverage_mult)),  # Low leverage (max 3x)
+                description=f"WAIT - ultra-conservative (high quality only) (Tier {active_tier.tier_number if active_tier else '?'})",
                 defensive=True
             )
         else:
