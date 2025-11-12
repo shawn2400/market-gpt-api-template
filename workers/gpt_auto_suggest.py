@@ -603,6 +603,42 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
     
     ctx["_market_condition"] = market_condition
     
+    # ========== HYBRID ADAPTIVE SYSTEM: TIER + REGIME ANALYSIS ==========
+    try:
+        from utils.smart_tiered_system import get_smart_tiered_system
+        from utils.ai_regime_analyzer import get_ai_regime_analyzer
+        
+        # Evaluate market strength and select appropriate tier
+        tiered_system = get_smart_tiered_system()
+        market_strength = tiered_system.evaluate_context(symbol, ctx, market_condition)
+        
+        # Analyze regime and detect shifts
+        regime_analyzer = get_ai_regime_analyzer()
+        regime_snapshot, regime_shift = regime_analyzer.analyze_with_shift_detection(symbol, ctx, market_condition)
+        
+        # Enrich context with tier and regime data for downstream usage
+        ctx["_market_strength"] = market_strength
+        ctx["_regime_snapshot"] = regime_snapshot
+        ctx["_regime_shift"] = regime_shift
+        ctx["_active_tier"] = market_strength.active_tier
+        
+        LOGGER.info(
+            f"🎯 [{symbol}] Hybrid System: "
+            f"Tier {market_strength.active_tier.tier_number} ({market_strength.active_tier.tier_name}) | "
+            f"Strength={market_strength.strength_score:.1f}/10 | "
+            f"Regime={regime_snapshot.regime.upper()} ({regime_snapshot.confidence:.1f}%)"
+        )
+        
+        if regime_shift:
+            LOGGER.info(
+                f"🔄 [{symbol}] REGIME SHIFT DETECTED: "
+                f"{regime_shift.from_regime.upper()} → {regime_shift.to_regime.upper()} | "
+                f"Impact: {regime_shift.trading_impact}"
+            )
+    except Exception as e:
+        LOGGER.warning(f"[{symbol}] Hybrid System unavailable: {e}")
+        # Graceful fallback - continue without tier/regime enrichment
+    
     # 🔍 DEBUG: Log what AI receives
     LOGGER.info(f"🔍 AI Strategy Context [{symbol}]: high_24h={ctx.get('high_24h')}, low_24h={ctx.get('low_24h')}, close={ctx.get('close')}, has_indicators={'adx' in ctx}")
     
