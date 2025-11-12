@@ -1,0 +1,77 @@
+INFO] Application startup complete.
+     ==> Your service is live 🎉
+     ==> 
+     ==> ///////////////////////////////////////////////////////////
+     ==> 
+     ==> Available at your primary URL https://algogpt-docker.onrender.com
+     ==> 
+     ==> ///////////////////////////////////////////////////////////
+     ==> Deploying...
+[2025-11-12 15:34:31 +0000] [1] [INFO] Handling signal: term
+[2025-11-12 15:34:31 +0000] [9] [INFO] Shutting down
+[2025-11-12 15:34:31 +0000] [9] [INFO] Error while closing socket [Errno 9] Bad file descriptor
+[2025-11-12 15:34:31 +0000] [10] [INFO] Shutting down
+[2025-11-12 15:34:31 +0000] [10] [INFO] Error while closing socket [Errno 9] Bad file descriptor
+[2025-11-12 15:34:31 +0000] [9] [INFO] Waiting for application shutdown.
+[2025-11-12 15:34:31 +0000] [9] [INFO] Application shutdown complete.
+[2025-11-12 15:34:31 +0000] [9] [INFO] Finished server process [9]
+[2025-11-12 15:34:31 +0000] [1] [ERROR] Worker (pid:9) was sent SIGTERM!
+[2025-11-12 15:34:31 +0000] [10] [INFO] Waiting for application shutdown.
+[2025-11-12 15:34:31 +0000] [10] [INFO] Application shutdown complete.
+[2025-11-12 15:34:31 +0000] [10] [INFO] Finished server process [10]
+[2025-11-12 15:34:31 +0000] [1] [ERROR] Worker (pid:10) was sent SIGTERM!
+[2025-11-12 15:34:31 +0000] [1] [INFO] Shutting down: Master
+[2025-11-12 15:34:47 +0000] [1] [INFO] Starting gunicorn 22.0.0
+[2025-11-12 15:34:47 +0000] [1] [INFO] Listening at: http://0.0.0.0:10000 (1)
+[2025-11-12 15:34:47 +0000] [1] [INFO] Using worker: uvicorn.workers.UvicornWorker
+[2025-11-12 15:34:47 +0000] [9] [INFO] Booting worker with pid: 9
+[2025-11-12 15:34:47 +0000] [10] [INFO] Booting worker with pid: 10
+INFO:algogpt.main:✅ Static files mounted at /static with no-cache headers
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 0, 'tokens': []}
+INFO:algogpt.redis:{'event': 'redis.disabled', 'reason': 'REDIS_URL missing'}
+INFO:algogpt.main:✅ Static files mounted at /static with no-cache headers
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 0, 'tokens': []}
+INFO:algogpt.redis:{'event': 'redis.disabled', 'reason': 'REDIS_URL missing'}
+INFO:algogpt.n8n:✅ N8N webhook validator initialized
+INFO:algogpt.n8n:✅ N8N fallback queue initialized
+INFO:algogpt.n8n:✅ N8N heartbeat monitor initialized
+INFO:algogpt.n8n:✅ N8N routes loaded successfully
+INFO:algogpt.n8n:✅ N8N webhook validator initialized
+INFO:algogpt.n8n:✅ N8N fallback queue initialized
+INFO:algogpt.n8n:✅ N8N heartbeat monitor initialized
+INFO:algogpt.n8n:✅ N8N routes loaded successfully
+INFO:monitors.circuit_breaker:Circuit breaker state loaded from database
+[2025-11-12 15:34:53 +0000] [10] [INFO] Started server process [10]
+[2025-11-12 15:34:53 +0000] [10] [INFO] Waiting for application startup.
+INFO:algogpt.main:✅ N8N_WEBHOOK_SECRET configured - webhook security enabled
+INFO:algogpt.main:🛡️ Circuit Breaker System Status:
+INFO:algogpt.main:  ✅ Daily Loss Limit: $150.00 USD
+INFO:algogpt.main:  ✅ Panic Close: Enabled (triggers at loss cap)
+INFO:algogpt.main:  ✅ Auto-Run Disable: Enabled (on circuit breaker trigger)
+INFO:algogpt.main:  ✅ Health Killswitch: 3 consecutive failures
+INFO:algogpt.main:  ℹ️  Circuit breakers enforced in utils/trade_manager.py::manage_open_trades()
+INFO:algogpt.main:ℹ️  Phase 3 AI Workers disabled (set ENABLE_LEGACY_WORKERS=1 to enable)
+INFO:algogpt.main:ℹ️  Mesh Bus disabled (legacy feature, not required)
+[2025-11-12 15:34:53 +0000] [10] [INFO] Application startup complete.
+INFO:monitors.circuit_breaker:Circuit breaker state loaded from database
+[2025-11-12 15:34:55 +0000] [9] [INFO] Started server process [9]
+[2025-11-12 15:34:55 +0000] [9] [INFO] Waiting for application startup.
+INFO:algogpt.main:✅ N8N_WEBHOOK_SECRET configured - webhook security enabled
+INFO:algogpt.main:🛡️ Circuit Breaker System Status:
+INFO:algogpt.main:  ✅ Daily Loss Limit: $150.00 USD
+INFO:algogpt.main:  ✅ Panic Close: Enabled (triggers at loss cap)
+INFO:algogpt.main:  ✅ Auto-Run Disable: Enabled (on circuit breaker trigger)
+INFO:algogpt.main:  ✅ Health Killswitch: 3 consecutive failures
+INFO:algogpt.main:  ℹ️  Circuit breakers enforced in utils/trade_manager.py::manage_open_trades()
+INFO:algogpt.main:ℹ️  Phase 3 AI Workers disabled (set ENABLE_LEGACY_WORKERS=1 to enable)
+INFO:algogpt.main:ℹ️  Mesh Bus disabled (legacy feature, not required)
+[2025-11-12 15:34:55 +0000] [9] [INFO] Application startup complete.
+     ==> Your service is live 🎉
+     ==> 
+     ==> ///////////////////////////////////////////////////////////
+     ==> 
+     ==> Available at your primary URL https://algogpt-docker.onrender.com
+     ==> 
+     ==> ///////////////////////////////////////////////////////////
+     ==> Detected service running on port 10000
+     ==> Docs on specifying a port: https://render.com/d

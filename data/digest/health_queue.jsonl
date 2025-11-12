@@ -569,13 +569,9 @@
 {"timestamp": 1762951980.3534522, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 1\n*Details:*\n\u2022 Workflows: Only 5 workflows running (expected 7+)", "details": {}}
 {"timestamp": 1762952214.8905337, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 1\n*Details:*\n\u2022 Workflows: Only 3 workflows running (expected 7+)", "details": {}}
 {"timestamp": 1762952339.0981991, "level": "CRITICAL", "message": "\ud83d\udea8 *Auto Health Monitor*\n\n\ud83d\udea8 CRITICAL: 5 consecutive failures!\n\n\u2022 Workflows: Only 5 workflows running (expected 7+)\n\n\u26a0\ufe0f **IMPORTANT:** All workflows may have stopped!\n\u27a1\ufe0f Please manually restart workflows or check the Replit console.\n\ud83d\udca1 Tip: Click the 'Run' button in Replit to restart all services.", "details": {}}
-{"timestamp": 1762952527.3743124, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 2\n*Details:*\n\u2022 API not responding\n\u2022 Dashboard not accessible", "details": {}}
-{"timestamp": 1762952558.4959145, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
-{"timestamp": 1762957951.8325064, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 1\n*Details:*\n\u2022 API not responding", "details": {}}
-{"timestamp": 1762957982.9295866, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
-{"timestamp": 1762958828.9195561, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 1\n*Details:*\n\u2022 Workflows: ", "details": {}}
-{"timestamp": 1762958860.0398433, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
-{"timestamp": 1762960639.3518095, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 1\n*Details:*\n\u2022 Workflows: ", "details": {}}
-{"timestamp": 1762960670.4957082, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
-{"timestamp": 1762961424.7240796, "level": "WARNING", "message": "\u26a0\ufe0f *Auto Health Monitor*\n\n*Status:* DEGRADED\n*Issues:* 1\n*Details:*\n\u2022 API not responding", "details": {}}
-{"timestamp": 1762961455.7810986, "level": "SUCCESS", "message": "\u2705 *Auto Health Monitor*\n\nSystem recovered! All checks passing.", "details": {}}
+{"timestamp": 1762952518.1349456, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
+{"timestamp": 1762954323.0024219, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
+{"timestamp": 1762956127.860025, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
+{"timestamp": 1762957933.7004528, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
+{"timestamp": 1762959739.6511037, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
+{"timestamp": 1762961547.0577936, "level": "INFO", "message": "\ud83d\udcca Position Report\n\n\ud83d\udcca <b>No active positions</b>\n\n\ud83d\udca4 Waiting for quality setups...", "details": {}}
