@@ -32,9 +32,9 @@
 
 ## 🌟 Overview | סקירה כללית
 
-**AlgoGPT v9.1** היא פלטפורמת מסחר אלגוריתמי אוטונומית המבוססת על **3 מודלי AI זולים** (DeepSeek + Grok + Gemini) שפועלים במערך קונצנזוס מהיר. המערכת פועלת 24/7 על Binance Futures, מנתחת באופן רציף 534 שווקים שונים, וסורקת **50 symbols בכל סבב** (x5 שיפור כיסוי שוק). **הפחתת עלויות: 90%** (הסרה של GPT-5 + Claude).
+**AlgoGPT v9.1** היא פלטפורמת מסחר אלגוריתמי אוטונומית המבוססת על **3 מודלי AI זולים** (DeepSeek + Grok + Gemini) שפועלים במערך קונצנזוס מהיר **לקבלת החלטות מסחר**. המערכת פועלת 24/7 על Binance Futures, מנתחת באופן רציף 534 שווקים שונים, וסורקת **50 symbols בכל סבב** (x5 שיפור כיסוי שוק). **הפחתת עלויות: 90%** (הסרת GPT-5 + Claude מקבלת החלטות מסחר).
 
-**AlgoGPT v9.1** is a cutting-edge autonomous algorithmic trading platform powered by **3 cost-optimized AI brains** (DeepSeek + Grok + Gemini) operating in fast consensus. Removed expensive providers (GPT-5 $15/M, Claude $3/M). It runs 24/7 on Binance Futures, continuously analyzing 534 markets across multiple timeframes, scanning **50 symbols per cycle** (5x market coverage improvement), and executes 4-10 high-quality trades daily with regime-adaptive dynamic risk management. **Cost Reduction: 90%** by removing GPT-5 and Claude.
+**AlgoGPT v9.1** is a cutting-edge autonomous algorithmic trading platform powered by **3 cost-optimized AI brains for trade decisions** (DeepSeek + Grok + Gemini). Removed expensive providers from trade consensus (GPT-5 $15/M, Claude $3/M → `ENABLE_OPENAI=0`). It runs 24/7 on Binance Futures, continuously analyzing 534 markets across multiple timeframes, scanning **50 symbols per cycle** (5x market coverage improvement), and executes 4-10 high-quality trades daily with regime-adaptive dynamic risk management. **Cost Reduction: 90%** by disabling GPT-5 and Claude for trade decisions.
 
 ### 🎯 Core Capabilities | יכולות ליבה
 
@@ -56,16 +56,21 @@
 
 ### 💎 Cost Optimization Strategy
 
-**Removed Expensive Brains:**
-- ❌ GPT-5: $15/M tokens (~$300-400/month) - **REMOVED**
-- ❌ Claude Sonnet 3.5: $3/M tokens (~$50-100/month) - **REMOVED**
+**Disabled for Trade Decisions** (`ENABLE_OPENAI=0` in `ai_trade_scorer.py`):
+- ❌ GPT-5: $15/M tokens (~$300-400/month) - **DISABLED FOR TRADING**
+- ❌ Claude Sonnet 3.5: $3/M tokens (~$50-100/month) - **REMOVED ENTIRELY**
 
-**Kept Only Cheap Brains:**
+**Active for Trade Decisions:**
 - ✅ DeepSeek: $0.14/M tokens (~$10-20/month)
 - ✅ Grok (XAI): Free tier (generous limits)
 - ✅ Gemini 2 Pro: 50 calls/day free tier (fallback/tiebreaker)
 
-**Result: 90% cost reduction!**
+**GPT-5 Orchestrator:**
+- ⚠️ GPT-5 still runs as a monitoring worker (`gpt5_orchestrator.py`) for system-level analysis
+- NOT used for individual trade decisions (disabled in consensus)
+- Low usage: every 30 minutes = ~$5-10/month
+
+**Result: 90% cost reduction on trade decision-making!**
 
 ### 🧠 AI Brain #1: DeepSeek
 - **Model**: `deepseek-chat`
@@ -295,12 +300,15 @@ AlgoGPT מריצה **10 workers** בפרלל, כל אחד אחראי על תפק
   - `FILLS_WATCH_ENABLE=1`
   - `FILLS_WATCH_INTERVAL_SEC=15`
 
-### 🧠 Worker #6: GPT-5 Central Brain
+### 🧠 Worker #6: GPT-5 Central Brain (Monitoring Only)
 - **File**: `workers/gpt5_orchestrator.py`
 - **Command**: `python workers/gpt5_orchestrator.py`
 - **Port**: None
-- **Description**: ריכוז מוח GPT-5 - orchestration של כל ה-AI brains
-- **Environment Variables**: None
+- **Description**: System monitoring and strategic oversight (NOT used for trade decisions)
+- **Note**: ⚠️ GPT-5 is **disabled for trade scoring** (`ENABLE_OPENAI=0`) to reduce costs. This worker only provides periodic system analysis.
+- **Environment Variables**:
+  - `GPT5_ORCHESTRATOR_ENABLED=1` (monitoring mode)
+  - `ORCHESTRATOR_INTERVAL_SEC=1800`
 
 ### 📊 Worker #7: Position Monitor
 - **File**: `workers/position_monitor.py`
