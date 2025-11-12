@@ -431,7 +431,45 @@ PROMPT_SYS_SPOT = PROMPT_SYS + "This request is for SPOT trading. side must be '
 PROMPT_SYS_FUT  = PROMPT_SYS + "This request is for FUTURES trading. side can be LONG or SHORT.\n"
 
 def _build_user_ctx(symbol: str, ctx: Dict[str, Any]) -> str:
-    data = {"symbol": symbol, "price": ctx.get("price"), "filters": ctx.get("filters", {})}
+    """
+    Build user context with ALL technical data for AI proposal generation.
+    Includes all indicators from _fetch_real_indicators + market intelligence.
+    """
+    # Extract market condition if available
+    market_condition = ctx.get("_market_condition", {})
+    
+    data = {
+        "symbol": symbol,
+        # Price data
+        "price": ctx.get("close") or ctx.get("price"),
+        "close": ctx.get("close"),
+        "high_24h": ctx.get("high_24h"),
+        "low_24h": ctx.get("low_24h"),
+        # Technical indicators (from _fetch_real_indicators)
+        "rsi": ctx.get("rsi"),
+        "adx": ctx.get("adx"),
+        "atr": ctx.get("atr"),  # Absolute ATR value
+        "atr_percent": ctx.get("atr_percent"),  # ATR as % of price
+        "macd": ctx.get("macd"),
+        "macd_signal": ctx.get("macd_signal"),
+        "macd_hist": ctx.get("macd_hist"),
+        "bb_upper": ctx.get("bb_upper"),
+        "bb_mid": ctx.get("bb_mid"),
+        "bb_lower": ctx.get("bb_lower"),
+        "ema_20": ctx.get("ema_20"),
+        "ema_50": ctx.get("ema_50"),
+        # Volume metrics
+        "volume": ctx.get("volume"),
+        "volume_sma_20": ctx.get("volume_sma_20"),
+        # Market intelligence
+        "regime": market_condition.get("regime") if isinstance(market_condition, dict) else None,
+        "mood": market_condition.get("mood") if isinstance(market_condition, dict) else None,
+        "recommended_strategy": market_condition.get("recommended_strategy") if isinstance(market_condition, dict) else None,
+        # Dynamic filters (flattened in ctx by _fetch_context_batch)
+        "min_rr": ctx.get("min_rr"),
+        "success_min": ctx.get("success_min"),
+        "quality_min": ctx.get("quality_min")
+    }
     return json.dumps(data, ensure_ascii=False)
 
 def _parse_json_safe(text: str) -> Optional[Dict[str, Any]]:
@@ -780,6 +818,7 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
         sys_prompt = prompt_engine.generate_prompt(market_condition, symbol, ctx or {})
     
     user_prompt = _build_user_ctx(symbol, ctx or {})
+    LOGGER.info(f"🔍 User Context sent to DeepSeek [{symbol}]: {user_prompt[:500]}...")
     data = None
     
     # Try DeepSeek first (primary, ultra-cheap)
@@ -797,10 +836,10 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
         
         if response and "choices" in response:
             content = response["choices"][0]["message"]["content"]
-            LOGGER.debug(f"📝 DeepSeek raw response for {symbol}: {content[:200]}...")
+            LOGGER.info(f"📝 DeepSeek raw response for {symbol}: {content[:300]}...")
             data = _parse_json_safe(content)
             if data:
-                LOGGER.info(f"✅ DeepSeek generated proposal for {symbol}")
+                LOGGER.info(f"✅ DeepSeek generated proposal for {symbol}: {data}")
             else:
                 LOGGER.warning(f"⚠️ DeepSeek response parsing failed for {symbol}")
     except Exception as e:
@@ -831,27 +870,35 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
         LOGGER.warning(f"NO PROPOSAL from AI for {symbol}")
         return None
     
-    # Parse and validate proposal
-    side = str(data.get("side","")).upper()
+    # Parse and validate proposal (handle multiple field name formats)
+    # Some AIs return "side", others return "direction"
+    side = str(data.get("side") or data.get("direction", "")).upper()
     if for_spot and side != "LONG":
         side = "LONG"
     lev = _to_int(data.get("leverage"), default=10) or 10
     lev = max(SUGGEST_MIN_LEVERAGE, min(SUGGEST_MAX_LEVERAGE, lev))
+    
+    # Handle multiple field name formats for stop loss and take profit
+    sl = _to_float(data.get("sl") or data.get("stop_loss"))
+    tp1 = _to_float(data.get("tp1") or data.get("take_profit"))
+    
     prop = {
         "symbol": symbol,
         "side": side if side in ("LONG","SHORT") else None,
         "entry": _to_float(data.get("entry")),
-        "sl": _to_float(data.get("sl")),
-        "tp1": _to_float(data.get("tp1")),
+        "sl": sl,
+        "tp1": tp1,
         "tp2": _to_float(data.get("tp2")),
         "tp3": _to_float(data.get("tp3")),
         "leverage": (1 if for_spot else lev),
-        "success_pct": _to_float(data.get("success_pct")),
-        "reason": data.get("reason") or "",
+        "success_pct": _to_float(data.get("success_pct") or data.get("confidence")),
+        "reason": data.get("reason") or data.get("reasoning", ""),
     }
     if prop["side"] not in ("LONG","SHORT"):
+        LOGGER.warning(f"❌ {symbol} REJECTED: Invalid side '{prop['side']}' (raw: {data.get('side')})")
         return None
     if prop["entry"] is None or prop["sl"] is None or prop["tp1"] is None:
+        LOGGER.warning(f"❌ {symbol} REJECTED: Missing levels - entry={prop['entry']}, sl={prop['sl']}, tp1={prop['tp1']}")
         return None
     
     # Validate RR
