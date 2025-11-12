@@ -103,6 +103,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import Response as StarletteResponse, PlainTextResponse, JSONResponse, HTMLResponse
 
+# =============== Authentication ===============
+from utils.auth import validate_token
+
 # =============== App config ===============
 APP_TITLE   = os.getenv("APP_TITLE", "AlgoGPT Service")
 APP_VERSION = os.getenv("APP_VERSION", "3.6.0")
@@ -163,6 +166,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Authentication Middleware
+app.middleware("http")(validate_token)
 
 # Anti-Cache Middleware for Static Files
 @app.middleware("http")

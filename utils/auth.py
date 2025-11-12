@@ -136,13 +136,21 @@ def _is_public(path: str) -> bool:
               "/api/info", "/scan/public-topk", "/scan/public"}
     if path in always or path in paths:
         return True
+    # Check prefixes (for /static/, etc.)
+    public_prefixes = ("/static/", "/favicon.ico")
+    if path.startswith(public_prefixes):
+        return True
     return any(path.startswith(p) for p in prefixes)
 
 async def validate_token(request: Request, call_next):
     try:
         path = request.url.path
-        if _is_public(path):
+        is_public = _is_public(path)
+        if is_public:
+            logger.info(f"✅ Public path allowed: {path}")
             return await call_next(request)
+        
+        logger.info(f"🔒 Auth required for: {path}")
 
         # Fail closed if tokens are required but none are loaded
         if not _ALLOW_ALL and not _TOKENS:
@@ -150,6 +158,7 @@ async def validate_token(request: Request, call_next):
 
         tok = request.headers.get("X-API-Key") or _extract_bearer_from_auth_header(request.headers.get("Authorization"))
         if not token_matches(tok):
+            logger.info(f"❌ Auth failed for: {path}")
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
         return await call_next(request)
