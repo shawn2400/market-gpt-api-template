@@ -1911,8 +1911,8 @@ async def _on_startup():
     
     # ==================== N8N Security Check ====================
     if not os.getenv("N8N_WEBHOOK_SECRET"):
-        logger.warning("⚠️ N8N_WEBHOOK_SECRET not configured - N8N webhooks will not work without proper security")
-        logger.warning("⚠️ Set N8N_WEBHOOK_SECRET environment variable to enable N8N webhook security")
+        logger.critical("❌ N8N_WEBHOOK_SECRET not configured - System BLOCKED for production safety")
+        raise RuntimeError("N8N_WEBHOOK_SECRET required for production - cannot start without webhook security")
     else:
         logger.info("✅ N8N_WEBHOOK_SECRET configured - webhook security enabled")
     
