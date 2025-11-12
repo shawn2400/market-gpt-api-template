@@ -101,10 +101,15 @@ class AIBrain:
         scanner_score = scout_data.get("market_scanner", {}).get("score", 0)
         analyst_score = scout_data.get("technical_analyst", {}).get("score", 0)
         
+        # Strategy context explanation
+        strategy_context = ""
+        if strategy == "wait":
+            strategy_context = "\n⚠️ WAIT Strategy = Ultra-conservative mode (still tradeable!):\n   Only approve exceptional setups with Quality≥7.5 and RR≥2.0\n   Lower leverage (max 3x), higher quality threshold\n   This is NOT 'don't trade' - it's 'be very selective'\n"
+        
         return f"""Analyze this trade proposal:
 
 Symbol: {symbol}
-Strategy: {strategy}
+Strategy: {strategy}{strategy_context}
 
 Scout Scores:
 - Market Scanner: {scanner_score}/10
