@@ -1,0 +1,192 @@
+**🎯 תוכנית עבודה מפורטת - מוכנה לביצוע!**
+
+## 🚀 **שלב 1: DATA LAYER - יסודות הנתונים (24 שעות)**
+
+### **1.1 Per-Symbol Stats Aggregator**
+```python
+# הרחבה ל-performance_tracker.py
+class SymbolStatsAggregator:
+    def aggregate_symbol_performance(self):
+        return {
+            "symbol": "BTCUSDT",
+            "win_rate": 45.2,
+            "avg_profit": 1.23,
+            "avg_loss": -0.87,
+            "total_trades": 42,
+            "recent_trend": "improving" # last 10 vs previous 10
+        }
+```
+
+### **1.2 Enhanced Performance Tracker**
+```python
+# שדרוג utils/performance_tracker.py
+def track_trade_with_symbol_analytics(trade_data):
+    existing_data = current_tracking(trade_data)
+    symbol_stats = symbol_aggregator.get_stats(trade_data.symbol)
+    return {**existing_data, **symbol_stats}
+```
+
+## ⚙️ **שלב 2: AUTO-TUNING ENGINE (48 שעות)**
+
+### **2.1 Auto Parameter Tuner**
+```python
+# מודול חדש: workers/auto_parameter_tuner.py
+class ParameterTuner:
+    def tune_based_on_performance(self):
+        current_win_rate = performance_tracker.get_win_rate()
+        
+        if current_win_rate < 35:
+            return {
+                "min_quality": 6.0,      # יותר מחמיר
+                "risk_reward": 2.5,      # דורש יותר reward
+                "leverage": 8            # מינוף נמוך
+            }
+        elif current_win_rate > 55:
+            return {
+                "min_quality": 4.5,      # יותר גמיש
+                "risk_reward": 1.8,      # reward יותר נמוך
+                "leverage": 12           # מינוף גבוה יותר
+            }
+```
+
+### **2.2 Integration עם Dynamic Filters**
+```python
+# עדכון utils/dynamic_filters.py
+def update_filters_from_tuner(self, tuned_params):
+    self.min_quality_score = tuned_params["min_quality"]
+    self.min_risk_reward = tuned_params["risk_reward"]
+    # מעדכן את ה-filters האוטומטיים
+```
+
+## 🛡️ **שלב 3: PROTECTION SYSTEM (48 שעות)**
+
+### **3.1 Multi-Level Protector**
+```python
+# מודול חדש: workers/multi_level_protector.py
+class MultiLevelProtector:
+    def check_and_activate_protections(self):
+        win_rate = performance_tracker.get_win_rate()
+        consecutive_losses = performance_tracker.get_consecutive_losses()
+        
+        if win_rate < 25 or consecutive_losses >= 4:
+            self.activate_emergency_mode()
+        elif win_rate < 35 or consecutive_losses >= 2:
+            self.activate_conservative_mode()
+```
+
+### **3.2 Conservative Mode Trigger**
+```python
+# אינטגרציה עם config/ai_protections.py
+def activate_conservative_mode(self):
+    ai_protections.update_settings({
+        "max_leverage": 8,
+        "min_risk_reward": 2.0,
+        "allowed_symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"]
+    })
+```
+
+## 📊 **שלב 4: SYMBOL MANAGEMENT (24 שעות)**
+
+### **4.1 Symbol Tiering Engine**
+```python
+# מודול חדש: workers/symbol_tiering_engine.py
+class SymbolTieringEngine:
+    def calculate_tier(self, symbol_stats):
+        score = (symbol_stats.win_rate * 0.4 + 
+                symbol_stats.volume_score * 0.3 +
+                symbol_stats.volatility_score * 0.3)
+        
+        if score >= 7.5: return "A"
+        elif score >= 5.0: return "B" 
+        else: return "C"
+```
+
+### **4.2 Dynamic Blacklist Manager**
+```python
+# מודול חדש: workers/blacklist_manager.py
+class BlacklistManager:
+    def auto_blacklist_symbols(self):
+        for symbol, stats in symbol_aggregator.get_all_stats():
+            if stats.win_rate < 25 and stats.total_trades >= 5:
+                self.blacklist_24h(symbol, f"Win rate too low: {stats.win_rate}%")
+```
+
+## 🔄 **שלב 5: ORCHESTRATION & RECOVERY (24 שעות)**
+
+### **5.1 Auto-Optimization Orchestrator**
+```python
+# worker ראשי חדש: workers/auto_optimization_orchestrator.py
+class AutoOptimizationOrchestrator:
+    def run_optimization_cycle(self):
+        # 1. אסוף נתונים
+        symbol_stats = symbol_aggregator.aggregate_all_symbols()
+        
+        # 2. טנן פרמטרים
+        tuned_params = parameter_tuner.tune(symbol_stats)
+        
+        # 3. עדכן הגנות
+        protector.check_and_activate(symbol_stats)
+        
+        # 4. נהל blacklist
+        blacklist_manager.auto_manage(symbol_stats)
+        
+        # 5. עדכן tiers
+        tiering_engine.update_tiers(symbol_stats)
+```
+
+### **5.2 Auto-Recovery System**
+```python
+def check_for_recovery(self):
+    if self.conservative_mode_active:
+        recent_win_rate = performance_tracker.get_win_rate(last_n=8)
+        if recent_win_rate > 50:
+            self.gradual_recovery_phase_1()
+```
+
+## 📈 **שלב 6: MONITORING & REPORTING (24 שעות)**
+
+### **6.1 Enhanced Telegram Reports**
+```python
+# שדרוג existing reporting
+def send_optimization_report(self):
+    report = f"""
+🔄 **Auto-Optimization Report**
+────────────────
+• Win Rate: {current_win_rate}% (טרום: {previous_win_rate}%)
+• Active Mode: {current_protection_mode}
+• Recent Changes: {recent_parameter_changes}
+• Top Performers: {top_3_symbols}
+• Auto-Blacklisted: {newly_blacklisted}
+────────────────
+    """
+    telegram.send_message(report)
+```
+
+## 🎯 **סדר עדיפויות מיקוד:**
+
+### **מיידי (היום):**
+1. **Symbol Stats Aggregator** - נתונים זה הכל!
+2. **Auto Parameter Tuner** - שיפור מתמשך
+3. **Enhanced Performance Tracker** - מעקב משופר
+
+### **מחר:**
+4. **Multi-Level Protector** - הגנה קריטית
+5. **Symbol Tiering Engine** - ניהול סמלים חכם
+
+### **יומיים:**
+6. **Auto-Optimization Orchestrator** - אינטגרציה שלמה
+7. **Enhanced Reporting** - שקיפות מלאה
+
+## 🔗 **אינטגרציה עם מערכת קיימת:**
+
+```python
+# בארכיטקטורה הסופית:
+existing_system = {
+    "gpt_auto_suggest.py": "מקבל tiers מ-tiering_engine",
+    "dynamic_filters.py": "מקבל params מ-parameter_tuner", 
+    "ai_protections.py": "מקבל protections מ-multi_level_protector",
+    "watchlist_utils.py": "מקבל blacklist updates"
+}
+```
+
+**🚀 מתחילים לבנות? איזה מודול ראשון אתה רוצה שאתמקד בו?**
