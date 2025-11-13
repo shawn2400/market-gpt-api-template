@@ -318,18 +318,86 @@ async def _fetch_context_batch(
 
 async def _build_local_context(symbols: List[str], interval: str = "15m") -> Dict[str, Dict[str, Any]]:
     """
-    Minimal context fallback when Context API is unavailable.
+    Enhanced local context fallback when Context API is unavailable.
     
-    Returns minimal context with symbol keys so downstream pipeline processes each symbol.
-    Actual indicator calculation happens in _fetch_real_indicators later in the pipeline.
+    Fetches basic market data (price, range) from Binance for GRID/Mean-Reversion compatibility.
+    Full indicators are calculated via _fetch_real_indicators later in the pipeline.
     """
     LOGGER.info(
-        f"Context API unavailable - building minimal context for {len(symbols)} symbols. "
-        f"Full indicators will be calculated via _fetch_real_indicators."
+        f"📡 Building enhanced local context for {len(symbols)} symbols (Context API unavailable)"
     )
     
-    # Return minimal context dict with symbol keys so downstream logic processes them
-    return {symbol: {"symbol": symbol, "interval": interval} for symbol in symbols}
+    from utils.binance_client import _init_client
+    
+    out = {}
+    cli = _init_client()
+    
+    if not cli:
+        # Fallback to minimal context if Binance unavailable
+        LOGGER.warning("Binance client unavailable - using minimal context")
+        return {symbol: {"symbol": symbol, "interval": interval} for symbol in symbols}
+    
+    # Fetch 24h ticker data for all symbols (single API call)
+    try:
+        tickers = cli.futures_ticker()
+        ticker_map = {t["symbol"]: t for t in tickers if t.get("symbol")}
+    except Exception as e:
+        LOGGER.warning(f"Failed to fetch tickers: {e}")
+        ticker_map = {}
+    
+    # Load watchlist for quality scores
+    from utils.watchlist_utils import load_watchlist
+    
+    try:
+        watchlist = load_watchlist(min_quality=None)
+        quality_map = {item["symbol"]: item.get("quality_score", 5) for item in watchlist if item.get("symbol")}
+    except Exception as e:
+        LOGGER.warning(f"Failed to load watchlist: {e}")
+        quality_map = {}
+    
+    # Build context with price + range + quality data
+    for symbol in symbols:
+        ticker = ticker_map.get(symbol)
+        quality = quality_map.get(symbol, 5)  # Default quality = 5 (medium)
+        
+        if ticker:
+            price = float(ticker.get("lastPrice", 0))
+            high_24h = float(ticker.get("highPrice", 0))
+            low_24h = float(ticker.get("lowPrice", 0))
+            
+            # Calculate range percentage
+            range_pct = 0.0
+            if low_24h > 0:
+                range_pct = ((high_24h - low_24h) / low_24h) * 100
+            
+            out[symbol] = {
+                "symbol": symbol,
+                "interval": interval,
+                "price": price,
+                "close": price,
+                "high_24h": high_24h,
+                "low_24h": low_24h,
+                "range_pct": range_pct,
+                "filters": {
+                    "quality": quality,
+                    "quality_score": quality,
+                }
+            }
+            LOGGER.debug(f"✅ {symbol}: price={price:.4f}, range={range_pct:.2f}%, quality={quality}")
+        else:
+            # Fallback to minimal context for this symbol
+            out[symbol] = {
+                "symbol": symbol, 
+                "interval": interval,
+                "filters": {
+                    "quality": quality,
+                    "quality_score": quality,
+                }
+            }
+            LOGGER.debug(f"⚠️ {symbol}: no ticker data, using minimal context (quality={quality})")
+    
+    LOGGER.info(f"✅ Enhanced context built for {len(out)} symbols ({len([s for s in out.values() if 'price' in s])}/{len(symbols)} with price data)")
+    return out
 
 def _cooldown_key(symbol: str, ttype: str) -> str:
     return f"algogpt:cooldown:{ttype}:{symbol.upper()}"
@@ -1687,39 +1755,44 @@ async def process_cycle():
             return
         
         # 🎯 SMART 3-STAGE FILTER: Check quality BEFORE expensive AI calls (95% cost reduction)
-        try:
-            from utils.smart_filter import smart_pre_filter
-            
-            # Use ctx if available, otherwise build minimal context from payload
-            filter_ctx = ctx if ctx else {
-                "symbol": symbol,
-                "price": payload.get("entry"),
-                "volume": payload.get("volume", 0),
-                "volume_sma_20": payload.get("volume_sma_20", 1000000),
-                "rsi": payload.get("rsi", 50),
-                "adx": payload.get("adx", 25),
-                "atr_percent": payload.get("atr_percent", 2.0),
-                "bb_upper": payload.get("bb_upper", payload.get("entry", 100) * 1.02),
-                "bb_lower": payload.get("bb_lower", payload.get("entry", 100) * 0.98),
-                "ema_20": payload.get("entry")
-            }
-            
-            filter_result = smart_pre_filter(symbol, filter_ctx)
-            
-            if not filter_result["passed"]:
-                LOGGER.info(
-                    f"🚫 Smart Filter BLOCKED {symbol} at Stage {filter_result['stage']}: "
-                    f"{filter_result['reason']} (quality={filter_result['quality_score']:.1f}/10)"
-                )
-                return  # Skip AI consensus entirely - HUGE cost savings!
-            
-            # Store quality score in payload for logging
-            payload["quality_score"] = filter_result["quality_score"]
-            LOGGER.info(f"✅ Smart Filter PASSED {symbol} - Quality={filter_result['quality_score']:.1f}/10, proceeding to AI consensus")
-            
-        except Exception as e:
-            LOGGER.warning(f"⚠️ Smart Filter error for {symbol}: {e} - proceeding to AI consensus anyway")
-            payload["quality_score"] = 6.0  # Default
+        # ⚠️ BYPASS for GRID: GRID is range-based, not indicators-based - skip Smart Filter
+        if ttype == "GRID":
+            LOGGER.info(f"✅ Smart Filter BYPASSED for GRID trade {symbol} (range-based strategy)")
+            payload["quality_score"] = 7.0  # GRID gets default good quality
+        else:
+            try:
+                from utils.smart_filter import smart_pre_filter
+                
+                # Use ctx if available, otherwise build minimal context from payload
+                filter_ctx = ctx if ctx else {
+                    "symbol": symbol,
+                    "price": payload.get("entry"),
+                    "volume": payload.get("volume", 0),
+                    "volume_sma_20": payload.get("volume_sma_20", 1000000),
+                    "rsi": payload.get("rsi", 50),
+                    "adx": payload.get("adx", 25),
+                    "atr_percent": payload.get("atr_percent", 2.0),
+                    "bb_upper": payload.get("bb_upper", payload.get("entry", 100) * 1.02),
+                    "bb_lower": payload.get("bb_lower", payload.get("entry", 100) * 0.98),
+                    "ema_20": payload.get("entry")
+                }
+                
+                filter_result = smart_pre_filter(symbol, filter_ctx)
+                
+                if not filter_result["passed"]:
+                    LOGGER.info(
+                        f"🚫 Smart Filter BLOCKED {symbol} at Stage {filter_result['stage']}: "
+                        f"{filter_result['reason']} (quality={filter_result['quality_score']:.1f}/10)"
+                    )
+                    return  # Skip AI consensus entirely - HUGE cost savings!
+                
+                # Store quality score in payload for logging
+                payload["quality_score"] = filter_result["quality_score"]
+                LOGGER.info(f"✅ Smart Filter PASSED {symbol} - Quality={filter_result['quality_score']:.1f}/10, proceeding to AI consensus")
+                
+            except Exception as e:
+                LOGGER.warning(f"⚠️ Smart Filter error for {symbol}: {e} - proceeding to AI consensus anyway")
+                payload["quality_score"] = 6.0  # Default
         
         # 🧠 AI CONSENSUS: Validate proposal with 3 AI Brains (≥2/3 required)
         # This applies to ALL proposal types: MEAN_REVERSION, GRID, FUTURES, SPOT
