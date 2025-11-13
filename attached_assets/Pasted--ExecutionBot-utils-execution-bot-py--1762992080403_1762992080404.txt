@@ -1,0 +1,307 @@
+מעולה, אז הנה שלד `ExecutionBot` מוכן, שאתה יכול לשים כ־`utils/execution_bot.py` ולהתאים לקוד שלך.
+
+⚠️ חשוב:
+זה **שלד חכם** – בנוי נכון ארכיטקטונית, אבל צריך שתתאים בו 3–5 שורות לוגיקה קיימת (שמות פונקציות שאתה כבר משתמש בהן ב־`routes/trade.py` / `trade_executor.py`).
+הוספתי לך TODO ברורים איפה צריך לחבר לקוד שלך.
+
+---
+
+```python
+# utils/execution_bot.py
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, Optional, Literal
+
+# 👇 להתאים ל-importים שקיימים אצלך בפרויקט
+from utils import trade_executor, trade_manager, binance_client  # TODO: ודא שהנתיבים נכונים
+# from utils import trade_storage, pnl_tracker                  # אם אתה משתמש בזה כאן
+# from utils.confirm_store import confirm_store                 # אם יש Confirm Store גלובלי
+
+
+FlowType = Literal["MARKET", "HYBRID"]
+
+
+class ExecutionBot:
+    """
+    Execution & Management Bot
+    ---------------------------
+    עטיפה מרכזית לפתיחת טריידים, ניהול, וסגירה.
+
+    המטרה:
+    - נקודת כניסה אחת: open_position / close_position / manage_once
+    - routes/telegram/auto-executor מדברים רק עם המחלקה הזאת
+    - הלוגיקה האמיתית נשארת בקבצים:
+        - trade_executor.py
+        - trade_manager.py
+        - binance_client.py
+    """
+
+    def __init__(self, logger: Optional[logging.Logger] = None) -> None:
+        self.log = logger or logging.getLogger("algogpt.execution_bot")
+
+    # -------------------------------------------------------------------------
+    # Public API
+    # -------------------------------------------------------------------------
+    async def open_position(
+        self,
+        ticket_exec: Dict[str, Any],
+        *,
+        source: str = "api",
+    ) -> Dict[str, Any]:
+        """
+        פתיחת טרייד יחיד לפי ticket_exec.
+
+        :param ticket_exec: dict מסודר עם כל מה שצריך לביצוע טרייד
+                           (symbol, side, position_type, leverage, budget/qty, sl/tp וכו').
+        :param source: מאיפה הטרייד הגיע ("api", "approval", "telegram", "auto" וכו').
+        :return: dict עם status, flow, symbol, side, position_id, orders, reason וכו'.
+        """
+        symbol = ticket_exec.get("symbol")
+        side = ticket_exec.get("side")
+        self.log.info(
+            "ExecutionBot.open_position called",
+            extra={"symbol": symbol, "side": side, "source": source},
+        )
+
+        # 1) ולידציה ראשונית (רזה – לא לחזור על מה שכבר ב-Pydantic ב-route)
+        self._validate_ticket_basic(ticket_exec)
+
+        # 2) בחירת flow (MARKET / HYBRID) – במקום הלוגיקה שהייתה ב-/execute ו-/approve
+        flow = self._select_flow(ticket_exec, source=source)
+
+        # 3) Approval gate – אם צריך אישור, מחזירים pending_approval
+        if self._needs_approval(ticket_exec, source=source):
+            # TODO: אם יש Confirm Store / Redis – לשמור שם את ticket_exec
+            # לדוגמה:
+            # confirm_store.save(ticket_exec)
+            self.log.info(
+                "ExecutionBot: trade requires approval. Marking as pending_approval",
+                extra={"symbol": symbol, "side": side, "source": source},
+            )
+            return {
+                "status": "pending_approval",
+                "flow": flow,
+                "symbol": symbol,
+                "side": side,
+                "reason": "Awaiting approval",
+            }
+
+        # 4) ביצוע בפועל – עטיפה מעל trade_executor / binance_client
+        try:
+            exec_result = await self._execute_flow(flow, ticket_exec, source=source)
+            # כאן exec_result הוא מה ש-trade_executor מחזיר היום
+            # אתה יכול להחזיר אותו כמו שהוא או לעטוף לפורמט אחיד
+            return {
+                "status": exec_result.get("status", "opened"),
+                "flow": flow,
+                "symbol": symbol,
+                "side": side,
+                "position_id": exec_result.get("position_id"),
+                "entry_orders": exec_result.get("entry_orders"),
+                "sl_order": exec_result.get("sl_order"),
+                "tp_orders": exec_result.get("tp_orders"),
+                "raw": exec_result,
+            }
+
+        except Exception as exc:
+            # TODO: אם יש אצלך Exception ייחודי של Binance, אפשר לתפוס אותו בנפרד
+            # לדוגמה: BinanceAPIException / ClientError וכו'
+            self.log.exception(
+                "ExecutionBot.open_position failed",
+                extra={"symbol": symbol, "side": side, "source": source},
+            )
+            # אפשר להוסיף כאן טיפול חכם ב-code -4061 וכו' אם יש גישה ל-code
+            return {
+                "status": "error",
+                "flow": flow,
+                "symbol": symbol,
+                "side": side,
+                "reason": str(exc),
+            }
+
+    async def close_position(
+        self,
+        *,
+        position_id: Optional[str] = None,
+        symbol: Optional[str] = None,
+        reason: str = "",
+    ) -> Dict[str, Any]:
+        """
+        סגירת פוזיציה (לפי position_id או symbol – תלוי מה יש במערכת).
+
+        :param position_id: מזהה פנימי של הפוזיציה (אם קיים במערכת).
+        :param symbol: סמבול (BTCUSDT וכו') אם אין position_id.
+        :param reason: סיבה לוגית לסגירה (לוגים, PnL וכו').
+        """
+        self.log.info(
+            "ExecutionBot.close_position called",
+            extra={"position_id": position_id, "symbol": symbol, "reason": reason},
+        )
+
+        # TODO: להתאים לפונקציית סגירה קיימת אצלך
+        # לדוגמה:
+        # result = await trade_executor.close_position_live(position_id=..., symbol=...)
+        # או:
+        # result = await binance_client.close_position(symbol=...)
+        result: Dict[str, Any] = {}
+
+        try:
+            # דוגמה כללית – לשנות לפי הקוד שלך:
+            if position_id:
+                # result = await trade_executor.close_position_by_id(position_id, reason=reason)
+                raise NotImplementedError("Implement close by position_id")
+            elif symbol:
+                # result = await trade_executor.close_position_by_symbol(symbol, reason=reason)
+                raise NotImplementedError("Implement close by symbol")
+            else:
+                raise ValueError("Either position_id or symbol must be provided")
+
+            return {
+                "status": result.get("status", "closed"),
+                "symbol": symbol or result.get("symbol"),
+                "position_id": position_id or result.get("position_id"),
+                "raw": result,
+            }
+        except Exception as exc:
+            self.log.exception(
+                "ExecutionBot.close_position failed",
+                extra={"position_id": position_id, "symbol": symbol},
+            )
+            return {
+                "status": "error",
+                "symbol": symbol,
+                "position_id": position_id,
+                "reason": str(exc),
+            }
+
+    async def manage_once(self) -> Dict[str, Any]:
+        """
+        סיבוב ניהול יחיד (tick אחד) – להזיז SL/TP, BE, Trailing וכו'.
+
+        מיועד להרצה ע"י scheduler/auto-executor,
+        ולא לפתוח לולאה אינסופית כאן.
+        """
+        self.log.info("ExecutionBot.manage_once called")
+
+        # TODO: להתאים לפונקציה הקיימת אצלך ב-trade_manager
+        # לדוגמה:
+        # actions = await trade_manager.manage_open_trades()
+        actions: Dict[str, Any] = {}
+
+        try:
+            # actions = await trade_manager.manage_open_trades()
+            raise NotImplementedError("Connect to trade_manager.manage_open_trades()")
+
+        except Exception as exc:
+            self.log.exception("ExecutionBot.manage_once failed")
+            return {
+                "status": "error",
+                "reason": str(exc),
+            }
+
+        return {
+            "status": "ok",
+            "actions": actions,
+        }
+
+    # -------------------------------------------------------------------------
+    # Internal helpers
+    # -------------------------------------------------------------------------
+    def _validate_ticket_basic(self, ticket_exec: Dict[str, Any]) -> None:
+        """
+        ולידציה בסיסית בלבד – כדי לתפוס טעויות גסות לפני הביצוע.
+        (שאר הוולידציה כבר נעשית ב-Pydantic + ב-executor עצמו).
+        """
+        symbol = ticket_exec.get("symbol")
+        side = ticket_exec.get("side")
+        budget = ticket_exec.get("budget") or ticket_exec.get("quantity")
+
+        if not symbol:
+            raise ValueError("Missing symbol in ticket_exec")
+        if side not in ("LONG", "SHORT", "BUY", "SELL"):
+            raise ValueError(f"Invalid side: {side!r}")
+        if budget is not None and float(budget) <= 0:
+            raise ValueError("Budget/quantity must be > 0")
+
+    def _select_flow(
+        self,
+        ticket_exec: Dict[str, Any],
+        *,
+        source: str,
+    ) -> FlowType:
+        """
+        בחירת flow (MARKET / HYBRID) לפי הלוגיקה שהייתה עד עכשיו ב-/execute ו-/approve.
+
+        TODO: להעתיק לכאן את ההיגיון שהיה אצלך ב-routes/trade.py:
+        - אם צריך אישור → HYBRID
+        - אם זה מגיע מ-approval/telegram → MARKET
+        - אם יש flags ב-ENV → להתחשב בהם
+        """
+        # דוגמה בסיסית בלבד – להחליף ללוגיקה האמיתית:
+        need_approval = bool(ticket_exec.get("need_approval"))
+        if need_approval and source == "api":
+            return "HYBRID"
+        return "MARKET"
+
+    def _needs_approval(self, ticket_exec: Dict[str, Any], *, source: str) -> bool:
+        """
+        האם הטרייד הזה צריך לעבור דרך מסלול אישור (טלגרם / webhook) לפני ביצוע אמיתי.
+
+        TODO: להתאים ללוגיקה שלך (Quality score, budget, flags וכו').
+        """
+        if source in ("approval", "telegram"):
+            # כבר אושר / הגיע מתוך מסלול אישור
+            return False
+
+        # דוגמה – להחליף ל-conditions האמיתיים אצלך:
+        return bool(ticket_exec.get("need_approval"))
+
+    async def _execute_flow(
+        self,
+        flow: FlowType,
+        ticket_exec: Dict[str, Any],
+        *,
+        source: str,
+    ) -> Dict[str, Any]:
+        """
+        ביצוע בפועל של הטרייד לפי flow.
+
+        כאן מחברים לפונקציות האמיתיות מ-trade_executor.py
+        (למשל execute_trade_live / execute_trade_hybrid וכו').
+        """
+        # TODO: להתאים לשמות הפונקציות אצלך:
+        if flow == "MARKET":
+            # לדוגמה:
+            # return await trade_executor.execute_trade_live(ticket_exec, source=source)
+            raise NotImplementedError("Connect MARKET flow to trade_executor")
+        elif flow == "HYBRID":
+            # לדוגמה:
+            # return await trade_executor.execute_trade_hybrid(ticket_exec, source=source)
+            raise NotImplementedError("Connect HYBRID flow to trade_executor")
+        else:
+            raise ValueError(f"Unknown flow: {flow}")
+```
+
+---
+
+### איך ממשיכים מפה (תכל'ס)
+
+1. תיצור קובץ `utils/execution_bot.py` ותדביק את זה כמו שהוא.
+2. תעבור על כל `TODO`:
+
+   * תחבר לפונקציות שאתה כבר משתמש בהן ב־`routes/trade.py` ו־`trade_executor.py`.
+   * תעתיק לשם את לוגיקת בחירת ה־flow וה־approval שהייתה ב־routes.
+3. ב־`routes/trade.py`:
+
+   * תיצור מופע יחיד של `ExecutionBot` (למשל כ־dependency ב-FastAPI או כ־singleton).
+   * ב־`/trade/execute` ו־`/trade/approve`:
+
+     * במקום כל הלוגיקה – תבנה `ticket_exec` ותעשה:
+
+       ```python
+       res = await execution_bot.open_position(ticket_exec, source="api" or "approval")
+       return JSONResponse(res)
+       ```
+
+כשתרצה, נוכל גם לעשות ביחד שינוי מדויק ל־`routes/trade.py`: לקחת את הקטעים שיש לך שם היום ולהראות לך איך הם זזים לתוך `_select_flow` / `_needs_approval` / `_execute_flow`.

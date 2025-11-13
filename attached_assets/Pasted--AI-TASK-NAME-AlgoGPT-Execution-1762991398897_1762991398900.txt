@@ -1,0 +1,220 @@
+להעתיק/להדביק לסוכן ה-AI (בריפליט) כמו שזה, בהודעה אחת:
+
+---
+
+**TASK NAME:** AlgoGPT – Execution & Management Bot Wrapper (Controller בלבד, בלי לאחד קבצים)
+
+**מטרה:**
+לבנות מודול קטן חדש בשם **Execution & Management Bot** שמשמש כ־*Controller מרכזי* לפתיחת טריידים, ניהול דינמי וסגירה – **בלי** להעביר את כל הקוד לקובץ אחד ובלי לשבור את מה שקיים.
+המודול החדש רק *עוטף* את הפונקציות הקיימות (`trade_executor`, `trade_manager`, `binance_client`, וכו’), ויוצר API פנימי מסודר וברור לשאר המערכת (routes, Auto Executor, Telegram, AI).
+
+---
+
+### ❌ אל תשנה / אל תאחד
+
+1. **לא לאחד קבצים!**
+   לא להעביר לוגיקה קיימת לקובץ אחד ולא למחוק/לאחד את הקבצים הבאים:
+
+   * `utils/binance_client.py`
+   * `utils/trade_executor.py`
+   * `utils/trade_manager.py`
+   * `utils/user_stream.py`
+   * `utils/trade_storage.py`
+   * `utils/pnl_tracker.py`
+   * כל קבצי ה־routes: `routes/trade.py`, `routes/executor.py`, `routes/telegram_bot.py`, `routes/telegram_webhook.py`
+   * כל קבצי ה־health/metrics (כמו `metrics.py`, `health_*`)
+
+2. **לא לשנות מנגנוני אבטחה / ENV / טלגרם / Circuit Breaker**
+
+   * לא לשנות: אימות, Bearer, HMAC, anti_replay, `.env`, Telegram notifier, Circuit Breaker, Daily Loss Cap.
+
+המטרה: להוסיף שכבת Controller מעל מה שקיים, לא לשכתב את המערכת.
+
+---
+
+### 📁 קבצים קיימים שאפשר ורצוי להשתמש בהם
+
+להניח שהם קיימים, ולהשתמש בהם *כמו שהם*:
+
+* `utils/binance_client.py` – כל תקשורת עם Binance (פקודות, SL/TP, דיוק כמות/מחיר)
+* `utils/trade_executor.py` – פתיחת טריידים, Budget, הצמדת SL/TP, Ladder
+* `utils/trade_manager.py` – ניהול פוזיציות בזמן אמת (Breakeven, Trailing SL, Dynamic TP, Chop)
+* `utils/user_stream.py` – זיהוי מילויים, SL/TP, סגירות מה־userStream
+* `utils/trade_storage.py` – שמירת טריידים ונתונים
+* `utils/pnl_tracker.py` – חישוב ושמירת PnL
+
+---
+
+### 🆕 מה ליצור: Execution & Management Bot (Controller)
+
+צור קובץ חדש:
+
+`utils/execution_bot.py`
+
+בתוכו ליצור מחלקה או מודול עם API פנימי ברור.
+למשל מחלקה:
+
+```python
+class ExecutionBot:
+    async def open_position(self, payload: dict) -> dict:
+        ...
+    async def manage_once(self) -> dict:
+        ...
+    async def close_position(self, position_id: str | None = None, symbol: str | None = None, reason: str = "") -> dict:
+        ...
+    async def sync_with_exchange_once(self) -> dict:
+        ...
+```
+
+#### 1) `open_position(payload: dict) -> dict`
+
+* קלט: `payload` מסודר שכולל לפחות:
+
+  * `symbol`
+  * `side` (LONG/SHORT או BUY/SELL)
+  * `position_type` (futures/spot)
+  * `entry_type` (limit/stop/ladder וכו’ – בהתאם למה שקיים)
+  * `leverage` (אם רלוונטי)
+  * `budget` או `quantity`
+  * פרטי SL/TP (או חישוב על בסיס ATR אם זה כבר קיים)
+* בתוך הפונקציה:
+
+  * ולידציות בסיסיות (לא עמוסות): יש symbol, side, budget>0, וכו’.
+  * שימוש ב־לוגיקה קיימת מ־`trade_executor.py` (למשל `execute_trade_live` או פונקציה קיימת אחרת) – **לא לכתוב Executor מחדש**.
+  * שימוש ב־`binance_client.py` להצבת ההזמנות בפועל.
+  * שמירת המידע ב־`trade_storage` / `pnl_tracker` אם זה כבר נעשה היום – לא לשבור, רק לוודא שזה קורה.
+* פלט: dict אחיד וברור, לדוגמה:
+
+  ```json
+  {
+    "status": "opened" | "rejected" | "error",
+    "symbol": "...",
+    "side": "...",
+    "position_id": "...",
+    "entry_orders": [...],
+    "sl_order": "...",
+    "tp_orders": [...],
+    "reason": "אם יש כישלון – טקסט מוסבר"
+  }
+  ```
+
+#### 2) `manage_once() -> dict`
+
+* תפקיד: **סיבוב ניהול אחד** (tick אחד), לא לולאה אינסופית.
+* בפנים:
+
+  * שליפה של רשימת פוזיציות פתוחות (באותה שיטה שבה `trade_manager` עובד היום – מקומית/בורסה).
+  * לכל פוזיציה:
+
+    * שימוש בלוגיקה קיימת מתוך `trade_manager.py`:
+
+      * Breakeven
+      * Trailing SL
+      * Dynamic TP
+      * Chop detection
+      * החלטה על סגירה חלקית/מלאה
+    * ביצוע בפועל דרך `binance_client.py` (Update SL/TP/Close וכו’).
+  * איסוף summary: כמה פוזיציות טופלו, מה הוזז, מה נסגר.
+* פלט: dict עם סיכום, לדוגמה:
+
+  ```json
+  {
+    "handled_positions": 3,
+    "actions": [
+      {"symbol": "BTCUSDT", "action": "move_sl_to_be", "details": "..."},
+      {"symbol": "ETHUSDT", "action": "trail_sl", "details": "..."}
+    ]
+  }
+  ```
+
+#### 3) `close_position(position_id / symbol, reason="") -> dict`
+
+* קלט: או `position_id` (אם יש כזה במערכת), או `symbol` (לפי איך שמנוהל היום).
+* בפנים:
+
+  * שימוש בלוגיקה קיימת לסגירת פוזיציה (לא להמציא מחדש).
+  * סגירה בבורסה דרך `binance_client.py`.
+  * עדכון `trade_storage` / `pnl_tracker`.
+* פלט: dict עם:
+
+  * `status` (`closed` / `error`)
+  * מה נסגר, באיזה מחיר, PnL אם זמין
+  * `reason` (כולל reason שהתקבל כארגומנט).
+
+#### 4) `sync_with_exchange_once() -> dict` (אופציונלי, אם יש צורך)
+
+* אם כבר יש לוגיקה קיימת שמסנכרנת בין מצב הבורסה למצב המקומי – לעטוף אותה כאן.
+* פלט: סיכום קצר.
+
+---
+
+### 🔌 אינטגרציה – שינוי מינימלי ב־routes / Auto Executor
+
+לא לשכתב routes מאפס.
+רק לעדכן ש־*במקום* לקרוא ישירות ל־`trade_executor` / `trade_manager` – הם קוראים ל־ExecutionBot.
+
+1. בנתיבים של פתיחת טרייד (למשל `routes/trade.py`):
+
+   * במקום:
+
+     * קריאה ישירה ל־`execute_trade_live(...)`
+   * להשתמש ב:
+
+     * מופע אחד של `ExecutionBot` (Singleton/Dependency) ולהריץ `await execution_bot.open_position(payload)`.
+
+2. בנתיבים / לופרים של ניהול (למשל `/manage-once`, Auto Executor, Scheduler):
+
+   * לקרוא ל־`await execution_bot.manage_once()` במקום לוגיקה מפוזרת.
+
+3. בנתיבי סגירה (אם קיימים `/close-position`, `/emergency-close` וכו’):
+
+   * להשתמש ב־`execution_bot.close_position(...)`.
+
+**חשוב:**
+לא ליצור לולאה אינסופית חדשה בתוך `execution_bot.py`.
+כל Timing (כל כמה שניות להריץ וכו’) – נשאר ב־Scheduler / Auto Executor שקיים היום.
+
+---
+
+### ⚙️ דרישות נוספות
+
+1. **Logging**
+
+   * להשתמש במנגנון ה־logging הקיים בפרויקט (לא ליצור Logger חדש).
+   * להוסיף לוגים רזים וברורים ב־`execution_bot.py`:
+
+     * פתיחת טרייד
+     * ניהול (שינוי SL/TP, מעבר ל-BE)
+     * סגירה
+
+2. **Docstrings**
+
+   * לכל פונקציה ציבורית ב־`execution_bot.py` להוסיף docstring ברור (אנגלית קצרה, זה מספיק):
+
+     * מה היא עושה
+     * אילו פרמטרים מקבלת
+     * מה היא מחזירה
+
+3. **אפס שבירת תאימות**
+
+   * כל ה־API החיצוני (endpoints, Telegram, Circuit Breaker) חייב להמשיך לעבוד.
+   * אם צריך לגעת בנתיב קיים – לשמור את אותו JSON Response, רק שהביצוע בפנים עובר דרך `ExecutionBot`.
+
+---
+
+### ✅ Acceptance Criteria
+
+1. קיים קובץ חדש: `utils/execution_bot.py` עם מחלקה/מודול `ExecutionBot` ו־API פנימי:
+
+   * `open_position`
+   * `manage_once`
+   * `close_position`
+   * (`sync_with_exchange_once` אם רלוונטי)
+2. מסלולי פתיחת טרייד / ניהול / סגירה משתמשים ב־ExecutionBot – בלי לשבור את ה־API החיצוני.
+3. אין לולאות אינסופיות חדשות – כל פונקציה עושה "סיבוב אחד" בלבד.
+4. כל הטסטים/בריאות בסיסית (`/readyz`, `/metrics`, `/status`) נשארים תקינים.
+
+---
+
+**מטרה סופית:**
+להגדיר רשמית “Execution & Management Bot” כ־Controller מעל המערכת הקיימת – בלי להמציא בוט חדש, בלי לאחד קבצים, רק לרכז את הלוגיקה הקיימת מאחורי API פנימי אחד, מסודר ונקי.
