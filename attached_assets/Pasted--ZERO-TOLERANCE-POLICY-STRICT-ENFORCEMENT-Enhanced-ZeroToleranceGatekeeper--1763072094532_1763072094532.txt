@@ -1,0 +1,291 @@
+**🎯 ZERO TOLERANCE POLICY - STRICT ENFORCEMENT!**
+
+## 🚫 **Enhanced ZeroToleranceGatekeeper - אפס פשרות!**
+
+```python
+class ZeroToleranceGatekeeper:
+    def __init__(self):
+        self.redis = redis_manager
+        self.permanent_blacklist = set()
+        self.temporary_blacklist = {}  # {symbol: expiry_timestamp}
+        
+    async def validate_symbol(self, symbol, order_type="ANY"):
+        """וולידציה קפדנית - אפס פשרות!"""
+        
+        # 1. בדיקת BLACKLIST לצמיתות
+        if await self.is_permanently_blacklisted(symbol):
+            return {
+                'approved': False,
+                'reason': f'🚫 PERMANENT BLACKLIST - {symbol} is garbage',
+                'blocked': True,
+                'emergency_level': 'MAXIMUM'
+            }
+        
+        # 2. בדיקת BLACKLIST זמני
+        if await self.is_temporarily_blacklisted(symbol):
+            return {
+                'approved': False, 
+                'reason': f'🚫 TEMPORARY BLACKLIST - {symbol} performing poorly',
+                'blocked': True,
+                'emergency_level': 'HIGH'
+            }
+        
+        # 3. בדיקה בסיסית - ב-TOP 50?
+        if not await self.is_in_top_50(symbol):
+            # הוסף ל-blacklist זמני לאחר 3 כישלונות
+            await self.record_failure(symbol)
+            return {
+                'approved': False,
+                'reason': f'🚫 {symbol} NOT in TOP 50 - BLOCKED',
+                'blocked': True,
+                'emergency_level': 'HIGH'
+            }
+        
+        # 4. הגנות GRID - רק TOP 10!
+        grid_check = self.check_grid_trading(symbol, order_type)
+        if not grid_check['approved']:
+            return grid_check
+        
+        # 5. איפוס מונה כישלונות אם עבר
+        await self.record_success(symbol)
+        
+        return {
+            'approved': True,
+            'reason': '✅ TOP 50 Approved Symbol',
+            'allowed_leverage': await self.calculate_max_leverage(symbol)
+        }
+    
+    async def is_permanently_blacklisted(self, symbol):
+        """האם הסמל ב-blacklist לצמיתות?"""
+        return symbol in self.permanent_blacklist
+    
+    async def is_temporarily_blacklisted(self, symbol):
+        """האם הסמל ב-blacklist זמני?"""
+        if symbol in self.temporary_blacklist:
+            expiry = self.temporary_blacklist[symbol]
+            if datetime.now().timestamp() < expiry:
+                return True
+            else:
+                # הסר אם תוקף פג
+                del self.temporary_blacklist[symbol]
+        return False
+    
+    async def record_failure(self, symbol):
+        """רישום כישלון של סמל"""
+        failure_key = f"failure_count:{symbol}"
+        current_failures = await self.redis.incr(failure_key)
+        
+        # הגדר TTL ל-24 שעות
+        if current_failures == 1:
+            await self.redis.expire(failure_key, 86400)  # 24 hours
+        
+        # אם 3 כישלונות ב-24 שעות - blacklist זמני
+        if current_failures >= 3:
+            await self.add_to_temporary_blacklist(symbol, hours=24)
+            await self.redis.delete(failure_key)  # איפוס מונה
+            
+            logger.warning(f"⛔ TEMPORARY BLACKLIST: {symbol} - 3 failures in 24h")
+    
+    async def record_success(self, symbol):
+        """רישום הצלחה של סמל - איפוס מונה כישלונות"""
+        failure_key = f"failure_count:{symbol}"
+        await self.redis.delete(failure_key)
+    
+    async def add_to_temporary_blacklist(self, symbol, hours=24):
+        """הוספה ל-blacklist זמני"""
+        expiry = datetime.now().timestamp() + (hours * 3600)
+        self.temporary_blacklist[symbol] = expiry
+        
+        # שמור ב-Redis גם כן
+        await self.redis.setex(
+            f"temp_blacklist:{symbol}", 
+            hours * 3600, 
+            "true"
+        )
+    
+    async def add_to_permanent_blacklist(self, symbol, reason="Repeated poor performance"):
+        """הוספה ל-blacklist לצמיתות"""
+        self.permanent_blacklist.add(symbol)
+        
+        # שמור ב-Redis
+        await self.redis.sadd("permanent_blacklist", symbol)
+        
+        logger.error(f"🔴 PERMANENT BLACKLIST: {symbol} - {reason}")
+    
+    def check_grid_trading(self, symbol, order_type):
+        """GRID trading - רק ל-TOP 10!"""
+        if order_type == "GRID":
+            top_10 = self.get_current_top_10()
+            if symbol not in top_10:
+                return {
+                    'approved': False,
+                    'reason': f'🚫 GRID trading blocked for {symbol} - TOP 10 only',
+                    'blocked': True,
+                    'emergency_level': 'HIGH'
+                }
+        return {'approved': True}
+    
+    async def is_in_top_50(self, symbol):
+        """האם הסמל נמצא ב-TOP 50 הנוכחי?"""
+        top_50 = await self.get_current_top_50()
+        return symbol in top_50
+```
+
+## ⚡ **Performance Tracker - זיהוי זבל אוטומטי**
+
+```python
+class GarbageDetector:
+    def __init__(self):
+        self.performance_thresholds = {
+            'max_consecutive_losses': 3,
+            'min_win_rate': 0.35,
+            'max_avg_loss': -0.05,  # -5%
+            'min_volume_requirement': 10_000_000  # $10M
+        }
+    
+    async def analyze_symbol_performance(self, symbol):
+        """ניתוח ביצועי סמל - זיהוי זבל"""
+        performance_data = await self.get_symbol_performance(symbol)
+        
+        # קריטריונים לזיהוי זבל
+        garbage_flags = []
+        
+        # 1. יותר מדי הפסדים רצופים
+        if performance_data['consecutive_losses'] >= self.performance_thresholds['max_consecutive_losses']:
+            garbage_flags.append(f"Too many consecutive losses: {performance_data['consecutive_losses']}")
+        
+        # 2. win rate נמוך מדי
+        if performance_data['win_rate'] < self.performance_thresholds['min_win_rate']:
+            garbage_flags.append(f"Low win rate: {performance_data['win_rate']:.1%}")
+        
+        # 3. הפסד ממוצע גבוה
+        if performance_data['avg_loss'] < self.performance_thresholds['max_avg_loss']:
+            garbage_flags.append(f"High average loss: {performance_data['avg_loss']:.1%}")
+        
+        # 4. נפח נמוך
+        if performance_data['avg_volume'] < self.performance_thresholds['min_volume_requirement']:
+            garbage_flags.append(f"Low volume: ${performance_data['avg_volume']:,.0f}")
+        
+        return {
+            'is_garbage': len(garbage_flags) > 0,
+            'garbage_reasons': garbage_flags,
+            'performance_score': performance_data['win_rate'] * 100  # ציון 0-100
+        }
+    
+    async def auto_blacklist_garbage(self):
+        """סריקה אוטומטית והוספה ל-blacklist"""
+        all_traded_symbols = await self.get_all_traded_symbols()
+        
+        for symbol in all_traded_symbols:
+            analysis = await self.analyze_symbol_performance(symbol)
+            
+            if analysis['is_garbage']:
+                # אם זוהה כזבל - הוסף ל-blacklist לצמיתות
+                reason = " | ".join(analysis['garbage_reasons'])
+                await self.gatekeeper.add_to_permanent_blacklist(symbol, reason)
+                
+                logger.warning(f"🗑️ AUTO-BLACKLISTED: {symbol} - {reason}")
+```
+
+## 🔄 **Real-time Enforcement System**
+
+```python
+class RealTimeEnforcement:
+    def __init__(self):
+        self.gatekeeper = ZeroToleranceGatekeeper()
+        self.garbage_detector = GarbageDetector()
+        
+    async def enforce_zero_tolerance(self):
+        """אכיפה רצופה של Zero Tolerance Policy"""
+        while True:
+            try:
+                # 1. סרוק וזהה זבל אוטומטי
+                await self.garbage_detector.auto_blacklist_garbage()
+                
+                # 2. נקה blacklist זמני שפג תוקף
+                await self.clean_expired_blacklists()
+                
+                # 3. עדכן סטטיסטיקות
+                await self.update_enforcement_stats()
+                
+                # המתנה 5 דקות בין סריקות
+                await asyncio.sleep(300)
+                
+            except Exception as e:
+                logger.error(f"❌ Enforcement system error: {e}")
+                await asyncio.sleep(60)
+    
+    async def clean_expired_blacklists(self):
+        """ניקוי blacklists זמניים שפג תוקפם"""
+        current_time = datetime.now().timestamp()
+        expired_symbols = []
+        
+        for symbol, expiry in self.gatekeeper.temporary_blacklist.items():
+            if current_time > expiry:
+                expired_symbols.append(symbol)
+        
+        for symbol in expired_symbols:
+            del self.gatekeeper.temporary_blacklist[symbol]
+            logger.info(f"🟡 Removed {symbol} from temporary blacklist")
+```
+
+## 📊 **Enforcement Dashboard**
+
+```python
+async def get_zero_tolerance_dashboard():
+    """דשבורד אכיפה מלא"""
+    gatekeeper = ZeroToleranceGatekeeper()
+    
+    return {
+        'policy': 'ZERO_TOLERANCE_ENFORCEMENT',
+        'blocked_today': await get_todays_blocks(),
+        'permanent_blacklist_count': len(gatekeeper.permanent_blacklist),
+        'temporary_blacklist_count': len(gatekeeper.temporary_blacklist),
+        'top_blacklisted_symbols': await get_top_blacklisted(),
+        'enforcement_stats': {
+            'grid_blocks_today': await get_grid_blocks(),
+            'top50_blocks_today': await get_top50_blocks(),
+            'auto_blacklists_today': await get_auto_blacklists()
+        }
+    }
+```
+
+## 🚀 **SYSTEM INTEGRATION - STRICT ENFORCEMENT**
+
+```python
+@app.on_event("startup") 
+async def startup_zero_tolerance_system():
+    """השקת מערכת Zero Tolerance המלאה"""
+    
+    # 1. אתחול כל המערכות
+    gatekeeper = ZeroToleranceGatekeeper()
+    enforcement = RealTimeEnforcement()
+    garbage_detector = GarbageDetector()
+    
+    # 2. טען blacklists קיימים
+    await gatekeeper.load_existing_blacklists()
+    
+    # 3. הפעל אכיפה רצופה
+    asyncio.create_task(enforcement.enforce_zero_tolerance())
+    
+    # 4. סריקת זבל ראשונית
+    asyncio.create_task(garbage_detector.auto_blacklist_garbage())
+    
+    logger.info("🔴 ZERO TOLERANCE SYSTEM ACTIVATED - Strict Enforcement!")
+```
+
+## 🎯 **סיכום Zero Tolerance Policy:**
+
+### **🚫 BLOCKED - NO EXCEPTIONS:**
+1. **לא ב-TOP 50?** → **אפס טריידים!**
+2. **GRID מחוץ ל-TOP 10?** → **חסום!**  
+3. **3 כישלונות ב-24h?** → **Blacklist זמני!**
+4. **ביצועים גרועים?** → **Blacklist לצמיתות!**
+
+### **✅ APPROVED - STRICT CRITERIA:**
+- **רק TOP 50** - הטובים ביותר
+- **GRID רק TOP 10** - המצטיינים
+- **Win rate > 35%** - ביצועים טובים
+- **Volume > $10M** - נפח מספיק
+
+**המערכת מוכנה לאכיפה קפדנית! 🚨**

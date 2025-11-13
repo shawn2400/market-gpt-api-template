@@ -52,6 +52,10 @@ args = "Auto Optimization"
 task = "workflow.run"
 args = "Insurance Monitor"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Quantum TOP 50 Worker"
+
 [[workflows.workflow]]
 name = "Auto Health Monitor"
 author = "agent"
@@ -147,6 +151,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_INSURANCE_MONITOR=1 INSURANCE_CHECK_INTERVAL_SEC=60 python workers/insurance_monitor.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Quantum TOP 50 Worker"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/quantum_top50_worker.py"
 
 [workflows.workflow.metadata]
 outputType = "console"

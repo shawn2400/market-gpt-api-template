@@ -94,6 +94,15 @@ class TradingGatekeeper:
             self.leverage_engine = None
             self._leverage_engine_available = False
         
+        try:
+            from utils.zero_tolerance_gatekeeper import get_gatekeeper, ZeroToleranceGatekeeper
+            self.zero_tolerance: Optional[ZeroToleranceGatekeeper] = get_gatekeeper()
+            self._zero_tolerance_available = True
+        except Exception as e:
+            logger.warning(f"Zero Tolerance Gatekeeper unavailable: {e}")
+            self.zero_tolerance = None
+            self._zero_tolerance_available = False
+        
         logger.info(
             f"🚪 Trading Gatekeeper initialized | "
             f"Enabled: {self.enabled} | "
@@ -101,7 +110,8 @@ class TradingGatekeeper:
             f"Filters: Symbol={self._symbol_filter_available}, "
             f"Quality={self._quality_monitor_available}, "
             f"Limits={self._limits_manager_available}, "
-            f"Leverage={self._leverage_engine_available}"
+            f"Leverage={self._leverage_engine_available}, "
+            f"ZeroTolerance={self._zero_tolerance_available}"
         )
     
     def validate_trade(
@@ -140,6 +150,26 @@ class TradingGatekeeper:
         
         # Run all validation checks
         try:
+            # 0. ZERO TOLERANCE GATEKEEPER (TOP 50 FILTER) - HIGHEST PRIORITY
+            if self._zero_tolerance_available:
+                # Accept both position_type and position_side (ExecutionBot uses position_side)
+                trade_type = kwargs.get("position_type") or kwargs.get("position_side") or kwargs.get("trade_type") or "LONG"
+                trade_type = str(trade_type).upper()
+                
+                # Normalize GRID detection
+                is_grid = kwargs.get("is_grid", False) or "GRID" in trade_type
+                if is_grid:
+                    trade_type = "GRID"
+                
+                block_result = self.zero_tolerance.check_symbol_allowed(symbol, trade_type)
+                result.filters_passed.append("zero_tolerance") if not block_result.blocked else result.filters_failed.append("zero_tolerance")
+                
+                if block_result.blocked:
+                    logger.warning(
+                        f"🚫 ZERO TOLERANCE BLOCK: {symbol} ({trade_type}) - {block_result.reason}"
+                    )
+                    return self._build_rejection(result, "zero_tolerance", block_result.reason)
+            
             # 1. SYMBOL FILTER
             if self._symbol_filter_available:
                 symbol_check = self._run_symbol_filter(symbol, **kwargs)

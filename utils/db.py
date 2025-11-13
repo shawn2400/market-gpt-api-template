@@ -300,6 +300,84 @@ def _init_postgres(cur):
     """)
     cur.execute("CREATE INDEX IF NOT EXISTS idx_market_states_symbol ON market_states(symbol);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_market_states_updated_at ON market_states(updated_at);")
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS top_50_snapshots (
+          id SERIAL PRIMARY KEY,
+          scan_timestamp TIMESTAMP NOT NULL,
+          symbol VARCHAR NOT NULL,
+          rank INTEGER NOT NULL,
+          total_score FLOAT NOT NULL,
+          volume_24h FLOAT NOT NULL,
+          liquidity FLOAT NOT NULL,
+          volatility_pct FLOAT NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_top50_snapshots_ts ON top_50_snapshots(scan_timestamp);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_top50_snapshots_symbol ON top_50_snapshots(symbol);")
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS grid_snapshot_symbols (
+          id SERIAL PRIMARY KEY,
+          scan_timestamp TIMESTAMP NOT NULL,
+          symbol VARCHAR NOT NULL,
+          rank INTEGER NOT NULL,
+          tier VARCHAR NOT NULL,
+          grid_score FLOAT NOT NULL,
+          volume_24h FLOAT NOT NULL,
+          liquidity FLOAT NOT NULL,
+          atr_pct FLOAT NOT NULL,
+          spread_bps FLOAT NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_grid_snapshots_ts ON grid_snapshot_symbols(scan_timestamp);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_grid_snapshots_symbol ON grid_snapshot_symbols(symbol);")
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS grid_performance_aggregates (
+          id SERIAL PRIMARY KEY,
+          symbol VARCHAR NOT NULL,
+          date DATE NOT NULL,
+          total_trades INTEGER DEFAULT 0,
+          wins INTEGER DEFAULT 0,
+          losses INTEGER DEFAULT 0,
+          win_rate FLOAT DEFAULT 0,
+          total_pnl_usdt FLOAT DEFAULT 0,
+          avg_pnl_pct FLOAT DEFAULT 0,
+          max_drawdown_pct FLOAT DEFAULT 0,
+          created_at TIMESTAMP DEFAULT NOW(),
+          updated_at TIMESTAMP DEFAULT NOW(),
+          UNIQUE(symbol, date)
+        );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_grid_perf_symbol_date ON grid_performance_aggregates(symbol, date);")
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS blacklist_permanent (
+          id SERIAL PRIMARY KEY,
+          symbol VARCHAR NOT NULL UNIQUE,
+          reason VARCHAR NOT NULL,
+          blacklisted_at TIMESTAMP DEFAULT NOW(),
+          created_by VARCHAR DEFAULT 'system'
+        );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_perm_symbol ON blacklist_permanent(symbol);")
+    
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS blacklist_temp_events (
+          id SERIAL PRIMARY KEY,
+          symbol VARCHAR NOT NULL,
+          reason VARCHAR NOT NULL,
+          failure_count INTEGER NOT NULL,
+          banned_at TIMESTAMP NOT NULL,
+          expires_at TIMESTAMP NOT NULL,
+          created_at TIMESTAMP DEFAULT NOW()
+        );
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_temp_symbol ON blacklist_temp_events(symbol);")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_blacklist_temp_expires ON blacklist_temp_events(expires_at);")
 
 def _init_sqlite(cur):
     """Initialize SQLite schema"""
