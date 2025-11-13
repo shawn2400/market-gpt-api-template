@@ -74,6 +74,14 @@ The system integrates a **scalable multi-brain architecture** with intelligent m
 
 The system also includes specialized AI systems for market intelligence, portfolio intelligence, news sentiment, and a **Post-Trade AI Review System**. An **Autonomous Improvement System** automatically applies parameter improvements with 60%+ consensus from 3+ brains (when multi-brain active).
 
+**Auto-Optimization System (Self-Adaptive Trading):**
+-   **Intelligent Parameter Tuning**: Analyzes performance every 4 hours and automatically adjusts min_quality (4.0-8.0), RR (1.01-3.0), and leverage (5-20x) based on win rate.
+-   **Multi-Level Protection**: Activates Warning/Conservative/Emergency modes based on win rate, consecutive losses, and daily PnL. Automatically tightens parameters when performance degrades.
+-   **Symbol Tiering Engine**: Classifies symbols as Tier A/B/C based on performance, with auto promotion/demotion. Tier 1: Strong performers, Tier 2: Normal + filters, Tier 3: Weak performers.
+-   **Dynamic Blacklist Manager**: Auto-blacklists symbols with 3+ consecutive losses for 24h TTL, preventing repeated losses on problematic markets.
+-   **Performance Tracking**: Per-symbol analytics including win rate, average profit, Sharpe ratio, and recent trend analysis.
+-   **Orchestrator Worker**: Coordinates all optimization modules, sends comprehensive Telegram reports every 4 hours with parameter changes and tier updates.
+
 ### Validation & Safety Infrastructure
 Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates (Dual Confirmation), Data-Driven Monte Carlo simulations, a Live Health Monitor, and Circuit Breakers.
 
@@ -87,7 +95,7 @@ Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates (Dual C
 Consolidated notification system with batched reports for Health, Trade/PnL, Critical Alerts, and AI Trade Reviews, with rate limiting.
 
 ### Deployment Architecture
-The production environment runs on Render.com with **8 Background Workers** and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development.
+The production environment runs on Render.com with **9 Background Workers** (including Auto-Optimization Orchestrator) and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development.
 
 ## External Dependencies
 
