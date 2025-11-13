@@ -9,8 +9,12 @@ from fastapi import APIRouter, HTTPException, Body, Query, Request
 from fastapi.responses import HTMLResponse
 import httpx
 
+from utils.execution_bot import ExecutionBot
+
 logger = logging.getLogger("algogpt.ops_approve")
 router = APIRouter(tags=["ops-approval"])
+
+_ops_execution_bot = ExecutionBot(logger=logger)
 
 # --- (optional) metrics wiring ---
 try:
@@ -729,17 +733,34 @@ async def approve_signed(request: Request):
         raise HTTPException(status_code=400, detail="AUTO_QTY: qty/leverage missing after auto sizing")
 
     flow = _decide_flow_by_mode(payload)
-    exec_res = await (
-        _execute_trade(payload) if flow == "MARKET"
-        else _execute_trade_armed(payload) if flow == "HYBRID"
-        else (_execute_trade_armed(payload) if any(payload.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(payload))
-    )
-    ok = bool(exec_res.get("ok"))
+    
+    result = await _ops_execution_bot.open_position(payload, source="ops_approval")
+    
+    ok = result.get("status") == "opened"
+    exec_res = {
+        "ok": ok,
+        "position_id": result.get("position_id"),
+        "entry_orders": result.get("entry_orders"),
+        "sl_order": result.get("sl_order"),
+        "tp_orders": result.get("tp_orders"),
+        "symbol": result.get("symbol"),
+        "side": result.get("side"),
+        "flow": result.get("flow"),
+        "reason": result.get("reason"),
+    }
+    
     if not ok:
         logger.warning("approve_signed_failed: %s", json.dumps(exec_res, ensure_ascii=False))
         if flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
-            retry = await _execute_trade(payload)
-            if not retry.get("ok"):
+            payload_market = payload.copy()
+            payload_market.pop("tp1", None)
+            payload_market.pop("tp2", None)
+            payload_market.pop("tp3", None)
+            payload_market.pop("sl", None)
+            retry_result = await _ops_execution_bot.open_position(payload_market, source="ops_approval_fallback")
+            retry_ok = retry_result.get("status") == "opened"
+            retry = {"ok": retry_ok, "result": retry_result}
+            if not retry_ok:
                 raise HTTPException(status_code=502, detail={"execute_error": exec_res, "fallback_market": retry})
             exec_res = {"primary": exec_res, "fallback_market": retry}
         else:
