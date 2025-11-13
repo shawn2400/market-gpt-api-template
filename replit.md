@@ -73,8 +73,26 @@ Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates, Data-D
 
 **🛡️ Advanced Risk Manager (3-Layer Loss Prevention):**
 -   **Layer 1 - Dynamic SL (ATR-Based)**: Automatically calculates and places stop-loss orders based on market volatility.
--   **Layer 2 - 60-Second Hold + 2% Max Loss Cap**: Enforces minimum hold period and hard 2% maximum loss cap.
+-   **Layer 2 - 60-Second Hold + 2% Max Loss Cap**: Enforces minimum hold period and hard 2% maximum loss cap with entry timestamp persistence.
 -   **Layer 3 - Breakeven Acceleration**: Moves SL to breakeven when position reaches +0.5% profit.
+
+**💾 Entry Timestamps Persistence (Redis + Database):**
+-   **Redis Primary Storage**: Sub-millisecond entry timestamp retrieval with 1-hour TTL auto-cleanup.
+-   **Database Backup**: Automatic backup to PostgreSQL every 5 minutes for disaster recovery.
+-   **Restart-Proof**: Entry times survive system restarts via recovery logic on startup.
+-   **Dual Storage**: Prevents 60-second hold bypass during high-frequency restarts.
+
+**📍 Smart LIMIT+MARKET Order Router:**
+-   **Decision Matrix**: ATR%, spread, signal age, urgency, book depth, breakout detection.
+-   **Intelligent Routing**: LIMIT for low volatility (sniper precision), MARKET for high volatility (urgent execution).
+-   **HYBRID Mode**: Medium volatility with LIMIT → MARKET escalation after 60s.
+-   **Purpose-Aware**: Optimizes for ENTRY, EXIT, TP, SL, GRID based on context.
+
+**🔧 Order Consolidation System:**
+-   **Max 4 Orders Per Symbol**: Prevents order book clutter and API rate limits.
+-   **Auto-Merge Similar Prices**: Consolidates orders within 0.3% price range.
+-   **Strategic TP Optimization**: Keeps 3 strategic levels (closest, middle, furthest).
+-   **Minimum Distance Enforcement**: 1% spacing between TP levels for risk management.
 
 ### Telegram Digest System
 Consolidated notification system with batched reports for Health, Trade/PnL, Critical Alerts, and AI Trade Reviews.

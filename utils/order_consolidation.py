@@ -109,6 +109,29 @@ class OrderConsolidationSystem:
         # Combine optimized orders
         optimized_orders = optimized_tp + optimized_sl + other_orders
         
+        # 🔧 ENFORCE MAX ORDERS PER SYMBOL
+        if len(optimized_orders) > self.max_orders:
+            # Sort by priority (SL > TP > others)
+            priority_orders = sl_orders + optimized_tp + other_orders
+            
+            # Keep only max_orders
+            keep_orders = priority_orders[:self.max_orders]
+            cancel_orders = priority_orders[self.max_orders:]
+            
+            # Add cancel actions
+            for order in cancel_orders:
+                actions.append({
+                    "type": "cancel",
+                    "order_id": order.get("orderId"),
+                    "reason": f"Exceeds max {self.max_orders} orders per symbol"
+                })
+            
+            optimized_orders = keep_orders
+            logger.warning(
+                f"🔧 {symbol}: Enforced max {self.max_orders} orders "
+                f"(cancelled {len(cancel_orders)} excess orders)"
+            )
+        
         logger.info(
             f"🔧 {symbol}: Optimized {len(current_orders)} → {len(optimized_orders)} orders "
             f"({len(actions)} actions)"
