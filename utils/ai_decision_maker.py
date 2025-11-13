@@ -139,6 +139,18 @@ Format: VOTE|SCORE|REASONING"""
                 score = scout_data.get("avg_score", 5.0)
                 reasoning = analysis[:200]
             
+            avg_score = scout_data.get("avg_score", 5.0)
+            min_quality = scout_data.get("min_quality", 6.0)
+            symbol = scout_data.get("symbol", "UNKNOWN")
+            
+            if avg_score >= min_quality and vote == "REJECT":
+                self.logger.info(
+                    f"✅ Hard override: {symbol} APPROVED by {self.name} "
+                    f"(avg_score={avg_score:.1f} ≥ min_quality={min_quality:.1f})"
+                )
+                vote = "APPROVE"
+                reasoning = f"[Auto-approved by dynamic threshold] {reasoning}"
+            
             return {
                 "brain": self.name,
                 "vote": vote,
@@ -152,11 +164,12 @@ Format: VOTE|SCORE|REASONING"""
     def _mock_vote(self, scout_data: Dict) -> Dict[str, Any]:
         """Fallback mock vote when API fails."""
         avg_score = scout_data.get("avg_score", 5.0)
+        min_quality = scout_data.get("min_quality", 6.0)
         return {
             "brain": self.name,
-            "vote": "APPROVE" if avg_score >= 6.0 else "REJECT",
+            "vote": "APPROVE" if avg_score >= min_quality else "REJECT",
             "score": round(avg_score, 1),
-            "reasoning": f"{self.name}: Setup looks reasonable (fallback)",
+            "reasoning": f"{self.name}: Setup looks reasonable (fallback, threshold={min_quality:.1f})",
             "confidence": "LOW"
         }
 
