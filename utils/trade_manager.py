@@ -39,16 +39,6 @@ with suppress(Exception):
 with suppress(Exception):
     from utils.alerts import send_telegram_message  # type: ignore
 
-# Trailing TP System (MetaBrain v9.1 Profit Protection)
-try:
-    import utils.trailing_tp as trailing_tp
-    _TRAILING_TP_AVAILABLE = True
-    logger.info("✅ Trailing TP system loaded")
-except Exception as _e:
-    trailing_tp = None  # type: ignore
-    _TRAILING_TP_AVAILABLE = False
-    logger.warning(f"Trailing TP unavailable: {_e}")
-
 # Dynamic Trading System (MetaBrain v8.0) - Legacy
 try:
     from utils.regime_glue import RegimeAdapter
@@ -123,6 +113,9 @@ DAILY_LOSS_CAP = float(os.getenv("DAILY_HARD_LOSS_USD", "-150"))
 _daily_pnl = 0.0
 _trades_today: List[dict] = []
 _cap_triggered = False
+
+# 🛡️ SL/TP PROTECTION FLAG - Position Monitor owns all protection (default: false)
+FILLS_WATCHER_PROTECT_ENABLE = os.getenv("FILLS_WATCHER_PROTECT_ENABLE", "false").lower() in ("1", "true", "yes")
 
 _health_fails = 0
 _HEALTH_FAIL_MAX = int(os.getenv("KILLSWITCH_THRESHOLD", "3"))
@@ -270,6 +263,10 @@ def _current_stop(symbol: str, side: str) -> Optional[float]:
     return max(stops) if side.upper() == "LONG" else min(stops)
 
 def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
+    # 🛡️ GUARD: Position Monitor owns all SL/TP management
+    if not FILLS_WATCHER_PROTECT_ENABLE:
+        return {"ok": False, "error": "Fills Watcher protection disabled - Position Monitor owns SL/TP"}
+    
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
     
@@ -327,6 +324,10 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
         return {"ok": False, "error": str(e)}
 
 def modify_take_profit(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
+    # 🛡️ GUARD: Position Monitor owns all SL/TP management
+    if not FILLS_WATCHER_PROTECT_ENABLE:
+        return {"ok": False, "error": "Fills Watcher protection disabled - Position Monitor owns SL/TP"}
+    
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
     
@@ -578,28 +579,6 @@ async def manage_open_trades():
                     print(f"❌ [manage] Skipping {sym}: no price")
                     logger.info(f"[manage] Skipping {sym}: no price")
                     continue
-
-                # 🎯 TRAILING TP CHECK (before Dynamic Path)
-                if _TRAILING_TP_AVAILABLE and trailing_tp.is_enabled():
-                    try:
-                        pos_snapshot = {**pos, "symbol": sym, "positionAmt": qty, "markPrice": price}
-                        if trailing_tp.should_activate_trailing(pos_snapshot):
-                            trailing_data = trailing_tp.activate_trailing(pos_snapshot)
-                            await notify_info(f"🎯 Trailing TP armed for {sym} @ {trailing_data['activation_pnl']:.1f}%", symbol=sym)
-                        trailing_tp.update_trailing_peak(pos_snapshot)
-                        should_close, pnl_pct, reason, trailing_state = trailing_tp.should_close_by_trailing(pos_snapshot)
-                        if should_close:
-                            position_side = "LONG" if qty > 0 else "SHORT"
-                            close_side = "SELL" if position_side == "LONG" else "BUY"
-                            _cancel_closing_orders(sym, ("TAKE_PROFIT", "TAKE_PROFIT_MARKET", "STOP", "STOP_MARKET"), position_side=position_side)
-                            qty_str, _ = _q_qty(sym, abs(qty))
-                            futures_create_order(symbol=sym, side=close_side, type="MARKET", quantity=qty_str, reduceOnly=True, positionSide=position_side)
-                            trailing_tp.remove_trailing(sym)
-                            await notify_info(f"🚨 Trailing TP exit {sym}: {reason} | PNL {pnl_pct:+.2f}%", symbol=sym)
-                            _last_update[sym] = now
-                            continue
-                    except Exception as err:
-                        logger.error(f"[manage] Trailing TP failure {sym}: {err}")
 
                 if now - _last_update.get(sym, 0) < _COOLDOWN:
                     print(f"⏭️ [manage] Skipping {sym}: cooldown active ({_COOLDOWN}s)")
@@ -917,66 +896,10 @@ async def manage_open_trades():
 
                 cur_stop = _current_stop(sym, side)
                 
-                # אם אין SL כלל - הגדר אחד מיד
-                initial_sl_set = False
-                if cur_stop is None or not _is_finite_number(cur_stop):
-                    print(f"🚨 [manage] {sym} has NO protective SL - setting initial stop at {target_sl:.4f}")
-                    logger.info(f"[manage] {sym} missing SL - setting initial stop")
-                    try:
-                        result = modify_stop_loss(sym, target_sl, position_side=side)
-                        if result.get("ok"):
-                            print(f"✅ [manage] {sym} initial SL placement confirmed by Binance")
-                            await notify_sl_tp_update(sym, side, "initial_sl", target_sl, entry=entry, leverage=leverage)
-                            cur_stop = target_sl
-                            initial_sl_set = True  # דגל שהוגדר כעת
-                        else:
-                            error = result.get("error", "unknown")
-                            print(f"❌ [manage] {sym} initial SL placement REJECTED by Binance: {error}")
-                            logger.error(f"[manage] {sym} SL placement rejected: {error}")
-                            cur_stop = entry  # fallback
-                    except Exception as e:
-                        logger.error("[manage] initial SL placement failed for %s: %s", sym, e)
-                        cur_stop = entry  # fallback
+                # ⚠️ SL/TP MANAGEMENT DISABLED - Position Monitor owns all protection
+                # All protective orders are now handled by Position Monitor (runs every 30s)
+                # This prevents dual-manager conflicts that caused be_price=0.0 bugs
                 
-                # שמירה על SL מעל entry אם כבר ב-BE
-                if side == "LONG":
-                    if (cur_stop >= entry) and (target_sl < entry):
-                        target_sl = max(entry, target_sl)
-                else:
-                    if (cur_stop <= entry) and (target_sl > entry):
-                        target_sl = min(entry, target_sl)
-
-                # דלג על trailing update אם זה זה עתה הוגדר initial SL
-                if not initial_sl_set:
-                    try:
-                        if _is_finite_number(target_sl) and _is_finite_number(cur_stop):
-                            thresh = 0.25 * current_atr
-                            need_update = (abs(target_sl - float(cur_stop)) >= thresh)
-                            if need_update:
-                                print(f"🔄 [manage] {sym} trailing SL: {cur_stop:.4f} → {target_sl:.4f} (Δ={abs(target_sl-cur_stop):.4f}, thresh={thresh:.4f})")
-                                logger.info(f"[manage] {sym} trailing SL update: {cur_stop} → {target_sl}")
-                                modify_stop_loss(sym, target_sl, position_side=side)
-                                await notify_sl_tp_update(sym, side, "trailing", target_sl, entry=entry, leverage=leverage)
-                            else:
-                                print(f"⏭️ [manage] {sym} SL delta too small (Δ={abs(target_sl-cur_stop):.4f} < {thresh:.4f}), skipping update")
-                    except Exception as e:
-                        logger.error("[manage] trailing update failed for %s: %s", sym, e)
-                else:
-                    print(f"✅ [manage] {sym} initial SL successfully placed, skipping trailing logic this cycle")
-
-                try:
-                    if current_adx > 25 and macd_now > 0:
-                        new_tp = (price + 4.5 * current_atr) if side == "LONG" else (price - 4.5 * current_atr)
-                        if _is_finite_number(new_tp):
-                            modify_take_profit(sym, new_tp, position_side=side)
-                            await notify_sl_tp_update(sym, side, "tp", new_tp, entry=entry, leverage=leverage)
-                except Exception as e:
-                    logger.error("[manage] TP update failed for %s: %s", sym, e)
-
-                # חוק-על: ודא SL מגן פעיל ואטומי
-                with suppress(Exception):
-                    ensure_protective_stop(sym, prefer_mode="native")
-
                 _last_update[sym] = now
 
             except Exception as ie:
@@ -986,16 +909,6 @@ async def manage_open_trades():
             await _be_guard_tick()
 
         await _detect_closures_and_review(positions)
-
-        # 🎯 TRAILING TP CLEANUP: Remove stale symbols
-        if _TRAILING_TP_AVAILABLE and trailing_tp.is_enabled():
-            try:
-                open_syms = {(p.get("symbol") or "").upper() for p in positions if abs(float(p.get("positionAmt") or 0)) > 0}
-                for stale in set(trailing_tp.get_all_trailing_symbols()) - open_syms:
-                    trailing_tp.remove_trailing(stale)
-                    logger.info(f"[Trailing TP] Cleaned up stale symbol: {stale}")
-            except Exception as cleanup_err:
-                logger.error(f"[Trailing TP] Cleanup failed: {cleanup_err}")
 
         try:
             ttl = get_price_age("BTCUSDT")
