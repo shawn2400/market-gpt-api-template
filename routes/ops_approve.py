@@ -619,18 +619,32 @@ async def approve(ticket_id: str = Query(..., description="ticket_id")):
     if float(ticket.get("qty") or 0) <= 0 or int(ticket.get("leverage") or 0) <= 0:
         return _html("⚠️ שגיאה: qty/leverage חסרים גם לאחר ניסיון חישוב אוטומטי (בדוק ENV AUTO_QTY_*).")
 
-    exec_res = await (
-        _execute_trade(ticket) if flow == "MARKET"
-        else _execute_trade_armed(ticket) if flow == "HYBRID"
-        else (_execute_trade_armed(ticket) if any(ticket.get(k) for k in ("tp1","tp2","tp3","sl")) else _execute_trade(ticket))
-    )
-    ok = bool(exec_res.get("ok"))
+    result = await _ops_execution_bot.open_position(ticket, source="ops_approval_get")
+    
+    ok = result.get("status") == "opened"
+    exec_res = {
+        "ok": ok,
+        "position_id": result.get("position_id"),
+        "entry_orders": result.get("entry_orders"),
+        "sl_order": result.get("sl_order"),
+        "tp_orders": result.get("tp_orders"),
+        "symbol": result.get("symbol"),
+        "side": result.get("side"),
+        "flow": result.get("flow"),
+        "reason": result.get("reason"),
+    }
 
     if (not ok) and flow in ("HYBRID","AUTO") and APPROVE_FALLBACK_TO_MARKET:
         logger.warning("approve_retry_market_after_hybrid_fail: %s", exec_res)
-        retry_res = await _execute_trade(ticket)
-        ok = bool(retry_res.get("ok"))
-        exec_res = {"primary": "HYBRID", "fallback_market": retry_res, "primary_error": exec_res}
+        ticket_market = ticket.copy()
+        ticket_market.pop("tp1", None)
+        ticket_market.pop("tp2", None)
+        ticket_market.pop("tp3", None)
+        ticket_market.pop("sl", None)
+        retry_result = await _ops_execution_bot.open_position(ticket_market, source="ops_approval_get_fallback")
+        retry_ok = retry_result.get("status") == "opened"
+        ok = retry_ok
+        exec_res = {"primary": "HYBRID", "fallback_market": {"ok": retry_ok, "result": retry_result}, "primary_error": exec_res}
 
     # ניהול אוטומטי מייד אחרי אישור (אם מופעל)
     if ok and SMART_MANAGE_ON_APPROVE:

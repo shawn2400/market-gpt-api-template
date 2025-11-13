@@ -210,9 +210,22 @@ class ExecutionBot:
         """
         Does this trade need to go through approval route (telegram / webhook) before actual execution.
 
-        TODO: Adapt to your logic (Quality score, budget, flags etc).
+        Sources that already passed approval or execute immediately:
+        - "approval", "ops_approval", "ops_approval_get", "ops_approval_fallback" - already approved
+        - "telegram", "telegram_callback" - user-initiated, execute immediately
+        - "auto_trade", "autopilot" - internal automation, execute immediately (confirm_first handled internally)
         """
-        if source in ("approval", "telegram", "telegram_callback"):
+        if source in (
+            "approval",
+            "ops_approval",
+            "ops_approval_get",
+            "ops_approval_fallback",
+            "ops_approval_get_fallback",
+            "telegram",
+            "telegram_callback",
+            "auto_trade",
+            "autopilot",
+        ):
             return False
 
         force_approve_env = os.getenv("REQUIRE_TELEGRAM_APPROVAL", "0").lower() in ("1", "true", "yes", "on")

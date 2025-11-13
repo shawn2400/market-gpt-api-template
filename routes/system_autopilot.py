@@ -6,9 +6,12 @@ from typing import Any, Dict, List, Optional, Tuple
 from fastapi import APIRouter, Body
 from utils.binance_client import futures_exchange_info_safe, get_futures_client
 from utils.auto_executor import execute_trade_live as exec_live
+from utils.execution_bot import ExecutionBot
 
 router = APIRouter(tags=["autopilot"])
 log = logging.getLogger("algogpt.autopilot")
+
+_autopilot_execution_bot = ExecutionBot(logger=log)
 
 # ───────────────────────── Config (ENV) ─────────────────────────
 AP_ENABLE                 = os.getenv("AUTOPILOT_ENABLE", "1").lower() in ("1","true","yes","on")
@@ -240,15 +243,34 @@ async def _pick_candidates(universe: List[str]) -> List[Tuple[str,str,float,Dict
 
 async def _open_candidate(sym: str, side: str, score: float, meta: Dict[str,Any]) -> Dict[str,Any]:
     try:
-        plan = await exec_live(
-            sym, side,
-            budget=AP_BUDGET_USDT,
-            leverage=AP_REQ_LEV,
-            dry_run=False,                    # מבצע בפועל, אך עם confirm_first=True
-            confirm_first=True,
-            telegram_chat_id=AP_TG_CHAT_ID,
-        )
-        return {"ok": True, "symbol": sym, "side": side, "score": score, "exec": plan}
+        ticket_exec = {
+            "symbol": sym,
+            "side": side,
+            "budget": AP_BUDGET_USDT,
+            "budget_usd": AP_BUDGET_USDT,
+            "leverage": AP_REQ_LEV,
+            "dry_run": False,
+            "confirm_first": True,
+            "require_approval": True,
+            "position_side": "LONG" if side == "BUY" else "SHORT",
+        }
+        
+        result = await _autopilot_execution_bot.open_position(ticket_exec, source="autopilot")
+        ok = result.get("status") in ("opened", "pending_approval")
+        
+        return {
+            "ok": ok,
+            "symbol": sym,
+            "side": side,
+            "score": score,
+            "exec": {
+                "ok": ok,
+                "status": result.get("status"),
+                "position_id": result.get("position_id"),
+                "flow": result.get("flow"),
+                "reason": result.get("reason"),
+            }
+        }
     except Exception as e:
         return {"ok": False, "symbol": sym, "side": side, "score": score, "error": str(e)}
 

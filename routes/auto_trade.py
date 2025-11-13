@@ -1,6 +1,7 @@
 # routes/auto_trade.py
 from __future__ import annotations
 from typing import Optional, Dict, Any
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -8,8 +9,12 @@ from pydantic import BaseModel, Field
 from utils.auth import require_api_key
 from utils.strategy_auto import pick_side_for_symbol
 from utils.trade_executor import execute_trade_live  # מבצע בפועל בורסה
+from utils.execution_bot import ExecutionBot
 
 router = APIRouter(prefix="/auto", tags=["Auto Trade"])
+logger = logging.getLogger("algogpt.auto_trade")
+
+_auto_trade_execution_bot = ExecutionBot(logger=logger)
 
 class AutoTradeReq(BaseModel):
     symbol: str = Field(..., examples=["BTCUSDT"])
@@ -37,22 +42,39 @@ async def auto_trade(req: AutoTradeReq, _token: str = Depends(require_api_key)) 
     else:
         side, position_side, reason = await pick_side_for_symbol(req.symbol)
 
-    # מבצעים את הטרייד (ה־trade_executor מכיל TP/SL/BE/Ladder לפי ENV)
+    # מבצעים את הטרייד דרך ExecutionBot
     try:
-        res = await execute_trade_live(
-            symbol=req.symbol,
-            side=side,                 # BUY/SELL
-            budget=req.budget_usd,
-            leverage=req.leverage,
-            dry_run=req.dry_run,
-            quantity=req.quantity,     # יכול להיות None → המנוע יחשב
-            position_side=position_side,  # LONG/SHORT
-            confirm_first=req.confirm_first,
-        )
+        ticket_exec = {
+            "symbol": req.symbol,
+            "side": side,
+            "budget": req.budget_usd,
+            "budget_usd": req.budget_usd,
+            "leverage": req.leverage,
+            "dry_run": req.dry_run,
+            "quantity": req.quantity,
+            "qty": req.quantity,
+            "position_side": position_side,
+            "confirm_first": req.confirm_first,
+            "require_approval": req.confirm_first,
+        }
+        
+        result = await _auto_trade_execution_bot.open_position(ticket_exec, source="auto_trade")
+        ok = result.get("status") == "opened"
+        
         return {
-            "ok": True,
-            "error": None,
-            "result": res,
+            "ok": ok,
+            "error": None if ok else result.get("reason"),
+            "result": {
+                "ok": ok,
+                "position_id": result.get("position_id"),
+                "entry_orders": result.get("entry_orders"),
+                "sl_order": result.get("sl_order"),
+                "tp_orders": result.get("tp_orders"),
+                "symbol": result.get("symbol"),
+                "side": result.get("side"),
+                "flow": result.get("flow"),
+                "reason": result.get("reason"),
+            },
             "decider": {"side": side, "position_side": position_side, "reason": reason},
         }
     except Exception as e:
