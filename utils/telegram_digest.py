@@ -282,6 +282,17 @@ class TelegramDigest:
     
     async def send_health_digest(self):
         """Send consolidated health digest"""
+        # Check for midnight Israel time even without alerts
+        from zoneinfo import ZoneInfo
+        israel_tz = ZoneInfo("Asia/Jerusalem")
+        israel_time = datetime.now(israel_tz)
+        is_midnight = israel_time.hour == 0
+        
+        if is_midnight and TELEGRAM_ENABLED:
+            # Send midnight summary regardless of alerts
+            await self._send_midnight_summary()
+            return
+        
         if not self.health_queue or not TELEGRAM_ENABLED:
             return
         
@@ -292,6 +303,18 @@ class TelegramDigest:
             warnings = [a for a in self.health_queue if a.level == "WARNING"]
             info = [a for a in self.health_queue if a.level == "INFO"]
             
+            # Check if this is midnight (00:00 Israel time) - send enhanced daily summary
+            from zoneinfo import ZoneInfo
+            israel_tz = ZoneInfo("Asia/Jerusalem")
+            israel_time = datetime.now(israel_tz)
+            is_midnight = israel_time.hour == 0
+            
+            if is_midnight:
+                # Send enhanced midnight summary with AI recommendations
+                await self._send_midnight_summary()
+                return
+            
+            # Regular health digest
             text = f"📊 <b>System Health Digest</b>\n\n"
             
             if critical:
@@ -329,6 +352,88 @@ class TelegramDigest:
                     logger.error(f"Failed to send health digest: {resp.status_code}")
         except Exception as e:
             logger.error(f"Error sending health digest: {e}")
+    
+    async def _send_midnight_summary(self):
+        """Send enhanced midnight summary with AI recommendations (00:00 Israel time)"""
+        if not TELEGRAM_ENABLED:
+            return
+        
+        try:
+            import httpx
+            from utils.daily_summary_ai import get_daily_kpis, get_ai_recommendations
+            
+            # Get daily KPIs
+            kpis = await get_daily_kpis()
+            
+            if "error" in kpis:
+                logger.error(f"Failed to get daily KPIs: {kpis['error']}")
+                return
+            
+            # Build midnight summary
+            text = f"🌙 <b>Daily Summary - {datetime.now().strftime('%Y-%m-%d')}</b>\n\n"
+            
+            # Trading Performance
+            text += f"📊 <b>Performance:</b>\n"
+            text += f"  • Total PnL: ${kpis.get('total_pnl', 0):.2f}\n"
+            text += f"  • Win Rate: {kpis.get('win_rate', 0):.1f}%\n"
+            text += f"  • Total Trades: {kpis.get('total_trades', 0)}\n"
+            text += f"  • Winning Trades: {kpis.get('winning_trades', 0)}\n\n"
+            
+            # Best/Worst Symbols
+            best_symbols = kpis.get("best_symbols", [])
+            if best_symbols:
+                text += f"🏆 <b>Top Performers:</b>\n"
+                for sym, pnl in best_symbols[:3]:
+                    text += f"  • {sym}: ${pnl:.2f}\n"
+                text += "\n"
+            
+            worst_symbols = kpis.get("worst_symbols", [])
+            if worst_symbols and len(worst_symbols) > 0:
+                text += f"⚠️ <b>Underperformers:</b>\n"
+                for sym, pnl in worst_symbols[:3]:
+                    if pnl < 0:  # Only show losers
+                        text += f"  • {sym}: ${pnl:.2f}\n"
+                text += "\n"
+            
+            # AI Recommendations
+            ai_recommendations = await get_ai_recommendations(kpis)
+            if ai_recommendations:
+                text += f"🤖 <b>AI Recommendations:</b>\n"
+                text += f"{ai_recommendations}\n\n"
+            
+            # Health Alerts Summary
+            if self.health_queue:
+                critical = [a for a in self.health_queue if a.level == "CRITICAL"]
+                warnings = [a for a in self.health_queue if a.level == "WARNING"]
+                text += f"🛡️ <b>Health Alerts:</b>\n"
+                if critical:
+                    text += f"  • Critical: {len(critical)}\n"
+                if warnings:
+                    text += f"  • Warnings: {len(warnings)}\n"
+                text += "\n"
+            
+            text += f"<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} (Midnight Summary)</i>"
+            
+            payload = {
+                "chat_id": TELEGRAM_CHAT_ID,
+                "text": text,
+                "parse_mode": "HTML",
+                "disable_web_page_preview": True
+            }
+            
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(
+                    f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+                    json=payload
+                )
+                if resp.status_code == 200:
+                    logger.info(f"Midnight summary sent with AI recommendations")
+                    self.health_queue.clear()  # Clear after sending
+                    self._save_queues()
+                else:
+                    logger.error(f"Failed to send midnight summary: {resp.status_code}")
+        except Exception as e:
+            logger.error(f"Error sending midnight summary: {e}")
     
     async def send_trade_digest(self):
         """Send consolidated trade/PNL digest (only if there are SL/TP hits)"""

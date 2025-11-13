@@ -24,10 +24,14 @@ except ImportError:
     GRID_MIN_HOLD_TIME_SEC = 1800  # 30 min for GRID
 
 
-def _get_position_entry_time(symbol: str) -> Optional[float]:
+def _get_position_entry_time(symbol: str, position_side: Optional[str] = None) -> Optional[float]:
     """
     Query database for position entry time (ts_open).
     Works with both PostgreSQL and SQLite using utils.db abstraction.
+    
+    Args:
+        symbol: Trading pair
+        position_side: For hedge mode - LONG or SHORT (if None, gets any open position)
     
     Returns:
         Timestamp (seconds since epoch) or None if not found
@@ -46,31 +50,51 @@ def _get_position_entry_time(symbol: str) -> Optional[float]:
             
             if is_pg:
                 # PostgreSQL: EXTRACT(EPOCH FROM timestamp)
-                cursor.execute("""
-                    SELECT EXTRACT(EPOCH FROM ts_open)
-                    FROM positions
-                    WHERE symbol = %s AND status = 'OPEN'
-                    ORDER BY ts_open DESC
-                    LIMIT 1
-                """, (symbol,))
+                if position_side and position_side in ("LONG", "SHORT"):
+                    cursor.execute("""
+                        SELECT EXTRACT(EPOCH FROM ts_open)
+                        FROM positions
+                        WHERE symbol = %s AND status = 'OPEN' AND side = %s
+                        ORDER BY ts_open DESC
+                        LIMIT 1
+                    """, (symbol, position_side))
+                else:
+                    cursor.execute("""
+                        SELECT EXTRACT(EPOCH FROM ts_open)
+                        FROM positions
+                        WHERE symbol = %s AND status = 'OPEN'
+                        ORDER BY ts_open DESC
+                        LIMIT 1
+                    """, (symbol,))
             else:
                 # SQLite: ts_open is already stored as REAL (unix timestamp)
-                cursor.execute("""
-                    SELECT ts_open
-                    FROM positions
-                    WHERE symbol = ? AND status = 'OPEN'
-                    ORDER BY ts_open DESC
-                    LIMIT 1
-                """, (symbol,))
+                if position_side and position_side in ("LONG", "SHORT"):
+                    cursor.execute("""
+                        SELECT ts_open
+                        FROM positions
+                        WHERE symbol = ? AND status = 'OPEN' AND side = ?
+                        ORDER BY ts_open DESC
+                        LIMIT 1
+                    """, (symbol, position_side))
+                else:
+                    cursor.execute("""
+                        SELECT ts_open
+                        FROM positions
+                        WHERE symbol = ? AND status = 'OPEN'
+                        ORDER BY ts_open DESC
+                        LIMIT 1
+                    """, (symbol,))
             
             row = cursor.fetchone()
             
             if row and row[0]:
                 entry_ts = float(row[0])
-                log.debug(f"[TimeProtection] {symbol} entry time: {entry_ts} ({time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(entry_ts))})")
+                side_str = f" ({position_side})" if position_side else ""
+                log.debug(f"[TimeProtection] {symbol}{side_str} entry time: {entry_ts} ({time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(entry_ts))})")
                 return entry_ts
             else:
-                log.debug(f"[TimeProtection] No open position found for {symbol}")
+                side_str = f" ({position_side})" if position_side else ""
+                log.debug(f"[TimeProtection] No open position found for {symbol}{side_str}")
                 return None
             
     except Exception as e:
@@ -78,18 +102,19 @@ def _get_position_entry_time(symbol: str) -> Optional[float]:
         return None
 
 
-def _check_minimum_hold_time(symbol: str, is_grid: bool = False) -> tuple[bool, str]:
+def _check_minimum_hold_time(symbol: str, is_grid: bool = False, position_side: Optional[str] = None) -> tuple[bool, str]:
     """
     Check if position has been held for minimum required time.
     
     Args:
         symbol: Trading pair
         is_grid: Whether this is a GRID trade (requires longer hold time)
+        position_side: For hedge mode - LONG or SHORT (if None, checks any open position)
     
     Returns:
         (allow_update: bool, reason: str)
     """
-    entry_ts = _get_position_entry_time(symbol)
+    entry_ts = _get_position_entry_time(symbol, position_side=position_side)
     
     if entry_ts is None:
         # If we can't determine entry time, allow update (fail-open for safety)
@@ -150,7 +175,7 @@ class ZeroGapSLManager:
             new_stop_price: New stop loss price
             qty: Position quantity (absolute value)
             side: Position side ("LONG" or "SHORT")
-            position_side: Hedge mode position side
+            position_side: Hedge mode position side (LONG/SHORT/BOTH)
             max_verify_attempts: Max attempts to verify order placement
             is_grid: Whether this is a GRID trade (requires 30 min hold vs 60s)
 
@@ -159,9 +184,11 @@ class ZeroGapSLManager:
         """
         try:
             # 🛡️ Step 0: Check minimum hold time (TIME-BASED PROTECTION)
-            allow_update, time_reason = _check_minimum_hold_time(symbol, is_grid=is_grid)
+            # Note: For hedge mode, we check the specific side's entry time
+            check_side = position_side if position_side and position_side in ("LONG", "SHORT") else side
+            allow_update, time_reason = _check_minimum_hold_time(symbol, is_grid=is_grid, position_side=check_side)
             if not allow_update:
-                log.warning(f"[ZeroGapSL] {symbol} SL update blocked: {time_reason}")
+                log.warning(f"[ZeroGapSL] {symbol} ({check_side}) SL update blocked: {time_reason}")
                 return {
                     "success": False,
                     "error": f"Time protection: {time_reason}",
