@@ -469,11 +469,12 @@ def _on_trade_completion(symbol: str, exit_time: float):
             from utils.telegram_notifier import send_trade_closed
             import asyncio
             
+            # Build close_info with all required fields
             close_info = {
-                "symbol": symbol,
+                "symbol": symbol,  # Use function parameter, not pos_data (symbol missing there)
                 "pnl_usd": pnl_usd,
                 "pnl_pct": pnl_pct,
-                "duration_sec": exit_time - pos_data['entry_time'],
+                "duration_sec": int(exit_time - pos_data.get('entry_time', exit_time)),
                 "exit_reason": trade_data.get("exit_reason", "MANUAL"),
                 "exit_price": exit_price,
                 "avg_exit": exit_price,
@@ -484,7 +485,9 @@ def _on_trade_completion(symbol: str, exit_time: float):
                     "price": entry_price,
                     "trade_kind": trade_data.get("strategy", "Futures"),
                     "mode": trade_data.get("strategy", "Futures"),
-                }
+                },
+                "leverage": leverage,
+                "quantity": quantity,
             }
             
             # Call async send_trade_closed

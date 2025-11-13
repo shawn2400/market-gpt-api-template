@@ -1,0 +1,693 @@
+
+ACTUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.27 USDT
+Entry Price
+0.0200200 USDT
+Avg. Close Price
+0.0199500 USDT
+Max Open Interest
+3,746 ACT
+Closed Vol.
+3,746 ACT
+ROI
+-5.24%
+Opened
+11/13/2025 12:12:06
+Closed
+11/13/2025 12:42:48
+
+1000SHIBUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.04 USDT
+Entry Price
+0.009796 USDT
+Avg. Close Price
+0.009792 USDT
+Max Open Interest
+7,653 1000SHIB
+Closed Vol.
+7,653 1000SHIB
+ROI
+-0.61%
+Opened
+11/13/2025 12:37:33
+Closed
+11/13/2025 12:40:37
+
+ACXUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.50 USDT
+Entry Price
+0.0764207 USDT
+Avg. Close Price
+0.0759187 USDT
+Max Open Interest
+981.2 ACX
+Closed Vol.
+981.2 ACX
+ROI
+-9.85%
+Opened
+11/13/2025 11:07:43
+Closed
+11/13/2025 12:40:34
+
+1000CHEEMSUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.17 USDT
+Entry Price
+0.0012084 USDT
+Avg. Close Price
+0.0012071 USDT
+Max Open Interest
+124,162 1000CHEEMS
+Closed Vol.
+124,162 1000CHEEMS
+ROI
+-1.62%
+Opened
+11/13/2025 12:24:16
+Closed
+11/13/2025 12:39:14
+
+1000000BOBUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.11 USDT
+Entry Price
+0.0478581 USDT
+Avg. Close Price
+0.0477900 USDT
+Max Open Interest
+1,570 1000000BOB
+Closed Vol.
+1,570 1000000BOB
+ROI
+-2.13%
+Opened
+11/13/2025 12:30:59
+Closed
+11/13/2025 12:38:46
+
+0GUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.08 USDT
+Entry Price
+1.3083000 USDT
+Avg. Close Price
+1.3070000 USDT
+Max Open Interest
+57 0G
+Closed Vol.
+57 0G
+ROI
+-1.49%
+Opened
+11/13/2025 12:37:34
+Closed
+11/13/2025 12:38:34
+
+AEROUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.03 USDT
+Entry Price
+0.9758000 USDT
+Avg. Close Price
+0.9755133 USDT
+Max Open Interest
+76.9 AERO
+Closed Vol.
+76.9 AERO
+ROI
+-0.44%
+Opened
+11/13/2025 12:24:16
+Closed
+11/13/2025 12:38:15
+
+SOLUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.13 USDT
+Entry Price
+154.9650 USDT
+Avg. Close Price
+154.8300 USDT
+Max Open Interest
+0.96 SOL
+Closed Vol.
+0.96 SOL
+ROI
+-1.30%
+Opened
+11/13/2025 12:12:52
+Closed
+11/13/2025 12:38:03
+
+1000LUNCUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.09 USDT
+Entry Price
+0.0349300 USDT
+Avg. Close Price
+0.0348906 USDT
+Max Open Interest
+2,147 1000LUNC
+Closed Vol.
+2,147 1000LUNC
+ROI
+-1.68%
+Opened
+11/13/2025 12:12:52
+Closed
+11/13/2025 12:36:35
+
+4USDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.16 USDT
+Entry Price
+0.0529900 USDT
+Avg. Close Price
+0.0528800 USDT
+Max Open Interest
+1,415 4
+Closed Vol.
+1,415 4
+ROI
+-3.11%
+Opened
+11/13/2025 12:30:59
+Closed
+11/13/2025 12:32:47
+
+TONUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+0.50 USDT
+Entry Price
+2.0481000 USDT
+Avg. Close Price
+2.0620000 USDT
+Max Open Interest
+36.5 TON
+Closed Vol.
+36.5 TON
+ROI
++10.18%
+Opened
+11/13/2025 11:14:33
+Closed
+11/13/2025 12:30:11
+
+1INCHUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.14 USDT
+Entry Price
+0.2164 USDT
+Avg. Close Price
+0.2160 USDT
+Max Open Interest
+346 1INCH
+Closed Vol.
+346 1INCH
+ROI
+-2.77%
+Opened
+11/13/2025 12:24:17
+Closed
+11/13/2025 12:30:07
+
+0GUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.14 USDT
+Entry Price
+1.3150000 USDT
+Avg. Close Price
+1.3126000 USDT
+Max Open Interest
+57 0G
+Closed Vol.
+57 0G
+ROI
+-2.73%
+Opened
+11/13/2025 11:18:26
+Closed
+11/13/2025 12:30:07
+
+ADAUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+0.41 USDT
+Entry Price
+0.56729 USDT
+Avg. Close Price
+0.56885 USDT
+Max Open Interest
+132 ADA
+Closed Vol.
+263 ADA
+ROI
++4.12%
+Opened
+11/13/2025 11:18:27
+Closed
+11/13/2025 12:28:21
+
+1000000MOGUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.12 USDT
+Entry Price
+0.3920000 USDT
+Avg. Close Price
+0.3914000 USDT
+Max Open Interest
+191.4 1000000MOG
+Closed Vol.
+191.4 1000000MOG
+ROI
+-2.29%
+Opened
+11/13/2025 12:24:17
+Closed
+11/13/2025 12:24:35
+
+1000PEPEUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+0.29 USDT
+Entry Price
+0.0058634 USDT
+Avg. Close Price
+0.0059066 USDT
+Max Open Interest
+6,817 1000PEPE
+Closed Vol.
+6,817 1000PEPE
+ROI
++5.89%
+Opened
+11/13/2025 11:07:33
+Closed
+11/13/2025 12:22:38
+
+AAVEUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.02 USDT
+Entry Price
+214.130 USDT
+Avg. Close Price
+214.050 USDT
+Max Open Interest
+0.2 AAVE
+Closed Vol.
+0.2 AAVE
+ROI
+-0.56%
+Opened
+11/13/2025 12:18:16
+Closed
+11/13/2025 12:22:17
+
+1INCHUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.11 USDT
+Entry Price
+0.2169 USDT
+Avg. Close Price
+0.2166 USDT
+Max Open Interest
+345 1INCH
+Closed Vol.
+345 1INCH
+ROI
+-2.07%
+Opened
+11/13/2025 12:18:17
+Closed
+11/13/2025 12:22:17
+
+LTCUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+1.95 USDT
+Entry Price
+99.49 USDT
+Avg. Close Price
+100.14 USDT
+Max Open Interest
+3.015 LTC
+Closed Vol.
+3.015 LTC
+ROI
++9.79%
+Opened
+11/13/2025 11:18:26
+Closed
+11/13/2025 12:22:13
+
+AEROUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.14 USDT
+Entry Price
+0.9808000 USDT
+Avg. Close Price
+0.9790270 USDT
+Max Open Interest
+76.5 AERO
+Closed Vol.
+76.5 AERO
+ROI
+-2.71%
+Opened
+11/13/2025 12:18:16
+Closed
+11/13/2025 12:20:12
+
+1000RATSUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.07 USDT
+Entry Price
+0.0417491 USDT
+Avg. Close Price
+0.0417110 USDT
+Max Open Interest
+1,797 1000RATS
+Closed Vol.
+1,797 1000RATS
+ROI
+-1.36%
+Opened
+11/13/2025 12:12:52
+Closed
+11/13/2025 12:15:31
+
+XRPUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+0.50 USDT
+Entry Price
+2.4970 USDT
+Avg. Close Price
+2.5055 USDT
+Max Open Interest
+31.9 XRP
+Closed Vol.
+59.9 XRP
+ROI
++5.09%
+Opened
+11/13/2025 11:14:24
+Closed
+11/13/2025 12:13:53
+
+1000000BOBUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.37 USDT
+Entry Price
+0.0498340 USDT
+Avg. Close Price
+0.0495966 USDT
+Max Open Interest
+1,518 1000000BOB
+Closed Vol.
+1,518 1000000BOB
+ROI
+-7.14%
+Opened
+11/13/2025 11:24:36
+Closed
+11/13/2025 12:13:30
+
+BTCUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-1.16 USDT
+Entry Price
+102,882.60 USDT
+Avg. Close Price
+102,800.00 USDT
+Max Open Interest
+0.014 BTC
+Closed Vol.
+0.014 BTC
+ROI
+-1.20%
+Opened
+11/13/2025 11:14:24
+Closed
+11/13/2025 12:12:44
+
+A2ZUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.10 USDT
+Entry Price
+0.0039913 USDT
+Avg. Close Price
+0.0039863 USDT
+Max Open Interest
+18,811 A2Z
+Closed Vol.
+18,811 A2Z
+ROI
+-1.89%
+Opened
+11/13/2025 11:18:26
+Closed
+11/13/2025 12:07:25
+
+ACEUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.17 USDT
+Entry Price
+0.282019 USDT
+Avg. Close Price
+0.281400 USDT
+Max Open Interest
+266.00 ACE
+Closed Vol.
+266.00 ACE
+ROI
+-3.29%
+Opened
+11/13/2025 11:14:25
+Closed
+11/13/2025 12:07:16
+
+ACHUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.06 USDT
+Entry Price
+0.0116830 USDT
+Avg. Close Price
+0.0116748 USDT
+Max Open Interest
+6,410 ACH
+Closed Vol.
+6,410 ACH
+ROI
+-1.04%
+Opened
+11/13/2025 11:07:34
+Closed
+11/13/2025 12:07:04
+
+SOLUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.06 USDT
+Entry Price
+155.2200 USDT
+Avg. Close Price
+155.1000 USDT
+Max Open Interest
+0.48 SOL
+Closed Vol.
+0.48 SOL
+ROI
+-1.15%
+Opened
+11/13/2025 11:42:44
+Closed
+11/13/2025 12:06:36
+
+AEROUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.59 USDT
+Entry Price
+0.9805000 USDT
+Avg. Close Price
+0.9729000 USDT
+Max Open Interest
+76.4 AERO
+Closed Vol.
+76.4 AERO
+ROI
+-11.62%
+Opened
+11/13/2025 11:24:36
+Closed
+11/13/2025 11:39:37
+
+AGTUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.66 USDT
+Entry Price
+0.0035760 USDT
+Avg. Close Price
+0.0035450 USDT
+Max Open Interest
+20,985 AGT
+Closed Vol.
+20,985 AGT
+ROI
+-13.00%
+Opened
+11/13/2025 11:18:36
+Closed
+11/13/2025 11:39:04
+
+AKEUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.93 USDT
+Entry Price
+0.0007621 USDT
+Avg. Close Price
+0.0007527 USDT
+Max Open Interest
+98,841 AKE
+Closed Vol.
+98,841 AKE
+ROI
+-2.46%
+Opened
+11/13/2025 11:14:23
+Closed
+11/13/2025 11:21:34
+
+AGTUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.79 USDT
+Entry Price
+0.0036210 USDT
+Avg. Close Price
+0.0035830 USDT
+Max Open Interest
+20,762 AGT
+Closed Vol.
+20,762 AGT
+ROI
+-2.09%
+Opened
+11/13/2025 11:07:33
+Closed
+11/13/2025 11:11:00
+
+1000WHYUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-0.32 USDT
+Entry Price
+0.0000235 USDT
+Avg. Close Price
+0.0000234 USDT
+Max Open Interest
+3,182,011 1000WHY
+Closed Vol.
+3,182,011 1000WHY
+ROI
+-0.85%
+Opened
+11/13/2025 11:07:33
+Closed
+11/13/2025 11:07:41
