@@ -108,6 +108,14 @@ Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates, Data-D
 -   **Real-Time Performance Tracking**: Win rate, consecutive losses, daily PnL per symbol.
 -   **Seamless Fallback**: If disabled or fails, falls back to static leverage_policy.py.
 
+**🔍 Trading Policy Filters (System-Wide Protection):**
+-   **Symbol Filter Engine**: Validates symbols before trading based on 24H volume ($10M+ default), liquidity depth ($50k+ order book), TOP 70 Binance symbols whitelist, blacklist management.
+-   **Order Quality Monitor**: Tracks fill rate (65%+ required), slippage monitoring (2% max average), execution speed metrics, automatic poor-performing symbol flagging.
+-   **Position Limits Manager**: Max 2 positions per symbol, max 25 total open orders, correlation exposure limits (30% max to correlated groups), single symbol exposure cap (15% max portfolio).
+-   **Trading Gatekeeper**: Unified pre-trade validation gate integrating all filters + Dynamic Leverage. Every trade must pass: Symbol validation → Quality check → Position limits → Leverage calculation before execution.
+-   **Fail-Open Architecture**: If filters fail to load, system allows trades (prevents false blocks), all filters log warnings for debugging.
+-   **Integration**: Wired into `allow_and_fix_ticket` in risk_guard.py - every trade validated before execution.
+
 ### Telegram Digest System
 Consolidated notification system with batched reports for Health, Trade/PnL, Critical Alerts, and AI Trade Reviews.
 

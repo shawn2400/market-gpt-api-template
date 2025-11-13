@@ -203,7 +203,37 @@ async def allow_and_fix_ticket(ticket: Dict[str, Any]) -> Tuple[bool, str, Dict[
     if beta >= env["CORR_CAP_BETA"] and btc_bps >= env["C2_BTC_SHOCK_BPS"]:
         return False, f"C2_CORR_HALT:beta={beta:.2f},btc_shock={btc_bps:.0f}bps", ticket
 
-    # 4) Volatility Gate (14/99): אם ATR% גבוה מהסף
+    # 4) Trading Gatekeeper - Symbol Filter + Quality + Limits + Dynamic Leverage
+    try:
+        from utils.trading_gatekeeper import get_gatekeeper
+        gatekeeper = get_gatekeeper()
+        
+        gatekeeper_result = gatekeeper.validate_trade(
+            symbol=sym,
+            order_type="NEW",
+            trade_quality=ticket.get("quality"),
+            atr_pct=ticket.get("atr_pct"),
+            current_price=ticket.get("price"),
+            **ticket
+        )
+        
+        if not gatekeeper_result.approved:
+            return False, f"GATEKEEPER:{gatekeeper_result.reason}", ticket
+        
+        # If gatekeeper calculated leverage, use it
+        if gatekeeper_result.leverage:
+            t_fixed["leverage"] = gatekeeper_result.leverage
+            logger.info(f"🎯 {sym}: Dynamic leverage {gatekeeper_result.leverage}x applied")
+        
+        # Log warnings if any
+        for warning in gatekeeper_result.warnings:
+            logger.warning(f"⚠️ {sym}: {warning}")
+    
+    except Exception as e:
+        # Fail-open: allow if gatekeeper fails
+        logger.error(f"❌ Gatekeeper error (allowing): {e}")
+
+    # 5) Volatility Gate (14/99): אם ATR% גבוה מהסף
     atrpct_cfg = env["VOLATILITY_GATE_ATRPCT"]
     if atrpct_cfg > 0:
         try:
@@ -215,7 +245,7 @@ async def allow_and_fix_ticket(ticket: Dict[str, Any]) -> Tuple[bool, str, Dict[
         if atrpct >= atrpct_cfg:
             return False, f"VOLATILITY_GATE:atr%={atrpct:.3f}≥{atrpct_cfg:.3f}", ticket
 
-    # 5) Expectation-Guard (C3)
+    # 6) Expectation-Guard (C3)
     exp_R = _rolling_expectancy_R()
     if exp_R < env["C3_EXPECTANCY_MIN"]:
         # הקטנת תקציב אוט' (חסימה רק אם EXP_R << 0 משמעותית ואינך רוצה לסכן)
@@ -224,7 +254,7 @@ async def allow_and_fix_ticket(ticket: Dict[str, Any]) -> Tuple[bool, str, Dict[
         if b > 0:
             t_fixed["budget"] = b * cap_pct
 
-    # 6) Volatility Targeting (99) + Kelly-Lite (100) — תיקוני lev/qty/budget
+    # 7) Volatility Targeting (99) + Kelly-Lite (100) — תיקוני lev/qty/budget
     price = None
     try:
         price = await get_last_price_async(sym)
@@ -257,7 +287,7 @@ async def allow_and_fix_ticket(ticket: Dict[str, Any]) -> Tuple[bool, str, Dict[
         b_cap = b_in if max_budget_env <= 0 else min(b_in, max_budget_env)
         t_fixed["budget"] = b_cap
 
-    # 7) כימות כמות סופית (qty) לפי כללים מערכתיים (אם קיים)
+    # 8) כימות כמות סופית (qty) לפי כללים מערכתיים (אם קיים)
     if (price or 0) > 0:
         t_fixed = ensure_final_qty(t_fixed, float(price)) or t_fixed
 

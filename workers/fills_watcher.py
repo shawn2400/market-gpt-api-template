@@ -442,6 +442,31 @@ def _on_trade_completion(symbol: str, exit_time: float):
             "strategy": pos_data.get("strategy", "Mean-Reversion")
         }
         
+        # 📊 Feed to Order Quality Monitor for tracking
+        try:
+            from utils.order_quality_monitor import record_order
+            from datetime import datetime
+            
+            # Calculate slippage if we have requested price
+            slippage_pct = abs(exit_price - entry_price) / entry_price if entry_price > 0 else 0.0
+            
+            record_order(
+                symbol=symbol,
+                order_id=trade_data["trade_id"],
+                side="SELL" if side == "LONG" else "BUY",  # Exit order side
+                order_type="MARKET",  # Most closes are market orders
+                requested_price=entry_price,  # Entry was the target
+                filled_price=exit_price,  # Exit was the fill
+                requested_qty=quantity,
+                filled_qty=quantity,  # Assume full fill on close
+                status="FILLED",
+                placed_at=datetime.fromtimestamp(pos_data["entry_time"]),
+                filled_at=datetime.fromtimestamp(exit_time)
+            )
+            log.debug(f"📊 Recorded order quality for {symbol}")
+        except Exception as e:
+            log.debug(f"Failed to record order quality: {e}")
+        
         # Add to digest for batch summary
         digest = get_digest()
         digest.add_trade_completion(
