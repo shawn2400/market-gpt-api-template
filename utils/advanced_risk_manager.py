@@ -19,10 +19,20 @@ Total savings: ~8.4 USDT per cycle
 import os
 import time
 import logging
+import json
 from typing import Dict, Any, Optional, Tuple
 from datetime import datetime, timezone
 
 logger = logging.getLogger("advanced_risk_manager")
+
+# Redis client for persistence
+try:
+    from utils.redis_client import get_redis
+    REDIS_AVAILABLE = True
+except Exception as e:
+    logger.warning(f"Redis unavailable: {e}")
+    REDIS_AVAILABLE = False
+    get_redis = None  # type: ignore
 
 # 🎯 LAYER 1: Dynamic SL Configuration
 ATR_MULTIPLIER_BASE = float(os.getenv("ATR_MULTIPLIER_BASE", "2.0"))
@@ -37,7 +47,11 @@ MAX_LOSS_CAP = float(os.getenv("MAX_LOSS_CAP", "0.02"))  # 2% hard stop
 # 🚀 LAYER 3: Breakeven Acceleration
 BREAKEVEN_THRESHOLD = float(os.getenv("BREAKEVEN_THRESHOLD", "0.005"))  # 0.5% profit
 
-# Position entry time tracking
+# 💾 Persistence Configuration
+REDIS_KEY_PREFIX = "arm:entry:"
+ENTRY_TTL_SECONDS = 3600  # 1 hour auto-cleanup
+
+# Position entry time tracking (memory cache)
 _position_entry_times: Dict[str, float] = {}
 
 
@@ -58,6 +72,9 @@ class AdvancedRiskManager:
         self.atr_multiplier_base = ATR_MULTIPLIER_BASE
         self.volatility_threshold = VOLATILITY_THRESHOLD
         
+        # 💾 Recovery: Load entry timestamps from Redis on startup
+        self._recover_entry_timestamps()
+        
         logger.info(
             f"🛡️ Advanced Risk Manager initialized | "
             f"Hold: {self.min_hold_time}s | "
@@ -65,15 +82,89 @@ class AdvancedRiskManager:
             f"BE: {self.breakeven_threshold*100:.1f}%"
         )
     
+    def _recover_entry_timestamps(self) -> None:
+        """
+        💾 Recover entry timestamps from Redis on startup
+        Ensures 60-second hold protection survives restarts
+        """
+        if not REDIS_AVAILABLE or not get_redis:
+            logger.info("💾 Redis unavailable - using memory-only entry tracking")
+            return
+        
+        try:
+            redis_client = get_redis()
+            if not redis_client:
+                return
+            
+            # Scan for all arm:entry:* keys
+            pattern = f"{REDIS_KEY_PREFIX}*"
+            recovered = 0
+            
+            for key in redis_client.scan_iter(match=pattern, count=100):
+                try:
+                    # Extract symbol from key (arm:entry:BTCUSDT -> BTCUSDT)
+                    symbol = key.replace(REDIS_KEY_PREFIX, "")
+                    
+                    # Load timestamp from Redis
+                    data = redis_client.get(key)
+                    if data:
+                        entry_data = json.loads(data)
+                        timestamp = entry_data.get("timestamp")
+                        if timestamp:
+                            _position_entry_times[symbol] = timestamp
+                            recovered += 1
+                except Exception as e:
+                    logger.warning(f"Failed to recover entry time for key {key}: {e}")
+            
+            if recovered > 0:
+                logger.info(f"💾 Recovered {recovered} entry timestamps from Redis")
+        except Exception as e:
+            logger.warning(f"💾 Entry timestamp recovery failed: {e}")
+    
+    def _save_to_redis(self, symbol: str, timestamp: float) -> None:
+        """
+        💾 Save entry timestamp to Redis for persistence
+        
+        Args:
+            symbol: Trading symbol
+            timestamp: Unix timestamp of position entry
+        """
+        if not REDIS_AVAILABLE or not get_redis:
+            return
+        
+        try:
+            redis_client = get_redis()
+            if not redis_client:
+                return
+            
+            key = f"{REDIS_KEY_PREFIX}{symbol}"
+            data = {
+                "symbol": symbol,
+                "timestamp": timestamp,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            
+            # Save with TTL (auto-cleanup after 1 hour)
+            redis_client.setex(key, ENTRY_TTL_SECONDS, json.dumps(data))
+            logger.debug(f"💾 Saved entry timestamp to Redis: {symbol}")
+        except Exception as e:
+            logger.warning(f"💾 Failed to save to Redis for {symbol}: {e}")
+    
     def register_position_entry(self, symbol: str) -> None:
         """
         Register position entry time for 60-second hold protection
+        💾 Persists to Redis for restart survival
         
         Args:
             symbol: Trading symbol (e.g., 'BTCUSDT')
         """
-        _position_entry_times[symbol] = time.time()
-        logger.info(f"⏰ Registered entry time for {symbol}")
+        timestamp = time.time()
+        _position_entry_times[symbol] = timestamp
+        
+        # 💾 Save to Redis for persistence
+        self._save_to_redis(symbol, timestamp)
+        
+        logger.info(f"⏰ Registered entry time for {symbol} (persisted to Redis)")
     
     def get_position_age(self, symbol: str) -> Optional[float]:
         """
@@ -306,13 +397,27 @@ class AdvancedRiskManager:
     def cleanup_closed_position(self, symbol: str) -> None:
         """
         Cleanup tracking data for closed position
+        💾 Removes from both memory and Redis
         
         Args:
             symbol: Trading symbol
         """
+        # Remove from memory
         if symbol in _position_entry_times:
             del _position_entry_times[symbol]
-            logger.debug(f"🧹 Cleaned up tracking for {symbol}")
+        
+        # 💾 Remove from Redis
+        if REDIS_AVAILABLE and get_redis:
+            try:
+                redis_client = get_redis()
+                if redis_client:
+                    key = f"{REDIS_KEY_PREFIX}{symbol}"
+                    redis_client.delete(key)
+                    logger.debug(f"💾 Removed {symbol} from Redis")
+            except Exception as e:
+                logger.warning(f"💾 Failed to cleanup Redis for {symbol}: {e}")
+        
+        logger.debug(f"🧹 Cleaned up tracking for {symbol}")
     
     def get_protection_summary(self) -> Dict[str, Any]:
         """

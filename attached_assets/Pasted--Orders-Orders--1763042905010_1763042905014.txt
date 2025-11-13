@@ -1,0 +1,139 @@
+**🎯 פקודת מערכת כללית - אופטימיזציית ניהול Orders**
+
+## 🚀 **"הפעל אופטימיזציית Orders אוטונומית - כלל המערכת"**
+
+### **📜 פקודת מערכת מלאה:**
+
+```python
+execute_system_wide_order_optimization({
+    "scope": "ALL_SYMBOLS",  # חל על כל הסמלים
+    "mission": "Optimize order management across entire portfolio",
+    
+    "1. ORDER CONSOLIDATION PROTOCOL": {
+        "rule": "Maximum 4 active TP/SL orders per symbol",
+        "actions": [
+            "consolidate_similar_prices()",      # מרכז מחירים דומים
+            "remove_redundant_orders()",         # מסיר orders כפולים
+            "optimize_order_spacing()"           # מרווח אופטימלי בין orders
+        ],
+        "target_state": "3-4 clear orders per symbol"
+    },
+    
+    "2. ORDER TYPE OPTIMIZATION": {
+        "rule": "Use MARKET for TP, LIMIT for entries",
+        "logic": {
+            "take_profit": "MARKET orders",      # הבטחת ביצוע
+            "stop_loss": "MARKET orders",        # הגנה ודאית  
+            "entries": "LIMIT orders",           # מחיר מדויק
+            "rationale": "Avoid missed executions on key levels"
+        }
+    },
+    
+    "3. TRAILING TP IMPLEMENTATION": {
+        "rule": "Auto-convert static TP to trailing above 25% profit",
+        "parameters": {
+            "activation_threshold": 0.25,        # 25% רווח
+            "trailing_distance": 0.15,           # 15% מהשיא
+            "auto_adjust_volatility": True       # מתאים לתנודתיות
+        }
+    },
+    
+    "4. RISK-AWARE ORDER PLACEMENT": {
+        "rule": "Minimum 1% distance between TP levels",
+        "validation": {
+            "check_order_distances()",           # בודק ריווח נכון
+            "prevent_overcrowding()",            # מונע צפיפות
+            "align_with_technical_levels()"      # מתיישר עם S/R
+        }
+    },
+    
+    "5. AUTO-CLEANUP SCHEDULE": {
+        "rule": "Daily order book optimization",
+        "schedule": [
+            {"time": "06:00", "action": "consolidate_all_orders"},
+            {"time": "12:00", "action": "remove_stale_orders"}, 
+            {"time": "18:00", "action": "optimize_active_orders"}
+        ]
+    }
+})
+```
+
+## 🔧 **ביצוע מערכתי - איך זה עובד:**
+
+### **אלגוריתם האיחוד האוטומטי:**
+```python
+class SystemOrderOptimizer:
+    async def optimize_all_symbols(self):
+        symbols = await self.get_all_traded_symbols()
+        
+        for symbol in symbols:
+            # 1. קבל את כל ה-orders הנוכחיים
+            current_orders = await self.get_orders(symbol)
+            
+            # 2. הפעל את פרוטוקול האופטימיזציה
+            optimized_orders = await self.consolidate_orders(current_orders)
+            
+            # 3. בצע את השינויים
+            await self.execute_optimization(symbol, optimized_orders)
+            
+            # 4. דווח על השינויים
+            await self.report_optimization(symbol, current_orders, optimized_orders)
+```
+
+### **לוגיקת האיחוד החכמה:**
+```python
+def consolidate_orders(current_orders):
+    """מאחד orders דומים וממטב את הספר"""
+    
+    # קבוצ orders לפי סוג
+    tp_orders = [o for o in current_orders if o.type == 'TAKE_PROFIT']
+    sl_orders = [o for o in current_orders if o.type == 'STOP_LOSS']
+    
+    # אופטימיזציית TP - מקסימום 3 רמות
+    if len(tp_orders) > 3:
+        optimized_tp = self.optimize_tp_levels(tp_orders)
+    else:
+        optimized_tp = self.space_tp_levels(tp_orders)
+    
+    # החזר הספר הממוטב
+    return optimized_tp + sl_orders
+```
+
+## 📊 **תוצאות צפויות - כלל המערכת:**
+
+### **לפני האופטימיזציה:**
+```python
+before_optimization = {
+    "ach_example": "8 TP orders עם מחירים דומים",
+    "management_complexity": "גבוהה - קשה לעקוב",
+    "execution_risk": "גבוה - competition בין orders",
+    "system_load": "כבד - many redundant orders"
+}
+```
+
+### **אחרי האופטימיזציה:**
+```python
+after_optimization = {
+    "all_symbols": "3-4 clear orders per symbol", 
+    "management_complexity": "נמוכה - סדר ובהירות",
+    "execution_confidence": "גבוהה - orders ברורים",
+    "system_efficiency": "מיטבית - no redundancy"
+}
+```
+
+## 🎯 **אישור הפעלה:**
+
+```
+✅ **System-Wide Order Optimization - ACTIVATED**
+📊 Scope: ALL TRADED SYMBOLS
+🔧 Actions: Consolidation + Optimization + Automation  
+📈 Expected: Reduced complexity, improved execution
+🔄 Schedule: Continuous + Daily cleanup
+
+Optimization protocol will run on all active symbols
+and maintain efficient order management automatically.
+```
+
+**המערכת תטפל בכל הסמלים אוטומטית - תיצור סדר, תימנע כפילויות, ותשפר ביצועים!** 🚀
+
+**מאשר להפעיל את האופטימיזציה המערכתית?** 🔧

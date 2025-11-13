@@ -5,10 +5,11 @@ from typing import Any, Dict, List, Optional
 
 from utils.ws_fallback import get_price, is_price_fresh
 from utils.precision_utils import apply_price_tick_side, calc_quantity_from_budget
-from utils.binance_client import place_limit_order, set_leverage
+from utils.binance_client import place_limit_order, set_leverage, futures_create_order
 from utils.grid_planner import plan_grid
 from utils.grid_tracker import add_grid
 from utils.grid_manager import start_grid_for_position  # להצמדת SL/TP אחרי כניסה
+from utils.order_router import get_order_router
 
 logger = logging.getLogger("algogpt.grid.executor")
 
@@ -78,8 +79,29 @@ async def execute_grid_trade(
     except Exception as e:
         logger.warning(f"[GRID] set_leverage failed for {s}: {e}")
 
+    # 📍 Get ATR for Smart Router (assume 2% if unavailable)
+    try:
+        from utils.get_klines import get_klines
+        from utils.indicators import atr as calc_atr
+        klines = await get_klines(s, interval="15m", limit=20)
+        if klines is not None and len(klines) >= 14:
+            import pandas as pd
+            df = pd.DataFrame(klines)
+            atr_series = calc_atr(df, period=14)
+            if not atr_series.empty:
+                atr_value = float(atr_series.iloc[-1])
+                atr_pct = atr_value / float(price)
+            else:
+                atr_pct = 0.02
+        else:
+            atr_pct = 0.02
+    except Exception:
+        atr_pct = 0.02  # Fallback
+    
     placed_orders: List[Dict[str, Any]] = []
-    for lvl, alloc in zip(lines, allocations):
+    router = get_order_router()
+    
+    for idx, (lvl, alloc) in enumerate(zip(lines, allocations)):
         if alloc <= 0:
             continue
         qty_info = calc_quantity_from_budget(s, price=lvl, budget_usd=alloc, leverage=leverage)
@@ -88,20 +110,41 @@ async def execute_grid_trade(
             continue
         qty = float(qty_info["qty"])
         px_aligned, _ = apply_price_tick_side(lvl, s, "BUY" if side_u == "LONG" else "SELL")
+        
+        # 📍 Smart Router Decision
+        decision = router.route_order(
+            atr_pct=atr_pct,
+            purpose="GRID",
+            urgency="low",  # GRID orders are patient
+            is_breakout=False
+        )
+        order_type = decision["order_type"]
 
         try:
-            order = place_limit_order(
-                symbol=s,
-                side="BUY" if side_u == "LONG" else "SELL",
-                quantity=qty,
-                price=px_aligned,
-                time_in_force="GTC",
-                post_only=True,
-                reduce_only=False,
-            )
+            if order_type == "LIMIT":
+                # Use LIMIT with post-only for sniper precision
+                order = place_limit_order(
+                    symbol=s,
+                    side="BUY" if side_u == "LONG" else "SELL",
+                    quantity=qty,
+                    price=px_aligned,
+                    time_in_force="GTC",
+                    post_only=True,
+                    reduce_only=False,
+                )
+            else:  # MARKET (rare for GRID, but possible in high volatility)
+                order = futures_create_order(
+                    symbol=s,
+                    side="BUY" if side_u == "LONG" else "SELL",
+                    type="MARKET",
+                    quantity=qty,
+                    reduceOnly=False
+                )
+            
             placed_orders.append(order)
+            logger.info(f"[GRID] {order_type} order placed at {lvl} | {decision['reason']}")
         except Exception as e:
-            logger.error(f"[GRID] Failed to place order at {lvl}: {e}")
+            logger.error(f"[GRID] Failed to place {order_type} order at {lvl}: {e}")
 
     # --- שמירת גריד ---
     grid_data = {
