@@ -6,6 +6,8 @@ from typing import Any, Dict, Optional, List, Callable
 from fastapi import APIRouter, Header, HTTPException, Request, Body, Query, Depends
 from pydantic import BaseModel
 
+from utils.execution_bot import ExecutionBot
+
 # --- Pydantic v1/v2 compatibility for validators & config ---
 try:
     # Pydantic v2
@@ -43,6 +45,8 @@ except Exception:
 
 logger = logging.getLogger("algogpt.trade")
 router = APIRouter(prefix="/trade", tags=["trade"], dependencies=_router_deps)
+
+execution_bot = ExecutionBot(logger=logger)
 
 # ---------- metrics wiring (optional) ----------
 try:
@@ -356,16 +360,32 @@ async def trade_execute(
     req: TradeRequest = Body(...),
     x_idempotency_key: Optional[str] = Header(default=None, alias="X-Idempotency-Key"),
 ):
-    flow = _choose_flow(req)
+    ticket_exec = dict(
+        symbol=req.symbol,
+        side=req.side,
+        quantity=(req.quantity if req.quantity is not None else None),
+        qty=(req.quantity if req.quantity is not None else None),
+        leverage=req.leverage,
+        note=req.note or "",
+        tp1=req.tp1,
+        tp2=req.tp2,
+        tp3=req.tp3,
+        sl=req.sl,
+        tp_splits=req.tp_splits,
+        budget=req.budget_usd,
+        budget_usd=req.budget_usd,
+        position_side=(req.position_side or ("LONG" if req.side == "BUY" else "SHORT")).upper(),
+        reduce_only=bool(req.reduce_only),
+        require_approval=bool(req.require_approval or req.confirm_first),
+        confirm_first=bool(req.require_approval or req.confirm_first),
+    )
+
+    result = await execution_bot.open_position(ticket_exec, source="api")
+    
+    flow = result.get("flow", "MARKET")
     record_trade_request(flow)
 
-    # Global toggle may force approvals
-    force_approve_env = os.getenv("REQUIRE_TELEGRAM_APPROVAL", "0").lower() in ("1", "true", "yes", "on")
-    # Respect explicit require_approval or legacy confirm_first
-    need_approval = bool(req.require_approval or req.confirm_first or force_approve_env)
-
-    # === Approval Gate ===
-    if need_approval:
+    if result.get("status") == "pending_approval":
         try:
             import httpx
             public_host = os.getenv("PUBLIC_HOST", "").strip()
@@ -397,7 +417,6 @@ async def trade_execute(
                 headers["X-Idempotency-Key"] = x_idempotency_key
             async with httpx.AsyncClient(timeout=12.0) as cli:
                 r = await cli.post(f"{base.rstrip('/')}/ops/ticket", json=payload, headers=headers)
-            # defensive JSON parse
             try:
                 data = r.json()
             except Exception as e:
@@ -420,39 +439,25 @@ async def trade_execute(
         except Exception as e:
             logger.error("open_ops_ticket_failed: %s", e)
             record_trade_fail(flow)
-            # Preserve behavior ONLY when approval was actually required
             raise HTTPException(status_code=502, detail=f"open_ops_ticket_failed: {e}")
-
-    # === No approval path ===
-    if flow == "MARKET" and (req.quantity is None or float(req.quantity) <= 0):
-        # if MARKET but no qty -> promote to HYBRID (budget-based execution)
-        flow = "HYBRID"
-
-    ticket_exec = dict(
-        symbol=req.symbol,
-        side=req.side,
-        qty=(req.quantity if req.quantity is not None else None),
-        leverage=req.leverage,
-        note=req.note or "",
-        tp1=req.tp1,
-        tp2=req.tp2,
-        tp3=req.tp3,
-        sl=req.sl,
-        tp_splits=req.tp_splits,
-        budget=req.budget_usd,
-        position_side=(req.position_side or ("LONG" if req.side == "BUY" else "SHORT")).upper(),
-        reduce_only=bool(req.reduce_only),
-    )
-
-    if flow == "MARKET":
-        if ticket_exec.get("qty") is None or float(ticket_exec["qty"]) <= 0:
-            record_trade_fail(flow)
-            raise HTTPException(status_code=400, detail="quantity required for MARKET flow")
-
-    res = await (_execute_trade_direct(ticket_exec) if flow == "MARKET" else _execute_trade_hybrid(ticket_exec))
-    ok = bool(res.get("ok"))
+    
+    ok = result.get("status") == "opened"
     (record_trade_ok if ok else record_trade_fail)(flow)
-    return {"ok": ok, "flow": flow, "result": res}
+    
+    return {
+        "ok": ok,
+        "flow": flow,
+        "result": {
+            "ok": ok,
+            "position_id": result.get("position_id"),
+            "entry_orders": result.get("entry_orders"),
+            "sl_order": result.get("sl_order"),
+            "tp_orders": result.get("tp_orders"),
+            "symbol": result.get("symbol"),
+            "side": result.get("side"),
+            "reason": result.get("reason"),
+        }
+    }
 
 @router.get("/approve")
 async def trade_approve(id: str = Query(..., description="idempotency key or ticket_id")):
@@ -472,9 +477,10 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
         record_trade_approval("approve", False)
         return {"ok": False, "error": "not_found"}
 
-    flow = "HYBRID" if any(it.get(k) for k in ("tp1", "tp2", "tp3", "sl")) or (it.get("budget") is not None) else "MARKET"
-    res = await (_execute_trade_hybrid(it) if flow == "HYBRID" else _execute_trade_direct(it))
-    ok = bool(res.get("ok"))
+    result = await execution_bot.open_position(it, source="approval")
+    
+    flow = result.get("flow", "MARKET")
+    ok = result.get("status") == "opened"
 
     try:
         ConfirmStore.decide(str(it.get("ticket_id") or id), approved=ok)
@@ -484,7 +490,20 @@ async def trade_approve(id: str = Query(..., description="idempotency key or tic
     record_trade_approval("approve", ok)
     (record_trade_ok if ok else record_trade_fail)(flow)
 
-    return {"ok": ok, "flow": flow, "result": res}
+    return {
+        "ok": ok,
+        "flow": flow,
+        "result": {
+            "ok": ok,
+            "position_id": result.get("position_id"),
+            "entry_orders": result.get("entry_orders"),
+            "sl_order": result.get("sl_order"),
+            "tp_orders": result.get("tp_orders"),
+            "symbol": result.get("symbol"),
+            "side": result.get("side"),
+            "reason": result.get("reason"),
+        }
+    }
 
 @router.get("/reject")
 async def trade_reject(id: str = Query(..., description="idempotency key or ticket_id")):
