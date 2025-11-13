@@ -27,10 +27,18 @@ except Exception:
                 pass
         return MockDigest()
 
-try:
-    from utils.position_manager import manage_once as add_sl_tp_protection
-except Exception:
-    add_sl_tp_protection = None  # type: ignore
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(levelname)s:%(name)s:%(message)s'
+)
+logger = logging.getLogger("position_monitor")
+
+# Global state variables for change detection
+_previous_positions: Dict[str, Any] = {}
+_last_position_count = 0
+
+# ⚠️ REMOVED: Legacy position_manager import
+# add_sl_tp_protection superseded by Trailing TP system to prevent dual-manager conflicts
 
 # 🎯 TRAILING TP SYSTEM (MetaBrain v9.1 Profit Protection)
 try:
@@ -122,10 +130,8 @@ async def ensure_positions_protected() -> None:
         except Exception as e:
             logger.error(f"❌ Emergency Protection check failed: {e}", exc_info=True)
         
-        # Regular auto-protect for protected positions
-        if add_sl_tp_protection is None:
-            logger.warning("⚠️ position_manager.manage_once not available - skipping auto-protect")
-            return
+        # ⚠️ ARCHITECTURE CHANGE: Position Monitor now uses Trailing TP only
+        # Legacy add_sl_tp_protection removed to prevent dual-manager conflicts
         
         for pos in positions:
             symbol = pos.get("symbol", "")
@@ -134,30 +140,8 @@ async def ensure_positions_protected() -> None:
             if amt == 0:
                 continue
             
-            try:
-                result = await add_sl_tp_protection(symbol=symbol)
-                
-                if result.get("skipped"):
-                    logger.debug(f"⏭️ {symbol}: {result.get('reason', 'skipped')}")
-                elif result.get("ok"):
-                    actions = []
-                    if result.get("sl_updated") or result.get("sl_placed"):
-                        actions.append("SL")
-                    if result.get("tp_ladder_placed") or result.get("tp_count", 0) > 0:
-                        tp_count = result.get("tp_count", result.get("tp_ladder_count", 0))
-                        actions.append(f"TP×{tp_count}")
-                    if result.get("trail_placed"):
-                        actions.append("Trail")
-                    
-                    if actions:
-                        logger.info(f"✅ {symbol}: Protected [{', '.join(actions)}]")
-                    else:
-                        logger.debug(f"✓ {symbol}: Already protected")
-                elif not result.get("ok"):
-                    logger.warning(f"⚠️ {symbol}: Protection failed - {result.get('error', 'unknown')}")
-            
-            except Exception as e:
-                logger.error(f"❌ {symbol}: Auto-protect error: {e}", exc_info=True)
+            # ⚠️ LEGACY SL/TP MANAGEMENT DISABLED - Trailing TP handles all protection
+            # add_sl_tp_protection is now superseded by Trailing TP system below
             
             # 🎯 TRAILING TP CHECK (after SL/TP protection)
             if trailing_tp and ENABLE_TRAILING_TP:
@@ -181,22 +165,40 @@ async def ensure_positions_protected() -> None:
                         position_side = "LONG" if amt > 0 else "SHORT"
                         close_side = "SELL" if position_side == "LONG" else "BUY"
                         
-                        # Cancel all existing orders before closing
-                        futures_cancel_all_orders(symbol)
-                        
-                        # Execute market close
-                        futures_create_order(
-                            symbol=symbol,
-                            side=close_side,
-                            type="MARKET",
-                            quantity=abs(amt),
-                            reduceOnly=True,
-                            positionSide=position_side
-                        )
-                        
-                        trailing_tp.remove_trailing(symbol)
-                        await send_telegram_message(f"🚨 Trailing TP exit {symbol}: {reason} | PNL {pnl_pct:+.2f}%")
-                        logger.info(f"🎯 Trailing TP closed {symbol}: {reason} @ {pnl_pct:+.2f}%")
+                        close_success = False
+                        try:
+                            # Step 1: Cancel all existing orders
+                            futures_cancel_all_orders(symbol)
+                            logger.debug(f"Cancelled all orders for {symbol}")
+                            
+                            # Step 2: Execute market close with retries
+                            for attempt in range(3):
+                                try:
+                                    order = futures_create_order(
+                                        symbol=symbol,
+                                        side=close_side,
+                                        type="MARKET",
+                                        quantity=abs(amt),
+                                        reduceOnly=True,
+                                        positionSide=position_side
+                                    )
+                                    logger.info(f"✅ Trailing TP close executed: {symbol} order {order.get('orderId')}")
+                                    close_success = True
+                                    break
+                                except Exception as retry_err:
+                                    logger.warning(f"⚠️ Trailing TP close attempt {attempt+1}/3 failed for {symbol}: {retry_err}")
+                                    if attempt < 2:
+                                        await asyncio.sleep(1)  # Brief delay before retry
+                            
+                            if close_success:
+                                trailing_tp.remove_trailing(symbol)
+                                await send_telegram_message(f"🚨 Trailing TP exit {symbol}: {reason} | PNL {pnl_pct:+.2f}%")
+                                logger.info(f"🎯 Trailing TP closed {symbol}: {reason} @ {pnl_pct:+.2f}%")
+                            else:
+                                logger.error(f"❌ Failed to close {symbol} after 3 attempts - keeping trailing state")
+                        except Exception as close_err:
+                            logger.error(f"❌ Trailing TP close failed for {symbol}: {close_err}")
+                            # Keep trailing state if close failed - will retry next cycle
                 
                 except Exception as err:
                     logger.error(f"❌ {symbol}: Trailing TP error: {err}", exc_info=True)
@@ -214,11 +216,6 @@ async def ensure_positions_protected() -> None:
     except Exception as e:
         logger.error(f"❌ ensure_positions_protected failed: {e}")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(levelname)s:%(name)s:%(message)s'
-)
-logger = logging.getLogger("position_monitor")
 
 # Configuration
 REPORT_INTERVAL_SEC = int(os.getenv("POSITION_REPORT_INTERVAL_SEC", "1800"))  # 30 minutes
@@ -379,22 +376,14 @@ async def monitor_loop():
     )
     
     if ENABLE_TRAILING_TP:
-        logger.info(
-            f"🎯 Trailing TP Config: Activate at {TRAILING_ACTIVATION_PCT}%, "
-            f"Close at {TRAILING_DISTANCE_PCT}% from peak"
-        )
+        logger.info("🎯 Trailing TP enabled (config in utils/trailing_tp.py)")
     
     last_report_time = 0
     
     while True:
         current_time = time.time()
         
-        try:
-            # 🎯 TRAILING TP - Check and update every 30 seconds
-            if ENABLE_TRAILING_TP:
-                await check_and_update_trailing_tp()
-        except Exception as e:
-            logger.error(f"Error in trailing TP: {e}")
+        # 🎯 TRAILING TP - Managed within ensure_positions_protected (every 30s)
         
         try:
             if ENABLE_AUTO_PROTECT:
