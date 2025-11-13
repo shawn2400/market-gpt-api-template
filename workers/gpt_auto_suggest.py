@@ -892,6 +892,8 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
                 LOGGER.info(f"✅ DeepSeek generated proposal for {symbol}: {data}")
             else:
                 LOGGER.warning(f"⚠️ DeepSeek response parsing failed for {symbol}")
+        else:
+            LOGGER.warning(f"❌ DeepSeek invalid response format for {symbol}: {response}")
     except Exception as e:
         LOGGER.warning(f"DeepSeek proposal generation failed for {symbol}: {e}")
     
@@ -1571,7 +1573,7 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
 async def process_cycle():
     # פרופיל שעות → קובע topK, cooldown, rr_bonus (rr_bonus כבר טופל ב-Context)
     hp = hours_profile_now()
-    topk = max(1, int(hp.get("topk", 12)))
+    topk = POOL_PER_CYCLE  # 🚀 Always scan 50 symbols per cycle (ignore hours_profile topk)
     cooldown_min = max(3, int(hp.get("cooldown_min", 12)))
     cooldown_sec = cooldown_min * 60
 
