@@ -39,6 +39,16 @@ with suppress(Exception):
 with suppress(Exception):
     from utils.alerts import send_telegram_message  # type: ignore
 
+# Trailing TP System (MetaBrain v9.1 Profit Protection)
+try:
+    import utils.trailing_tp as trailing_tp
+    _TRAILING_TP_AVAILABLE = True
+    logger.info("✅ Trailing TP system loaded")
+except Exception as _e:
+    trailing_tp = None  # type: ignore
+    _TRAILING_TP_AVAILABLE = False
+    logger.warning(f"Trailing TP unavailable: {_e}")
+
 # Dynamic Trading System (MetaBrain v8.0) - Legacy
 try:
     from utils.regime_glue import RegimeAdapter
@@ -569,6 +579,28 @@ async def manage_open_trades():
                     logger.info(f"[manage] Skipping {sym}: no price")
                     continue
 
+                # 🎯 TRAILING TP CHECK (before Dynamic Path)
+                if _TRAILING_TP_AVAILABLE and trailing_tp.is_enabled():
+                    try:
+                        pos_snapshot = {**pos, "symbol": sym, "positionAmt": qty, "markPrice": price}
+                        if trailing_tp.should_activate_trailing(pos_snapshot):
+                            trailing_data = trailing_tp.activate_trailing(pos_snapshot)
+                            await notify_info(f"🎯 Trailing TP armed for {sym} @ {trailing_data['activation_pnl']:.1f}%", symbol=sym)
+                        trailing_tp.update_trailing_peak(pos_snapshot)
+                        should_close, pnl_pct, reason, trailing_state = trailing_tp.should_close_by_trailing(pos_snapshot)
+                        if should_close:
+                            position_side = "LONG" if qty > 0 else "SHORT"
+                            close_side = "SELL" if position_side == "LONG" else "BUY"
+                            _cancel_closing_orders(sym, ("TAKE_PROFIT", "TAKE_PROFIT_MARKET", "STOP", "STOP_MARKET"), position_side=position_side)
+                            qty_str, _ = _q_qty(sym, abs(qty))
+                            futures_create_order(symbol=sym, side=close_side, type="MARKET", quantity=qty_str, reduceOnly=True, positionSide=position_side)
+                            trailing_tp.remove_trailing(sym)
+                            await notify_info(f"🚨 Trailing TP exit {sym}: {reason} | PNL {pnl_pct:+.2f}%", symbol=sym)
+                            _last_update[sym] = now
+                            continue
+                    except Exception as err:
+                        logger.error(f"[manage] Trailing TP failure {sym}: {err}")
+
                 if now - _last_update.get(sym, 0) < _COOLDOWN:
                     print(f"⏭️ [manage] Skipping {sym}: cooldown active ({_COOLDOWN}s)")
                     logger.info(f"[manage] Skipping {sym}: cooldown active")
@@ -954,6 +986,16 @@ async def manage_open_trades():
             await _be_guard_tick()
 
         await _detect_closures_and_review(positions)
+
+        # 🎯 TRAILING TP CLEANUP: Remove stale symbols
+        if _TRAILING_TP_AVAILABLE and trailing_tp.is_enabled():
+            try:
+                open_syms = {(p.get("symbol") or "").upper() for p in positions if abs(float(p.get("positionAmt") or 0)) > 0}
+                for stale in set(trailing_tp.get_all_trailing_symbols()) - open_syms:
+                    trailing_tp.remove_trailing(stale)
+                    logger.info(f"[Trailing TP] Cleaned up stale symbol: {stale}")
+            except Exception as cleanup_err:
+                logger.error(f"[Trailing TP] Cleanup failed: {cleanup_err}")
 
         try:
             ttl = get_price_age("BTCUSDT")
