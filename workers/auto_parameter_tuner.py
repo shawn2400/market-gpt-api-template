@@ -20,7 +20,7 @@ from datetime import datetime
 import json
 
 from utils.performance_tracker import get_performance_tracker
-from utils.dynamic_filters import save_filter_overrides, BASE_QUALITY, BASE_RR_TOP10
+from utils.dynamic_filters import save_filter_overrides, _load_overrides, BASE_QUALITY, BASE_RR_TOP10, BASE_RR_ALT
 
 LOGGER = logging.getLogger("auto_parameter_tuner")
 
@@ -102,13 +102,18 @@ class AutoParameterTuner:
         return tuning_result
     
     def _get_current_parameters(self) -> Dict:
-        """Get current parameter values"""
-        try:
-            if hasattr(self, 'current_params'):
-                return self.current_params
-        except:
-            pass
+        """Get current parameter values from overrides or defaults"""
+        # Load from overrides first (live values from last tuning)
+        overrides = _load_overrides()
         
+        if overrides:
+            return {
+                "min_quality": overrides.get("min_quality", BASE_QUALITY),
+                "min_rr": overrides.get("min_rr_top10", BASE_RR_TOP10),
+                "max_leverage": overrides.get("max_leverage", 15)
+            }
+        
+        # Fallback to defaults
         return {
             "min_quality": BASE_QUALITY,
             "min_rr": BASE_RR_TOP10,
@@ -208,15 +213,20 @@ class AutoParameterTuner:
         self._save_params()
         
         # Save to dynamic_filters override file (this is what gpt_auto_suggest reads!)
+        # Include both RR splits and leverage
         overrides = {
             "min_quality": new_params["min_quality"],
-            "min_rr": new_params["min_rr"],
+            "min_rr_top10": new_params["min_rr"],
+            "min_rr_alt": new_params["min_rr"] + 0.1,  # Alt coins slightly higher RR
             "max_leverage": new_params["max_leverage"]
         }
         
         save_filter_overrides(overrides)
         
-        self.logger.info(f"✅ New parameters applied and saved to dynamic_filters overrides")
+        self.logger.info(
+            f"✅ New parameters applied: quality={new_params['min_quality']:.1f}, "
+            f"rr={new_params['min_rr']:.2f}, leverage={new_params['max_leverage']}x"
+        )
     
     def _load_params(self):
         """Load parameters from file"""

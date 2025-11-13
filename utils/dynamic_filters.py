@@ -22,13 +22,13 @@ BASE_RR_TOP10 = 1.01     # מינימום מוחלט!
 BASE_RR_ALT = 1.01       # מינימום מוחלט!
 BASE_QUALITY = 4.0       # קבל כמעט הכל!
 
-# ====== Adjustment ranges (RR קבוע ללא adjustment!) ======
+# ====== Adjustment ranges (ALLOW DYNAMIC RR for Auto-Optimization!) ======
 SUCCESS_MIN = 40.0       # מינימום מאוד נמוך
 SUCCESS_MAX = 60.0       # מקסימום נמוך
-RR_TOP10_MIN = 1.01      # מינימום מוחלט - קבוע!
-RR_TOP10_MAX = 1.01      # מקסימום=מינימום → ללא adjustment!
-RR_ALT_MIN = 1.01        # מינימום מוחלט - קבוע!
-RR_ALT_MAX = 1.01        # מקסימום=מינימום → ללא adjustment!
+RR_TOP10_MIN = 1.01      # מינימום מוחלט
+RR_TOP10_MAX = 3.0       # מקסימום - מאפשר auto-tuning!
+RR_ALT_MIN = 1.01        # מינימום מוחלט
+RR_ALT_MAX = 3.0         # מקסימום - מאפשר auto-tuning!
 QUALITY_MIN = 4.0        # מינימום מאוד נמוך
 QUALITY_MAX = 8.0        # מקסימום ריאלי (טווח: 4.0-8.0)
 
@@ -117,23 +117,37 @@ def save_filter_overrides(overrides: Dict[str, float]) -> bool:
     Save filter overrides (called by Auto Parameter Tuner).
     
     Args:
-        overrides: Dict with min_quality, min_rr, max_leverage
+        overrides: Dict with min_quality, min_rr_top10, min_rr_alt, max_leverage
         
     Returns:
         True if saved successfully
     """
     overrides_file = "/tmp/dynamic_filters_overrides.json"
+    temp_file = "/tmp/dynamic_filters_overrides.json.tmp"
+    
     try:
         data = {
             "overrides": overrides,
             "updated_at": __import__('datetime').datetime.utcnow().isoformat()
         }
-        with open(overrides_file, 'w') as f:
+        
+        # Atomic write: write to temp file, then replace
+        with open(temp_file, 'w') as f:
             json.dump(data, f, indent=2)
-        logger.info(f"✅ Filter overrides saved: {overrides}")
+        
+        # Atomic replace (rename is atomic on POSIX systems)
+        os.replace(temp_file, overrides_file)
+        
+        logger.info(f"✅ Filter overrides saved atomically: {overrides}")
         return True
     except Exception as e:
         logger.error(f"Failed to save filter overrides: {e}")
+        # Clean up temp file if it exists
+        try:
+            if os.path.exists(temp_file):
+                os.remove(temp_file)
+        except:
+            pass
         return False
 
 
@@ -164,8 +178,8 @@ def get_dynamic_thresholds(
     
     # Use overrides if available, otherwise use BASE values
     base_quality = overrides.get("min_quality", BASE_QUALITY)
-    base_rr_top10 = overrides.get("min_rr", BASE_RR_TOP10)
-    base_rr_alt = overrides.get("min_rr", BASE_RR_ALT)
+    base_rr_top10 = overrides.get("min_rr_top10", BASE_RR_TOP10)
+    base_rr_alt = overrides.get("min_rr_alt", BASE_RR_ALT)
     
     # חשב market score אם לא סופק
     if market_score is None and ctx:
@@ -185,12 +199,13 @@ def get_dynamic_thresholds(
     success_pct = _clamp(success_pct, SUCCESS_MIN, SUCCESS_MAX)
     
     # RR - ככל שהשוק טוב יותר, נדרוש פחות
+    # Use base_rr from overrides or BASE values
     rr_top10_range = RR_TOP10_MAX - RR_TOP10_MIN
-    rr_top10 = BASE_RR_TOP10 - (adjustment * (rr_top10_range / 2))
+    rr_top10 = base_rr_top10 - (adjustment * (rr_top10_range / 2))
     rr_top10 = _clamp(rr_top10, RR_TOP10_MIN, RR_TOP10_MAX)
     
     rr_alt_range = RR_ALT_MAX - RR_ALT_MIN
-    rr_alt = BASE_RR_ALT - (adjustment * (rr_alt_range / 2))
+    rr_alt = base_rr_alt - (adjustment * (rr_alt_range / 2))
     rr_alt = _clamp(rr_alt, RR_ALT_MIN, RR_ALT_MAX)
     
     # Quality Score - ככל שהשוק טוב יותר, נדרוש פחות
@@ -221,6 +236,13 @@ def get_dynamic_thresholds(
         "market_score": market_score,
         "regime": (ctx.get("filters") or {}).get("regime", "") if ctx else "",
     }
+    
+    # Log applied overrides for debugging
+    if overrides:
+        logger.debug(
+            f"Applied overrides: quality={base_quality:.1f}, "
+            f"rr_top10={base_rr_top10:.2f}, rr_alt={base_rr_alt:.2f}"
+        )
     
     # Add tier info if overridden
     if tier_name:
