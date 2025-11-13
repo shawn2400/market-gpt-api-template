@@ -373,6 +373,16 @@ class TelegramDigest:
             text += f"  • Total Trades: {kpis.get('total_trades', 0)}\n"
             text += f"  • Winning Trades: {kpis.get('winning_trades', 0)}\n\n"
             
+            # Strategy Breakdown
+            strategy_stats = kpis.get("strategy_stats", {})
+            if any(s["count"] > 0 for s in strategy_stats.values()):
+                text += f"📈 <b>Strategy Breakdown:</b>\n"
+                for strategy, stats in strategy_stats.items():
+                    if stats["count"] > 0:
+                        win_rate = (stats["wins"] / stats["count"]) * 100
+                        text += f"  • {strategy}: {stats['count']} trades, {win_rate:.1f}% WR, ${stats['pnl']:.2f}\n"
+                text += "\n"
+            
             # Best/Worst Symbols
             best_symbols = kpis.get("best_symbols", [])
             if best_symbols:

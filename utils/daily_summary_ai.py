@@ -42,24 +42,28 @@ async def get_daily_kpis() -> Dict[str, Any]:
             "winning_trades": 0,
             "best_symbols": [],
             "worst_symbols": [],
-            "strategy_stats": {},
+            "strategy_stats": {
+                "GRID": {"count": 0, "wins": 0, "pnl": 0.0},
+                "MEAN_REVERSION": {"count": 0, "wins": 0, "pnl": 0.0},
+                "FUTURES": {"count": 0, "wins": 0, "pnl": 0.0},
+            },
             "exit_reasons": {}
         }
         
         with _conn() as con:
             cursor = con.cursor()
             
-            # Get all closed positions from today
+            # Get all closed positions from today with trade_type
             if is_pg:
                 cursor.execute("""
-                    SELECT symbol, pnl, status, side
+                    SELECT symbol, pnl, status, side, trade_type
                     FROM positions
                     WHERE ts_close >= to_timestamp(%s) AND status = 'CLOSED'
                     ORDER BY ts_close DESC
                 """, (today_ts,))
             else:
                 cursor.execute("""
-                    SELECT symbol, pnl, status, side
+                    SELECT symbol, pnl, status, side, trade_type
                     FROM positions
                     WHERE ts_close >= ? AND status = 'CLOSED'
                     ORDER BY ts_close DESC
@@ -74,7 +78,7 @@ async def get_daily_kpis() -> Dict[str, Any]:
             # Calculate KPIs
             symbol_pnl = {}
             for row in rows:
-                symbol, pnl, status, side = row
+                symbol, pnl, status, side, trade_type = row
                 pnl_val = float(pnl) if pnl else 0.0
                 
                 kpis["total_pnl"] += pnl_val
@@ -86,6 +90,13 @@ async def get_daily_kpis() -> Dict[str, Any]:
                 if symbol not in symbol_pnl:
                     symbol_pnl[symbol] = []
                 symbol_pnl[symbol].append(pnl_val)
+                
+                # Track by strategy
+                if trade_type and trade_type in kpis["strategy_stats"]:
+                    kpis["strategy_stats"][trade_type]["count"] += 1
+                    kpis["strategy_stats"][trade_type]["pnl"] += pnl_val
+                    if pnl_val > 0:
+                        kpis["strategy_stats"][trade_type]["wins"] += 1
             
             # Win rate
             if kpis["total_trades"] > 0:
