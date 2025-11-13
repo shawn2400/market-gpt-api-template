@@ -139,6 +139,8 @@ def _get_client() -> Optional[Client]:
             return _CLIENT
         return _init_client()
 
+get_client = _get_client
+
 class _ClientProxy:
     def __getattr__(self, name: str):
         c = _get_client()

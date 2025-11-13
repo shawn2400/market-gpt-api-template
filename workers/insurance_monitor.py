@@ -292,7 +292,7 @@ async def layer2_margin_defense() -> bool:
                 f"Action: Closed {closed_count} losing positions\n\n"
                 f"🛡️ Account protected from liquidation!"
             )
-            send_telegram_message(message)
+            asyncio.create_task(send_telegram_message(message))
             
             _insurance_state["margin_triggers"] += 1
             return True
@@ -336,7 +336,8 @@ async def layer3_cross_balancer() -> bool:
                 f"💡 Consider moving excess to Isolated margin\n"
                 f"📊 Balance: ${total_balance:.2f}"
             )
-            send_telegram_message(message)
+            asyncio.create_task(send_telegram_message(message))
+            logger.info("Cross balancer alert")
             
             _insurance_state["cross_rebalances"] += 1
             return True
