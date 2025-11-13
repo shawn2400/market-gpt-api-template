@@ -17,9 +17,10 @@ import logging
 import os
 from typing import Dict, Tuple
 from datetime import datetime
+import json
 
 from utils.performance_tracker import get_performance_tracker
-from utils.dynamic_filters import DynamicFilters
+from utils.dynamic_filters import save_filter_overrides, BASE_QUALITY, BASE_RR_TOP10
 
 LOGGER = logging.getLogger("auto_parameter_tuner")
 
@@ -37,12 +38,15 @@ class AutoParameterTuner:
     def __init__(self):
         self.logger = LOGGER
         self.performance_tracker = get_performance_tracker()
-        self.dynamic_filters = DynamicFilters()
         
         # Safety bounds (prevent extreme values)
         self.MIN_QUALITY_BOUNDS = (3.0, 8.0)
-        self.RR_BOUNDS = (1.2, 3.0)
+        self.RR_BOUNDS = (1.01, 3.0)
         self.LEVERAGE_BOUNDS = (5, 20)
+        
+        # Current parameters file
+        self.params_file = "/tmp/auto_tuner_params.json"
+        self._load_params()
     
     def analyze_and_tune(self, days: int = 7) -> Dict:
         """
@@ -98,11 +102,17 @@ class AutoParameterTuner:
         return tuning_result
     
     def _get_current_parameters(self) -> Dict:
-        """Get current parameter values from dynamic filters"""
+        """Get current parameter values"""
+        try:
+            if hasattr(self, 'current_params'):
+                return self.current_params
+        except:
+            pass
+        
         return {
-            "min_quality": self.dynamic_filters.min_quality_score,
-            "min_rr": self.dynamic_filters.min_rr_top10,
-            "max_leverage": 15  # Default from config
+            "min_quality": BASE_QUALITY,
+            "min_rr": BASE_RR_TOP10,
+            "max_leverage": 15
         }
     
     def _calculate_parameter_adjustments(
@@ -193,15 +203,40 @@ class AutoParameterTuner:
         }
     
     def _apply_parameter_changes(self, new_params: Dict):
-        """Apply new parameters to dynamic filters"""
-        self.dynamic_filters.min_quality_score = new_params["min_quality"]
-        self.dynamic_filters.min_rr_top10 = new_params["min_rr"]
-        self.dynamic_filters.min_rr_alt = new_params["min_rr"] + 0.1
+        """Apply and save new parameters via dynamic_filters override mechanism"""
+        self.current_params = new_params
+        self._save_params()
         
-        # Save updated configuration
-        self.dynamic_filters.save_config()
+        # Save to dynamic_filters override file (this is what gpt_auto_suggest reads!)
+        overrides = {
+            "min_quality": new_params["min_quality"],
+            "min_rr": new_params["min_rr"],
+            "max_leverage": new_params["max_leverage"]
+        }
         
-        self.logger.info(f"✅ New parameters applied and saved")
+        save_filter_overrides(overrides)
+        
+        self.logger.info(f"✅ New parameters applied and saved to dynamic_filters overrides")
+    
+    def _load_params(self):
+        """Load parameters from file"""
+        try:
+            if os.path.exists(self.params_file):
+                with open(self.params_file, 'r') as f:
+                    self.current_params = json.load(f)
+            else:
+                self.current_params = self._get_current_parameters()
+        except Exception as e:
+            self.logger.warning(f"Failed to load params: {e}")
+            self.current_params = self._get_current_parameters()
+    
+    def _save_params(self):
+        """Save parameters to file (local tracking)"""
+        try:
+            with open(self.params_file, 'w') as f:
+                json.dump(self.current_params, f, indent=2)
+        except Exception as e:
+            self.logger.warning(f"Failed to save params: {e}")
     
     def _clamp(self, value: float, min_val: float, max_val: float) -> float:
         """Clamp value between min and max bounds"""

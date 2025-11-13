@@ -2,10 +2,19 @@
 """
 Dynamic Filter Adjustment System
 מתאים את סינוני האיכות בזמן אמת לפי תנאי השוק
+
+Auto-Optimization Integration:
+- Loads parameter overrides from /tmp/dynamic_filters_overrides.json
+- Auto Parameter Tuner writes tuned values there
+- get_dynamic_thresholds() applies overrides automatically
 """
 from __future__ import annotations
 import os
+import json
 from typing import Dict, Any, Optional
+import logging
+
+logger = logging.getLogger("dynamic_filters")
 
 # ====== Base thresholds (ULTRA Aggressive - ACCEPT ALMOST ANYTHING!) ======
 BASE_SUCCESS_PCT = 45.0  # קבל כמעט הכל!
@@ -85,6 +94,49 @@ def calculate_market_score(ctx: Dict[str, Any]) -> float:
     return _clamp(score, -1.0, 1.0)
 
 
+def _load_overrides() -> Dict[str, float]:
+    """
+    Load parameter overrides from Auto-Optimization System.
+    
+    Returns:
+        Dict with override values or empty dict if not available
+    """
+    overrides_file = "/tmp/dynamic_filters_overrides.json"
+    try:
+        if os.path.exists(overrides_file):
+            with open(overrides_file, 'r') as f:
+                data = json.load(f)
+                return data.get("overrides", {})
+    except Exception as e:
+        logger.warning(f"Failed to load filter overrides: {e}")
+    return {}
+
+
+def save_filter_overrides(overrides: Dict[str, float]) -> bool:
+    """
+    Save filter overrides (called by Auto Parameter Tuner).
+    
+    Args:
+        overrides: Dict with min_quality, min_rr, max_leverage
+        
+    Returns:
+        True if saved successfully
+    """
+    overrides_file = "/tmp/dynamic_filters_overrides.json"
+    try:
+        data = {
+            "overrides": overrides,
+            "updated_at": __import__('datetime').datetime.utcnow().isoformat()
+        }
+        with open(overrides_file, 'w') as f:
+            json.dump(data, f, indent=2)
+        logger.info(f"✅ Filter overrides saved: {overrides}")
+        return True
+    except Exception as e:
+        logger.error(f"Failed to save filter overrides: {e}")
+        return False
+
+
 def get_dynamic_thresholds(
     symbol: str,
     ctx: Optional[Dict[str, Any]] = None,
@@ -102,7 +154,19 @@ def get_dynamic_thresholds(
     tier_override: Optional tier number (1, 2, or 3) from Smart Tiered System
     - If provided, enforces that tier's min_quality threshold
     - Tier 1: 4.4, Tier 2: 4.5, Tier 3: 6.0
+    
+    **Auto-Optimization Integration:**
+    Automatically loads overrides from /tmp/dynamic_filters_overrides.json
+    written by Auto Parameter Tuner based on performance analysis.
     """
+    # Load overrides from Auto-Optimization System
+    overrides = _load_overrides()
+    
+    # Use overrides if available, otherwise use BASE values
+    base_quality = overrides.get("min_quality", BASE_QUALITY)
+    base_rr_top10 = overrides.get("min_rr", BASE_RR_TOP10)
+    base_rr_alt = overrides.get("min_rr", BASE_RR_ALT)
+    
     # חשב market score אם לא סופק
     if market_score is None and ctx:
         market_score = calculate_market_score(ctx)
@@ -130,8 +194,9 @@ def get_dynamic_thresholds(
     rr_alt = _clamp(rr_alt, RR_ALT_MIN, RR_ALT_MAX)
     
     # Quality Score - ככל שהשוק טוב יותר, נדרוש פחות
+    # Use base_quality from overrides or BASE_QUALITY
     quality_range = QUALITY_MAX - QUALITY_MIN
-    quality = BASE_QUALITY - (adjustment * (quality_range / 2))
+    quality = base_quality - (adjustment * (quality_range / 2))
     quality = _clamp(quality, QUALITY_MIN, QUALITY_MAX)
     
     # Apply tier override if provided (Smart Tiered System)
@@ -195,4 +260,6 @@ __all__ = [
     "get_dynamic_thresholds",
     "calculate_market_score",
     "explain_filters",
+    "save_filter_overrides",
+    "_load_overrides",
 ]

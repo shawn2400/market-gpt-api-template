@@ -48,6 +48,10 @@ args = "Auto Cleanup"
 task = "workflow.run"
 args = "Auto Scanner"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Auto Optimization"
+
 [[workflows.workflow]]
 name = "Auto Health Monitor"
 author = "agent"
@@ -135,6 +139,17 @@ outputType = "console"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG POOL_PER_CYCLE=50 SUGGEST_GRID=1 AUTO_RUN=1 MIN_QUALITY_SCORE=6.0 python workers/gpt_auto_suggest.py"
+
+[[workflows.workflow]]
+name = "Auto Optimization"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG OPTIMIZATION_INTERVAL_HOURS=4 OPTIMIZATION_LOOKBACK_DAYS=7 python workers/auto_optimization_orchestrator.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[ports]]
 localPort = 5000

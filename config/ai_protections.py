@@ -320,6 +320,42 @@ class AIProtectionManager:
         """Get current protection parameters."""
         return self.current_params.to_dict()
     
+    def update_settings(self, settings: Dict[str, Any]) -> bool:
+        """
+        Update protection settings (used by Multi-Level Protector).
+        
+        Args:
+            settings: Dict with max_leverage, min_risk_reward, max_daily_trades, etc.
+            
+        Returns:
+            True if updated successfully
+        """
+        try:
+            if "max_leverage" in settings:
+                new_val = int(settings["max_leverage"])
+                if self.current_params.leverage_min <= new_val <= self.current_params.leverage_max:
+                    self.current_params.base_leverage = new_val
+                    self.logger.info(f"Updated max_leverage → {new_val}")
+            
+            if "min_risk_reward" in settings:
+                new_val = float(settings["min_risk_reward"])
+                if 1.2 <= new_val <= 3.0:
+                    self.current_params.min_risk_reward = new_val
+                    self.logger.info(f"Updated min_risk_reward → {new_val}")
+            
+            if "min_quality" in settings:
+                new_val = float(settings["min_quality"])
+                if 4.0 <= new_val <= 10.0:
+                    self.current_params.min_entry_quality = new_val
+                    self.logger.info(f"Updated min_entry_quality → {new_val}")
+            
+            self.logger.info("Protection settings updated via Multi-Level Protector")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Failed to update settings: {e}", exc_info=True)
+            return False
+    
     def reset_to_base(self) -> None:
         """Reset to base parameters."""
         self.current_params = ProtectionParams()
