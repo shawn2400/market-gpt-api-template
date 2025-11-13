@@ -1,0 +1,110 @@
+# config/protection_rules.yaml
+# Advanced Risk Manager - 3-Layer Protection Configuration
+# =========================================================
+
+# 🎯 LAYER 1: Dynamic Stop Loss (ATR-based)
+dynamic_sl:
+  enabled: true
+  
+  # ATR Multipliers for different volatility regimes
+  atr_multiplier_base: 2.0        # Base multiplier
+  atr_multiplier_volatile: 2.5    # For high volatility (>8%)
+  atr_multiplier_stable: 1.5      # For low volatility (<8%)
+  
+  # Volatility threshold to classify markets
+  volatility_threshold: 0.08      # 8% ATR/price ratio
+  
+  # ATR calculation period
+  atr_period: 14                  # 14 candles (standard)
+  atr_timeframe: "15m"            # 15-minute candles
+
+# 🛡️ LAYER 2: Time & Loss Protection
+time_loss_protection:
+  enabled: true
+  
+  # Minimum hold time before SL can activate
+  min_hold_time_sec: 60           # 60 seconds minimum
+  
+  # Maximum loss cap (hard stop)
+  max_loss_cap: 0.02              # 2% maximum loss per trade
+  
+  # Force close on max loss
+  force_close_on_cap: true        # Auto-close at 2% loss
+
+# 🚀 LAYER 3: Breakeven Acceleration
+breakeven_acceleration:
+  enabled: true
+  
+  # Profit threshold to trigger breakeven SL
+  breakeven_threshold: 0.005      # 0.5% profit
+  
+  # Additional buffer above entry for breakeven
+  breakeven_buffer: 0.0           # 0% buffer (exact BE)
+  
+  # Auto-move SL to breakeven
+  auto_activate: true
+
+# 📊 Risk Limits per Symbol Tier
+symbol_tier_limits:
+  tier_a:  # Strong performers
+    max_loss_override: 0.025      # 2.5% for best symbols
+    min_hold_time: 45             # 45 seconds minimum
+    
+  tier_b:  # Normal symbols
+    max_loss_override: 0.02       # 2% standard
+    min_hold_time: 60             # 60 seconds standard
+    
+  tier_c:  # Weak performers
+    max_loss_override: 0.015      # 1.5% tighter protection
+    min_hold_time: 90             # 90 seconds longer hold
+
+# 🎯 Strategy-Specific Overrides
+strategy_overrides:
+  GRID:
+    max_loss_cap: 0.015           # 1.5% for GRID (tighter)
+    min_hold_time: 120            # 2 minutes for GRID
+    
+  mean_reversion:
+    max_loss_cap: 0.02            # 2% standard
+    min_hold_time: 60             # 1 minute standard
+    
+  momentum:
+    max_loss_cap: 0.025           # 2.5% looser for momentum
+    min_hold_time: 30             # 30 seconds faster for momentum
+
+# 🔔 Alert Configuration
+alerts:
+  enabled: true
+  
+  # Alert on SL activation
+  alert_on_sl_trigger: true
+  alert_on_force_close: true
+  alert_on_breakeven: true
+  
+  # Alert channels
+  telegram_enabled: true
+  log_level: "INFO"               # INFO, WARNING, CRITICAL
+
+# 📈 Performance Tracking
+tracking:
+  enabled: true
+  
+  # Track protection effectiveness
+  track_prevented_losses: true
+  track_breakeven_saves: true
+  track_sl_accuracy: true
+  
+  # Report interval
+  report_interval_hours: 24       # Daily summary
+
+# 🚨 Emergency Override
+emergency:
+  # Global kill switch
+  disable_all_protection: false
+  
+  # Emergency max loss (system-wide)
+  emergency_max_loss: 0.05        # 5% absolute maximum
+  
+  # Emergency actions
+  close_all_on_emergency: true
+  pause_new_trades: true

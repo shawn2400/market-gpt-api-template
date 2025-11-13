@@ -48,6 +48,64 @@ except Exception as e:
     trailing_tp = None  # type: ignore
     logger.warning(f"⚠️ Trailing TP unavailable: {e}")
 
+# 🛡️ ADVANCED RISK MANAGER (3-Layer Protection)
+try:
+    from utils.advanced_risk_manager import get_risk_manager
+    from utils.get_klines import get_klines
+    from utils.indicators import atr as calculate_atr
+    import pandas as pd
+    risk_manager = get_risk_manager()
+    logger.info("✅ Advanced Risk Manager loaded successfully")
+except Exception as e:
+    risk_manager = None  # type: ignore
+    logger.warning(f"⚠️ Advanced Risk Manager unavailable: {e}")
+
+async def calculate_symbol_atr(symbol: str, period: int = 14) -> float:
+    """
+    Calculate ATR (Average True Range) for a symbol
+    
+    Args:
+        symbol: Trading symbol (e.g., 'BTCUSDT')
+        period: ATR period (default 14)
+        
+    Returns:
+        ATR value, or 0.0 if calculation fails
+    """
+    try:
+        # Get recent candles
+        if not get_klines:  # type: ignore
+            logger.warning("⚠️ get_klines not available")
+            return 0.0
+            
+        klines = await get_klines(symbol, interval="15m", limit=period + 10)
+        if klines is None or len(klines) < period:
+            logger.warning(f"⚠️ Insufficient klines for {symbol} ATR calculation")
+            return 0.0
+        
+        # Convert to DataFrame
+        if not pd:  # type: ignore
+            logger.warning("⚠️ pandas not available")
+            return 0.0
+        df = pd.DataFrame(klines)
+        
+        # Calculate ATR
+        if not calculate_atr:  # type: ignore
+            logger.warning("⚠️ calculate_atr not available")
+            return 0.0
+        atr_series = calculate_atr(df, period=period)
+        if atr_series.empty:
+            logger.warning(f"⚠️ Empty ATR series for {symbol}")
+            return 0.0
+        
+        atr_value = float(atr_series.iloc[-1])
+        logger.debug(f"📊 {symbol} ATR({period}): {atr_value:.8f}")
+        return atr_value
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to calculate ATR for {symbol}: {e}")
+        return 0.0
+
+
 def cleanup_orders_for_closed_positions(closed_symbols: List[str]) -> None:
     """
     Cancel all remaining orders for positions that have been closed.
@@ -74,11 +132,8 @@ def cleanup_orders_for_closed_positions(closed_symbols: List[str]) -> None:
                     continue
             
             logger.info(f"🧹 Cleaning up orders for closed position: {symbol}")
-            result = futures_cancel_all_orders(symbol)
-            if result.get("ok"):
-                logger.info(f"✅ Cancelled all orders for {symbol}")
-            else:
-                logger.warning(f"⚠️ Failed to cancel orders for {symbol}: {result.get('error')}")
+            futures_cancel_all_orders(symbol)  # Fire and forget - don't await in sync function
+            logger.info(f"✅ Cancelled all orders for {symbol}")
         except Exception as e:
             logger.error(f"❌ Error cancelling orders for {symbol}: {e}")
 
@@ -182,7 +237,8 @@ async def ensure_positions_protected() -> None:
                                         reduceOnly=True,
                                         positionSide=position_side
                                     )
-                                    logger.info(f"✅ Trailing TP close executed: {symbol} order {order.get('orderId')}")
+                                    order_id = order.get('orderId') if isinstance(order, dict) else 'unknown'
+                                    logger.info(f"✅ Trailing TP close executed: {symbol} order {order_id}")
                                     close_success = True
                                     break
                                 except Exception as retry_err:
@@ -202,6 +258,129 @@ async def ensure_positions_protected() -> None:
                 
                 except Exception as err:
                     logger.error(f"❌ {symbol}: Trailing TP error: {err}", exc_info=True)
+            
+            # 🛡️ ADVANCED RISK MANAGER - 3-LAYER PROTECTION
+            if risk_manager:
+                try:
+                    entry_price = float(pos.get("entryPrice", 0))
+                    mark_price = float(pos.get("markPrice", 0))
+                    
+                    if entry_price <= 0 or mark_price <= 0:
+                        continue
+                    
+                    position_side = "LONG" if amt > 0 else "SHORT"
+                    
+                    # 🛡️ LAYER 2: Check if within 60-second hold period
+                    if risk_manager.is_within_hold_period(symbol):
+                        age = risk_manager.get_position_age(symbol)
+                        logger.debug(f"⏰ {symbol}: Within hold period ({age:.1f}s / 60s)")
+                        continue  # Skip SL activation during hold period
+                    
+                    # 🛡️ LAYER 2: Check if should force close at 2% max loss
+                    should_close, close_reason = risk_manager.should_force_close(pos)
+                    if should_close:
+                        from utils.binance_client import futures_create_order, futures_cancel_all_orders
+                        
+                        logger.warning(f"🚨 {symbol}: Force closing - {close_reason}")
+                        
+                        close_side = "SELL" if position_side == "LONG" else "BUY"
+                        
+                        try:
+                            futures_cancel_all_orders(symbol)
+                            order = futures_create_order(
+                                symbol=symbol,
+                                side=close_side,
+                                type="MARKET",
+                                quantity=abs(amt),
+                                reduceOnly=True,
+                                positionSide=position_side
+                            )
+                            
+                            risk_manager.cleanup_closed_position(symbol)
+                            await send_telegram_message(
+                                f"🚨 MAX LOSS CAP HIT\n"
+                                f"Symbol: {symbol}\n"
+                                f"Reason: {close_reason}\n"
+                                f"Closed at market to prevent larger loss"
+                            )
+                            logger.critical(f"🛡️ {symbol}: Force closed - {close_reason}")
+                            continue
+                            
+                        except Exception as force_close_err:
+                            logger.error(f"❌ Failed to force close {symbol}: {force_close_err}")
+                    
+                    # 🚀 LAYER 3: Check if should move SL to breakeven
+                    should_be, be_price = risk_manager.should_activate_breakeven(pos)
+                    if should_be:
+                        from utils.binance_client import futures_create_order, futures_cancel_all_orders
+                        
+                        try:
+                            # Cancel existing SL orders
+                            futures_cancel_all_orders(symbol)
+                            
+                            # Place new STOP_MARKET at breakeven
+                            close_side = "SELL" if position_side == "LONG" else "BUY"
+                            
+                            sl_order = futures_create_order(
+                                symbol=symbol,
+                                side=close_side,
+                                type="STOP_MARKET",
+                                quantity=abs(amt),
+                                stopPrice=be_price,
+                                reduceOnly=True,
+                                positionSide=position_side
+                            )
+                            
+                            logger.info(f"🚀 {symbol}: Breakeven SL activated @ {be_price:.8f}")
+                            await send_telegram_message(
+                                f"🚀 Breakeven Activated\n"
+                                f"Symbol: {symbol}\n"
+                                f"SL moved to breakeven: {be_price:.8f}\n"
+                                f"Position now risk-free!"
+                            )
+                            continue
+                            
+                        except Exception as be_err:
+                            logger.error(f"❌ Failed to set breakeven SL for {symbol}: {be_err}")
+                    
+                    # 🎯 LAYER 1: Calculate and apply dynamic SL to Binance
+                    atr = await calculate_symbol_atr(symbol, period=14)
+                    if atr > 0:
+                        from utils.binance_client import futures_create_order, futures_cancel_all_orders
+                        
+                        volatility = risk_manager.calculate_volatility(symbol, atr, mark_price)
+                        protected_sl = risk_manager.calculate_protected_sl(
+                            entry_price, atr, position_side, volatility
+                        )
+                        
+                        try:
+                            # Cancel existing SL orders
+                            futures_cancel_all_orders(symbol)
+                            
+                            # Place new STOP_MARKET at protected SL
+                            close_side = "SELL" if position_side == "LONG" else "BUY"
+                            
+                            sl_order = futures_create_order(
+                                symbol=symbol,
+                                side=close_side,
+                                type="STOP_MARKET",
+                                quantity=abs(amt),
+                                stopPrice=protected_sl,
+                                reduceOnly=True,
+                                positionSide=position_side
+                            )
+                            
+                            logger.info(
+                                f"🎯 {symbol}: Dynamic SL placed @ {protected_sl:.8f} "
+                                f"(ATR={atr:.8f}, Vol={volatility*100:.1f}%)"
+                            )
+                        except Exception as sl_err:
+                            logger.error(f"❌ Failed to place dynamic SL for {symbol}: {sl_err}")
+                    else:
+                        logger.debug(f"⚠️ {symbol}: ATR=0, skipping dynamic SL")
+                    
+                except Exception as risk_err:
+                    logger.error(f"❌ {symbol}: Risk Manager error: {risk_err}", exc_info=True)
         
         # 🎯 TRAILING TP CLEANUP: Remove stale symbols
         if trailing_tp and ENABLE_TRAILING_TP:

@@ -84,6 +84,17 @@ class ExecutionBot:
         # 4) Execute in production - wrapper over trade_executor / binance_client
         try:
             exec_result = await self._execute_flow(flow, ticket_exec, source=source)
+            
+            # 🛡️ REGISTER POSITION ENTRY TIME for 60-second hold protection
+            if exec_result.get("status") == "opened":
+                try:
+                    from utils.advanced_risk_manager import get_risk_manager
+                    risk_manager = get_risk_manager()
+                    risk_manager.register_position_entry(symbol)
+                    self.log.info(f"🛡️ Registered entry time for {symbol} (60-second hold protection)")
+                except Exception as reg_err:
+                    self.log.warning(f"⚠️ Failed to register entry time for {symbol}: {reg_err}")
+            
             return {
                 "status": exec_result.get("status", "opened"),
                 "flow": flow,
