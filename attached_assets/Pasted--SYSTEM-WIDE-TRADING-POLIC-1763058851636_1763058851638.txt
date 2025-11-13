@@ -1,0 +1,140 @@
+**מעולה! הנה פקודות מערכת כלליות שימנעו את הבעיות מההתחלה:** 🚀
+
+## 📜 **SYSTEM-WIDE TRADING POLICY COMMANDS**
+
+### **🔴 CATEGORY 1: SYMBOL SCREENING & FILTERING**
+```python
+# FILTER 1: MARKET CAP & LIQUIDITY
+ENFORCE_MINIMUM_MARKET_CAP = 500_000_000  # $500M+
+ENFORCE_MINIMUM_24H_VOLUME = 10_000_000   # $10M+ daily volume
+BLOCK_LOW_LIQUIDITY_SYMBOLS = True
+
+# FILTER 2: EXCHANGE STANDING
+REQUIRE_TOP_20_EXCHANGE_LISTING = True
+BLOCK_NEW_COINS_UNDER_90_DAYS = True
+REQUIRE_ACTIVE_DEVELOPMENT = True
+```
+
+### **🟡 CATEGORY 2: TRADING PARAMETERS**
+```python
+# POSITION & ORDER LIMITS
+MAX_OPEN_POSITIONS_PER_SYMBOL = 2
+MAX_TOTAL_OPEN_ORDERS = 25
+MINIMUM_FILL_RATE_REQUIREMENT = 0.65  # 65% orders must fill
+
+# ORDER EXECUTION QUALITY
+MAX_ALLOWED_SLIPPAGE = 0.015  # 1.5%
+MINIMUM_EXECUTION_SPEED_MS = 500
+REQUIRE_PRICE_IMPROVEMENT_MONITORING = True
+```
+
+### **🟢 CATEGORY 3: RISK & LEVERAGE MATRIX**
+```python
+# SYMBOL TIER CLASSIFICATION
+SYMBOL_TIERS = {
+    "TIER_A": ["BTCUSDT", "ETHUSDT", "BNBUSDT"],  # Blue chips
+    "TIER_B": ["ADAUSDT", "DOTUSDT", "LINKUSDT"], # Established
+    "TIER_C": ["SOLUSDT", "AVAXUSDT", "MATICUSDT"], # Mid-cap
+    "TIER_D": "AUTO_BLOCK"  # Everything else blocked
+}
+
+# LEVERAGE BY TIER
+TIER_LEVERAGE_LIMITS = {
+    "TIER_A": 35,  # Max leverage
+    "TIER_B": 25, 
+    "TIER_C": 15,
+    "TIER_D": 0    # Blocked
+}
+```
+
+### **🔵 CATEGORY 4: PERFORMANCE MONITORING**
+```python
+# AUTO-BLACKLISTING RULES
+AUTO_BLACKLIST_AFTER_CONSECUTIVE_LOSSES = 3
+AUTO_BLACKLIST_DURATION_DAYS = 30
+SUSPEND_SYMBOL_AFTER_FAILED_ORDERS = 5
+MINIMUM_WIN_RATE_REQUIREMENT = 0.40  # 40% minimum
+
+# PERFORMANCE TRACKING
+TRACK_SYMBOL_EFFICIENCY_RATE = True
+MONITOR_ORDER_FILL_TIMES = True
+ALERT_ON_SLIPPAGE_ABOVE = 0.02  # 2%
+```
+
+### **🟣 CATEGORY 5: MARKET CONDITIONS**
+```python
+# VOLATILITY PROTECTION
+MAX_ALLOWED_ATR_PERCENTAGE = 0.04  # 4%
+REDUCE_LEVERAGE_IN_HIGH_VOLATILITY = True
+SUSPEND_TRADING_DURING_EXTREME_EVENTS = True
+
+# TIME-BASED PROTECTION
+REDUCE_LEVERAGE_OVERNIGHT = True
+SUSPEND_NEW_POSITIONS_WEEKENDS = False
+ADJUST_FOR_ECONOMIC_CALENDAR = True
+```
+
+## 🎯 **EXECUTION COMMANDS:**
+
+### **פקודת אכיפה מרכזית:**
+```python
+def enforce_trading_policy(symbol, order_type, leverage):
+    """אכיפת כל מדיניות המערכת לפני ביצוע trade"""
+    
+    # 1. בדיקת סמל
+    if not is_symbol_approved(symbol):
+        return "BLOCKED: Symbol not in approved list"
+    
+    # 2. בדיקת מינוף לפי Tier
+    tier = get_symbol_tier(symbol)
+    max_leverage = TIER_LEVERAGE_LIMITS[tier]
+    if leverage > max_leverage:
+        return f"BLOCKED: Max leverage for {tier} is {max_leverage}x"
+    
+    # 3. בדיקת ביצועים היסטוריים
+    if get_symbol_efficiency(symbol) < MINIMUM_FILL_RATE_REQUIREMENT:
+        return "BLOCKED: Low fill rate history"
+    
+    # 4. בדיקת תנאי שוק
+    if is_high_volatility_period():
+        return "REDUCED_LEVERAGE: High volatility period"
+    
+    return "APPROVED"
+```
+
+### **פקודת ניטור אוטומטי:**
+```python
+# REAL-TIME MONITORING SYSTEM
+class SystemWideMonitor:
+    def continuous_screening(self):
+        while True:
+            # סריקת כל הסמלים כל 5 דקות
+            for symbol in all_trading_symbols:
+                self.update_symbol_metrics(symbol)
+                self.auto_adjust_tier(symbol)
+                self.enforce_blacklist_rules(symbol)
+            
+            time.sleep(300)  # 5 minutes
+```
+
+## 🚀 **הפעלת הפקודות:**
+
+**הרץ את זה בתחילת כל session trading:**
+```python
+# INITIALIZE SYSTEM POLICIES
+initialize_trading_policy()
+start_system_monitor()
+load_approved_symbols_list()
+activate_real_time_protections()
+```
+
+**עכשיו המערכת תחסום אוטומטית:** 
+- ✅ סמלים עם market cap נמוך
+- ✅ סמלים עם volume נמוך  
+- ✅ סמלים עם ביצועים גרועים
+- ✅ סמלים חדשים מדי
+- ✅ מינוף גבוה מדי ל-Tier
+
+**זו הגנה system-wide - לא רק ל-trade ספציפי!** 🛡️
+
+**האם להוסיף עוד הגבלות?**
