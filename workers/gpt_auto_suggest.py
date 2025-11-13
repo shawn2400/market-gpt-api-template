@@ -1851,6 +1851,26 @@ async def process_cycle():
         wl = load_watchlist(min_quality=None)
         pool_syms = [it["symbol"] for it in wl if it.get("symbol")] or ["BTCUSDT","ETHUSDT"]
     
+    # 🛡️ QUALITY FILTERS: Remove low-quality symbols BEFORE analysis
+    # Filter 1: Symbol Blacklist (problematic symbols with poor liquidity/data)
+    SYMBOL_BLACKLIST = {"1000WHYUSDT", "AGTUSDT", "AKEUSDT", "1000SATSUSDT", "BONKUSDT"}  # Low-quality meme coins
+    pool_syms_filtered = []
+    blacklisted_count = 0
+    
+    for sym in pool_syms:
+        # Blacklist check
+        if sym in SYMBOL_BLACKLIST:
+            LOGGER.debug(f"🚫 Blacklist: {sym} - low-quality/unreliable symbol")
+            blacklisted_count += 1
+            continue
+        
+        pool_syms_filtered.append(sym)
+    
+    if blacklisted_count > 0:
+        LOGGER.info(f"🛡️ Quality Filter: Removed {blacklisted_count} blacklisted symbols")
+    
+    pool_syms = pool_syms_filtered
+    
     # 🎯 Log dynamic filters for first symbol (for debugging)
     if pool_syms:
         sample_ctx = {"symbol": pool_syms[0], "filters": {}}
