@@ -168,9 +168,230 @@ ENABLE_AUTO_PROTECT = os.getenv("ENABLE_AUTO_PROTECT", "1").lower() in ("1", "tr
 POSITION_ALERT_LEVEL = os.getenv("POSITION_ALERT_LEVEL", "critical").lower()
 POSITION_PNL_THRESHOLD = float(os.getenv("POSITION_PNL_THRESHOLD_PCT", "10.0"))
 
+# 🎯 TRAILING TP CONFIGURATION
+ENABLE_TRAILING_TP = os.getenv("ENABLE_TRAILING_TP", "1").lower() in ("1", "true", "yes")
+TRAILING_ACTIVATION_PCT = float(os.getenv("TRAILING_ACTIVATION_PCT", "25.0"))  # Activate at 25% profit
+TRAILING_DISTANCE_PCT = float(os.getenv("TRAILING_DISTANCE_PCT", "15.0"))  # Close at 15% from peak
+
 # Track previous state to detect changes
 _previous_positions: Dict[str, Dict[str, Any]] = {}
 _last_position_count = 0
+
+# 🎯 TRAILING TP SYSTEM - Track peak prices and trailing state
+_trailing_positions: Dict[str, Dict[str, Any]] = {}
+# Structure: {symbol: {peak_price, activation_time, trailing_distance, entry_price, side}}
+
+def calculate_pnl_percent(entry_price: float, current_price: float, side: str) -> float:
+    """Calculate PNL percentage based on position side"""
+    if entry_price <= 0:
+        return 0.0
+    
+    if side == "LONG":
+        return ((current_price - entry_price) / entry_price) * 100
+    else:  # SHORT
+        return ((entry_price - current_price) / entry_price) * 100
+
+def should_activate_trailing(position: Dict[str, Any]) -> bool:
+    """Check if trailing TP should be activated for this position"""
+    symbol = position.get("symbol", "")
+    
+    # Already activated
+    if symbol in _trailing_positions:
+        return False
+    
+    entry = float(position.get("entryPrice", 0))
+    mark = float(position.get("markPrice", 0))
+    amt = float(position.get("positionAmt", 0))
+    
+    if entry <= 0 or mark <= 0:
+        return False
+    
+    side = "LONG" if amt > 0 else "SHORT"
+    pnl_pct = calculate_pnl_percent(entry, mark, side)
+    
+    # Activate if profit >= threshold
+    return pnl_pct >= TRAILING_ACTIVATION_PCT
+
+def activate_trailing(position: Dict[str, Any]) -> None:
+    """Activate trailing TP for a position"""
+    symbol = position.get("symbol", "")
+    entry = float(position.get("entryPrice", 0))
+    mark = float(position.get("markPrice", 0))
+    amt = float(position.get("positionAmt", 0))
+    side = "LONG" if amt > 0 else "SHORT"
+    
+    pnl_pct = calculate_pnl_percent(entry, mark, side)
+    
+    _trailing_positions[symbol] = {
+        "peak_price": mark,
+        "activation_time": datetime.now(timezone.utc),
+        "trailing_distance": TRAILING_DISTANCE_PCT,
+        "entry_price": entry,
+        "side": side,
+        "activation_pnl": pnl_pct
+    }
+    
+    logger.info(f"🎯 Trailing TP activated for {symbol} | PNL: +{pnl_pct:.1f}% | Peak: {mark:.4f}")
+    
+    # Send Telegram notification
+    try:
+        message = (
+            f"🎯 <b>TRAILING TP ACTIVATED</b>\n\n"
+            f"Symbol: <b>{symbol}</b>\n"
+            f"Side: {side}\n"
+            f"Entry: <code>{entry:.4f}</code>\n"
+            f"Current: <code>{mark:.4f}</code>\n"
+            f"Profit: <b>+{pnl_pct:.1f}%</b>\n\n"
+            f"📊 Will close if price drops {TRAILING_DISTANCE_PCT}% from peak\n"
+            f"🔒 Protecting your profits!"
+        )
+        send_telegram_message(message)
+    except Exception as e:
+        logger.warning(f"Failed to send trailing activation alert: {e}")
+
+def update_trailing_peak(position: Dict[str, Any]) -> None:
+    """Update peak price if new high/low reached"""
+    symbol = position.get("symbol", "")
+    if symbol not in _trailing_positions:
+        return
+    
+    trailing_data = _trailing_positions[symbol]
+    mark = float(position.get("markPrice", 0))
+    peak = trailing_data["peak_price"]
+    side = trailing_data["side"]
+    
+    # Update peak if new extreme reached
+    if side == "LONG" and mark > peak:
+        old_peak = peak
+        trailing_data["peak_price"] = mark
+        logger.info(f"📈 {symbol}: New peak {mark:.4f} (was {old_peak:.4f})")
+    elif side == "SHORT" and mark < peak:
+        old_peak = peak
+        trailing_data["peak_price"] = mark
+        logger.info(f"📉 {symbol}: New peak {mark:.4f} (was {old_peak:.4f})")
+
+def should_close_by_trailing(position: Dict[str, Any]) -> tuple[bool, float, str]:
+    """
+    Check if position should be closed based on trailing TP logic
+    Returns: (should_close, current_pnl_pct, reason)
+    """
+    symbol = position.get("symbol", "")
+    if symbol not in _trailing_positions:
+        return False, 0.0, ""
+    
+    trailing_data = _trailing_positions[symbol]
+    mark = float(position.get("markPrice", 0))
+    peak = trailing_data["peak_price"]
+    side = trailing_data["side"]
+    entry = trailing_data["entry_price"]
+    
+    if peak <= 0 or mark <= 0:
+        return False, 0.0, ""
+    
+    # Calculate drawdown from peak (absolute percentage)
+    if side == "LONG":
+        # For LONG: peak is highest price reached
+        # Drawdown when price drops from peak
+        drawdown_pct = abs((peak - mark) / peak) * 100
+    else:  # SHORT
+        # For SHORT: peak is lowest price reached (best for short)
+        # Drawdown when price rises from peak
+        drawdown_pct = abs((mark - peak) / peak) * 100
+    
+    current_pnl = calculate_pnl_percent(entry, mark, side)
+    
+    # Close if drawdown >= trailing distance
+    if drawdown_pct >= TRAILING_DISTANCE_PCT:
+        direction = "dropped" if side == "LONG" else "rose"
+        reason = f"Price {direction} {drawdown_pct:.1f}% from peak {peak:.4f}"
+        logger.info(f"🎯 {symbol} trailing close triggered: {reason} | Current PnL: +{current_pnl:.1f}%")
+        return True, current_pnl, reason
+    
+    return False, current_pnl, ""
+
+async def execute_trailing_close(position: Dict[str, Any], pnl_pct: float, reason: str) -> None:
+    """Execute market close for trailing TP trigger"""
+    symbol = position.get("symbol", "")
+    amt = float(position.get("positionAmt", 0))
+    mark = float(position.get("markPrice", 0))
+    
+    try:
+        client = get_client()
+        if not client:
+            logger.error(f"Cannot close {symbol}: Client not available")
+            return
+        
+        side = "SELL" if amt > 0 else "BUY"
+        qty = abs(amt)
+        
+        logger.info(f"🎯 Executing trailing close: {symbol} | {side} {qty} @ market | PNL: +{pnl_pct:.1f}%")
+        
+        # Place market order with reduceOnly
+        order = client.futures_create_order(
+            symbol=symbol,
+            side=side,
+            type="MARKET",
+            quantity=qty,
+            reduceOnly=True
+        )
+        
+        logger.info(f"✅ Trailing close executed: {symbol} | Order ID: {order.get('orderId')}")
+        
+        # Remove from trailing tracking
+        trailing_data = _trailing_positions.pop(symbol, {})
+        activation_time = trailing_data.get("activation_time", datetime.now(timezone.utc))
+        duration = (datetime.now(timezone.utc) - activation_time).total_seconds() / 60
+        
+        # Send Telegram notification
+        message = (
+            f"✅ <b>TRAILING TP CLOSED</b>\n\n"
+            f"Symbol: <b>{symbol}</b>\n"
+            f"Side: {side}\n"
+            f"Qty: <code>{qty}</code>\n"
+            f"Price: <code>{mark:.4f}</code>\n"
+            f"Profit: <b>+{pnl_pct:.1f}%</b>\n\n"
+            f"📊 {reason}\n"
+            f"⏱️ Trailing duration: {duration:.1f} min\n"
+            f"🎯 <b>Profit secured!</b>"
+        )
+        send_telegram_message(message)
+        
+    except Exception as e:
+        logger.error(f"❌ Failed to execute trailing close for {symbol}: {e}")
+
+async def check_and_update_trailing_tp() -> None:
+    """
+    Main trailing TP logic - runs every 30 seconds
+    1. Activate trailing for positions at profit threshold
+    2. Update peak prices for active trailing positions
+    3. Close positions that hit trailing stop
+    """
+    if not ENABLE_TRAILING_TP:
+        return
+    
+    try:
+        positions = get_active_positions()
+        if not positions:
+            return
+        
+        for pos in positions:
+            symbol = pos.get("symbol", "")
+            
+            # Step 1: Check if should activate trailing
+            if should_activate_trailing(pos):
+                activate_trailing(pos)
+            
+            # Step 2: Update peak if trailing active
+            if symbol in _trailing_positions:
+                update_trailing_peak(pos)
+            
+            # Step 3: Check if should close by trailing
+            should_close, pnl_pct, reason = should_close_by_trailing(pos)
+            if should_close:
+                await execute_trailing_close(pos, pnl_pct, reason)
+    
+    except Exception as e:
+        logger.error(f"❌ check_and_update_trailing_tp failed: {e}")
 
 def get_active_positions() -> List[Dict[str, Any]]:
     """Get all active positions from Binance"""
@@ -315,13 +536,27 @@ async def monitor_loop():
         f"Position Monitor started | "
         f"Reports: {REPORT_INTERVAL_SEC}s | "
         f"Auto-Protect: {AUTO_PROTECT_INTERVAL_SEC}s | "
+        f"Trailing TP: {'ON' if ENABLE_TRAILING_TP else 'OFF'} | "
         f"Protection: {'ON' if ENABLE_AUTO_PROTECT else 'OFF'}"
     )
+    
+    if ENABLE_TRAILING_TP:
+        logger.info(
+            f"🎯 Trailing TP Config: Activate at {TRAILING_ACTIVATION_PCT}%, "
+            f"Close at {TRAILING_DISTANCE_PCT}% from peak"
+        )
     
     last_report_time = 0
     
     while True:
         current_time = time.time()
+        
+        try:
+            # 🎯 TRAILING TP - Check and update every 30 seconds
+            if ENABLE_TRAILING_TP:
+                await check_and_update_trailing_tp()
+        except Exception as e:
+            logger.error(f"Error in trailing TP: {e}")
         
         try:
             if ENABLE_AUTO_PROTECT:

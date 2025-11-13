@@ -52,6 +52,10 @@ args = "Auto Scanner"
 task = "workflow.run"
 args = "Auto Optimization"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Insurance Monitor"
+
 [[workflows.workflow]]
 name = "Auto Health Monitor"
 author = "agent"
@@ -147,6 +151,17 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG OPTIMIZATION_INTERVAL_HOURS=4 OPTIMIZATION_LOOKBACK_DAYS=7 python workers/auto_optimization_orchestrator.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Insurance Monitor"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_INSURANCE_MONITOR=1 INSURANCE_CHECK_INTERVAL_SEC=60 python workers/insurance_monitor.py"
 
 [workflows.workflow.metadata]
 outputType = "console"

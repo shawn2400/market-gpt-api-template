@@ -82,6 +82,25 @@ The system also includes specialized AI systems for market intelligence, portfol
 -   **Performance Tracking**: Per-symbol analytics including win rate, average profit, Sharpe ratio, and recent trend analysis.
 -   **Orchestrator Worker**: Coordinates all optimization modules, sends comprehensive Telegram reports every 4 hours with parameter changes and tier updates.
 
+**🎯 Trailing TP System (Profit Protection):**
+-   **Auto-Activation**: Automatically activates when position reaches 25-30% profit threshold.
+-   **Peak Tracking**: Continuously monitors and updates peak prices for both LONG and SHORT positions.
+-   **Dynamic Trailing**: Follows price movements and adjusts trailing distance (default 15% from peak).
+-   **Automatic Closing**: Executes market close when price drops 15% from peak, securing profits.
+-   **Telegram Notifications**: Sends alerts on activation and closure with PnL details.
+-   **Integration**: Runs every 30 seconds within Position Monitor workflow, no configuration required.
+-   **AIAUSDT Protection**: Specifically designed to prevent profit evaporation like AIAUSDT (74% → 28% drop).
+
+**🛡️ Insurance Monitor System (Account Protection):**
+-   **Layer 1 - Drawdown Protection**: If daily PnL ≤ -5%, stops new opens and closes 50% of largest positions automatically.
+-   **Layer 2 - Margin Ratio Defense**: If Cross Margin Ratio < 10%, closes worst losing positions until margin ≥ 15%.
+-   **Layer 3 - Cross/Isolated Balancer**: Alerts when Cross margin > 40% of total capital, recommends rebalancing to Isolated.
+-   **Layer 4 - Funding Rate Killer**: Monitors funding rates (future feature), closes longs if funding > 0.05% for 3 consecutive periods.
+-   **Layer 5 - Circuit Breaker**: If total account PnL ≤ -8%, closes ALL positions and suspends trading for 24h.
+-   **Autonomous Execution**: All layers execute automatically without human confirmation, preventing emotional trading.
+-   **Critical Alerts**: Sends Telegram notifications for all insurance triggers with detailed metrics.
+-   **Continuous Monitoring**: Runs every 60 seconds, checking balance, margin, and account health in real-time.
+
 ### Validation & Safety Infrastructure
 Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates (Dual Confirmation), Data-Driven Monte Carlo simulations, a Live Health Monitor, and Circuit Breakers.
 
@@ -95,7 +114,7 @@ Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates (Dual C
 Consolidated notification system with batched reports for Health, Trade/PnL, Critical Alerts, and AI Trade Reviews, with rate limiting.
 
 ### Deployment Architecture
-The production environment runs on Render.com with **9 Background Workers** (including Auto-Optimization Orchestrator) and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development.
+The production environment runs on Render.com with **11 Background Workers** (including Auto-Optimization Orchestrator, Trailing TP via Position Monitor, and Insurance Monitor) and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development.
 
 ## External Dependencies
 
