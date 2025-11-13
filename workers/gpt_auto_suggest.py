@@ -1805,7 +1805,16 @@ async def process_cycle():
             # Extract scores from payload
             mi_score = payload.get("mi_score", 6.0)
             so_score = payload.get("so_score", 6.0)
-            strategy_type = payload.get("strategy_type", "mean_reversion" if ttype == "MEAN_REVERSION" else "trend_following")
+            
+            # Map trade type to strategy type for AI Consensus
+            if ttype == "GRID":
+                strategy_type = "grid"
+            elif ttype == "MEAN_REVERSION":
+                strategy_type = "mean_reversion"
+            elif ttype == "FUTURES":
+                strategy_type = "trend_following"
+            else:
+                strategy_type = payload.get("strategy_type", "mean_reversion")
             
             # Build scout_data with CORRECT structure that get_consensus expects
             scout_data = {
