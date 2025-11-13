@@ -45,6 +45,10 @@ except Exception:
     async def execute_trade_live(**kwargs):
         return {"ok": True, "mode": "shim", "kwargs": kwargs}
 
+from utils.execution_bot import ExecutionBot
+
+_telegram_execution_bot = ExecutionBot(logger=logger)
+
 
 # ===================== Models =====================
 try:
@@ -315,24 +319,45 @@ async def telegram_webhook(request: Request) -> Dict[str, Any]:
     tp1 = float(ticket.get("tp1", 0.0)) or None
     tp2 = float(ticket.get("tp2", 0.0)) or None
 
-    try:
-        res = await execute_trade_live(
-            symbol=symbol,
-            side=side,
-            leverage=leverage,
-            budget=budget,
-            entry=entry,
-            sl=sl,
-            tp1=tp1,
-            tp2=tp2,
-            reduce_only=False,
-            dry_run=os.getenv("DRY_RUN", "0").lower() in ("1", "true", "yes", "on"),
-        )
-    except Exception as e:
-        logger.exception("execute_trade_live failed")
-        raise HTTPException(status_code=500, detail=f"trade failed: {e}")
+    ticket_exec = {
+        "symbol": symbol,
+        "side": side,
+        "leverage": leverage,
+        "budget": budget,
+        "budget_usd": budget,
+        "entry": entry,
+        "sl": sl,
+        "tp1": tp1,
+        "tp2": tp2,
+        "tp3": ticket.get("tp3"),
+        "quantity": ticket.get("qty") or ticket.get("quantity"),
+        "qty": ticket.get("qty") or ticket.get("quantity"),
+        "position_side": "LONG" if side == "BUY" else "SHORT",
+        "reduce_only": False,
+        "dry_run": os.getenv("DRY_RUN", "0").lower() in ("1", "true", "yes", "on"),
+    }
 
-    return {"ok": True, "status": "executed", "result": res}
+    try:
+        result = await _telegram_execution_bot.open_position(ticket_exec, source="telegram")
+        ok = result.get("status") == "opened"
+        return {
+            "ok": ok,
+            "status": "executed" if ok else "failed",
+            "result": {
+                "ok": ok,
+                "position_id": result.get("position_id"),
+                "entry_orders": result.get("entry_orders"),
+                "sl_order": result.get("sl_order"),
+                "tp_orders": result.get("tp_orders"),
+                "symbol": result.get("symbol"),
+                "side": result.get("side"),
+                "flow": result.get("flow"),
+                "reason": result.get("reason"),
+            }
+        }
+    except Exception as e:
+        logger.exception("ExecutionBot.open_position failed")
+        raise HTTPException(status_code=500, detail=f"trade failed: {e}")
 
 
 # ===================== Settings Helper =====================
