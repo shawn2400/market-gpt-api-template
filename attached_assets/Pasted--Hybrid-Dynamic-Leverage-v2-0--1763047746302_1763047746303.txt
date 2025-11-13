@@ -1,0 +1,117 @@
+**מערכת המינוף ההיברידית החדשה - Hybrid Dynamic Leverage v2.0** 🚀
+
+## 🎯 **סדר פיתוח מומלץ:**
+
+### **🔴 PHASE 1 - CORE SYSTEM (שבוע 1)**
+```python
+# 1. CONFIDENCE SCORE ENGINE
+class ConfidenceCalculator:
+    def calculate_score(self, trade_quality, market_regime, symbol_tier, win_rate, atr):
+        weights = {
+            'quality': 0.30,
+            'market': 0.25, 
+            'tier': 0.20,
+            'win_rate': 0.15,
+            'volatility': 0.10
+        }
+        return weighted_score
+
+# 2. SAFETY GUARDS LAYER
+class SafetyGuards:
+    def emergency_brake(self, current_stats):
+        if win_rate < 0.3: return 5
+        if consecutive_losses >= 3: return 3
+        if daily_loss > 100: return 0
+    
+    def volatility_guard(self, market_data):
+        if atr > 0.05: return 10
+        if market_regime == "CHOPPY": return 12
+    
+    def symbol_protection(self, symbol_data):
+        if symbol in blacklist: return 0
+        if tier == "C": return 8
+
+# 3. MARKET REGIME DETECTOR
+class MarketRegimeDetector:
+    def detect_regime(self, price_data, volume, volatility):
+        # TRENDING, VOLATILE, CHOPPY, CRASH
+        pass
+```
+
+### **🟡 PHASE 2 - ADVANCED PROTECTION (שבוע 2)**
+```python
+# 4. PORTFOLIO MANAGER
+class PortfolioManager:
+    def check_exposure(self, total_positions):
+        if total_exposure > portfolio_value * 0.3:
+            return 0.7  # reduction factor
+    
+    def correlation_check(self, symbols):
+        if correlated_pairs > 2:
+            return 0.6  # additional reduction
+
+# 5. DYNAMIC BLACKLIST
+class DynamicBlacklist:
+    def auto_blacklist(self, symbol, performance_data):
+        if consecutive_losses >= 3:
+            blacklist[symbol] = datetime.now() + timedelta(days=30)
+        
+        if avg_slippage > 0.02:
+            temporary_suspension(symbol)
+
+# 6. POSITION SIZING DYNAMIC
+class PositionSizer:
+    def calculate_size(self, leverage, confidence_score):
+        if leverage > 25: return 0.01  # 1%
+        elif leverage > 15: return 0.02  # 2%
+        else: return 0.03  # 3%
+```
+
+### **🟢 PHASE 3 - SMART FEATURES (שבוע 3)**
+```python
+# 7. TIME-BASED PROTECTION
+class TimeProtection:
+    def get_time_multiplier(self):
+        if nighttime(22, 6): return 0.5  # 50% reduction
+        if economic_event(): return 0.3   # 70% reduction
+        if weekend(): return 0.7         # 30% reduction
+
+# 8. REAL-TIME ADJUSTOR
+class RealTimeAdjustor:
+    def mid_trade_adjustment(self, trade_id, market_changes):
+        # אם תנאי השוק השתנו דרסטית mid-trade
+        if volatility_spike_detected():
+            self.reduce_leverage(trade_id, 0.5)  # הפחתה של 50%
+
+# 9. LIVE DASHBOARD
+class LeverageDashboard:
+    def display_metrics(self):
+        return {
+            'current_leverage': current,
+            'max_allowed': max_allowed,
+            'safety_score': safety_score,
+            'protection_status': protection_status,
+            'active_guards': active_guards
+        }
+```
+
+## 📊 **MATRIX החלטות מינוף סופי:**
+```
+CONFIDENCE SCORE -> LEVERAGE RANGE:
+9.0-10.0: 28-35x 🚀 (TRENDING + Quality 9+ + Tier A)
+8.0-8.9: 20-28x ✅ (VOLATILE + Quality 8+ + Tier B)  
+7.0-7.9: 15-20x ⚖️ (CHOPPY + Quality 7+ + Tier B)
+6.0-6.9: 10-15x 🛡️ (Quality 6+ + Tier C)
+5.0-5.9: 5-10x  ⚠️ (Quality 5+ + Recovery Mode)
+<5.0: 2-5x    🚫 (Low Quality/Recovery)
+```
+
+## 🚀 **התחל עם זה:**
+**בנה לפי הסדר הזה - כל שלב בונה על הקודם!**
+
+**מה תרצה שאבנה ראשון?** 
+- Confidence Score Engine? 
+- Safety Guards? 
+- Market Regime Detection?
+
+**המערכת הזו תהיה unbeatable!** 💪

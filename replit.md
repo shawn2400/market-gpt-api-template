@@ -94,6 +94,20 @@ Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates, Data-D
 -   **Strategic TP Optimization**: Keeps 3 strategic levels (closest, middle, furthest).
 -   **Minimum Distance Enforcement**: 1% spacing between TP levels for risk management.
 
+**🚀 Hybrid Dynamic Leverage System v2.0:**
+-   **100% Dynamic Leverage (2-35x)**: Adapts in real-time based on market conditions and trade quality.
+-   **Multi-Factor Confidence Scoring**: Quality (30%), Market Regime (25%), Symbol Tier (20%), Win Rate (15%), Volatility (10%).
+-   **3-Layer Safety Guards**: Emergency Brake (Win Rate<30% = 5x max), Volatility Guard (ATR>5% = 10x max), Symbol Protection (Blacklist = 0x).
+-   **Market Regime Detection**: TRENDING (25-35x), VOLATILE (15-25x), CHOPPY (8-15x), CRASH (3-8x).
+-   **Symbol Tier System**: Tier A (Win Rate >60%), Tier B (45-60%), Tier C (30-45%), Tier D/Blacklist (<30%).
+-   **Recovery Mode**: After large losses, gradual leverage increase 5x → 8x → 12x → 15x → 20x → 25x → 30x.
+-   **Portfolio Protection**: Max 30% total exposure, correlation limits reduce leverage by 30-40%.
+-   **Dynamic Position Sizing**: Leverage >25x = 1% position, >15x = 2%, ≤15x = 3-5% (confidence-based).
+-   **Time-Based Protection**: Night hours (22-06) = 15x max, Weekend = 10x max, Economic events = 8x max.
+-   **Auto-Blacklist**: 3 consecutive losses = 30-day automatic blacklist.
+-   **Real-Time Performance Tracking**: Win rate, consecutive losses, daily PnL per symbol.
+-   **Seamless Fallback**: If disabled or fails, falls back to static leverage_policy.py.
+
 ### Telegram Digest System
 Consolidated notification system with batched reports for Health, Trade/PnL, Critical Alerts, and AI Trade Reviews.
 

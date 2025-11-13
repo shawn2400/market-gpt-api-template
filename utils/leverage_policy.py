@@ -5,6 +5,17 @@ from typing import Dict, Any, Optional, Tuple
 
 logger = logging.getLogger("algogpt.levpolicy")
 
+# Dynamic Leverage v2.0 integration
+DYNAMIC_LEVERAGE_MODE = os.getenv("DYNAMIC_LEVERAGE_MODE", "0").lower() in ("1", "true", "yes")
+
+if DYNAMIC_LEVERAGE_MODE:
+    try:
+        from utils.dynamic_leverage import get_dynamic_leverage_calculator
+        logger.info("🚀 Dynamic Leverage v2.0 ENABLED - using hybrid intelligent system")
+    except ImportError:
+        logger.warning("Dynamic Leverage requested but module not found, falling back to static policy")
+        DYNAMIC_LEVERAGE_MODE = False
+
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV helpers
 # ──────────────────────────────────────────────────────────────────────────────
@@ -153,6 +164,16 @@ def _apply_governor_caps(base: int) -> int:
 def adjust_leverage(adx: float, proposed: int, symbol: Optional[str] = None, **kwargs) -> int:
     """
     קביעת מינוף אפקטיבי עם רבדים של Caps ושכלולים:
+    
+    🚀 DYNAMIC LEVERAGE v2.0:
+      אם DYNAMIC_LEVERAGE_MODE=1, משתמש במערכת ההיברידית החכמה:
+      - Multi-factor confidence scoring
+      - 3-Layer safety guards
+      - Market regime detection
+      - Portfolio protection
+      - Recovery mode
+      
+    📊 STATIC LEVERAGE (fallback):
       1) התחלה מ־proposed (פלט האסטרטגיה).
       2) המלצת טבלת ADX→LEV (min).
       3) תקרת בטיחות ADX (OPS_ADX_SAFETY_MAX_LEVERAGE).
@@ -165,9 +186,49 @@ def adjust_leverage(adx: float, proposed: int, symbol: Optional[str] = None, **k
     פרמטרים אופציונליים ב-kwargs:
       - quality: float [0..10]  → איכות סיגנל. עשוי להוסיף עד +QUAL_BONUS_AT_Q10 במקסימום.
       - atr_pct: float          → ATR כאחוז מהמחיר. אם גדול מ-ATR_PCT_HARD_CAP → Cap ל-ATR_PCT_CAP_LEV.
+      - current_price: float    → מחיר נוכחי (נדרש ל-Dynamic Leverage)
+      - win_rate: float         → Win rate 0-1 (אופציונלי, ל-Dynamic Leverage)
       - drift_bps: float        → אם ברצונך לכפות ערך Drift חיצוני; אם לא — יישאב אוטומטית.
       - regime: str             → "STRICT"/"BALANCED"/"AGGRESSIVE" (אם רוצים לעקוף ENV עכשווי).
     """
+    
+    # 🚀 Try Dynamic Leverage v2.0 first
+    if DYNAMIC_LEVERAGE_MODE and symbol:
+        try:
+            calc = get_dynamic_leverage_calculator()
+            
+            # Extract parameters for dynamic calculator
+            quality = kwargs.get("quality", 5.0)  # Default to neutral if not provided
+            atr_pct = kwargs.get("atr_pct", 0.02)  # Default 2% if not provided
+            current_price = kwargs.get("current_price", 0.0)
+            win_rate = kwargs.get("win_rate")
+            market_regime = kwargs.get("market_regime")
+            
+            if current_price > 0:
+                result = calc.calculate_leverage(
+                    trade_quality=float(quality),
+                    symbol=symbol,
+                    atr_pct=float(atr_pct),
+                    current_price=float(current_price),
+                    adx=float(adx) if adx else None,
+                    win_rate=float(win_rate) if win_rate else None,
+                    market_regime=market_regime,
+                    **kwargs
+                )
+                
+                logger.info(
+                    f"🚀 Dynamic Leverage: {symbol} → {result['leverage']}x | "
+                    f"Confidence: {result['confidence_score'].total_score:.1f}/10 | "
+                    f"Guards: {len(result['guards_applied'])}"
+                )
+                
+                return result["leverage"]
+            else:
+                logger.warning(f"Dynamic Leverage: Missing current_price for {symbol}, falling back to static")
+        except Exception as e:
+            logger.error(f"Dynamic Leverage failed for {symbol}: {e}, falling back to static")
+    
+    # 📊 Fallback to static leverage policy
     base = int(proposed)
     ctx: Dict[str, Any] = {
         "adx": round(float(adx), 2),
