@@ -1114,18 +1114,18 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
         LOGGER.info(f"REJECTED {symbol}: entry_gap_ok failed (price={price}, entry={prop['entry']})")
         return None
 
-    # 🎯 STRATEGY ORCHESTRATOR: Auto-select optimal strategy based on market conditions
-    market_condition = ctx.get("_market_condition")  # Stored by _gpt_suggest
-    orchestrator = get_strategy_orchestrator()
-    strategy_config = await orchestrator.select_strategy(market_condition, symbol, ctx)
+    # 🎯 GET STRATEGY CONFIG: Already selected in _ai_consensus_suggest_v2!
+    # Context now contains _market_condition AND strategy was already selected
+    # We just need to extract thresholds from context (set by _ai_consensus_suggest_v2)
+    market_condition = ctx.get("_market_condition")
     
-    # Use strategy-specific thresholds instead of generic dynamic filters
-    min_rr = strategy_config.min_rr
-    success_req = max(success_floor, strategy_config.min_success_pct)
+    # Get thresholds from market_condition (set by Market Intelligence)
+    min_rr = market_condition.min_rr_threshold if market_condition else 1.5
+    success_req = max(success_floor, 50.0)  # Default 50%, will be overridden by tier logic
     
     LOGGER.info(
-        f"🎯 {symbol}: Strategy=[{strategy_config.strategy_type.upper()}] "
-        f"MinRR={min_rr:.2f}, MinSuccess={success_req:.1f}%, MaxLev={strategy_config.max_leverage}x"
+        f"🎯 {symbol}: Using Market Intelligence thresholds → "
+        f"MinRR={min_rr:.2f}, MinSuccess={success_req:.1f}%"
     )
     
     # דרישת RR + funding bias
@@ -1852,8 +1852,7 @@ async def process_cycle():
         ctx = ctx_map.get(sym) or {}
         success_floor = SUCCESS_PCT_MIN
         
-        # 🎯 STRATEGY ORCHESTRATOR: Decide which strategy to use
-        # First, analyze market to get market_condition
+        # 🎯 MARKET INTELLIGENCE: Analyze market conditions (no AI call yet!)
         try:
             from utils.market_intelligence import get_market_intelligence
             mi_engine = get_market_intelligence()
@@ -1867,12 +1866,15 @@ async def process_cycle():
             else:
                 market_condition = mi_engine.analyze_market(ctx)
             
-            # Get strategy recommendation
-            orchestrator = get_strategy_orchestrator()
-            strategy_config = await orchestrator.select_strategy(market_condition, sym, ctx)
+            # 📝 STORE market_condition in ctx for downstream propose_* functions
+            # This prevents redundant AI calls - _ai_consensus_suggest_v2 will use this!
+            ctx["_market_condition"] = market_condition
             
-            # 🚀 EXECUTE STRATEGY BASED ON ORCHESTRATOR DECISION
-            if strategy_config.grid_mode and SUGGEST_GRID:
+            # 🚀 ROUTE TO APPROPRIATE STRATEGY based on market_intelligence recommendation
+            # (No select_strategy call here - that happens ONCE in _ai_consensus_suggest_v2!)
+            recommended = market_condition.recommended_strategy
+            
+            if recommended == "grid" and SUGGEST_GRID:
                 # Try GRID Strategy first
                 try:
                     LOGGER.info(f"🎯 {sym}: Attempting GRID strategy (range required ≥2%)")
@@ -1905,7 +1907,7 @@ async def process_cycle():
                         except Exception as e2:
                             LOGGER.exception(f"propose_futures fallback error {sym}: {e2}")
             
-            elif strategy_config.mean_reversion_mode:
+            elif recommended == "mean_reversion":
                 # Mean-Reversion Strategy (VWAP-based, deterministic)
                 try:
                     LOGGER.info(f"🎯 {sym}: Attempting Mean-Reversion strategy (VWAP-based, range <2%)")
@@ -1932,10 +1934,10 @@ async def process_cycle():
                         except Exception as e2:
                             LOGGER.exception(f"propose_futures fallback error {sym}: {e2}")
             
-            elif strategy_config.strategy_type == "wait":
+            elif recommended == "wait":
                 # WAIT Mode - very selective
                 LOGGER.info(f"⏸️ {sym}: WAIT mode - market uncertain, skipping for now")
-                # Still try futures but with very high thresholds (handled by strategy_config)
+                # Still try futures but with very high thresholds (handled internally by AI)
                 if SUGGEST_FUTURES:
                     try:
                         p = await propose_futures(sym, ctx, success_floor)
@@ -1944,7 +1946,7 @@ async def process_cycle():
                         LOGGER.exception(f"propose_futures error {sym}: {e}")
             
             else:
-                # FUTURES strategies (Scalping, Momentum, Range-Bounce, Breakout)
+                # FUTURES strategies (futures_long, futures_short, or any other)
                 if SUGGEST_FUTURES:
                     try:
                         p = await propose_futures(sym, ctx, success_floor)
