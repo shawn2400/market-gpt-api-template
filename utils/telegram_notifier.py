@@ -284,85 +284,55 @@ async def notify_ops_alert(msg: str) -> None:
 
 async def notify_sl_tp_update(symbol: str, side: str, kind: str, value: Any, entry: Optional[float] = None, leverage: Optional[float] = None) -> None:
     """
-    דיווח בזמן אמת על עדכוני SL/TP/BE/Trailing - Enhanced version with full details
+    דיווח בזמן אמת על עדכוני SL/TP/BE/Trailing - CRITICAL ONLY
     
-    🚨 ALWAYS sends enhanced notifications with:
-    - Hebrew + English labels
-    - Entry context
-    - Leverage info
-    - Distance % from entry
-    - Professional formatting
+    📊 Send ONLY critical updates:
+    - Breakeven moves
+    - Trailing stops (50%+ moves)
+    - Major TP adjustments
+    
+    SKIP minor updates to reduce noise
     """
     if not TELEGRAM_NOTIFY_TRADES:
         return
     
-    # Import enhanced notification formatter
-    try:
-        from utils.enhanced_trade_notifications import format_sl_tp_update
-        
+    # Filter: Only send CRITICAL updates
+    critical_kinds = ["breakeven", "trailing"]  # Only BE and Trailing
+    
+    if kind.lower() not in critical_kinds:
+        logger.debug(f"Skipping non-critical SL/TP update: {symbol} {kind}")
+        return
+    
+    # For trailing, check if movement is significant (>5%)
+    if kind.lower() == "trailing" and entry:
         try:
             value_float = float(value)
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to convert value to float: {value}, error: {e}")
-            value_float = 0.0
-        
-        # Generate enhanced notification
-        try:
-            message = format_sl_tp_update(
-                symbol=symbol,
-                side=side,
-                kind=kind,
-                value=value_float,
-                entry=entry,
-                leverage=leverage
-            )
+            entry_float = float(entry)
+            change_pct = abs((value_float - entry_float) / entry_float) * 100
             
-            await notify_telegram(
-                message,
-                level="info",
-                kind="trade_mgmt",
-                dedupe_key=f"live:{symbol}:{kind}:{int(time.time()//15)}",
-                cooldown_sec=15
-            )
-            logger.info(f"✅ Enhanced SL/TP notification sent for {symbol}")
-            
-        except Exception as e:
-            # Log the actual error for debugging
-            logger.error(f"❌ Enhanced notification failed for {symbol}: {e}", exc_info=True)
-            
-            # Still send SOMETHING so user knows what's happening
-            try:
-                val = f"{float(value):.4f}"
-            except Exception:
-                val = str(value)
-            
-            await notify_telegram(
-                f"🔧 <b>LIVE UPDATE</b> · {kind}\n"
-                f"📊 <b>{symbol}</b> {side} → <code>{val}</code>\n"
-                f"⚠️ <i>Enhanced format failed - contact support</i>",
-                level="info",
-                kind="trade_mgmt",
-                dedupe_key=f"live:{symbol}:{kind}:{int(time.time()//15)}",
-                cooldown_sec=15
-            )
-            
-    except ImportError as e:
-        # This should never happen - enhanced_trade_notifications should always be available
-        logger.error(f"❌ CRITICAL: enhanced_trade_notifications module not found: {e}")
-        
-        try:
-            val = f"{float(value):.4f}"
+            if change_pct < 5.0:  # Skip if < 5% move
+                logger.debug(f"Skipping minor trailing update: {symbol} {change_pct:.1f}%")
+                return
         except Exception:
-            val = str(value)
-        
-        await notify_telegram(
-            f"🔧 <b>LIVE UPDATE</b> · {kind}\n"
-            f"📊 <b>{symbol}</b> {side} → <code>{val}</code>",
-            level="info",
-            kind="trade_mgmt",
-            dedupe_key=f"live:{symbol}:{kind}:{int(time.time()//15)}",
-            cooldown_sec=15
-        )
+            pass
+    
+    # Send concise notification
+    try:
+        val = f"{float(value):.4f}"
+    except Exception:
+        val = str(value)
+    
+    emoji = "🎯" if kind.lower() == "breakeven" else "📈"
+    kind_label = "BE" if kind.lower() == "breakeven" else "Trail"
+    
+    await notify_telegram(
+        f"{emoji} <b>{symbol}</b> {side}\n"
+        f"• {kind_label}: <code>{val}</code>",
+        level="info",
+        kind="trade_mgmt",
+        dedupe_key=f"live:{symbol}:{kind}:{int(time.time()//30)}",
+        cooldown_sec=30
+    )
 
 async def notify_info(text: str) -> None:
     await notify_telegram(f"ℹ️ {text}", level="info", kind="ops", dedupe_key=f"info:{hashlib.sha1(text.encode()).hexdigest()[:8]}", cooldown_sec=60)
@@ -643,7 +613,7 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     trade_icon = "🔷" if kind.upper() == "GRID" else "⚡"
     trade_label = f"{trade_icon} <b>{kind} Trade</b>"
     
-    title = f"🟡 <b>Trade Pending Approval</b> · {trade_label}"
+    title = f"🟡 <b>Trade Pending</b> · {trade_label}"
     badge = _entry_score_badge(plan)
 
     lines: List[str] = []
@@ -653,41 +623,33 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
     lines.append(market_line)
     lines.append(f"🪙 <b>{symbol}</b> · {side} · lev <b>{lev}</b> · {otype}")
     lines.append(f"💫 מחיר עכשיו: <code>{_fmt_num(now_px, 4)}</code>")
-    lines.append(f"🟦 <b>כניסה</b>: <code>{_fmt_num(entry, 4)}</code> · ⏳ ETA כניסה {_fmt_eta(eta_entry)}")
+    lines.append(f"🟦 <b>כניסה</b>: <code>{_fmt_num(entry, 4)}</code> · ⏳ ETA {_fmt_eta(eta_entry)}")
     lines.append(f"🛡 <b>SL</b>: <code>{_fmt_num(sl_px, 4)}</code>")
     if tp_lines:
         lines += tp_lines
     lines.append(
-        f"📈 <b>הסתברות כוללת</b>: <b>{_fmt_pct_prob(overall_p)}</b> · "
-        f"P(T1): {_fmt_pct_prob((probs or {}).get('tp1'))} · "
-        f"P(T2): {_fmt_pct_prob((probs or {}).get('tp2'))} · "
-        f"P(T3): {_fmt_pct_prob((probs or {}).get('tp3'))}"
+        f"📈 <b>הסתברות</b>: <b>{_fmt_pct_prob(overall_p)}</b> · "
+        f"T1: {_fmt_pct_prob((probs or {}).get('tp1'))} · "
+        f"T2: {_fmt_pct_prob((probs or {}).get('tp2'))}"
     )
     lines.append(f"💸 <b>השקעה</b>: {_fmt_usd(budget)}")
     if exp_pnl is not None:
-        lines.append(f"🎯 <b>יעד רווח (משוער)</b>: {_fmt_usd(exp_pnl)}")
-    order_mode = (plan.get("order_type") or plan.get("entry_type") or "MARKET").upper()
-    lines.append(f"🧾 <b>סוג הזמנה</b>: {order_mode} · ⏱ TTL לאישור: {ttl_sec}s")
-    if 'leverage' in plan:
-        try:
-            levf = float(lev)
-            lines.append(f"🧮 <b>מינוף</b>: x{int(levf) if levf.is_integer() else levf}")
-        except Exception:
-            pass
-    if 'allocation_pct' in plan:
-        try:
-            lines.append(f"📊 <b>Allocation</b>: {float(plan['allocation_pct']):.0f}%")
-        except Exception:
-            pass
-    lines.append(f"🧠 <b>למה נבחר</b>: {why_txt}")
+        lines.append(f"🎯 <b>יעד רווח</b>: {_fmt_usd(exp_pnl)}")
+    lines.append(f"🧠 <b>למה</b>: {why_txt}")
     lines.append("— — —")
     lines.append(f"🕒 {_fmt_il(time.time())}")
 
     urls = _build_trade_urls(idem, plan)
     kb = _approval_kb_for_trade(idem, ticket_url=urls.get("ticket"))
-    await notify_telegram_with_markup(
-        "\n".join(lines), kb, level="critical", kind="approve",
-        chat_id=chat_id, dedupe_key=f"approve:{idem}", cooldown_sec=5, force=False
+    
+    # Use unified message system
+    from utils.unified_trade_message import send_unified_entry_message
+    cid = chat_id if chat_id is not None else CHAT_ID
+    await send_unified_entry_message(
+        symbol=symbol,
+        chat_id=cid,
+        entry_text="\n".join(lines),
+        reply_markup=kb
     )
 
 # ===================== Trade lifecycle short notifiers =====================
@@ -700,10 +662,18 @@ async def send_trade_opened(info: Dict[str, Any]) -> None:
     otype = _fmt_order_type(plan.get("order_type", ""))
     lev = plan.get("leverage", "—")
     kind = (plan.get("trade_kind") or plan.get("mode") or plan.get("market") or "Futures").capitalize()
-    await notify_telegram(
-        f"🟢 <b>Opened</b> · <b>{kind}</b>\n"
-        f"{s} {side} · qty <code>{qty}</code> · ~<code>{_fmt_num(price,4)}</code> · {otype} · lev <b>{lev}</b>",
-        level="critical", kind="open", dedupe_key=f"open:{s}:{int(time.time()//60)}", cooldown_sec=30
+    
+    # Update unified message
+    from utils.unified_trade_message import update_unified_opened_message
+    await update_unified_opened_message(
+        symbol=s,
+        open_data={
+            "price": price,
+            "qty": qty,
+            "leverage": lev,
+            "order_type": otype,
+            "kind": kind
+        }
     )
 
 async def send_trade_update(info: Dict[str, Any]) -> None:
@@ -728,42 +698,26 @@ async def send_trade_closed(info: Dict[str, Any]) -> None:
     pnl_usd = info.get("pnl_usd", info.get("pnl"))
     pnl_pct = info.get("pnl_pct")
     dur     = info.get("duration_sec")
-    hit     = info.get("hit") or []
-    went    = info.get("went_well") or []
-    bad     = info.get("to_improve") or []
-    scores  = info.get("scorecards") or {}
-    overal  = info.get("overall_score")
+    exit_reason = info.get("exit_reason", "UNKNOWN")
 
     entry = plan.get("entry_price") or plan.get("price")
-    exit  = info.get("exit_price") or info.get("avg_exit")
-
-    lines = [f"🔴 <b>Closed</b> · <b>{kind}</b> · {s} {side}"]
-    from .telegram_notifier_core import _fmt_pct_prob, _fmt_usd
-    lines.append(f"💰 PnL: <b>{_fmt_usd(pnl_usd)}</b> ({_fmt_pct_prob(pnl_pct) if pnl_pct is not None else '—'})")
-    lines.append(f"🎯 Hit: {', '.join(hit) if hit else '—'}")
-    lines.append(f"⏱ Duration: {dur if dur is not None else '—'}")
-    lines.append(f"↔️ Prices: entry <code>{_fmt_num(entry,4)}</code> → exit <code>{_fmt_num(exit,4)}</code>")
-    if went:
-        lines.append("✅ Went well:")
-        for x in went[:5]:
-            lines.append(f"  • {x}")
-    if bad:
-        lines.append("⚠️ To improve:")
-        for x in bad[:5]:
-            lines.append(f"  • {x}")
-    if scores:
-        lines.append("🧪 Scores:")
-        for k, v in scores.items():
-            try:
-                lines.append(f"  • {k}: {int(float(v))}/10")
-            except Exception:
-                lines.append(f"  • {k}: —")
-    if overal is not None:
-        try:
-            lines.append(f"🏁 Overall: <b>{int(float(overal))}/10</b>")
-        except Exception:
-            pass
-    await notify_telegram("\n".join(lines), level="critical", kind="close", dedupe_key=f"close:{s}:{int(time.time()//60)}", cooldown_sec=30)
+    exit_price  = info.get("exit_price") or info.get("avg_exit")
+    
+    duration_min = int(dur / 60) if dur else 0
+    
+    # Update unified message
+    from utils.unified_trade_message import update_unified_closed_message
+    await update_unified_closed_message(
+        symbol=s,
+        close_data={
+            "pnl_usd": float(pnl_usd) if pnl_usd else 0.0,
+            "pnl_pct": float(pnl_pct) if pnl_pct else 0.0,
+            "duration_min": duration_min,
+            "exit_reason": exit_reason,
+            "entry_price": entry,
+            "exit_price": exit_price
+        }
+    )
 
 # ===================== Change Tickets (re-exports) =====================
 from .telegram_notifier_core import (
