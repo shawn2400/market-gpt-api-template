@@ -122,6 +122,15 @@ Consolidated notification system with batched reports for Health, Trade/PnL, Cri
 ### Deployment Architecture
 The production environment runs on Render.com with 11 Background Workers and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development.
 
+**Infrastructure Notes:**
+- **Redis:** Upstash Redis with External URL (`rediss://square-hawk-37108.upstash.io`) - accessible from Replit + Render
+- **Database:** Neon PostgreSQL with Scale-to-Zero (Free tier) - endpoint auto-suspends after 5 minutes of inactivity and auto-resumes on first query
+- **Critical Tables:** breaker_state, trades, proposals, market_states, app_heartbeat, guardian_fixes
+- **Known Issues Fixed:** 
+  - Redis Internal URL replaced with Upstash External URL (Nov 2025)
+  - N8N_WEBHOOK_SECRET added to prevent production startup failures (Nov 2025)
+  - Database Scale-to-Zero behavior documented (endpoint resumes automatically on query)
+
 ## External Dependencies
 
 -   **Binance Futures API**: Market data, order execution, account management.
