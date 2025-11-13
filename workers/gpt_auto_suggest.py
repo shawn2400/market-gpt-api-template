@@ -718,6 +718,13 @@ async def _emit(payload: Dict[str, Any]) -> bool:
                 
                 if is_success:
                     LOGGER.info(f"✅ STANDALONE execution successful: {sym} {original_side}")
+                    
+                    # 📱 Send comprehensive Telegram notification for standalone trade entry
+                    try:
+                        await send_standalone_entry_notification(payload, result, raw)
+                    except Exception as tg_err:
+                        LOGGER.warning(f"⚠️ Telegram notification failed (trade executed successfully): {tg_err}")
+                    
                     return True
                 else:
                     reason = result.get("reason") or raw.get("error", "Unknown error")
@@ -734,6 +741,112 @@ async def _emit(payload: Dict[str, Any]) -> bool:
                 f"   Payload keys: {list(payload.keys())}"
             )
             return False
+
+# ---------------- Telegram Standalone Notifications ----------------
+async def send_standalone_entry_notification(payload: Dict[str, Any], result: Dict[str, Any], raw: Dict[str, Any]) -> None:
+    """
+    📱 Send comprehensive Telegram notification for standalone trade entry
+    
+    Includes:
+    - Quality score (0-10)
+    - Profit expectations (TP levels with % gains)
+    - Entry timing and market regime
+    - Leverage and budget allocation
+    - Entry/SL/TP prices
+    """
+    try:
+        import httpx
+        from datetime import datetime
+        
+        BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+        
+        if not BOT_TOKEN or not CHAT_ID:
+            LOGGER.debug("Telegram not configured - skipping notification")
+            return
+        
+        # Extract data from payload
+        symbol = payload.get("symbol", "UNKNOWN")
+        side = payload.get("side", "LONG")
+        quality_score = payload.get("quality_score", 0.0)
+        consensus_score = payload.get("consensus_score", 0.0)
+        
+        # Entry details
+        entry_price = raw.get("entry_price") or payload.get("entry") or payload.get("current_price", 0.0)
+        sl_price = raw.get("sl_price") or payload.get("sl", 0.0)
+        tp_prices = raw.get("tp_prices", []) or [payload.get("tp1"), payload.get("tp2"), payload.get("tp3")]
+        tp_prices = [tp for tp in tp_prices if tp]  # Filter None values
+        
+        # Financial details
+        leverage = payload.get("leverage", raw.get("leverage", 1))
+        budget = payload.get("budget_usd") or payload.get("notional_usd", 0.0)
+        investment = budget * leverage if leverage and budget else 0.0
+        
+        # Strategy and regime
+        trade_type = payload.get("trade_type", "UNKNOWN")
+        is_grid = payload.get("is_grid", False)
+        reason = payload.get("reason", "")
+        market_regime = payload.get("market_regime", "UNKNOWN")
+        
+        # Calculate expected profits
+        profit_expectations = []
+        if entry_price and tp_prices:
+            for i, tp in enumerate(tp_prices[:3], 1):
+                if tp and entry_price:
+                    pct_gain = ((tp - entry_price) / entry_price * 100) if side == "LONG" else ((entry_price - tp) / entry_price * 100)
+                    profit_expectations.append(f"TP{i}: {tp:.6f} (+{pct_gain:.2f}%)")
+        
+        # Build message
+        side_emoji = "🟢" if side == "LONG" else "🔴"
+        quality_emoji = "🌟" if quality_score >= 8 else "✅" if quality_score >= 6 else "⚠️"
+        strategy_badge = "🎯 GRID" if is_grid else f"📊 {trade_type}"
+        
+        message = f"""
+{side_emoji} <b>New {side} Position Opened</b> {quality_emoji}
+
+━━━━━━━━━━━━━━━━━━━━
+<b>📍 {symbol}</b>
+{strategy_badge} | 🧠 Quality: <b>{quality_score:.1f}/10</b>
+
+💰 <b>Entry Details:</b>
+• Entry: <code>{entry_price:.6f}</code>
+• Stop Loss: <code>{sl_price:.6f}</code> ({((sl_price - entry_price) / entry_price * 100):.2f}%)
+• Leverage: <b>x{leverage}</b>
+• Budget: ${budget:.2f} (${investment:.2f} position)
+
+🎯 <b>Profit Targets:</b>
+{chr(10).join(f"• {exp}" for exp in profit_expectations) if profit_expectations else "• Not set"}
+
+📊 <b>Market Analysis:</b>
+• Regime: <code>{market_regime}</code>
+• Consensus: {consensus_score:.1f}/10
+• Reason: {reason[:80]}...
+
+⏰ <b>Entry Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')} UTC
+━━━━━━━━━━━━━━━━━━━━
+🤖 <i>Standalone Auto Scanner</i>
+""".strip()
+        
+        # Send to Telegram
+        api_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.post(
+                api_url,
+                json={
+                    "chat_id": CHAT_ID,
+                    "text": message,
+                    "parse_mode": "HTML",
+                    "disable_web_page_preview": True
+                }
+            )
+            
+            if response.status_code == 200:
+                LOGGER.info(f"✅ Telegram notification sent for {symbol} {side}")
+            else:
+                LOGGER.warning(f"⚠️ Telegram API returned {response.status_code}: {response.text[:200]}")
+                
+    except Exception as e:
+        LOGGER.error(f"❌ Failed to send Telegram notification: {e}", exc_info=True)
 
 # ---------------- Proposers ----------------
 def _min_rr_for(symbol: str, ctx_filters: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> float:

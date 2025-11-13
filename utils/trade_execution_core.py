@@ -60,8 +60,12 @@ TELEGRAM_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID", "0") or "0")
 TELEGRAM_PARSE_MODE = os.getenv("TELEGRAM_PARSE_MODE", "HTML").strip() or "HTML"
 REDIS_URL = os.getenv("REDIS_URL", "").strip()
 
-# NEW: make SL type configurable (STOP vs STOP_MARKET)
-SL_KIND = (os.getenv("SL_KIND", "STOP") or "STOP").upper()
+# ✅ CRITICAL FIX: Use STOP_MARKET for instant execution (STOP = LIMIT which can fail to fill)
+SL_KIND = (os.getenv("SL_KIND", "STOP_MARKET") or "STOP_MARKET").upper()
+
+# 🛡️ Time-based Trade Protection: Prevent ultra-short trades (8-second exits)
+MIN_TRADE_HOLD_TIME_SEC = int(os.getenv("MIN_TRADE_HOLD_TIME_SEC", "60"))  # 60s minimum before SL can trigger
+GRID_MIN_HOLD_TIME_SEC = int(os.getenv("GRID_MIN_HOLD_TIME_SEC", "1800"))  # 30 min minimum for GRID trades
 
 try:
     import redis
@@ -477,6 +481,8 @@ def _quality_gate(
 
 __all__ = [
     "ALLOW_MARKET_ENTRY",
+    "MIN_TRADE_HOLD_TIME_SEC",
+    "GRID_MIN_HOLD_TIME_SEC",
     "ENTRY_BAND_BPS",
     "STOP_BAND_BPS",
     "ESCALATE_AFTER_S",
