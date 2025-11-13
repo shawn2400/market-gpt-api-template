@@ -722,6 +722,15 @@ def set_leverage(symbol: str, leverage: int, *, client: Optional[Client] = None)
             # לא קריטי
             pass
 
+        # 🛡️ הגדרת ISOLATED margin type לפני שינוי מינוף (תיקון קריטי!)
+        try:
+            cli.futures_change_margin_type(symbol=sym, marginType="ISOLATED")  # type: ignore[attr-defined]
+            logger.info("set_leverage: %s -> ISOLATED margin", sym)
+        except Exception as margin_err:
+            msg = str(margin_err)
+            if "No need to change margin type" not in msg and "margin type same" not in msg.lower():
+                logger.warning("set_leverage: failed to set ISOLATED margin for %s: %s", sym, margin_err)
+        
         # שינוי מינוף
         cli.futures_change_leverage(symbol=sym, leverage=lev)  # type: ignore[attr-defined]
         logger.info("set_leverage: %s -> x%d", sym, lev)
