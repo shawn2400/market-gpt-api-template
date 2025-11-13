@@ -649,11 +649,21 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
     ctx["symbol"] = symbol
     
     # ========== FETCH LIVE BINANCE INDICATORS ==========
-    # If indicators missing, fetch REAL data from Binance
-    if not ctx.get("adx") or not ctx.get("rsi"):
+    # If indicators missing OR price/volume data is zero/missing, fetch REAL data from Binance
+    needs_fetch = (
+        not ctx.get("adx") or not ctx.get("rsi") or
+        not ctx.get("close") or float(ctx.get("close", 0)) <= 0 or
+        not ctx.get("high_24h") or float(ctx.get("high_24h", 0)) <= 0 or
+        not ctx.get("low_24h") or float(ctx.get("low_24h", 0)) <= 0 or
+        not ctx.get("volume") or float(ctx.get("volume", 0)) <= 0
+    )
+    
+    if needs_fetch:
+        LOGGER.info(f"📡 {symbol}: Fetching LIVE indicators from Binance (missing or zero data detected)")
         real_indicators = await _fetch_real_indicators(symbol, interval="15m", limit=200)
         if real_indicators:
             ctx.update(real_indicators)
+            LOGGER.info(f"✅ {symbol}: LIVE indicators fetched successfully (close={ctx.get('close')}, ATR={ctx.get('atr_percent')}%)")
         else:
             LOGGER.warning(f"⚠️ {symbol}: Failed to fetch live indicators, skipping")
             return None
