@@ -30,11 +30,13 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Intelligent Brain Management System**: Auto-suspend/resume for failed providers (429 errors, timeouts, API failures). Ready to scale to multi-brain consensus when additional providers activated. Dynamic consensus threshold adjusts automatically based on active brains. Includes cost tracking and token budgeting.
 -   **Optional Expansion Brains (SUSPENDED)**: Qwen 2.5 Turbo (FREE, needs valid API key), Gemini 2 Pro ($0.00005/call, rate limited), Claude Sonnet ($0.003/call, needs credits), Grok (XAI, $0.001/call). Can be activated anytime for 2/3 or 3/3 consensus.
 -   **AI Strategy Consensus Engine**: 100% AI-driven strategy selection via a 3-brain voting system based on independent market analysis.
+-   **Dynamic Quality Threshold Enforcement (v9.2)**: Hard override mechanism in AI decision maker ensures trades meeting dynamic `min_quality` thresholds are automatically approved, even if AI votes REJECT. Thresholds adapt per strategy and market tier: GRID (2.0-2.1), Mean-Reversion (3.2-4.2), Momentum (4.8-6.3), WAIT (5.0-6.5).
 -   **Precision Calculator v1.0**: Calculates exact leverage and investment amounts based on trade quality, market volatility, regime, and balance.
 -   **Deep Market Analyzer**: Multi-layer technical analysis covering trend, volatility, support/resistance, market structure, and volume.
 -   **Live Regime Detector**: Real-time market classification (TRENDING, CHOPPY, VOLATILE, SIDEWAYS) using ADX, ATR, Bollinger Bands, and price range.
 -   **Entry Timing Optimizer**: Analyzes recent price action and volatility for optimal entry timing.
 -   **Dynamic Protection Manager**: AI suggests regime-specific parameter sets (Entry Quality, SL ATR, TP RR, Trail ATR, Leverage) within wide safety ranges, with guardrails from `order_sanity.py`, `leverage_policy.py`, `precision_calculator.py`.
+-   **Standalone Auto Scanner Mode**: Auto Scanner can execute trades directly on Binance when Main Server is unavailable (dev environment), ensuring continuous operation without HTTP dependencies.
 -   **Accurate ROI Calculation**: Based on PnL_USDT / actual_investment, accounting for leverage.
 -   **Dual Order Types**: Uses both LIMIT and MARKET orders dynamically.
 -   **Smart Position Mode Compatibility**: Adapts to Binance Hedge Mode and One-Way Mode.

@@ -669,12 +669,71 @@ async def _emit(payload: Dict[str, Any]) -> bool:
     except Exception as e:
         sym = payload.get("symbol", "UNKNOWN")
         side = payload.get("side", "")
-        LOGGER.error(
-            f"❌ emit failed for {sym} {side}: {type(e).__name__}: {e}\n"
-            f"   URL: {ALERT_INGEST_URL}\n"
-            f"   Payload keys: {list(payload.keys())}"
-        )
-        return False
+        
+        if "127.0.0.1:8000" in str(ALERT_INGEST_URL) and isinstance(e, (httpx.ConnectError, httpx.TimeoutException)):
+            LOGGER.warning(
+                f"⚠️ Main Server not available (dev mode) - executing {sym} {side} STANDALONE"
+            )
+            
+            try:
+                from utils.execution_bot import ExecutionBot
+                
+                original_side = payload.get("side", "LONG")
+                execution_side = "BUY" if original_side == "LONG" else "SELL"
+                
+                quality_value = payload.get("quality_score")
+                LOGGER.info(f"🔍 STANDALONE DEBUG {sym}: quality_score={quality_value}, keys={list(payload.keys())}")
+                
+                ticket = {
+                    "symbol": payload.get("symbol"),
+                    "side": execution_side,
+                    "budget_usd": payload.get("budget_usd") or payload.get("notional_usd", 100.0),
+                    "leverage": payload.get("leverage", 2),
+                    "entry": payload.get("entry") or payload.get("current_price"),
+                    "sl": payload.get("sl"),
+                    "tp": payload.get("tp1") or payload.get("tp"),
+                    "position_type": "MARKET",
+                    "quality": payload.get("quality_score", 100.0),
+                    "score": payload.get("quality_score", 100.0),
+                    "atr_pct": payload.get("atr_pct"),
+                    "vol": payload.get("vol"),
+                    "metadata": {
+                        "trade_type": payload.get("trade_type"),
+                        "is_grid": payload.get("is_grid", False),
+                        "consensus_score": payload.get("consensus_score"),
+                        "quality_score": payload.get("quality_score"),
+                        "reason": payload.get("reason", ""),
+                        "original_side": original_side,
+                    }
+                }
+                
+                bot = ExecutionBot()
+                result = await bot.open_position(ticket, source="auto_scanner_standalone")
+                
+                raw = result.get("raw", {})
+                is_success = (
+                    result.get("status") in ("opened", "success") and
+                    raw.get("ok", False) is not False
+                )
+                
+                if is_success:
+                    LOGGER.info(f"✅ STANDALONE execution successful: {sym} {original_side}")
+                    return True
+                else:
+                    reason = result.get("reason") or raw.get("error", "Unknown error")
+                    LOGGER.error(f"❌ STANDALONE execution failed: {sym} {original_side} - {reason}")
+                    return False
+                    
+            except Exception as exec_err:
+                LOGGER.error(f"❌ STANDALONE execution error for {sym} {side}: {exec_err}")
+                return False
+        else:
+            LOGGER.error(
+                f"❌ emit failed for {sym} {side}: {type(e).__name__}: {e}\n"
+                f"   URL: {ALERT_INGEST_URL}\n"
+                f"   Payload keys: {list(payload.keys())}"
+            )
+            return False
 
 # ---------------- Proposers ----------------
 def _min_rr_for(symbol: str, ctx_filters: Dict[str, Any], ctx: Optional[Dict[str, Any]] = None) -> float:
