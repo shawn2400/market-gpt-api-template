@@ -1204,13 +1204,21 @@ async def execute_trade_live(
 # ─────────── Plan Wrapper (for alerts/ingest auto-execution) ───────────
 async def auto_execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Wrapper שמקבל plan (מ-/alerts/ingest) ומבצע את הטרייד באמצעות execute_trade_live.
+    🔥 UPGRADED: Routes through ExecutionBot with TradingGatekeeper + SmartOrderRouter + ISOLATED limit!
+    
+    Wrapper שמקבל plan (מ-/alerts/ingest) ומבצע את הטרייד באמצעות ExecutionBot.
     מחזיר תוצאה עם ok/error + פרטי הביצוע.
     
-    🛡️ CRITICAL: Includes Post-Entry Verification to ensure SL+TP exist!
+    🛡️ Protection Layers:
+    - TradingGatekeeper (symbol filters, quality, dynamic leverage)
+    - SmartOrderRouter (LIMIT/MARKET decision)
+    - ISOLATED positions counter (4 max)
+    - Post-Entry Verification (SL+TP enforcement)
     """
-    print(f"🔧 [auto_execute_plan] ENTERED function")
+    print(f"🔧 [auto_execute_plan] ENTERED function (ExecutionBot mode)")
     try:
+        from utils.execution_bot import ExecutionBot
+        
         symbol = str(plan.get("symbol", "")).upper()
         side = str(plan.get("side", "")).upper()
         print(f"🔧 [auto_execute_plan] Processing {symbol} {side}")
@@ -1249,21 +1257,34 @@ async def auto_execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
         elif isinstance(sl_dict, (int, float)):
             sl = float(sl_dict) or None
         
-        # בצע את הטרייד
+        # 🚀 CRITICAL FIX: Route through ExecutionBot with all protections!
         dry_run = os.getenv("DRY_RUN", "0").lower() in ("1", "true", "yes", "on")
-        result = await execute_trade_live(
-            symbol=symbol,
-            side=side,
-            leverage=leverage,
-            budget=budget,
-            quantity=qty,
-            entry=entry,
-            sl=sl,
-            tp=tp1,
-            dry_run=dry_run,
-            confirm_first=False,  # לא צריך אישור - אנחנו כבר ב-FULL AUTO
-            reduce_only=False
-        )
+        
+        # Build ticket for ExecutionBot (matches open_position signature)
+        ticket_exec = {
+            "symbol": symbol,
+            "side": side,
+            "leverage": leverage,
+            "budget_usd": budget,
+            "budget": budget,
+            "quantity": qty,
+            "entry": entry,
+            "sl": sl,
+            "tp1": tp1,
+            "dry_run": dry_run,
+            "confirm_first": False,  # Already in FULL AUTO mode
+            "reduce_only": False,
+            # Metadata for SmartRouter and Gatekeeper
+            "quality_score": plan.get("quality") or plan.get("score") or plan.get("success_pct", 0) / 10,
+            "atr_pct": plan.get("atr_pct", 0.02),
+            "spread_pct": plan.get("spread_pct"),
+            "signal_age": plan.get("signal_age"),
+            "urgency": "normal",
+        }
+        
+        # Instantiate ExecutionBot and execute with ALL protections
+        bot = ExecutionBot()
+        result = await bot.open_position(ticket_exec, source="auto")
         
         # 💾 CRITICAL: Save trade parameters to database IMMEDIATELY after entry
         if result.get("ok") and not dry_run:

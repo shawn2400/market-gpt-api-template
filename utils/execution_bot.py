@@ -17,7 +17,7 @@ import logging
 import os
 from typing import Any, Dict, Optional, Literal
 
-FlowType = Literal["MARKET", "HYBRID"]
+FlowType = Literal["MARKET", "HYBRID", "LIMIT"]
 
 
 class ExecutionBot:
@@ -37,6 +37,23 @@ class ExecutionBot:
 
     def __init__(self, logger: Optional[logging.Logger] = None) -> None:
         self.log = logger or logging.getLogger("algogpt.execution_bot")
+        
+        # 🛡️ Initialize protection systems (TradingGatekeeper + SmartRouter)
+        try:
+            from utils.trading_gatekeeper import TradingGatekeeper
+            self._gatekeeper = TradingGatekeeper()
+            self.log.info("✅ TradingGatekeeper loaded")
+        except Exception as e:
+            self.log.warning(f"⚠️ TradingGatekeeper unavailable: {e}")
+            self._gatekeeper = None
+        
+        try:
+            from utils.order_router import SmartOrderRouter
+            self._order_router = SmartOrderRouter()
+            self.log.info("✅ SmartOrderRouter loaded")
+        except Exception as e:
+            self.log.warning(f"⚠️ SmartOrderRouter unavailable: {e}")
+            self._order_router = None
 
     async def open_position(
         self,
@@ -65,7 +82,60 @@ class ExecutionBot:
         except Exception as e:
             raise
 
-        # 2) Flow selection (MARKET / HYBRID) - instead of logic that was in /execute and /approve
+        # 🛡️ 1.5) TradingGatekeeper validation - CRITICAL PROTECTION LAYER
+        if self._gatekeeper:
+            try:
+                gatekeeper_result = self._gatekeeper.validate_trade(
+                    symbol=symbol,
+                    order_type="NEW",
+                    trade_quality=ticket_exec.get("quality_score"),
+                    atr_pct=ticket_exec.get("atr_pct"),
+                    current_price=ticket_exec.get("price") or ticket_exec.get("current_price"),
+                    position_side=side,
+                    leverage=ticket_exec.get("leverage"),
+                    metadata=ticket_exec,
+                )
+                
+                if not gatekeeper_result.approved:
+                    self.log.warning(
+                        f"🚫 Gatekeeper BLOCKED {symbol}: {gatekeeper_result.reason}"
+                    )
+                    return {
+                        "status": "blocked",
+                        "flow": None,
+                        "symbol": symbol,
+                        "side": side,
+                        "reason": gatekeeper_result.reason,
+                        "details": gatekeeper_result.details,
+                    }
+                
+                # Apply gatekeeper enforced limits
+                if gatekeeper_result.leverage:
+                    original_lev = ticket_exec.get("leverage")
+                    ticket_exec["leverage"] = min(
+                        ticket_exec.get("leverage", 20),
+                        gatekeeper_result.leverage
+                    )
+                    if original_lev != ticket_exec["leverage"]:
+                        self.log.info(
+                            f"🛡️ Gatekeeper capped leverage: {original_lev}x → {ticket_exec['leverage']}x"
+                        )
+                
+                if gatekeeper_result.max_position_size:
+                    ticket_exec["gatekeeper_max_size"] = gatekeeper_result.max_position_size
+                
+                self.log.info(
+                    f"✅ Gatekeeper APPROVED {symbol} | "
+                    f"Leverage: {ticket_exec.get('leverage')}x | "
+                    f"Filters: {', '.join(gatekeeper_result.filters_passed)}"
+                )
+                
+            except Exception as gate_err:
+                self.log.error(f"⚠️ Gatekeeper check failed: {gate_err}", exc_info=True)
+                # Fail-open mode: allow trade but log error
+                self.log.warning(f"⚠️ Proceeding with trade (gatekeeper failed)")
+
+        # 2) Flow selection (MARKET / HYBRID / LIMIT) - with SmartRouter
         flow = self._select_flow(ticket_exec, source=source)
 
         # 3) Approval gate - if approval needed, return pending_approval
@@ -79,6 +149,19 @@ class ExecutionBot:
                 "symbol": symbol,
                 "side": side,
                 "reason": "Awaiting approval",
+            }
+
+        # 🛡️ 3.5) Binance ISOLATED positions limit (max 4) - enforce before execution
+        try:
+            await self._enforce_isolated_limit(symbol, ticket_exec)
+        except RuntimeError as iso_err:
+            self.log.warning(f"⚠️ ISOLATED limit reached for {symbol}: {iso_err}")
+            return {
+                "status": "blocked",
+                "flow": flow,
+                "symbol": symbol,
+                "side": side,
+                "reason": str(iso_err),
             }
 
         # 4) Execute in production - wrapper over trade_executor / binance_client
@@ -205,13 +288,43 @@ class ExecutionBot:
         source: str,
     ) -> FlowType:
         """
-        Flow selection (MARKET / HYBRID) based on logic that was in /execute and /approve.
-
-        TODO: Copy the logic that was in routes/trade.py:
-        - If needs approval → HYBRID
-        - If coming from approval/telegram → MARKET
-        - If flags in ENV → consider them
+        Flow selection using SmartOrderRouter for intelligent LIMIT/MARKET/HYBRID decisions.
+        
+        Falls back to legacy logic if router unavailable.
         """
+        # 🚀 Try SmartOrderRouter first
+        if self._order_router:
+            try:
+                decision = self._order_router.route_order(
+                    atr_pct=ticket_exec.get("atr_pct", 0.02),
+                    spread_pct=ticket_exec.get("spread_pct"),
+                    signal_age_sec=ticket_exec.get("signal_age"),
+                    urgency=ticket_exec.get("urgency", "normal"),
+                    purpose="ENTRY",
+                    book_depth_ok=ticket_exec.get("book_depth_ok", True),
+                    position_size_large=(ticket_exec.get("notional") or 0) > 2000,
+                )
+                ticket_exec["router_meta"] = decision  # Store decision metadata
+                order_type = decision.get("order_type", "MARKET")
+                
+                self.log.info(
+                    f"📍 SmartRouter decision: {order_type} | "
+                    f"ATR: {ticket_exec.get('atr_pct', 'N/A')}% | "
+                    f"Reason: {decision.get('reason', 'N/A')}"
+                )
+                
+                # Map router output to FlowType
+                if order_type == "LIMIT":
+                    return "LIMIT"
+                elif order_type in ("HYBRID", "LIMIT_ESCALATE"):
+                    return "HYBRID"
+                else:
+                    return "MARKET"
+                    
+            except Exception as router_err:
+                self.log.warning(f"⚠️ SmartRouter failed, using legacy flow: {router_err}")
+        
+        # 📜 Legacy flow selection (backward compatibility)
         if any(ticket_exec.get(k) is not None for k in ("tp1", "tp2", "tp3", "sl")):
             return "HYBRID"
         if (ticket_exec.get("quantity") is None) and (ticket_exec.get("budget_usd") is not None or ticket_exec.get("budget") is not None):
@@ -243,6 +356,61 @@ class ExecutionBot:
         force_approve_env = os.getenv("REQUIRE_TELEGRAM_APPROVAL", "0").lower() in ("1", "true", "yes", "on")
         need_approval = bool(ticket_exec.get("require_approval") or ticket_exec.get("confirm_first") or force_approve_env)
         return need_approval
+
+    async def _enforce_isolated_limit(self, symbol: str, ticket_exec: Dict[str, Any]) -> None:
+        """
+        Enforce Binance's ISOLATED margin limit (max 4 concurrent positions).
+        
+        If 4 ISOLATED positions already exist and this is a new symbol,
+        either downgrade to CROSS margin or raise an error.
+        
+        Raises:
+            RuntimeError: If ISOLATED limit reached and cannot proceed
+        """
+        try:
+            from utils.binance_client import get_client
+            
+            # Get current positions
+            client = get_client()
+            positions = client.futures_position_information()
+            
+            # Count open ISOLATED positions
+            isolated_open = [
+                p for p in positions
+                if float(p.get("positionAmt", 0)) != 0 and p.get("marginType") == "isolated"
+            ]
+            
+            # If we already have a position for this symbol in ISOLATED, allow it
+            if symbol in {p["symbol"] for p in isolated_open}:
+                self.log.info(f"✅ ISOLATED OK: {symbol} already has ISOLATED position")
+                return
+            
+            # If we have 4 ISOLATED positions and this is a NEW symbol
+            if len(isolated_open) >= 4:
+                isolated_symbols = [p["symbol"] for p in isolated_open]
+                self.log.warning(
+                    f"⚠️ ISOLATED LIMIT: 4/4 positions full ({', '.join(isolated_symbols)})"
+                )
+                
+                # Option 1: Auto-downgrade to CROSS margin (safest)
+                ticket_exec["margin_type"] = "CROSS"
+                ticket_exec["isolated_limit_downgrade"] = True
+                self.log.info(f"🔄 Auto-downgraded {symbol} to CROSS margin (ISOLATED limit reached)")
+                return
+                
+                # Option 2: Reject trade (strict mode)
+                # raise RuntimeError(
+                #     f"Binance ISOLATED limit reached (4/4). "
+                #     f"Close one ISOLATED position or use CROSS margin. "
+                #     f"Current ISOLATED: {', '.join(isolated_symbols)}"
+                # )
+            
+            self.log.info(f"✅ ISOLATED OK: {len(isolated_open)}/4 positions, allowing {symbol}")
+            
+        except RuntimeError:
+            raise  # Re-raise our own errors
+        except Exception as e:
+            self.log.warning(f"⚠️ ISOLATED limit check failed: {e} - proceeding anyway (fail-open)")
 
     async def _execute_flow(
         self,
