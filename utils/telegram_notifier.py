@@ -641,15 +641,9 @@ async def send_trade_approval(idem: str, plan: Dict[str, Any], chat_id: Optional
 
     urls = _build_trade_urls(idem, plan)
     kb = _approval_kb_for_trade(idem, ticket_url=urls.get("ticket"))
-    
-    # Use unified message system
-    from utils.unified_trade_message import send_unified_entry_message
-    cid = chat_id if chat_id is not None else CHAT_ID
-    await send_unified_entry_message(
-        symbol=symbol,
-        chat_id=cid,
-        entry_text="\n".join(lines),
-        reply_markup=kb
+    await notify_telegram_with_markup(
+        "\n".join(lines), kb, level="critical", kind="approve",
+        chat_id=chat_id, dedupe_key=f"approve:{idem}", cooldown_sec=5, force=False
     )
 
 # ===================== Trade lifecycle short notifiers =====================
@@ -659,21 +653,14 @@ async def send_trade_opened(info: Dict[str, Any]) -> None:
     side = _fmt_side(plan.get("side", ""))
     qty = plan.get("qty", "")
     price = plan.get("entry_price", plan.get("price", ""))
-    otype = _fmt_order_type(plan.get("order_type", ""))
     lev = plan.get("leverage", "—")
     kind = (plan.get("trade_kind") or plan.get("mode") or plan.get("market") or "Futures").capitalize()
     
-    # Update unified message
-    from utils.unified_trade_message import update_unified_opened_message
-    await update_unified_opened_message(
-        symbol=s,
-        open_data={
-            "price": price,
-            "qty": qty,
-            "leverage": lev,
-            "order_type": otype,
-            "kind": kind
-        }
+    # Concise open notification with unique dedupe (price + qty makes it unique)
+    await notify_telegram(
+        f"✅ <b>{s}</b> {kind} {side}\n"
+        f"• Price: <code>{_fmt_num(price,4)}</code> | Qty: {qty} | Lev: {lev}x",
+        level="critical", kind="open", dedupe_key=f"open:{s}:{price}:{qty}:{int(time.time()//10)}", cooldown_sec=15
     )
 
 async def send_trade_update(info: Dict[str, Any]) -> None:
@@ -699,24 +686,20 @@ async def send_trade_closed(info: Dict[str, Any]) -> None:
     pnl_pct = info.get("pnl_pct")
     dur     = info.get("duration_sec")
     exit_reason = info.get("exit_reason", "UNKNOWN")
-
+    
     entry = plan.get("entry_price") or plan.get("price")
     exit_price  = info.get("exit_price") or info.get("avg_exit")
-    
     duration_min = int(dur / 60) if dur else 0
     
-    # Update unified message
-    from utils.unified_trade_message import update_unified_closed_message
-    await update_unified_closed_message(
-        symbol=s,
-        close_data={
-            "pnl_usd": float(pnl_usd) if pnl_usd else 0.0,
-            "pnl_pct": float(pnl_pct) if pnl_pct else 0.0,
-            "duration_min": duration_min,
-            "exit_reason": exit_reason,
-            "entry_price": entry,
-            "exit_price": exit_price
-        }
+    pnl_emoji = "💰" if (pnl_usd or 0) > 0 else "📉"
+    
+    # Concise close notification with unique dedupe (PnL + exit makes it unique)
+    from .telegram_notifier_core import _fmt_usd
+    await notify_telegram(
+        f"{pnl_emoji} <b>{s}</b> {kind} CLOSED\n"
+        f"• PnL: <b>{_fmt_usd(pnl_usd)}</b> ({pnl_pct:+.2f}%)\n"
+        f"• Duration: {duration_min}min | Exit: {exit_reason}",
+        level="critical", kind="close", dedupe_key=f"close:{s}:{pnl_usd}:{duration_min}:{int(time.time()//10)}", cooldown_sec=15
     )
 
 # ===================== Change Tickets (re-exports) =====================
