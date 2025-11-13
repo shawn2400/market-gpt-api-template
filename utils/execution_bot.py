@@ -295,8 +295,13 @@ class ExecutionBot:
         # 🚀 Try SmartOrderRouter first
         if self._order_router:
             try:
+                # 🛡️ CRITICAL: Normalize atr_pct - .get() returns None if key exists but value is None!
+                atr_pct = ticket_exec.get("atr_pct")
+                if atr_pct is None:
+                    atr_pct = 0.02  # Default 2% volatility
+                
                 decision = self._order_router.route_order(
-                    atr_pct=ticket_exec.get("atr_pct", 0.02),
+                    atr_pct=atr_pct,
                     spread_pct=ticket_exec.get("spread_pct"),
                     signal_age_sec=ticket_exec.get("signal_age"),
                     urgency=ticket_exec.get("urgency", "normal"),

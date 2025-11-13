@@ -1260,6 +1260,11 @@ async def auto_execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
         # 🚀 CRITICAL FIX: Route through ExecutionBot with all protections!
         dry_run = os.getenv("DRY_RUN", "0").lower() in ("1", "true", "yes", "on")
         
+        # 🛡️ CRITICAL: Normalize atr_pct - .get() returns None if key exists but value is None!
+        atr_pct = plan.get("atr_pct")
+        if atr_pct is None:
+            atr_pct = 0.02  # Default 2% volatility
+        
         # Build ticket for ExecutionBot (matches open_position signature)
         ticket_exec = {
             "symbol": symbol,
@@ -1276,7 +1281,7 @@ async def auto_execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
             "reduce_only": False,
             # Metadata for SmartRouter and Gatekeeper
             "quality_score": plan.get("quality") or plan.get("score") or plan.get("success_pct", 0) / 10,
-            "atr_pct": plan.get("atr_pct", 0.02),
+            "atr_pct": atr_pct,
             "spread_pct": plan.get("spread_pct"),
             "signal_age": plan.get("signal_age"),
             "urgency": "normal",
