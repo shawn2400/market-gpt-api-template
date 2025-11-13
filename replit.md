@@ -116,6 +116,18 @@ Includes a Validation Pipeline (backtesting), Fail-Closed Decision Gates, Data-D
 -   **Fail-Open Architecture**: If filters fail to load, system allows trades (prevents false blocks), all filters log warnings for debugging.
 -   **Integration**: Wired into `allow_and_fix_ticket` in risk_guard.py - every trade validated before execution.
 
+**🎯 Dynamic TOP 50 Symbol Filter (Musical Chairs System):**
+-   **Zero Tolerance Policy**: Blocks ALL trades (SPOT/LONG/SHORT/GRID) for symbols outside TOP 50 with automatic blacklisting after 3 failures.
+-   **Quantum TOP 50 Worker**: Dynamic 8-15 min scheduler (based on market volatility) runs continuous ranking system - EXTREME volatility = 8min, STABLE = 15min.
+-   **SmartTop50Scanner**: Scans 120 candidates (80 from previous TOP 100 + 40 new random) vs 538 full scan - 77% efficiency gain with intelligent caching.
+-   **Multi-Factor Scoring**: Volume (35%), Liquidity (35%), Volatility/Performance (30%) - only top performers survive each cycle.
+-   **DynamicGridApprover**: Calculates TOP 10-30 GRID symbols dynamically (volume $75M+, liquidity $50k+, ATR <3.5%, spread <10bps).
+-   **TieredGridSystem**: Platinum (TOP 10, 8-12 orders, 0.8% spacing), Gold (TOP 11-20, 6-10 orders, 1.0%), Silver (TOP 21-25, 5-8 orders, 1.2%), Bronze (TOP 26-30, 4-6 orders, 1.5%).
+-   **ZeroToleranceGatekeeper**: Universal enforcement in TradingGatekeeper - blocks non-TOP 50 for all trades, non-GRID approved for GRID trades, auto-ban after 3 failures (24h temp, then permanent).
+-   **GarbageDetector**: Auto-identifies trash symbols (3 consecutive losses OR win rate <35% OR avg loss >-5% OR volume <$10M) and permanent blacklist.
+-   **Hybrid Persistence**: Redis for hot data (low latency, 1h TTL), PostgreSQL for history/analytics (top_50_snapshots, grid_snapshot_symbols, grid_performance_aggregates, blacklist_permanent, blacklist_temp_events).
+-   **Fail-Open Safety**: Empty Redis lists (expired/cold start) trigger fail-open to prevent false blocks - system allows trades until new scan completes.
+
 ### Telegram Digest System
 Consolidated notification system with batched reports for Health, Trade/PnL, Critical Alerts, and AI Trade Reviews.
 
