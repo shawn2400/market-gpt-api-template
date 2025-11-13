@@ -464,9 +464,10 @@ def _quality_gate(
     max_atr_pct: float,
     volume: Optional[float],
     min_volume: float,
-) -> (bool, str):
+) -> tuple[bool, str]:
     q = float(quality if quality is not None else QUALITY_DEFAULT)
-    if q < (min_score if min_score > 0 else MIN_QUALITY_FALLBACK):
+    effective_min = (min_score if min_score > 0 else MIN_QUALITY_FALLBACK)
+    if q < effective_min:
         return False, "quality_below_min"
     if atr_pct is not None and atr_pct > max_atr_pct:
         return False, "atr_pct_too_high"

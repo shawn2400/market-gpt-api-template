@@ -57,19 +57,16 @@ class ExecutionBot:
         """
         symbol = ticket_exec.get("symbol")
         side = ticket_exec.get("side")
-        self.log.warning(f"[ENTRY-DEBUG] ExecutionBot.open_position START: symbol={symbol} side={side} source={source} quality={ticket_exec.get('quality')} score={ticket_exec.get('score')}")
+        self.log.info(f"ExecutionBot.open_position called: symbol={symbol} side={side} source={source}")
 
         # 1) Basic validation (lean - not repeating what's already in Pydantic in route)
         try:
             self._validate_ticket_basic(ticket_exec)
-            self.log.warning(f"[ENTRY-DEBUG] Validation passed for {symbol}")
         except Exception as e:
-            self.log.warning(f"[ENTRY-DEBUG] Validation FAILED for {symbol}: {e}")
             raise
 
         # 2) Flow selection (MARKET / HYBRID) - instead of logic that was in /execute and /approve
         flow = self._select_flow(ticket_exec, source=source)
-        self.log.warning(f"[FLOW-DEBUG] Selected flow={flow} for {symbol} (qty={ticket_exec.get('quantity')}, budget={ticket_exec.get('budget_usd')})")
 
         # 3) Approval gate - if approval needed, return pending_approval
         if self._needs_approval(ticket_exec, source=source):
@@ -86,9 +83,7 @@ class ExecutionBot:
 
         # 4) Execute in production - wrapper over trade_executor / binance_client
         try:
-            self.log.warning(f"[FLOW-DEBUG] Calling _execute_flow: flow={flow}, symbol={symbol}")
             exec_result = await self._execute_flow(flow, ticket_exec, source=source)
-            self.log.warning(f"[FLOW-DEBUG] _execute_flow result: {exec_result}")
             return {
                 "status": exec_result.get("status", "opened"),
                 "flow": flow,
@@ -413,20 +408,13 @@ class ExecutionBot:
                 clean = _filter_kwargs_for_callable(exec_live_async, base_kwargs)
                 return await exec_live_async(clean)
 
-        self.log.warning(f"[HYBRID-DEBUG] base_kwargs keys: {list(base_kwargs.keys())}, quality={base_kwargs.get('quality')}, score={base_kwargs.get('score')}")
         try:
             if inspect.iscoroutinefunction(exec_live):
-                result = await exec_live(base_kwargs)
-                self.log.warning(f"[HYBRID-DEBUG] result from exec_live: {result}")
-                return result
+                return await exec_live(base_kwargs)
             loop = asyncio.get_running_loop()
-            result = await loop.run_in_executor(None, lambda: exec_live(base_kwargs))
-            self.log.warning(f"[HYBRID-DEBUG] result from exec_live (executor): {result}")
-            return result
-        except TypeError as e:
-            self.log.warning(f"[HYBRID-DEBUG] TypeError, falling back to filter: {e}")
+            return await loop.run_in_executor(None, lambda: exec_live(base_kwargs))
+        except TypeError:
             clean = _filter_kwargs_for_callable(exec_live, base_kwargs)
-            self.log.warning(f"[HYBRID-DEBUG] clean keys: {list(clean.keys())}")
             if inspect.iscoroutinefunction(exec_live):
                 return await exec_live(**clean)
             loop = asyncio.get_running_loop()

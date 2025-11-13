@@ -129,12 +129,12 @@ outputType = "console"
 name = "Auto Scanner"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG POOL_PER_CYCLE=50 SUGGEST_GRID=1 AUTO_RUN=1 python workers/gpt_auto_suggest.py"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG POOL_PER_CYCLE=50 SUGGEST_GRID=1 AUTO_RUN=1 MIN_QUALITY_SCORE=7.0 python workers/gpt_auto_suggest.py"
 
 [[ports]]
 localPort = 5000
