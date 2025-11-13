@@ -744,6 +744,156 @@ POST /telegram/callback        - Interactive button callbacks
 
 ---
 
+## 🤖 ExecutionBot Architecture (Unified Trade Execution)
+
+**AlgoGPT v9.1** implements **ExecutionBot** — a centralized trade execution wrapper that consolidates all trade execution logic from multiple entry points into a single, unified interface.
+
+### 🎯 Design Principles
+
+**Problem**: Previously, trade execution logic was duplicated across 5+ entry points (API, Telegram, Ops Approval, Auto Scanner, Autopilot), making maintenance difficult and error-prone.
+
+**Solution**: ExecutionBot wraps `trade_executor.py` and provides a single, consistent interface for all trade entry points:
+
+```python
+# All entry points now use ExecutionBot:
+from utils.execution_bot import ExecutionBot
+
+bot = ExecutionBot(logger=logger)
+result = await bot.open_position(ticket_exec, source="api")
+```
+
+### 🏗️ Architecture
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                    Entry Points                         │
+├─────────────────────────────────────────────────────────┤
+│  /trade/execute  │  /telegram/webhook  │  /ops/approve  │
+│  /auto/trade     │  /autopilot         │  callbacks     │
+└──────────────┬──────────────────────────────────────────┘
+               │
+               ▼
+      ┌────────────────────┐
+      │  ExecutionBot      │  ← Unified wrapper
+      │  utils/           │
+      │  execution_bot.py  │
+      └────────┬───────────┘
+               │
+               ├─→ _select_flow()        (MARKET/HYBRID)
+               ├─→ _needs_approval()     (Approval gating)
+               └─→ _execute_flow()       (Delegate to trade_executor)
+               
+               ▼
+      ┌────────────────────┐
+      │  trade_executor.py │  ← Core execution logic
+      └────────────────────┘
+```
+
+### 🔄 Unified Flow
+
+```python
+# ExecutionBot.open_position() flow:
+1. Source-aware approval gating (_needs_approval)
+   - Already approved sources bypass approval
+   - New requests check approval flags
+   
+2. Flow selection (_select_flow)
+   - MARKET: Only budget_usd provided
+   - HYBRID: TP/SL configuration provided
+   
+3. Execution delegation (_execute_flow)
+   - Calls trade_executor functions
+   - Handles -4061 errors (fallback to MARKET)
+   - Returns unified response format
+   
+4. Centralized logging
+   - "[ExecutionBot] open_position source=X flow=Y"
+   - Consistent across all entry points
+```
+
+### 📋 Source-Aware Approval Gating
+
+ExecutionBot intelligently bypasses approval for already-approved or automated sources:
+
+```python
+# Sources that execute immediately (bypass approval):
+- "ops_approval", "ops_approval_get", "ops_approval_fallback"
+  → Already approved via Telegram callbacks
+  
+- "telegram", "telegram_callback"
+  → User-initiated, execute immediately
+  
+- "auto_trade", "autopilot"
+  → Internal automation, execute immediately
+
+# Sources that may need approval:
+- "api"
+  → Checks require_approval flag
+```
+
+### 🎯 Supported Flows
+
+#### 🔸 MARKET Flow
+- **When**: Only `budget_usd` provided
+- **Execution**: Direct market order with ATR-based SL/TP
+- **File**: `utils/trade_executor.py::execute_trade_market_only()`
+
+#### 🔸 HYBRID Flow
+- **When**: Custom TP/SL configuration provided
+- **Execution**: LIMIT entry + STOP_MARKET SL + TAKE_PROFIT_MARKET TP
+- **File**: `utils/trade_executor.py::execute_trade_hybrid()`
+- **Fallback**: On -4061 error, falls back to MARKET flow
+
+### 🔌 Entry Points Using ExecutionBot
+
+| Entry Point | File | Source | Flow |
+|-------------|------|--------|------|
+| API Execute | `routes/trade.py` | `"api"` | MARKET/HYBRID |
+| API Approve | `routes/trade.py` | `"approval"` | MARKET/HYBRID |
+| Telegram | `routes/telegram_bot.py` | `"telegram"` | MARKET/HYBRID |
+| Ops Approval | `routes/ops_approve.py` | `"ops_approval_get"` | HYBRID |
+| Ops Fallback | `routes/ops_approve.py` | `"ops_approval_get_fallback"` | MARKET |
+| Auto Trade | `routes/auto_trade.py` | `"auto_trade"` | MARKET/HYBRID |
+| Autopilot | `routes/system_autopilot.py` | `"autopilot"` | MARKET/HYBRID |
+
+### ✅ Benefits
+
+- **Single Source of Truth**: All execution logic centralized
+- **Consistent Logging**: Unified logging format across all entry points
+- **Backward Compatible**: External API formats preserved
+- **Source-Aware**: Intelligent approval gating per source
+- **Fallback Handling**: Automatic HYBRID→MARKET fallback on errors
+- **Easy Testing**: Single component to test instead of 5+
+- **Future-Proof**: Easy to add new entry points or flows
+
+### 📝 Example Usage
+
+```python
+from utils.execution_bot import ExecutionBot
+
+bot = ExecutionBot(logger=logger)
+
+ticket_exec = {
+    "symbol": "BTCUSDT",
+    "side": "BUY",
+    "position_side": "LONG",
+    "budget_usd": 100.0,
+    "leverage": 5,
+    "dry_run": False,
+}
+
+result = await bot.open_position(ticket_exec, source="api")
+
+if result["status"] == "opened":
+    print(f"Position opened: {result['position_id']}")
+elif result["status"] == "pending_approval":
+    print(f"Awaiting approval: {result['telegram_msg_id']}")
+else:
+    print(f"Failed: {result['reason']}")
+```
+
+---
+
 ## 🔐 Security (HMAC Signature)
 
 AlgoGPT uses **HMAC-SHA256 signatures** for all critical API calls to ensure authenticity and prevent replay attacks.

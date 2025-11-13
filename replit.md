@@ -41,6 +41,14 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **AI Consensus Parameters**: Final parameter values are the median of proposals from all AI brains within wide safety ranges.
 -   **Database Resilience**: 3-layer protection including auto-pause prevention, exponential backoff retries, and fallback queries.
 
+**ExecutionBot - Unified Trade Execution Wrapper:**
+-   **Centralized Architecture**: All trade execution logic consolidated into single wrapper (`utils/execution_bot.py`) from 5+ entry points (API, Telegram, Ops Approval, Auto Scanner, Autopilot).
+-   **Source-Aware Approval Gating**: Intelligent bypass for already-approved sources (ops_approval*, telegram*) and automation flows (auto_trade, autopilot) to prevent regression.
+-   **Dual Flow Support**: MARKET flow (budget-only) and HYBRID flow (custom TP/SL) with automatic fallback on -4061 errors.
+-   **Unified Logging**: Consistent format across all entry points: "[ExecutionBot] open_position source=X flow=Y symbol=Z status=W"
+-   **Backward Compatible**: External API response formats preserved for external consumers.
+-   **Entry Points**: `/trade/execute`, `/trade/approve`, `/telegram/webhook`, `/ops/approve`, `/auto/trade`, `/autopilot`
+
 ### AI Brains System
 The system integrates a **scalable multi-brain architecture** with intelligent management:
 
