@@ -697,9 +697,18 @@ async def _emit(payload: Dict[str, Any]) -> bool:
                     "score": payload.get("quality_score", 100.0),
                     "atr_pct": payload.get("atr_pct"),
                     "vol": payload.get("vol"),
+                    "is_grid": payload.get("is_grid", False),
+                    "grid_min": payload.get("grid_min"),
+                    "grid_max": payload.get("grid_max"),
+                    "grid_levels": payload.get("grid_levels"),
                     "metadata": {
                         "trade_type": payload.get("trade_type"),
                         "is_grid": payload.get("is_grid", False),
+                        "grid_min": payload.get("grid_min"),
+                        "grid_max": payload.get("grid_max"),
+                        "grid_levels": payload.get("grid_levels"),
+                        "grid_step_pct": payload.get("grid_step_pct"),
+                        "grid_side": payload.get("grid_side"),
                         "consensus_score": payload.get("consensus_score"),
                         "quality_score": payload.get("quality_score"),
                         "reason": payload.get("reason", ""),
@@ -779,8 +788,24 @@ async def send_standalone_entry_notification(payload: Dict[str, Any], result: Di
         
         # Financial details
         leverage = payload.get("leverage", raw.get("leverage", 1))
-        budget = payload.get("budget_usd") or payload.get("notional_usd", 0.0)
-        investment = budget * leverage if leverage and budget else 0.0
+        budget_recommended = payload.get("budget_usd") or payload.get("notional_usd", 0.0)
+        
+        # Extract ACTUAL investment from execution result
+        actual_investment = raw.get("actual_investment") or result.get("actual_investment")
+        if not actual_investment:
+            # Fallback: calculate from grid_orders if available
+            grid_orders = raw.get("grid_orders", [])
+            if grid_orders:
+                # For GRID: sum up all order notionals
+                actual_investment = sum(
+                    float(order.get("qty", 0)) * float(order.get("price", 0))
+                    for order in grid_orders
+                ) / leverage if leverage else 0
+            else:
+                # Fallback to recommended
+                actual_investment = budget_recommended
+        
+        investment_display = budget_recommended * leverage if leverage and budget_recommended else 0.0
         
         # Strategy and regime
         trade_type = payload.get("trade_type", "UNKNOWN")

@@ -464,7 +464,40 @@ def _on_trade_completion(symbol: str, exit_time: float):
         # Add to buffer for batch AI review
         _completed_trades_buffer.append(trade_data)
         
-        # 🎨 PROFESSIONAL Telegram Notification
+        # 🎨 Send concise close notification via telegram_notifier
+        try:
+            from utils.telegram_notifier import send_trade_closed
+            import asyncio
+            
+            close_info = {
+                "symbol": symbol,
+                "pnl_usd": pnl_usd,
+                "pnl_pct": pnl_pct,
+                "duration_sec": exit_time - pos_data['entry_time'],
+                "exit_reason": trade_data.get("exit_reason", "MANUAL"),
+                "exit_price": exit_price,
+                "avg_exit": exit_price,
+                "plan": {
+                    "symbol": symbol,
+                    "side": side,
+                    "entry_price": entry_price,
+                    "price": entry_price,
+                    "trade_kind": trade_data.get("strategy", "Futures"),
+                    "mode": trade_data.get("strategy", "Futures"),
+                }
+            }
+            
+            # Call async send_trade_closed
+            try:
+                loop = asyncio.get_event_loop()
+                loop.create_task(send_trade_closed(close_info))
+            except RuntimeError:
+                # No event loop - skip for now
+                log.debug("No event loop for send_trade_closed - skipping notification")
+        except Exception as notif_err:
+            log.warning(f"Failed to send close notification: {notif_err}")
+        
+        # Legacy detailed message (backup)
         try:
             # Determine outcome
             is_win = pnl_pct > 0
@@ -493,7 +526,8 @@ def _on_trade_completion(symbol: str, exit_time: float):
             # Side emoji
             side_emoji = "📈" if side == "LONG" else "📉"
             
-            msg = (
+            # Skip legacy detailed message - using concise one instead
+            msg_disabled = (
                 f"╔═══════════════════════════╗\n"
                 f"║  {header_emoji} <b>{header_text}</b> {header_emoji}  ║\n"
                 f"║   <b>{pnl_usd:+.2f}$ ({pnl_pct:+.2f}% ROI)</b>        ║\n"

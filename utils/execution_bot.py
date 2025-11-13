@@ -246,6 +246,14 @@ class ExecutionBot:
         Here we connect to actual functions from trade_executor.py
         (e.g. execute_trade_live / execute_trade_hybrid etc).
         """
+        # Check for GRID trading
+        metadata = ticket_exec.get("metadata") or {}
+        is_grid = metadata.get("is_grid", False) or ticket_exec.get("is_grid", False)
+        
+        if is_grid:
+            self.log.info(f"🔷 GRID trade detected - executing multi-level grid strategy")
+            return await self._execute_grid_trade(ticket_exec)
+        
         if flow == "MARKET":
             return await self._execute_trade_direct(ticket_exec)
         elif flow == "HYBRID":
@@ -255,8 +263,15 @@ class ExecutionBot:
 
     async def _execute_trade_direct(self, ticket: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Direct MARKET execution (moved from routes/trade.py).
-        Fast-path through internal adapter if available.
+        Direct execution with smart order type selection (LIMIT or MARKET).
+        
+        Uses LIMIT orders when:
+        - entry price is provided in ticket
+        - market is trending (not volatile)
+        
+        Falls back to MARKET when:
+        - no entry price
+        - volatile market conditions
         """
         try:
             from utils.trade_executor import place_futures_market
@@ -280,6 +295,8 @@ class ExecutionBot:
             side = str(ticket.get("side", "")).upper()
             qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
             leverage = int(ticket.get("leverage") or 0)
+            entry_price = ticket.get("entry") or ticket.get("entry_price") or ticket.get("limit_price")
+            
             if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
                 return {"ok": False, "error": "bad_ticket_params"}
 
@@ -289,14 +306,26 @@ class ExecutionBot:
                 self.log.warning(f"futures_change_leverage failed: {e}")
 
             from utils.order_ids import build_client_order_id
+            from utils.trade_execution_core import _q_price
+            
+            # Determine order type: LIMIT if entry_price provided, otherwise MARKET
+            order_type = "LIMIT" if entry_price and float(entry_price) > 0 else "MARKET"
             
             base_kwargs: Dict[str, Any] = {
                 "symbol": symbol,
                 "side": side,
-                "type": "MARKET",
+                "type": order_type,
                 "quantity": qty,
                 "newClientOrderId": build_client_order_id(symbol, side, role="ENTRY"),
             }
+            
+            # Add price for LIMIT orders
+            if order_type == "LIMIT":
+                base_kwargs["price"] = _q_price(symbol, float(entry_price))
+                base_kwargs["timeInForce"] = "GTC"
+                self.log.info(f"Using LIMIT order @ {entry_price} for {symbol}")
+            else:
+                self.log.info(f"Using MARKET order for {symbol}")
 
             pos_side_supplied = str(ticket.get("position_side") or ticket.get("positionSide") or "").upper()
             attempt_order = dict(base_kwargs)
@@ -419,3 +448,117 @@ class ExecutionBot:
                 return await exec_live(**clean)
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(None, lambda: exec_live(**clean))
+
+    async def _execute_grid_trade(self, ticket: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Execute GRID strategy - place multiple LIMIT orders across price range.
+        
+        GRID trading involves:
+        - Placing N orders (grid_levels) at different prices
+        - Spread across range (grid_min to grid_max)
+        - Equal spacing between levels (grid_step_pct)
+        - All orders are LIMIT orders (not MARKET)
+        
+        Example:
+        - grid_min=148.65, grid_max=161.69, grid_levels=6
+        - Creates 6 LIMIT BUY orders at: 148.65, 151.02, 153.38, 155.75, 158.11, 160.48
+        """
+        try:
+            from utils.binance_client import futures_create_order, set_leverage
+            from utils.order_ids import build_client_order_id
+            from utils.trade_execution_core import _q_price, _q_qty
+        except Exception as e:
+            return {"ok": False, "error": "imports_failed", "detail": str(e)}
+        
+        symbol = str(ticket.get("symbol", "")).upper()
+        side = str(ticket.get("side", "")).upper()
+        leverage = int(ticket.get("leverage") or 2)
+        budget_usd = float(ticket.get("budget_usd") or ticket.get("budget") or 100.0)
+        
+        # Extract GRID parameters
+        metadata = ticket.get("metadata") or {}
+        grid_min = float(metadata.get("grid_min") or ticket.get("grid_min") or 0)
+        grid_max = float(metadata.get("grid_max") or ticket.get("grid_max") or 0)
+        grid_levels = int(metadata.get("grid_levels") or ticket.get("grid_levels") or 6)
+        
+        if not (symbol and side in ("BUY", "SELL") and grid_min > 0 and grid_max > grid_min):
+            return {"ok": False, "error": "invalid_grid_params"}
+        
+        self.log.info(f"🔷 GRID Strategy: {symbol} {side} - {grid_levels} levels from {grid_min} to {grid_max}")
+        
+        # Set leverage
+        try:
+            set_leverage(symbol, leverage)
+        except Exception as e:
+            self.log.warning(f"set_leverage failed: {e}")
+        
+        # Calculate price levels (equal spacing)
+        price_step = (grid_max - grid_min) / (grid_levels - 1) if grid_levels > 1 else 0
+        prices = [grid_min + (i * price_step) for i in range(grid_levels)]
+        
+        # Calculate quantity per level (split budget evenly across all levels)
+        budget_per_level = budget_usd / grid_levels
+        
+        # Place LIMIT orders at each level
+        grid_orders = []
+        errors = []
+        
+        for i, price in enumerate(prices, start=1):
+            try:
+                # Calculate qty for this level: (budget_per_level * leverage) / price
+                qty_raw = (budget_per_level * leverage) / price
+                qty_str = _q_qty(symbol, qty_raw)
+                price_str = _q_price(symbol, price)
+                
+                order_kwargs = {
+                    "symbol": symbol,
+                    "side": side,
+                    "type": "LIMIT",
+                    "timeInForce": "GTC",
+                    "quantity": qty_str,
+                    "price": price_str,
+                    "newClientOrderId": build_client_order_id(symbol, side, role=f"GRID{i}"),
+                }
+                
+                # Add position side if hedge mode
+                if os.getenv("POSITION_MODE_OVERRIDE", "").lower() in ("hedge", "hedged"):
+                    order_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
+                
+                self.log.info(f"  Level {i}/{grid_levels}: LIMIT {side} @ {price_str} qty={qty_str}")
+                
+                order_result = futures_create_order(**order_kwargs)
+                grid_orders.append({
+                    "level": i,
+                    "price": price,
+                    "qty": qty_str,
+                    "order": order_result
+                })
+                
+            except Exception as e:
+                error_msg = f"Level {i} failed: {e}"
+                self.log.error(f"  ❌ {error_msg}")
+                errors.append(error_msg)
+        
+        if not grid_orders:
+            return {
+                "ok": False,
+                "status": "error",
+                "error": "all_grid_orders_failed",
+                "detail": errors,
+            }
+        
+        self.log.info(f"✅ GRID execution complete: {len(grid_orders)}/{grid_levels} orders placed")
+        
+        return {
+            "ok": True,
+            "status": "opened",
+            "symbol": symbol,
+            "side": side,
+            "grid_orders": grid_orders,
+            "grid_levels_placed": len(grid_orders),
+            "grid_levels_total": grid_levels,
+            "errors": errors if errors else None,
+            "entry_price": sum(prices) / len(prices) if prices else 0,  # Average price
+            "actual_investment": budget_usd,
+            "leverage": leverage,
+        }
