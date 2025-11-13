@@ -837,7 +837,7 @@ async def send_standalone_entry_notification(payload: Dict[str, Any], result: Di
 • Entry: <code>{entry_price:.6f}</code>
 • Stop Loss: <code>{sl_price:.6f}</code> ({((sl_price - entry_price) / entry_price * 100):.2f}%)
 • Leverage: <b>x{leverage}</b>
-• Budget: ${budget:.2f} (${investment:.2f} position)
+• Budget: ${budget_recommended:.2f} (${actual_investment:.2f} position)
 
 🎯 <b>Profit Targets:</b>
 {chr(10).join(f"• {exp}" for exp in profit_expectations) if profit_expectations else "• Not set"}

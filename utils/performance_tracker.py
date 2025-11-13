@@ -551,6 +551,178 @@ class PerformanceTracker:
         except Exception as e:
             self.logger.warning(f"Failed to load performance data: {e}")
             self.trades = []
+    
+    def get_symbol_stats(self, symbol: str, days: int = 30) -> Dict:
+        """
+        Get comprehensive performance stats for a specific symbol.
+        
+        Args:
+            symbol: The trading symbol
+            days: Lookback period (default: 30 days)
+            
+        Returns:
+            Dict with win_rate, avg_profit, avg_loss, total_trades, recent_trend, etc.
+        """
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        
+        symbol_trades = [
+            t for t in self.trades
+            if t.symbol == symbol
+            and t.closed_at is not None
+            and t.actual_pnl_usd is not None
+            and datetime.fromisoformat(t.opened_at) >= cutoff
+        ]
+        
+        if not symbol_trades:
+            return {
+                "symbol": symbol,
+                "win_rate": 0.0,
+                "avg_profit": 0.0,
+                "avg_loss": 0.0,
+                "total_trades": 0,
+                "wins": 0,
+                "losses": 0,
+                "recent_trend": "unknown",
+                "consecutive_losses": 0,
+                "last_trade_date": None
+            }
+        
+        wins = [t for t in symbol_trades if t.win]
+        losses = [t for t in symbol_trades if not t.win]
+        
+        win_pnls = [t.actual_pnl_usd for t in wins]
+        loss_pnls = [t.actual_pnl_usd for t in losses]
+        
+        win_rate = (len(wins) / len(symbol_trades) * 100) if symbol_trades else 0.0
+        
+        recent_trend = self._calculate_recent_trend(symbol_trades)
+        
+        consecutive_losses = self._count_consecutive_losses(symbol, days=days)
+        
+        last_trade = max(symbol_trades, key=lambda t: t.closed_at or t.opened_at)
+        
+        return {
+            "symbol": symbol,
+            "win_rate": round(win_rate, 2),
+            "avg_profit": round(sum(win_pnls) / len(win_pnls), 2) if win_pnls else 0.0,
+            "avg_loss": round(sum(loss_pnls) / len(loss_pnls), 2) if loss_pnls else 0.0,
+            "total_trades": len(symbol_trades),
+            "wins": len(wins),
+            "losses": len(losses),
+            "recent_trend": recent_trend,
+            "consecutive_losses": consecutive_losses,
+            "last_trade_date": last_trade.closed_at or last_trade.opened_at
+        }
+    
+    def get_all_symbol_stats(self, days: int = 30, min_trades: int = 3) -> Dict[str, Dict]:
+        """
+        Get performance stats for all symbols that have minimum trade count.
+        
+        Args:
+            days: Lookback period
+            min_trades: Minimum trades required to include symbol
+            
+        Returns:
+            Dict mapping symbol -> stats
+        """
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        
+        recent_trades = [
+            t for t in self.trades
+            if t.closed_at is not None
+            and datetime.fromisoformat(t.opened_at) >= cutoff
+        ]
+        
+        symbols = set(t.symbol for t in recent_trades)
+        
+        all_stats = {}
+        for symbol in symbols:
+            stats = self.get_symbol_stats(symbol, days=days)
+            if stats["total_trades"] >= min_trades:
+                all_stats[symbol] = stats
+        
+        return all_stats
+    
+    def _calculate_recent_trend(self, trades: List[TradeRecord]) -> str:
+        """
+        Analyze if performance is improving, stable, or declining.
+        
+        Compares recent 50% vs older 50% of trades.
+        """
+        if len(trades) < 6:
+            return "insufficient_data"
+        
+        sorted_trades = sorted(trades, key=lambda t: t.opened_at)
+        
+        midpoint = len(sorted_trades) // 2
+        older_half = sorted_trades[:midpoint]
+        recent_half = sorted_trades[midpoint:]
+        
+        older_wins = sum(1 for t in older_half if t.win)
+        recent_wins = sum(1 for t in recent_half if t.win)
+        
+        older_wr = (older_wins / len(older_half) * 100) if older_half else 0.0
+        recent_wr = (recent_wins / len(recent_half) * 100) if recent_half else 0.0
+        
+        diff = recent_wr - older_wr
+        
+        if diff > 15:
+            return "improving"
+        elif diff < -15:
+            return "declining"
+        else:
+            return "stable"
+    
+    def _count_consecutive_losses(self, symbol: str, days: int = 30) -> int:
+        """Count consecutive losses for a symbol (most recent first)"""
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        
+        symbol_trades = [
+            t for t in self.trades
+            if t.symbol == symbol
+            and t.closed_at is not None
+            and t.win is not None
+            and datetime.fromisoformat(t.opened_at) >= cutoff
+        ]
+        
+        if not symbol_trades:
+            return 0
+        
+        sorted_trades = sorted(symbol_trades, key=lambda t: t.closed_at or t.opened_at, reverse=True)
+        
+        consecutive = 0
+        for trade in sorted_trades:
+            if not trade.win:
+                consecutive += 1
+            else:
+                break
+        
+        return consecutive
+    
+    def get_consecutive_losses(self, days: int = 7) -> int:
+        """Get total consecutive losses across all symbols (for circuit breaker)"""
+        cutoff = datetime.utcnow() - timedelta(days=days)
+        
+        all_trades = [
+            t for t in self.trades
+            if t.closed_at is not None
+            and t.win is not None
+            and datetime.fromisoformat(t.opened_at) >= cutoff
+        ]
+        
+        if not all_trades:
+            return 0
+        
+        sorted_trades = sorted(all_trades, key=lambda t: t.closed_at or t.opened_at, reverse=True)
+        
+        consecutive = 0
+        for trade in sorted_trades:
+            if not trade.win:
+                consecutive += 1
+            else:
+                break
+        
+        return consecutive
 
 
 # Global instance
