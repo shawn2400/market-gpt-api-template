@@ -283,13 +283,10 @@ class TelegramDigest:
     async def send_health_digest(self):
         """Send consolidated health digest"""
         # Check for midnight Israel time even without alerts
-        from zoneinfo import ZoneInfo
-        israel_tz = ZoneInfo("Asia/Jerusalem")
-        israel_time = datetime.now(israel_tz)
-        is_midnight = israel_time.hour == 0
+        from utils.midnight_tracker import should_send_midnight_summary
         
-        if is_midnight and TELEGRAM_ENABLED:
-            # Send midnight summary regardless of alerts
+        if should_send_midnight_summary() and TELEGRAM_ENABLED:
+            # Send midnight summary ONCE per day at 00:00 Israel time
             await self._send_midnight_summary()
             return
         
@@ -304,13 +301,10 @@ class TelegramDigest:
             info = [a for a in self.health_queue if a.level == "INFO"]
             
             # Check if this is midnight (00:00 Israel time) - send enhanced daily summary
-            from zoneinfo import ZoneInfo
-            israel_tz = ZoneInfo("Asia/Jerusalem")
-            israel_time = datetime.now(israel_tz)
-            is_midnight = israel_time.hour == 0
+            from utils.midnight_tracker import should_send_midnight_summary
             
-            if is_midnight:
-                # Send enhanced midnight summary with AI recommendations
+            if should_send_midnight_summary():
+                # Send enhanced midnight summary with AI recommendations (ONCE per day)
                 await self._send_midnight_summary()
                 return
             
