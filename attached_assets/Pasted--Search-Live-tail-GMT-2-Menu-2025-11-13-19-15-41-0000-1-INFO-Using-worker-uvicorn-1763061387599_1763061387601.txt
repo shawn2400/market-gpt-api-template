@@ -1,0 +1,105 @@
+
+Search
+
+Live tail
+GMT+2
+
+Menu
+
+[2025-11-13 19:15:41 +0000] [1] [INFO] Using worker: uvicorn.workers.UvicornWorker
+[2025-11-13 19:15:41 +0000] [7] [INFO] Booting worker with pid: 7
+INFO:algogpt.main:✅ Static files mounted at /static with no-cache headers
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 0, 'tokens': []}
+INFO:algogpt.redis:{'event': 'redis.disabled', 'reason': 'REDIS_URL missing'}
+WARNING:algogpt.n8n:⚠️ N8N_WEBHOOK_SECRET not set - webhook validation disabled
+INFO:algogpt.n8n:✅ N8N fallback queue initialized
+INFO:algogpt.n8n:✅ N8N heartbeat monitor initialized
+INFO:algogpt.n8n:✅ N8N routes loaded successfully
+WARNING:monitors.circuit_breaker:Could not load breaker state from database: no such table: breaker_state, falling back to JSON
+[2025-11-13 19:15:43 +0000] [7] [INFO] Started server process [7]
+[2025-11-13 19:15:43 +0000] [7] [INFO] Waiting for application startup.
+CRITICAL:algogpt.main:❌ N8N_WEBHOOK_SECRET not configured - System BLOCKED for production safety
+[2025-11-13 19:15:43 +0000] [7] [ERROR] Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/starlette/routing.py", line 732, in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+  File "/usr/local/lib/python3.11/site-packages/starlette/routing.py", line 608, in __aenter__
+    await self._router.startup()
+  File "/usr/local/lib/python3.11/site-packages/starlette/routing.py", line 709, in startup
+    await handler()
+  File "/app/main.py", line 1852, in _on_startup
+    raise RuntimeError("N8N_WEBHOOK_SECRET required for production - cannot start without webhook security")
+RuntimeError: N8N_WEBHOOK_SECRET required for production - cannot start without webhook security
+[2025-11-13 19:15:43 +0000] [7] [ERROR] Application startup failed. Exiting.
+[2025-11-13 19:15:43 +0000] [7] [INFO] Worker exiting (pid: 7)
+[2025-11-13 19:15:44 +0000] [1] [ERROR] Worker (pid:7) exited with code 3
+[2025-11-13 19:15:44 +0000] [1] [ERROR] Shutting down: Master
+[2025-11-13 19:15:44 +0000] [1] [ERROR] Reason: Worker failed to boot.
+10.200.26.8:53010 - "GET /readyz HTTP/1.1" 200
+10.200.26.8:49256 - "GET /readyz HTTP/1.1" 200
+[2025-11-13 19:15:52 +0000] [1] [INFO] Starting gunicorn 22.0.0
+[2025-11-13 19:15:52 +0000] [1] [INFO] Listening at: http://0.0.0.0:10000 (1)
+[2025-11-13 19:15:52 +0000] [1] [INFO] Using worker: uvicorn.workers.UvicornWorker
+[2025-11-13 19:15:52 +0000] [7] [INFO] Booting worker with pid: 7
+INFO:algogpt.main:✅ Static files mounted at /static with no-cache headers
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 0, 'tokens': []}
+INFO:algogpt.redis:{'event': 'redis.disabled', 'reason': 'REDIS_URL missing'}
+WARNING:algogpt.n8n:⚠️ N8N_WEBHOOK_SECRET not set - webhook validation disabled
+INFO:algogpt.n8n:✅ N8N fallback queue initialized
+INFO:algogpt.n8n:✅ N8N heartbeat monitor initialized
+INFO:algogpt.n8n:✅ N8N routes loaded successfully
+WARNING:monitors.circuit_breaker:Could not load breaker state from database: no such table: breaker_state, falling back to JSON
+[2025-11-13 19:15:55 +0000] [7] [INFO] Started server process [7]
+[2025-11-13 19:15:55 +0000] [7] [INFO] Waiting for application startup.
+CRITICAL:algogpt.main:❌ N8N_WEBHOOK_SECRET not configured - System BLOCKED for production safety
+[2025-11-13 19:15:55 +0000] [7] [ERROR] Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/starlette/routing.py", line 732, in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+  File "/usr/local/lib/python3.11/site-packages/starlette/routing.py", line 608, in __aenter__
+    await self._router.startup()
+  File "/usr/local/lib/python3.11/site-packages/starlette/routing.py", line 709, in startup
+    await handler()
+  File "/app/main.py", line 1852, in _on_startup
+    raise RuntimeError("N8N_WEBHOOK_SECRET required for production - cannot start without webhook security")
+RuntimeError: N8N_WEBHOOK_SECRET required for production - cannot start without webhook security
+[2025-11-13 19:15:55 +0000] [7] [ERROR] Application startup failed. Exiting.
+[2025-11-13 19:15:55 +0000] [7] [INFO] Worker exiting (pid: 7)
+10.200.26.8:49270 - "GET /readyz HTTP/1.1" 200
+[2025-11-13 19:15:55 +0000] [1] [ERROR] Worker (pid:7) exited with code 3
+[2025-11-13 19:15:55 +0000] [1] [ERROR] Shutting down: Master
+[2025-11-13 19:15:55 +0000] [1] [ERROR] Reason: Worker failed to boot.
+10.200.26.8:34740 - "GET /readyz HTTP/1.1" 200
+10.200.26.8:34742 - "GET /readyz HTTP/1.1" 200
+[2025-11-13 19:16:00 +0000] [1] [INFO] Starting gunicorn 22.0.0
+[2025-11-13 19:16:00 +0000] [1] [INFO] Listening at: http://0.0.0.0:10000 (1)
+[2025-11-13 19:16:00 +0000] [1] [INFO] Using worker: uvicorn.workers.UvicornWorker
+[2025-11-13 19:16:00 +0000] [7] [INFO] Booting worker with pid: 7
+INFO:algogpt.main:✅ Static files mounted at /static with no-cache headers
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 0, 'tokens': []}
+INFO:algogpt.redis:{'event': 'redis.disabled', 'reason': 'REDIS_URL missing'}
+     ==> Exited with status 3
+     ==> Common ways to troubleshoot your deploy: https://render.com/docs/troubleshooting-deploys
+WARNING:algogpt.n8n:⚠️ N8N_WEBHOOK_SECRET not set - webhook validation disabled
+INFO:algogpt.n8n:✅ N8N fallback queue initialized
+INFO:algogpt.n8n:✅ N8N heartbeat monitor initialized
+INFO:algogpt.n8n:✅ N8N routes loaded successfully
+WARNING:monitors.circuit_breaker:Could not load breaker state from database: no such table: breaker_state, falling back to JSON
+[2025-11-13 19:16:02 +0000] [7] [INFO] Started server process [7]
+[2025-11-13 19:16:02 +0000] [7] [INFO] Waiting for application startup.
+CRITICAL:algogpt.main:❌ N8N_WEBHOOK_SECRET not configured - System BLOCKED for production safety
+[2025-11-13 19:16:02 +0000] [7] [ERROR] Traceback (most recent call last):
+  File "/usr/local/lib/python3.11/site-packages/starlette/routing.py", line 732, in lifespan
+    async with self.lifespan_context(app) as maybe_state:
+  File "/usr/local/lib/python3.11/site-packages/starlette/routing.py", line 608, in __aenter__
+    await self._router.startup()
+  File "/usr/local/lib/python3.11/site-packages/starlette/routing.py", line 709, in startup
+    await handler()
+  File "/app/main.py", line 1852, in _on_startup
+    raise RuntimeError("N8N_WEBHOOK_SECRET required for production - cannot start without webhook security")
+RuntimeError: N8N_WEBHOOK_SECRET required for production - cannot start without webhook security
+[2025-11-13 19:16:02 +0000] [7] [ERROR] Application startup failed. Exiting.
+[2025-11-13 19:16:02 +0000] [7] [INFO] Worker exiting (pid: 7)
+[2025-11-13 19:16:03 +0000] [1] [ERROR] Worker (pid:7) exited with code 3
+[2025-11-13 19:16:03 +0000] [1] [ERROR] Shutting down: Master
+[2025-11-13 19:16:03 +0000] [1] [ERROR] Reason: Worker failed to boot.
+10.200.26.8:34760 - "GET /readyz HTTP/1.1" 200
+10.200.26.8:46494 - "GET /readyz HTTP/1.1" 200
