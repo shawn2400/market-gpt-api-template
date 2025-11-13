@@ -26,10 +26,6 @@ args = "Fills Watcher"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "GPT-5 Central Brain"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "Position Monitor"
 
 [[workflows.workflow.tasks]]
@@ -74,17 +70,6 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG FILLS_WATCH_ENABLE=1 FILLS_WATCH_INTERVAL_SEC=15 python workers/fills_watcher.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
-name = "GPT-5 Central Brain"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/gpt5_orchestrator.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
