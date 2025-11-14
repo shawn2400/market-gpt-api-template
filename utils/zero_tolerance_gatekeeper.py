@@ -33,12 +33,12 @@ class ZeroToleranceGatekeeper:
         self.perm_blacklist_key = "blacklist:permanent"
         self.failure_count_key_prefix = "failures:count:"
         
-        self.max_failures_before_ban = 3
+        self.max_failures_before_ban = 5
         self.temp_ban_duration_hours = 24
         
         logger.info(
             "ZeroToleranceGatekeeper initialized - "
-            "blocking non-TOP 50 trades, max failures: 3"
+            "blocking non-TOP 50 trades, max failures: 5"
         )
     
     def check_symbol_allowed(
@@ -160,6 +160,9 @@ class ZeroToleranceGatekeeper:
         
         try:
             import json
+            
+            self._cleanup_expired_blacklist()
+            
             data = self.redis.get(self.temp_blacklist_key)
             if data:
                 temp_list = json.loads(data)
@@ -173,6 +176,45 @@ class ZeroToleranceGatekeeper:
             return False
         
         return False
+    
+    def _cleanup_expired_blacklist(self):
+        """Auto-clean expired symbols from temp blacklist"""
+        if not self.redis:
+            return
+        
+        try:
+            import json
+            data = self.redis.get(self.temp_blacklist_key)
+            if not data:
+                return
+            
+            temp_list = json.loads(data)
+            current_time = time.time()
+            
+            active_list = [
+                item for item in temp_list
+                if item.get('expires_at', 0) > current_time
+            ]
+            
+            if len(active_list) < len(temp_list):
+                removed_count = len(temp_list) - len(active_list)
+                logger.info(
+                    f"🧹 Auto-cleaned {removed_count} expired symbols from temp blacklist "
+                    f"({len(active_list)} active remain)"
+                )
+                
+                if active_list:
+                    self.redis.setex(
+                        self.temp_blacklist_key,
+                        86400 * 2,
+                        json.dumps(active_list)
+                    )
+                else:
+                    self.redis.delete(self.temp_blacklist_key)
+                    logger.info("✅ Temp blacklist completely cleared (all expired)")
+                    
+        except Exception as e:
+            logger.warning(f"Failed to cleanup expired blacklist: {e}")
     
     def _record_failure(self, symbol: str, reason: str):
         if not self.redis:
@@ -201,8 +243,14 @@ class ZeroToleranceGatekeeper:
         try:
             import json
             
+            self._cleanup_expired_blacklist()
+            
             data = self.redis.get(self.temp_blacklist_key)
             temp_list = json.loads(data) if data else []
+            
+            if any(item['symbol'].upper() == symbol.upper() for item in temp_list):
+                logger.warning(f"⚠️ {symbol} already in temp blacklist, skipping duplicate")
+                return
             
             expires_at = time.time() + (self.temp_ban_duration_hours * 3600)
             
@@ -222,7 +270,7 @@ class ZeroToleranceGatekeeper:
             
             logger.error(
                 f"🚫 TEMP BLACKLIST: {symbol} banned for {self.temp_ban_duration_hours}h | "
-                f"Reason: {reason}"
+                f"Reason: {reason} | Active bans: {len(temp_list)}"
             )
             
         except Exception as e:
