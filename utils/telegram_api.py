@@ -21,7 +21,7 @@ def _chat_default(chat_id: Optional[Union[int, str]]) -> Union[int, str]:
     קודם chat_id שנשלח לפונקציה, אחרת ADMIN_CHAT_ID או TELEGRAM_CHAT_ID מהסביבה.
     שומר מחרוזת אם זו מחרוזת; מנסה להמיר למספר אם אפשר.
     """
-    if chat_id is not None:
+    if chat_id not in (None, "", 0, "0"):
         return chat_id
     val = os.getenv("ADMIN_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or ""
     try:

@@ -277,13 +277,8 @@ async def ensure_positions_protected() -> None:
                     
                     position_side = "LONG" if amt > 0 else "SHORT"
                     
-                    # 🛡️ LAYER 2: Check if within 60-second hold period
-                    if risk_manager.is_within_hold_period(symbol):
-                        age = risk_manager.get_position_age(symbol)
-                        logger.debug(f"⏰ {symbol}: Within hold period ({age:.1f}s / 60s)")
-                        continue  # Skip SL activation during hold period
-                    
                     # 🛡️ LAYER 2: Check if should force close at 2% max loss
+                    # This MUST run even during hold period (safety net)
                     should_close, close_reason = risk_manager.should_force_close(pos)
                     if should_close:
                         from utils.binance_client import futures_create_order, futures_cancel_all_orders
@@ -354,6 +349,12 @@ async def ensure_positions_protected() -> None:
                             logger.error(f"❌ Failed to set breakeven SL for {symbol}: {be_err}")
                     
                     # 🎯 LAYER 1: Calculate and apply dynamic SL to Binance
+                    # 🛡️ Skip dynamic SL if within 60-second hold period (prevents premature exits)
+                    if risk_manager.is_within_hold_period(symbol):
+                        age = risk_manager.get_position_age(symbol)
+                        logger.debug(f"⏰ {symbol}: Within hold period ({age:.1f}s / 60s), skipping dynamic SL")
+                        continue
+                    
                     # 🛡️ FIX: Skip if in cooldown period (after -2021 errors)
                     if symbol in _sl_retry_after and time.time() < _sl_retry_after[symbol]:
                         logger.debug(f"⏸️ {symbol}: SL placement in cooldown, skipping")
