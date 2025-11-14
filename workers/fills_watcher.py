@@ -667,24 +667,27 @@ class _TradeManagerThread(threading.Thread):
     def run(self):
         print("🔧 [TradeManagerThread] Started - will manage open trades every 60s")
         log.info("[TradeManagerThread] Started - will manage open trades every 60s")
-        while True:
-            try:
-                print(f"🔧 [TradeManagerThread] Running manage_open_trades() at {time.strftime('%H:%M:%S')}")
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                loop.run_until_complete(manage_open_trades())
-                
-                # 🛡️ FIX: Wait for all pending tasks before closing loop
-                pending = asyncio.all_tasks(loop)
-                if pending:
-                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-                
-                loop.close()
-                print(f"✅ [TradeManagerThread] Completed manage_open_trades() at {time.strftime('%H:%M:%S')}")
-            except Exception as e:
-                print(f"❌ [TradeManagerThread] manage_open_trades failed: {e}")
-                log.error("[TradeManagerThread] manage_open_trades failed: %s", e)
-            time.sleep(60)
+        
+        # 🛡️ FIX: Create long-lived asyncio loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            while True:
+                try:
+                    print(f"🔧 [TradeManagerThread] Running manage_open_trades() at {time.strftime('%H:%M:%S')}")
+                    loop.run_until_complete(manage_open_trades())
+                    print(f"✅ [TradeManagerThread] Completed manage_open_trades() at {time.strftime('%H:%M:%S')}")
+                except Exception as e:
+                    print(f"❌ [TradeManagerThread] manage_open_trades failed: {e}")
+                    log.error("[TradeManagerThread] manage_open_trades failed: %s", e)
+                time.sleep(60)
+        finally:
+            # Clean shutdown: wait for all tasks before closing loop
+            pending = asyncio.all_tasks(loop)
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.close()
 
 
 class _Worker(threading.Thread):

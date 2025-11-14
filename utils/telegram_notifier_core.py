@@ -372,24 +372,20 @@ async def _tg_send(text: str, chat_id: Optional[int] = None, parse_mode: str = "
     try:
         await _http_send(text, chat_id=chat_id, parse_mode=parse_mode)
     except RuntimeError:
+        loop = asyncio.new_event_loop()
         try:
-            task = asyncio.get_event_loop().create_task(_http_send(text, chat_id=chat_id, parse_mode=parse_mode))
-            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-        except Exception:
-            loop = asyncio.new_event_loop()
             loop.run_until_complete(_http_send(text, chat_id=chat_id, parse_mode=parse_mode))
+        finally:
             loop.close()
 
 async def _tg_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_id: Optional[int] = None) -> None:
     try:
         await _http_send_with_markup(text, reply_markup, chat_id=chat_id)
     except RuntimeError:
+        loop = asyncio.new_event_loop()
         try:
-            task = asyncio.get_event_loop().create_task(_http_send_with_markup(text, reply_markup, chat_id=chat_id))
-            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-        except Exception:
-            loop = asyncio.new_event_loop()
             loop.run_until_complete(_http_send_with_markup(text, reply_markup, chat_id=chat_id))
+        finally:
             loop.close()
 
 # ===================== (NEW) Filtered high-level send =====================
