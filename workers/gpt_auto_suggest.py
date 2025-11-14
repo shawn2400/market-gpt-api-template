@@ -161,7 +161,7 @@ logging.basicConfig(level=os.getenv("LOG_LEVEL","INFO").upper())
 # System now uses DeepSeek (primary) + Gemini (fallback) for 95% cost reduction
 
 CONTEXT_URL = os.getenv("CONTEXT_URL","").strip()  # למשל: https://your-host
-ALERT_INGEST_URL = os.getenv("ALERT_INGEST_URL","http://127.0.0.1:8000/alerts/trade-ingest").strip()
+ALERT_INGEST_URL = os.getenv("ALERT_INGEST_URL","").strip()  # No default - use standalone mode if not set
 WEBHOOK_HMAC_SECRET = os.getenv("WEBHOOK_HMAC_SECRET","").strip()
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", os.getenv("ADMIN_CHAT_ID","")).strip()
 
