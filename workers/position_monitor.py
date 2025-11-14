@@ -248,6 +248,14 @@ async def ensure_positions_protected() -> None:
         # ⚠️ ARCHITECTURE CHANGE: Position Monitor now uses Trailing TP only
         # Legacy add_sl_tp_protection removed to prevent dual-manager conflicts
         
+        # 📊 LOG: Position tracking summary (AFTER validating positions)
+        if positions:
+            logger.debug(
+                f"📊 Position Monitor: Tracking {len(positions)} positions | "
+                f"Symbols: {', '.join([p.get('symbol', 'UNKNOWN') for p in positions[:5]])}"
+                f"{'...' if len(positions) > 5 else ''}"
+            )
+        
         for pos in positions:
             symbol = pos.get("symbol", "")
             amt = float(pos.get("positionAmt", 0))
@@ -335,6 +343,16 @@ async def ensure_positions_protected() -> None:
                     # 🛡️ LAYER 2: Check if should force close at 2% max loss
                     # This MUST run even during hold period (safety net)
                     should_close, close_reason = risk_manager.should_force_close(pos)
+                    
+                    # 📊 LOG: Max loss check result
+                    unrealized_pnl = float(pos.get("unRealizedProfit", 0))
+                    leverage_value = float(pos.get("leverage", 1))
+                    logger.debug(
+                        f"📊 {symbol}: Max loss check | "
+                        f"PnL: ${unrealized_pnl:.2f}, Lev: {leverage_value:.0f}x, "
+                        f"Should close: {should_close}"
+                    )
+                    
                     if should_close:
                         from utils.binance_client import futures_create_order, futures_cancel_all_orders
                         

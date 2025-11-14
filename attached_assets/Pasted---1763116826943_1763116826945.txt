@@ -1,0 +1,616 @@
+# 🚀 **פתרון דינמי ואוטומטי מלא - ניקוי ותחזוקה אוטומטיים**
+
+## 🤖 **מערכת ניהול אוטומטית חכמה**
+
+```python
+# utils/auto_maintenance_orchestrator.py
+import asyncio
+import time
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List, Optional
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+
+logger = logging.getLogger(__name__)
+
+class AutoMaintenanceOrchestrator:
+    """
+    🤖 מנהל תחזוקה אוטומטי דינמי - מנטר ומתקן אוטומטית
+    """
+    
+    def __init__(self, db_client, binance_client):
+        self.db = db_client
+        self.binance = binance_client
+        self.scheduler = AsyncIOScheduler()
+        self.is_running = False
+        
+        # Modules
+        self.quantum_manager = DynamicQuantumManager(db_client, binance_client)
+        self.blacklist_manager = SmartBlacklistManager(db_client)
+        self.grid_manager = AdaptiveGridManager(db_client, binance_client)
+        self.health_monitor = SystemHealthMonitor(db_client)
+        
+        # Dynamic thresholds
+        self.adaptive_thresholds = {
+            'blacklist_cleanup_interval': 6,  # שעות - משתנה אוטומטית
+            'grid_rebuild_interval': 4,       # שעות
+            'quantum_scan_interval': 2,       # שעות  
+            'failure_threshold': 3,           # failures לפני BLACKLIST
+            'min_grid_symbols': 20,           # מינימום סימבולים ב-GRID
+            'max_blacklist_size': 50          # מקסימום סימבולים ב-BLACKLIST
+        }
+        
+    async def start_auto_maintenance(self):
+        """הפעלת ניהול אוטומטי דינמי"""
+        if self.is_running:
+            logger.warning("⚠️ Auto-maintenance already running")
+            return
+            
+        logger.info("🤖 STARTING AUTO MAINTENANCE ORCHESTRATOR")
+        self.is_running = True
+        
+        # הגדרת משימות מתוזמנות
+        await self._setup_scheduled_tasks()
+        
+        # משימות נוספות
+        tasks = [
+            self._dynamic_threshold_adjuster(),
+            self._real_time_health_monitor(),
+            self._auto_recovery_engine(),
+            self._performance_optimizer()
+        ]
+        
+        for task in tasks:
+            asyncio.create_task(task)
+            
+        logger.info("✅ Auto-maintenance orchestrator started")
+    
+    async def _setup_scheduled_tasks(self):
+        """הגדרת משימות מתוזמנות אוטומטיות"""
+        
+        # 1. ניקוי BLACKLIST אוטומטי כל 6 שעות
+        self.scheduler.add_job(
+            self._auto_blacklist_maintenance,
+            'interval',
+            hours=6,
+            id='blacklist_cleanup'
+        )
+        
+        # 2. עדכון GRID APPROVED כל 4 שעות
+        self.scheduler.add_job(
+            self._auto_grid_rebuild,
+            'interval', 
+            hours=4,
+            id='grid_rebuild'
+        )
+        
+        # 3. סריקת Quantum TOP 50 כל 2 שעות
+        self.scheduler.add_job(
+            self._auto_quantum_scan,
+            'interval',
+            hours=2,
+            id='quantum_scan'
+        )
+        
+        # 4. אופטימיזציה שבועית ביום ראשון ב-02:00
+        self.scheduler.add_job(
+            self._weekly_optimization,
+            'cron',
+            day_of_week=0,  # ראשון
+            hour=2,
+            minute=0,
+            id='weekly_optimization'
+        )
+        
+        self.scheduler.start()
+        logger.info("✅ Scheduled tasks configured")
+    
+    async def _auto_blacklist_maintenance(self):
+        """ניקוי BLACKLIST אוטומטי ודינמי"""
+        try:
+            logger.info("🧹 Running auto blacklist maintenance...")
+            
+            # בדיקה דינמית אם צריך ניקוי
+            if not await self._needs_blacklist_cleanup():
+                logger.info("⏭️ Blacklist cleanup not needed - skipping")
+                return
+                
+            # ניקוי אוטומטי
+            success = await self.blacklist_manager.smart_cleanup()
+            
+            if success:
+                logger.info("✅ Auto blacklist maintenance completed")
+                
+                # התאם threshold לפי ביצועים
+                await self._adjust_cleanup_interval()
+            else:
+                logger.error("❌ Auto blacklist maintenance failed")
+                
+        except Exception as e:
+            logger.error(f"❌ Auto blacklist maintenance error: {e}")
+    
+    async def _auto_grid_rebuild(self):
+        """בניית GRID APPROVED אוטומטית"""
+        try:
+            logger.info("🏗️ Running auto grid rebuild...")
+            
+            # בדיקה אם צריך עדכון
+            if not await self._needs_grid_rebuild():
+                logger.info("⏭️ Grid rebuild not needed - skipping")
+                return
+                
+            # בנייה מחדש
+            success = await self.grid_manager.adaptive_rebuild()
+            
+            if success:
+                logger.info("✅ Auto grid rebuild completed")
+                await self._adjust_grid_interval()
+            else:
+                logger.warning("⚠️ Auto grid rebuild had issues")
+                
+        except Exception as e:
+            logger.error(f"❌ Auto grid rebuild error: {e}")
+    
+    async def _auto_quantum_scan(self):
+        """סריקת Quantum אוטומטית"""
+        try:
+            logger.info("🔍 Running auto quantum scan...")
+            
+            success = await self.quantum_manager.dynamic_scan()
+            
+            if success:
+                logger.info("✅ Auto quantum scan completed")
+            else:
+                logger.warning("⚠️ Auto quantum scan had issues")
+                
+        except Exception as e:
+            logger.error(f"❌ Auto quantum scan error: {e}")
+    
+    async def _dynamic_threshold_adjuster(self):
+        """התאמה דינמית של thresholds לפי ביצועים"""
+        while self.is_running:
+            try:
+                # קבלת מדדי ביצועים
+                performance_data = await self.health_monitor.get_performance_metrics()
+                
+                # התאמת thresholds
+                await self._adjust_thresholds_based_on_performance(performance_data)
+                
+                await asyncio.sleep(1800)  # כל 30 דקות
+                
+            except Exception as e:
+                logger.error(f"❌ Dynamic threshold adjustment failed: {e}")
+                await asyncio.sleep(300)
+    
+    async def _adjust_thresholds_based_on_performance(self, performance_data: Dict):
+        """התאמת thresholds אוטומטית לפי ביצועים"""
+        
+        success_rate = performance_data.get('success_rate', 0)
+        error_rate = performance_data.get('error_rate', 0)
+        grid_symbols_count = performance_data.get('grid_symbols_count', 0)
+        
+        # התאמת failure threshold
+        if error_rate > 0.1:  # אם error rate גבוה
+            self.adaptive_thresholds['failure_threshold'] = max(2, self.adaptive_thresholds['failure_threshold'] - 1)
+            logger.info(f"🔧 Adjusted failure_threshold to {self.adaptive_thresholds['failure_threshold']}")
+        
+        elif error_rate < 0.02:  # אם error rate נמוך
+            self.adaptive_thresholds['failure_threshold'] = min(5, self.adaptive_thresholds['failure_threshold'] + 1)
+            logger.info(f"🔧 Adjusted failure_threshold to {self.adaptive_thresholds['failure_threshold']}")
+        
+        # התאמת min_grid_symbols
+        if grid_symbols_count < 15:
+            self.adaptive_thresholds['min_grid_symbols'] = 15
+        elif grid_symbols_count > 40:
+            self.adaptive_thresholds['min_grid_symbols'] = 25
+            
+        logger.debug(f"📊 Adaptive thresholds: {self.adaptive_thresholds}")
+```
+
+## 🧹 **מנהל BLACKLIST חכם ואוטומטי**
+
+```python
+# utils/smart_blacklist_manager.py
+import logging
+from datetime import datetime, timedelta
+from typing import Dict, List
+
+logger = logging.getLogger(__name__)
+
+class SmartBlacklistManager:
+    """מנהל BLACKLIST חכם עם ניקוי אוטומטי"""
+    
+    def __init__(self, db_client):
+        self.db = db_client
+        
+    async def smart_cleanup(self) -> bool:
+        """ניקוי חכם ואוטומטי של BLACKLIST"""
+        try:
+            # 1. ניתוח מצב BLACKLIST
+            analysis = await self._analyze_blacklist()
+            
+            if not analysis['needs_cleanup']:
+                logger.info("✅ Blacklist is clean - no action needed")
+                return True
+            
+            # 2. ניקוי סלקטיבי
+            cleanup_result = await self._selective_cleanup(analysis)
+            
+            # 3. איפוס failures לסימבולים שנקו
+            await self._reset_failures_for_cleaned(cleanup_result['cleaned_symbols'])
+            
+            # 4. דיווח
+            await self._report_cleanup_results(cleanup_result)
+            
+            logger.info(f"✅ Smart cleanup completed: {cleanup_result['cleaned_count']} symbols cleaned")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Smart cleanup failed: {e}")
+            return False
+    
+    async def _analyze_blacklist(self) -> Dict:
+        """ניתוח חכם של BLACKLIST"""
+        blacklisted = await self.db.get_temp_blacklist()
+        now = datetime.now()
+        
+        analysis = {
+            'total_count': len(blacklisted),
+            'old_entries': [],      # יותר מ-24 שעות
+            'recent_entries': [],   # פחות מ-24 שעות  
+            'high_failure_entries': [], # יותר מ-5 failures
+            'needs_cleanup': False
+        }
+        
+        for item in blacklisted:
+            # המרת זמן
+            blacklist_time = item.get('blacklisted_at', now)
+            if isinstance(blacklist_time, str):
+                blacklist_time = datetime.fromisoformat(blacklist_time)
+            
+            # ניתוח לפי גיל
+            age = now - blacklist_time
+            if age > timedelta(hours=24):
+                analysis['old_entries'].append(item)
+            else:
+                analysis['recent_entries'].append(item)
+            
+            # ניתוח לפי failure count
+            failures = item.get('failure_count', 0)
+            if failures >= 5:
+                analysis['high_failure_entries'].append(item)
+        
+        # החלטה אם צריך ניקוי
+        analysis['needs_cleanup'] = (
+            len(analysis['old_entries']) > 0 or 
+            len(analysis['high_failure_entries']) > 10
+        )
+        
+        return analysis
+    
+    async def _selective_cleanup(self, analysis: Dict) -> Dict:
+        """ניקוי סלקטיבי חכם"""
+        symbols_to_clean = []
+        
+        # 1. נקה entries ישנים (יותר מ-24 שעות)
+        for item in analysis['old_entries']:
+            symbols_to_clean.append(item['symbol'])
+        
+        # 2. נקה entries עם failures רבים (אם יש יותר מדי)
+        if len(analysis['high_failure_entries']) > 10:
+            for item in analysis['high_failure_entries'][:5]:  # רק 5 הראשונים
+                symbols_to_clean.append(item['symbol'])
+        
+        # 3. שמור entries חדשים עם failures מעטים
+        recent_low_failures = [
+            item for item in analysis['recent_entries'] 
+            if item.get('failure_count', 0) < 3
+        ]
+        
+        # ביצוע הניקוי
+        if symbols_to_clean:
+            await self.db.remove_from_blacklist(symbols_to_clean)
+        
+        return {
+            'cleaned_symbols': symbols_to_clean,
+            'cleaned_count': len(symbols_to_clean),
+            'preserved_count': len(blacklisted) - len(symbols_to_clean)
+        }
+    
+    async def auto_cleanup_if_needed(self) -> bool:
+        """ניקוי אוטומטי אם נדרש"""
+        try:
+            blacklisted = await self.db.get_temp_blacklist()
+            
+            # תנאים לניקוי אוטומטי
+            needs_cleanup = (
+                len(blacklisted) > 30 or  # יותר מדי סימבולים
+                await self._has_old_entries() or  # entries ישנים
+                await self._is_affecting_performance()  # משפיע על ביצועים
+            )
+            
+            if needs_cleanup:
+                logger.info("🤖 Auto-triggering blacklist cleanup")
+                return await self.smart_cleanup()
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"❌ Auto cleanup check failed: {e}")
+            return False
+```
+
+## 🔧 **מנהל Quantum דינמי**
+
+```python
+# utils/dynamic_quantum_manager.py
+import logging
+from typing import Dict, List
+
+logger = logging.getLogger(__name__)
+
+class DynamicQuantumManager:
+    """מנהל Quantum דינמי עם התאמה אוטומטית"""
+    
+    def __init__(self, db_client, binance_client):
+        self.db = db_client
+        self.binance = binance_client
+        self.performance_history = []
+        
+    async def dynamic_scan(self) -> bool:
+        """סריקה דינמית עם התאמה אוטומטית"""
+        try:
+            # 1. התאם קריטריונים לפי ביצועים
+            await self._adjust_criteria()
+            
+            # 2. בצע סריקה
+            scan_result = await self._perform_adaptive_scan()
+            
+            # 3. עדכן GRID APPROVED
+            update_success = await self._update_grid_approved(scan_result['qualified_symbols'])
+            
+            # 4. רשם ביצועים
+            await self._record_performance(scan_result)
+            
+            logger.info(f"✅ Dynamic scan completed: {len(scan_result['qualified_symbols'])} qualified symbols")
+            return update_success
+            
+        except Exception as e:
+            logger.error(f"❌ Dynamic scan failed: {e}")
+            return False
+    
+    async def _adjust_criteria(self):
+        """התאמת קריטריונים דינמית"""
+        # ניתוח ביצועים אחרונים
+        recent_performance = await self._analyze_recent_performance()
+        
+        # התאם volatility threshold
+        if recent_performance.get('high_volatility_failures', 0) > 5:
+            await self._decrease_volatility_threshold()
+        elif recent_performance.get('low_volatility_success', 0) > 10:
+            await self._increase_volatility_threshold()
+        
+        # התאם volume requirements
+        if recent_performance.get('liquidity_issues', 0) > 3:
+            await self._increase_volume_requirements()
+            
+        logger.info("🔧 Adjusted quantum criteria dynamically")
+    
+    async def _perform_adaptive_scan(self) -> Dict:
+        """סריקה מסתגלת עם learning"""
+        all_symbols = await self.binance.fetch_markets()
+        spot_symbols = [s for s in all_symbols if s['spot'] and s['active']]
+        
+        qualified = []
+        rejected = []
+        
+        for symbol_info in spot_symbols[:100]:  # סריקה חלקית לאיטרציה מהירה
+            try:
+                symbol = symbol_info['symbol']
+                
+                # בדיקות דינמיות
+                checks = await self._run_dynamic_checks(symbol)
+                
+                if all(checks.values()):
+                    qualified.append({
+                        'symbol': symbol,
+                        'score': await self._calculate_dynamic_score(symbol, checks),
+                        'checks_passed': checks
+                    })
+                else:
+                    rejected.append({
+                        'symbol': symbol, 
+                        'failed_checks': [k for k, v in checks.items() if not v]
+                    })
+                    
+            except Exception as e:
+                logger.debug(f"Symbol {symbol_info['symbol']} scan failed: {e}")
+                continue
+        
+        return {
+            'qualified_symbols': sorted(qualified, key=lambda x: x['score'], reverse=True)[:50],
+            'rejected_symbols': rejected,
+            'total_scanned': len(spot_symbols)
+        }
+```
+
+## 🎯 **הפעלה אוטומטית - פקודת ONE-CLICK**
+
+```python
+# commands/auto_maintenance_commands.py
+import asyncio
+import logging
+from utils.auto_maintenance_orchestrator import AutoMaintenanceOrchestrator
+
+logger = logging.getLogger(__name__)
+
+class MaintenanceCommands:
+    """פקודות לתחזוקה אוטומטית"""
+    
+    def __init__(self, db_client, binance_client):
+        self.orchestrator = AutoMaintenanceOrchestrator(db_client, binance_client)
+    
+    async def start_auto_maintenance(self):
+        """הפעל תחזוקה אוטומטית מלאה"""
+        logger.info("🚀 Starting FULL auto-maintenance system")
+        return await self.orchestrator.start_auto_maintenance()
+    
+    async def quick_fix_now(self):
+        """תיקון מהיר ומידי - ONE CLICK"""
+        logger.info("🔧 Executing QUICK FIX NOW command")
+        
+        try:
+            # 1. ניקוי BLACKLIST מיידי
+            from utils.smart_blacklist_manager import SmartBlacklistManager
+            blacklist_mgr = SmartBlacklistManager(self.orchestrator.db)
+            await blacklist_mgr.smart_cleanup()
+            
+            # 2. עדכון Quantum מיידי
+            await self.orchestrator.quantum_manager.dynamic_scan()
+            
+            # 3. בניית GRID מיידית
+            await self.orchestrator.grid_manager.adaptive_rebuild()
+            
+            # 4. דוח מצב
+            status = await self.get_system_status()
+            
+            logger.info("🎉 QUICK FIX completed successfully!")
+            return status
+            
+        except Exception as e:
+            logger.error(f"❌ QUICK FIX failed: {e}")
+            return {'status': 'error', 'message': str(e)}
+    
+    async def force_grid_rebuild(self):
+        """כפה בניית GRID מחדש"""
+        logger.info("🏗️ FORCING grid rebuild...")
+        return await self.orchestrator.grid_manager.adaptive_rebuild(force=True)
+    
+    async def emergency_cleanup(self):
+        """ניקוי חירום - מסיר ALL blacklist"""
+        logger.warning("🚨 EMERGENCY CLEANUP - removing ALL blacklist entries")
+        
+        try:
+            blacklisted = await self.orchestrator.db.get_temp_blacklist()
+            symbols_to_remove = [item['symbol'] for item in blacklisted]
+            
+            await self.orchestrator.db.remove_from_blacklist(symbols_to_remove)
+            await self.orchestrator.db.reset_all_failure_counts()
+            
+            logger.info(f"🚨 Removed {len(symbols_to_remove)} symbols from blacklist")
+            return {'status': 'success', 'cleaned': len(symbols_to_remove)}
+            
+        except Exception as e:
+            logger.error(f"❌ Emergency cleanup failed: {e}")
+            return {'status': 'error', 'message': str(e)}
+    
+    async def get_system_status(self):
+        """קבלת סטטוס מערכת מלא"""
+        try:
+            blacklisted = await self.orchestrator.db.get_temp_blacklist()
+            grid_approved = await self.orchestrator.db.get_grid_approved_symbols()
+            
+            return {
+                'status': 'healthy',
+                'blacklist_count': len(blacklisted),
+                'grid_approved_count': len(grid_approved),
+                'auto_maintenance_running': self.orchestrator.is_running,
+                'adaptive_thresholds': self.orchestrator.adaptive_thresholds,
+                'timestamp': datetime.now().isoformat()
+            }
+        except Exception as e:
+            return {'status': 'error', 'message': str(e)}
+
+# פקודת CLI לנוחיותך
+async def main():
+    """הפעלה דרך command line"""
+    import sys
+    
+    db_client = await get_db_client()  # החלף עם הקוד שלך
+    binance_client = await get_binance_client()  # החלף עם הקוד שלך
+    
+    commands = MaintenanceCommands(db_client, binance_client)
+    
+    if len(sys.argv) > 1:
+        command = sys.argv[1]
+        
+        if command == "start":
+            await commands.start_auto_maintenance()
+        elif command == "quickfix":
+            result = await commands.quick_fix_now()
+            print(f"Quick fix result: {result}")
+        elif command == "emergency":
+            result = await commands.emergency_cleanup()
+            print(f"Emergency cleanup: {result}")
+        elif command == "status":
+            status = await commands.get_system_status()
+            print(f"System status: {status}")
+        elif command == "rebuild-grid":
+            result = await commands.force_grid_rebuild()
+            print(f"Grid rebuild: {result}")
+        else:
+            print("Unknown command. Use: start, quickfix, emergency, status, rebuild-grid")
+    else:
+        print("Usage: python -m commands.auto_maintenance_commands <command>")
+
+if __name__ == "__main__":
+    asyncio.run(main())
+```
+
+## 🚀 **שימוש מיידי - פקודות ONE-CLICK**
+
+```bash
+# הפעל את כל המערכת האוטומטית
+python -m commands.auto_maintenance_commands start
+
+# תיקון מהיר - יעשה הכל אוטומטית
+python -m commands.auto_maintenance_commands quickfix
+
+# ניקוי חירום - מסיר הכל מ-BLACKLIST  
+python -m commands.auto_maintenance_commands emergency
+
+# סטטוס מערכת
+python -m commands.auto_maintenance_commands status
+
+# כפיית בניית GRID
+python -m commands.auto_maintenance_commands rebuild-grid
+```
+
+## 📊 **מערכת דיווח אוטומטית**
+
+```python
+# utils/auto_reporting.py
+class AutoReporter:
+    """דיווח אוטומטי על פעולות המערכת"""
+    
+    async def send_daily_report(self):
+        """דוח יומי אוטומטי"""
+        status = await self.get_system_status()
+        
+        report = f"""
+📊 **דוח תחזוקה אוטומטי יומי**
+
+🔄 **סטטוס כללי:**
+- תחזוקה אוטומטית: {'✅ פעילה' if status['auto_maintenance_running'] else '❌ לא פעילה'}
+- סימבולים ב-GRID: {status['grid_approved_count']}
+- סימבולים ב-BLACKLIST: {status['blacklist_count']}
+
+⚙️ **Thresholds נוכחיים:**
+{self._format_thresholds(status['adaptive_thresholds'])}
+
+📈 **פעולות אחרונות:**
+{await self.get_recent_activities()}
+        """
+        
+        await self.send_telegram_message(report)
+```
+
+**המערכת עכשיו תרוץ באופן אוטומטי ותבצע:** 🤖
+- ניקוי BLACKLIST כל 6 שעות
+- עדכון GRID כל 4 שעות  
+- סריקת Quantum כל 2 שעות
+- התאמה דינמית של thresholds
+- דיווחים אוטומטיים
+
+**ואתה יכול להפעיל עם פקודת ONE-CLICK!** 🎯

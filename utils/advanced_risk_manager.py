@@ -333,6 +333,9 @@ class AdvancedRiskManager:
         """
         🛡️ LAYER 2: Check if position should be force-closed (2% max loss cap)
         
+        CRITICAL FIX: Uses unrealizedProfit and leverage for accurate PnL calculation
+        Prevents large losses in high-leverage positions
+        
         Args:
             position: Position data from Binance
             
@@ -343,21 +346,41 @@ class AdvancedRiskManager:
         entry_price = float(position.get("entryPrice", 0))
         mark_price = float(position.get("markPrice", 0))
         position_amt = float(position.get("positionAmt", 0))
+        unrealized_pnl = float(position.get("unRealizedProfit", 0))
+        leverage = float(position.get("leverage", 1))
         
         if entry_price <= 0 or mark_price <= 0 or position_amt == 0:
             return False, ""
         
-        # Calculate current PnL %
-        if position_amt > 0:  # LONG
-            pnl_pct = (mark_price - entry_price) / entry_price
-        else:  # SHORT
-            pnl_pct = (entry_price - mark_price) / entry_price
+        # 🛡️ CRITICAL FIX: Calculate PnL% based on MARGIN (accounts for leverage)
+        # This prevents large % losses in high-leverage positions
+        position_value_usd = abs(position_amt * entry_price)
+        margin_used = position_value_usd / leverage if leverage > 0 else position_value_usd
         
-        # Check if exceeds max loss
+        if margin_used <= 0:
+            logger.warning(f"⚠️ {symbol}: Invalid margin calculation, using fallback")
+            # Fallback to entry-price based calculation
+            if position_amt > 0:  # LONG
+                pnl_pct = (mark_price - entry_price) / entry_price
+            else:  # SHORT
+                pnl_pct = (entry_price - mark_price) / entry_price
+        else:
+            # Correct calculation: PnL% = unrealizedPnL / margin
+            pnl_pct = unrealized_pnl / margin_used
+        
+        # Check if exceeds max loss (2%)
         if pnl_pct <= -self.max_loss_cap:
-            reason = f"Max loss cap hit: {pnl_pct*100:.2f}% ≤ {-self.max_loss_cap*100:.1f}%"
+            reason = (
+                f"Max loss cap hit: {pnl_pct*100:.2f}% ≤ {-self.max_loss_cap*100:.1f}% "
+                f"(PnL: ${unrealized_pnl:.2f}, Margin: ${margin_used:.2f}, Lev: {leverage:.0f}x)"
+            )
             logger.warning(f"🚨 {symbol}: {reason}")
             return True, reason
+        
+        logger.debug(
+            f"🛡️ {symbol}: PnL% = {pnl_pct*100:.2f}% "
+            f"(${unrealized_pnl:.2f} / ${margin_used:.2f}, Lev: {leverage:.0f}x)"
+        )
         
         return False, ""
     
