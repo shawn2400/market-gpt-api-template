@@ -226,70 +226,61 @@ def get_disk_usage() -> dict:
 
 
 def cleanup_blacklist_and_redis():
-    """Smart Blacklist & Redis cleanup"""
+    """
+    Smart Blacklist & Redis cleanup with BlacklistForgivenessManager.
+    
+    Now runs AUTOMATIC FORGIVENESS for TOP 50 symbols:
+    - Removes TOP 50 symbols from blacklist
+    - Reduces failure counters by 50% (preserves history)
+    - Enforces 1h cool-off for repeat offenders (≥6 failures)
+    - Atomic operations to prevent race conditions
+    """
     try:
+        from utils.blacklist_forgiveness_manager import get_forgiveness_manager
         from utils.redis_client import get_redis
-        import json
         
         redis_client = get_redis()
         if not redis_client:
             logger.debug("Redis unavailable, skipping blacklist cleanup")
             return
         
-        logger.info("🧹 Blacklist & Redis cleanup...")
+        logger.info("🧹 Blacklist & Redis cleanup with auto-forgiveness...")
         
-        temp_blacklist_key = "blacklist:temp"
-        temp_data = redis_client.get(temp_blacklist_key)
+        # 🎯 NEW: Run BlacklistForgivenessManager (auto-forgiveness for TOP 50)
+        forgiveness_manager = get_forgiveness_manager()
+        if forgiveness_manager:
+            try:
+                result = forgiveness_manager.run_forgiveness_cycle()
+                
+                if result.get('status') == 'success':
+                    forgiven = result.get('forgiven', 0)
+                    cooloff = result.get('cooloff', 0)
+                    
+                    if forgiven > 0 or cooloff > 0:
+                        logger.info(
+                            f"✅ Forgiveness cycle: {forgiven} forgiven, "
+                            f"{cooloff} on cooloff"
+                        )
+                elif result.get('status') == 'skipped':
+                    logger.debug(f"⚠️ Forgiveness skipped: {result.get('reason')}")
+                    
+            except Exception as e:
+                logger.warning(f"Forgiveness manager failed: {e}")
         
-        if temp_data:
-            blacklist = json.loads(temp_data)
-            original_count = len(blacklist)
-            
-            cutoff = time.time() - (24 * 3600)
-            blacklist = [
-                entry for entry in blacklist
-                if entry.get("timestamp", 0) > cutoff
-            ]
-            
-            if len(blacklist) < original_count:
-                redis_client.setex(
-                    temp_blacklist_key,
-                    86400,
-                    json.dumps(blacklist)
-                )
-                logger.info(
-                    f"🧹 Cleaned {original_count - len(blacklist)} stale blacklist entries"
-                )
-        
-        top_50_key = "top50:approved_list"
-        top_50_data = redis_client.get(top_50_key)
-        
-        if top_50_data:
-            top_50_symbols = json.loads(top_50_data)
-            reset_count = 0
-            
-            for symbol in top_50_symbols:
-                failure_key = f"failures:count:{symbol}"
-                if redis_client.exists(failure_key):
-                    redis_client.delete(failure_key)
-                    reset_count += 1
-            
-            if reset_count > 0:
-                logger.info(f"🧹 Reset {reset_count} failure counters (now in TOP 50)")
-        
+        # 🧹 LEGACY: Orphaned failure counter cleanup (TTL enforcement)
         pattern = "failures:count:*"
         orphaned = 0
         for key in redis_client.scan_iter(match=pattern, count=100):
             ttl = redis_client.ttl(key)
-            if ttl == -1:
-                redis_client.expire(key, 7 * 86400)
+            if ttl == -1:  # No expiry set
+                redis_client.expire(key, 7 * 86400)  # 7 days
                 orphaned += 1
         
         if orphaned > 0:
-            logger.info(f"🧹 Set expiry on {orphaned} orphaned failure counters")
+            logger.info(f"🧹 Set 7-day expiry on {orphaned} orphaned failure counters")
     
     except Exception as e:
-        logger.error(f"Blacklist cleanup failed: {e}")
+        logger.error(f"Blacklist cleanup failed: {e}", exc_info=True)
 
 
 def run_cleanup():

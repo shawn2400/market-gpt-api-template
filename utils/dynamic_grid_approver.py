@@ -34,29 +34,65 @@ class DynamicGridApprover:
         self.client = get_client() if get_client else None
         self.redis = get_redis() if get_redis else None
         
-        # 🛡️ RELAXED THRESHOLDS: Increased from strict $75M/$200k to enable 10-20 GRID symbols
-        # Previous: $75M volume, $200k liquidity, 3.5% ATR, 10bps spread (only 2 symbols!)
-        # Updated: $40M volume, $100k liquidity, 5.0% ATR, 15bps spread (targets 10-20 symbols)
-        self.min_volume_grid = 40_000_000      # Was: 75M
-        self.max_atr_pct = 0.050               # Was: 0.035 (3.5%)
-        self.max_spread_bps = 15               # Was: 10
-        self.min_liquidity_grid = 100_000      # Was: 200k
+        # 🔧 REGIME-AWARE THRESHOLDS: Now dynamically adjusted via DynamicGridCriteriaAdapter
+        # Base values (before regime adjustments):
+        # - $40M volume, $100k liquidity, 5.0% ATR, 15bps spread
+        # Regime multipliers:
+        # - CHOPPY/SIDEWAYS: ×0.7 vol/liq, ×1.3 ATR (GRID-optimal → relaxed)
+        # - TRENDING: ×1.2 vol/liq, ×0.8 ATR (GRID-risky → tightened)
+        # - VOLATILE: ×1.0 vol/liq, ×1.1 ATR (neutral)
+        # Safety guardrails: Vol≥$20M, Liq≥$75k, ATR≤7%, Spread≤25bps
+        
+        # Initialize with base thresholds (will be updated dynamically)
+        self.min_volume_grid = 40_000_000
+        self.max_atr_pct = 0.050
+        self.max_spread_bps = 15
+        self.min_liquidity_grid = 100_000
         
         self.grid_approved_key = "grid:approved_list"
         self.grid_tiers_key = "grid:tiers"
         
+        # Initialize criteria adapter for dynamic adjustments
+        try:
+            from utils.dynamic_grid_criteria_adapter import get_criteria_adapter
+            self.criteria_adapter = get_criteria_adapter()
+        except Exception as e:
+            logger.warning(f"Failed to initialize criteria adapter: {e}")
+            self.criteria_adapter = None
+        
         logger.info(
             f"DynamicGridApprover initialized - "
-            f"min_volume=${self.min_volume_grid/1_000_000:.0f}M, "
-            f"max_atr={self.max_atr_pct*100:.1f}%, "
-            f"max_spread={self.max_spread_bps}bps, "
-            f"min_liquidity=${self.min_liquidity_grid/1_000:.0f}k"
+            f"Base thresholds: Vol=${self.min_volume_grid/1_000_000:.0f}M, "
+            f"ATR={self.max_atr_pct*100:.1f}%, "
+            f"Spread={self.max_spread_bps}bps, "
+            f"Liq=${self.min_liquidity_grid/1_000:.0f}k | "
+            f"Adapter: {'ENABLED' if self.criteria_adapter else 'DISABLED (static fallback)'}"
         )
     
     def calculate_grid_approved_list(self, top_50_symbols: List[str]) -> List[str]:
         if not self.client:
             logger.error("Binance client not available")
             return []
+        
+        # 🎯 DYNAMIC THRESHOLDS: Get regime-adjusted criteria
+        if self.criteria_adapter:
+            try:
+                thresholds = self.criteria_adapter.get_adjusted_thresholds()
+                self.min_volume_grid = thresholds.min_volume
+                self.max_atr_pct = thresholds.max_atr_pct
+                self.max_spread_bps = thresholds.max_spread_bps
+                self.min_liquidity_grid = thresholds.min_liquidity
+                
+                logger.info(
+                    f"📊 GRID criteria adjusted for {thresholds.regime.upper()} regime | "
+                    f"Vol≥${self.min_volume_grid/1_000_000:.0f}M, "
+                    f"Liq≥${self.min_liquidity_grid/1_000:.0f}k, "
+                    f"ATR≤{self.max_atr_pct*100:.1f}%, "
+                    f"Spread≤{self.max_spread_bps}bps | "
+                    f"Source: {thresholds.source}"
+                )
+            except Exception as e:
+                logger.warning(f"Failed to get dynamic thresholds, using static: {e}")
         
         scored_symbols = []
         for symbol in top_50_symbols:
