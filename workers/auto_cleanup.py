@@ -283,6 +283,71 @@ def cleanup_blacklist_and_redis():
         logger.error(f"Blacklist cleanup failed: {e}", exc_info=True)
 
 
+def cleanup_dangling_orders():
+    """
+    🧹 Cleanup dangling Binance orders for closed positions.
+    
+    Scans ALL open futures orders and cancels any that don't match active positions.
+    Also cleans up stale Redis entry_timestamps for closed trades.
+    """
+    try:
+        from utils.binance_client import get_open_orders, get_open_positions, futures_cancel_order
+        from utils.redis_client import get_redis
+        
+        # Get active positions
+        positions = get_open_positions() or []
+        active_symbols = {p.get("symbol") for p in positions if abs(float(p.get("positionAmt", 0))) > 0}
+        
+        logger.debug(f"Active positions: {len(active_symbols)} symbols")
+        
+        # Get ALL open orders (not scoped to any symbol)
+        cancelled_count = 0
+        try:
+            all_orders = get_open_orders() or []  # No symbol = all orders
+            logger.debug(f"Checking {len(all_orders)} total open orders")
+            
+            for order in all_orders:
+                order_symbol = order.get("symbol")
+                order_id = order.get("orderId")
+                
+                # Cancel order if symbol not in active positions
+                if order_symbol and order_symbol not in active_symbols:
+                    try:
+                        futures_cancel_order(symbol=order_symbol, order_id=order_id)
+                        cancelled_count += 1
+                        logger.info(f"🧹 Cancelled dangling order: {order_symbol} #{order_id}")
+                    except Exception as e:
+                        logger.debug(f"Failed to cancel order {order_id}: {e}")
+        except Exception as e:
+            logger.error(f"Error fetching/cancelling orders: {e}")
+        
+        # Cleanup stale Redis entry_timestamps (ALWAYS run, even if no positions)
+        redis_client = get_redis()
+        if redis_client:
+            try:
+                cleaned_timestamps = 0
+                for key in redis_client.scan_iter(match="entry_timestamp:*", count=100):
+                    symbol = key.split(":")[-1] if ":" in key else None
+                    
+                    # Delete if symbol not in active positions (or if no active positions at all)
+                    if symbol and (not active_symbols or symbol not in active_symbols):
+                        redis_client.delete(key)
+                        cleaned_timestamps += 1
+                        logger.debug(f"🧹 Deleted stale entry_timestamp: {key}")
+                
+                if cleaned_timestamps > 0:
+                    logger.info(f"🧹 Cleaned {cleaned_timestamps} stale entry_timestamps from Redis")
+            except Exception as e:
+                logger.debug(f"Redis cleanup failed: {e}")
+        
+        if cancelled_count > 0:
+            logger.info(f"✅ Dangling orders cleanup: cancelled {cancelled_count} orders")
+        else:
+            logger.debug("No dangling orders found")
+    
+    except Exception as e:
+        logger.error(f"Dangling orders cleanup failed: {e}")
+
 def run_cleanup():
     """Run full cleanup cycle"""
     logger.info("🧹 Starting auto-cleanup cycle...")
@@ -301,6 +366,7 @@ def run_cleanup():
     cleanup_learning_data()
     cleanup_temp_files()
     cleanup_blacklist_and_redis()
+    cleanup_dangling_orders()
     
     disk_after = get_disk_usage()
     if disk_before and disk_after:
