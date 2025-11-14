@@ -67,6 +67,7 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Order Quality Monitor**: Tracks fill rate, slippage, and execution speed.
 -   **Position Limits Manager**: Sets max positions per symbol, total open orders, and correlation exposure limits.
 -   **Trading Gatekeeper**: Unified pre-trade validation integrating all filters and Dynamic Leverage.
+-   **Zero Tolerance Filter**: Auto-cleanup for expired temp blacklist entries; requires 5 failures before 24h ban (less aggressive than previous 3-failure threshold).
 
 **Dynamic TOP 50 Symbol Filter (Musical Chairs System):**
 -   Blocks trades for symbols outside the TOP 50.
