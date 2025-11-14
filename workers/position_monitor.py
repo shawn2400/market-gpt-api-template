@@ -37,6 +37,11 @@ logger = logging.getLogger("position_monitor")
 _previous_positions: Dict[str, Any] = {}
 _last_position_count = 0
 
+# 🛡️ FIX: SL placement failure tracking (prevent spam on -2021 errors)
+_sl_placement_failures: Dict[str, int] = {}  # symbol -> failure count
+_sl_retry_after: Dict[str, float] = {}  # symbol -> timestamp to resume retries
+SL_FAILURE_SKIP_CYCLES = 5  # Skip 5 cycles (5 * 30s = 2.5 min cooldown)
+
 # ⚠️ REMOVED: Legacy position_manager import
 # add_sl_tp_protection superseded by Trailing TP system to prevent dual-manager conflicts
 
@@ -209,7 +214,8 @@ async def ensure_positions_protected() -> None:
                     
                     if trailing_tp.should_activate_trailing(pos_snapshot):
                         trailing_data = trailing_tp.activate_trailing(pos_snapshot)
-                        await send_telegram_message(f"🎯 Trailing TP armed for {symbol} @ {trailing_data['activation_pnl']:.1f}%")
+                        # 🛡️ FIX: Use Markdown-safe format
+                        await send_telegram_message(f"🎯 Trailing TP armed for `{symbol}` @ *{trailing_data['activation_pnl']:.1f}%*")
                     
                     trailing_tp.update_trailing_peak(pos_snapshot)
                     
@@ -248,7 +254,8 @@ async def ensure_positions_protected() -> None:
                             
                             if close_success:
                                 trailing_tp.remove_trailing(symbol)
-                                await send_telegram_message(f"🚨 Trailing TP exit {symbol}: {reason} | PNL {pnl_pct:+.2f}%")
+                                # 🛡️ FIX: Use Markdown-safe format
+                                await send_telegram_message(f"🚨 Trailing TP exit `{symbol}`: {reason} | PNL *{pnl_pct:+.2f}%*")
                                 logger.info(f"🎯 Trailing TP closed {symbol}: {reason} @ {pnl_pct:+.2f}%")
                             else:
                                 logger.error(f"❌ Failed to close {symbol} after 3 attempts - keeping trailing state")
@@ -297,10 +304,11 @@ async def ensure_positions_protected() -> None:
                             )
                             
                             risk_manager.cleanup_closed_position(symbol)
+                            # 🛡️ FIX: Use Markdown-safe format
                             await send_telegram_message(
-                                f"🚨 MAX LOSS CAP HIT\n"
-                                f"Symbol: {symbol}\n"
-                                f"Reason: {close_reason}\n"
+                                f"🚨 *MAX LOSS CAP HIT*\n\n"
+                                f"Symbol: `{symbol}`\n"
+                                f"Reason: {close_reason}\n\n"
                                 f"Closed at market to prevent larger loss"
                             )
                             logger.critical(f"🛡️ {symbol}: Force closed - {close_reason}")
@@ -332,10 +340,11 @@ async def ensure_positions_protected() -> None:
                             )
                             
                             logger.info(f"🚀 {symbol}: Breakeven SL activated @ {be_price:.8f}")
+                            # 🛡️ FIX: Use Markdown-safe format
                             await send_telegram_message(
-                                f"🚀 Breakeven Activated\n"
-                                f"Symbol: {symbol}\n"
-                                f"SL moved to breakeven: {be_price:.8f}\n"
+                                f"🚀 *Breakeven Activated*\n\n"
+                                f"Symbol: `{symbol}`\n"
+                                f"SL moved to breakeven: `{be_price:.8f}`\n\n"
                                 f"Position now risk-free!"
                             )
                             continue
@@ -344,6 +353,11 @@ async def ensure_positions_protected() -> None:
                             logger.error(f"❌ Failed to set breakeven SL for {symbol}: {be_err}")
                     
                     # 🎯 LAYER 1: Calculate and apply dynamic SL to Binance
+                    # 🛡️ FIX: Skip if in cooldown period (after -2021 errors)
+                    if symbol in _sl_retry_after and time.time() < _sl_retry_after[symbol]:
+                        logger.debug(f"⏸️ {symbol}: SL placement in cooldown, skipping")
+                        continue
+                    
                     atr = await calculate_symbol_atr(symbol, period=14)
                     if atr > 0:
                         from utils.binance_client import futures_create_order, futures_cancel_all_orders
@@ -370,12 +384,34 @@ async def ensure_positions_protected() -> None:
                                 positionSide=position_side
                             )
                             
+                            # 🛡️ FIX: On success, clear failure tracking
+                            if symbol in _sl_placement_failures:
+                                del _sl_placement_failures[symbol]
+                            if symbol in _sl_retry_after:
+                                del _sl_retry_after[symbol]
+                            
                             logger.info(
                                 f"🎯 {symbol}: Dynamic SL placed @ {protected_sl:.8f} "
                                 f"(ATR={atr:.8f}, Vol={volatility*100:.1f}%)"
                             )
                         except Exception as sl_err:
-                            logger.error(f"❌ Failed to place dynamic SL for {symbol}: {sl_err}")
+                            # 🛡️ FIX: Detect -2021 errors and enter cooldown
+                            error_code = getattr(sl_err, "code", None)
+                            error_msg = str(sl_err)
+                            
+                            if error_code == -2021 or "-2021" in error_msg or "immediately trigger" in error_msg.lower():
+                                _sl_placement_failures[symbol] = _sl_placement_failures.get(symbol, 0) + 1
+                                cooldown_time = time.time() + (SL_FAILURE_SKIP_CYCLES * AUTO_PROTECT_INTERVAL_SEC)
+                                _sl_retry_after[symbol] = cooldown_time
+                                
+                                logger.warning(
+                                    f"⏸️ {symbol}: SL would trigger immediately (-2021), "
+                                    f"entering {SL_FAILURE_SKIP_CYCLES} cycle cooldown "
+                                    f"({SL_FAILURE_SKIP_CYCLES * AUTO_PROTECT_INTERVAL_SEC}s)"
+                                )
+                            else:
+                                # Other errors - log normally
+                                logger.error(f"❌ Failed to place dynamic SL for {symbol}: {sl_err}")
                     else:
                         logger.debug(f"⚠️ {symbol}: ATR=0, skipping dynamic SL")
                     

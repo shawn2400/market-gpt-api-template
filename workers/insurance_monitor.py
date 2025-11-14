@@ -284,10 +284,11 @@ async def layer2_margin_defense() -> bool:
             final_ratio = calculate_margin_ratio(account) if account else 0
             
             # Send alert
+            # 🛡️ FIX: Use Markdown instead of HTML
             message = (
-                f"🚨 <b>MARGIN DEFENSE ACTIVATED</b>\n\n"
-                f"Initial Ratio: <b>{margin_ratio:.2f}%</b>\n"
-                f"Final Ratio: <b>{final_ratio:.2f}%</b>\n"
+                f"🚨 *MARGIN DEFENSE ACTIVATED*\n\n"
+                f"Initial Ratio: *{margin_ratio:.2f}%*\n"
+                f"Final Ratio: *{final_ratio:.2f}%*\n"
                 f"Threshold: {MARGIN_RATIO_MIN}%\n\n"
                 f"Action: Closed {closed_count} losing positions\n\n"
                 f"🛡️ Account protected from liquidation!"
@@ -323,16 +324,23 @@ async def layer3_cross_balancer() -> bool:
         
         cross_pct = (total_cross_balance / total_balance) * 100
         
-        if cross_pct > MAX_CROSS_PCT:
-            logger.warning(f"⚠️ CROSS BALANCER ALERT | Cross: {cross_pct:.1f}% > {MAX_CROSS_PCT}%")
+        # 🛡️ FIX: Only alert if actionable (more than 2 positions AND high cross%)
+        # 100% Cross is normal when you only have 1-2 positions
+        positions = get_active_positions()
+        num_positions = len(positions)
+        
+        if cross_pct > MAX_CROSS_PCT and num_positions > 2:
+            logger.warning(f"⚠️ CROSS BALANCER ALERT | Cross: {cross_pct:.1f}% > {MAX_CROSS_PCT}% | Positions: {num_positions}")
             
             # Note: Actual rebalancing requires transfer API calls
             # For now, just alert - future feature can implement transfers
             
+            # 🛡️ FIX: Use Markdown instead of HTML
             message = (
-                f"⚠️ <b>CROSS MARGIN ALERT</b>\n\n"
-                f"Cross Margin: <b>{cross_pct:.1f}%</b>\n"
-                f"Maximum: {MAX_CROSS_PCT}%\n\n"
+                f"⚠️ *CROSS MARGIN ALERT*\n\n"
+                f"Cross Margin: *{cross_pct:.1f}%*\n"
+                f"Maximum: {MAX_CROSS_PCT}%\n"
+                f"Positions: {num_positions}\n\n"
                 f"💡 Consider moving excess to Isolated margin\n"
                 f"📊 Balance: ${total_balance:.2f}"
             )
