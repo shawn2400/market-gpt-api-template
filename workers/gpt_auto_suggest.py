@@ -635,13 +635,6 @@ def _to_int(x, default=None) -> Optional[int]:
 
 # ---------------- Emit ----------------
 async def _emit(payload: Dict[str, Any]) -> bool:
-    if not WEBHOOK_HMAC_SECRET:
-        LOGGER.error("❌ emit failed: WEBHOOK_HMAC_SECRET not set")
-        return False
-    if not ALERT_INGEST_URL:
-        LOGGER.error("❌ emit failed: ALERT_INGEST_URL not set")
-        return False
-    
     # 🧠 SAVE CONSENSUS TO REDIS for fills_watcher Telegram notifications
     symbol = payload.get("symbol")
     consensus_data = payload.get("consensus")
@@ -656,6 +649,85 @@ async def _emit(payload: Dict[str, Any]) -> bool:
         except Exception as e:
             LOGGER.warning(f"⚠️ Failed to save consensus to Redis: {e}")
     
+    sym = payload.get("symbol", "UNKNOWN")
+    side = payload.get("side", "")
+    
+    # 🚀 STANDALONE MODE: If no webhook configured, execute directly via ExecutionBot
+    if not ALERT_INGEST_URL or not WEBHOOK_HMAC_SECRET:
+        LOGGER.info(
+            f"🔧 No external webhook configured - executing {sym} {side} in STANDALONE mode"
+        )
+        
+        try:
+            from utils.execution_bot import ExecutionBot
+            
+            original_side = payload.get("side", "LONG")
+            execution_side = "BUY" if original_side == "LONG" else "SELL"
+            
+            quality_value = payload.get("quality_score")
+            LOGGER.info(f"🔍 STANDALONE DEBUG {sym}: quality_score={quality_value}, keys={list(payload.keys())}")
+            
+            ticket = {
+                "symbol": payload.get("symbol"),
+                "side": execution_side,
+                "budget_usd": payload.get("budget_usd") or payload.get("notional_usd", 100.0),
+                "leverage": payload.get("leverage", 2),
+                "entry": payload.get("entry") or payload.get("current_price"),
+                "sl": payload.get("sl"),
+                "tp": payload.get("tp1") or payload.get("tp"),
+                "position_type": "MARKET",
+                "quality": payload.get("quality_score", 100.0),
+                "score": payload.get("quality_score", 100.0),
+                "atr_pct": payload.get("atr_pct"),
+                "vol": payload.get("vol"),
+                "is_grid": payload.get("is_grid", False),
+                "grid_min": payload.get("grid_min"),
+                "grid_max": payload.get("grid_max"),
+                "grid_levels": payload.get("grid_levels"),
+                "metadata": {
+                    "trade_type": payload.get("trade_type"),
+                    "is_grid": payload.get("is_grid", False),
+                    "grid_min": payload.get("grid_min"),
+                    "grid_max": payload.get("grid_max"),
+                    "grid_levels": payload.get("grid_levels"),
+                    "grid_step_pct": payload.get("grid_step_pct"),
+                    "grid_side": payload.get("grid_side"),
+                    "consensus_score": payload.get("consensus_score"),
+                    "quality_score": payload.get("quality_score"),
+                    "reason": payload.get("reason", ""),
+                    "original_side": original_side,
+                }
+            }
+            
+            bot = ExecutionBot()
+            result = await bot.open_position(ticket, source="auto_scanner_standalone")
+            
+            raw = result.get("raw", {})
+            is_success = (
+                result.get("status") in ("opened", "success") and
+                raw.get("ok", False) is not False
+            )
+            
+            if is_success:
+                LOGGER.info(f"✅ STANDALONE execution successful: {sym} {original_side}")
+                
+                # 📱 Send comprehensive Telegram notification for standalone trade entry
+                try:
+                    await send_standalone_entry_notification(payload, result, raw)
+                except Exception as tg_err:
+                    LOGGER.warning(f"⚠️ Telegram notification failed (trade executed successfully): {tg_err}")
+                
+                return True
+            else:
+                reason = result.get("reason") or raw.get("error", "Unknown error")
+                LOGGER.error(f"❌ STANDALONE execution failed: {sym} {original_side} - {reason}")
+                return False
+                
+        except Exception as exec_err:
+            LOGGER.error(f"❌ STANDALONE execution error for {sym} {side}: {exec_err}")
+            return False
+    
+    # 📡 WEBHOOK MODE: Send to external alert ingest service
     try:
         body, headers = build_signed_outbound(
             WEBHOOK_HMAC_SECRET, payload,
@@ -667,89 +739,12 @@ async def _emit(payload: Dict[str, Any]) -> bool:
             r.raise_for_status()
             return True
     except Exception as e:
-        sym = payload.get("symbol", "UNKNOWN")
-        side = payload.get("side", "")
-        
-        if "127.0.0.1:8000" in str(ALERT_INGEST_URL) and isinstance(e, (httpx.ConnectError, httpx.TimeoutException)):
-            LOGGER.warning(
-                f"⚠️ Main Server not available (dev mode) - executing {sym} {side} STANDALONE"
-            )
-            
-            try:
-                from utils.execution_bot import ExecutionBot
-                
-                original_side = payload.get("side", "LONG")
-                execution_side = "BUY" if original_side == "LONG" else "SELL"
-                
-                quality_value = payload.get("quality_score")
-                LOGGER.info(f"🔍 STANDALONE DEBUG {sym}: quality_score={quality_value}, keys={list(payload.keys())}")
-                
-                ticket = {
-                    "symbol": payload.get("symbol"),
-                    "side": execution_side,
-                    "budget_usd": payload.get("budget_usd") or payload.get("notional_usd", 100.0),
-                    "leverage": payload.get("leverage", 2),
-                    "entry": payload.get("entry") or payload.get("current_price"),
-                    "sl": payload.get("sl"),
-                    "tp": payload.get("tp1") or payload.get("tp"),
-                    "position_type": "MARKET",
-                    "quality": payload.get("quality_score", 100.0),
-                    "score": payload.get("quality_score", 100.0),
-                    "atr_pct": payload.get("atr_pct"),
-                    "vol": payload.get("vol"),
-                    "is_grid": payload.get("is_grid", False),
-                    "grid_min": payload.get("grid_min"),
-                    "grid_max": payload.get("grid_max"),
-                    "grid_levels": payload.get("grid_levels"),
-                    "metadata": {
-                        "trade_type": payload.get("trade_type"),
-                        "is_grid": payload.get("is_grid", False),
-                        "grid_min": payload.get("grid_min"),
-                        "grid_max": payload.get("grid_max"),
-                        "grid_levels": payload.get("grid_levels"),
-                        "grid_step_pct": payload.get("grid_step_pct"),
-                        "grid_side": payload.get("grid_side"),
-                        "consensus_score": payload.get("consensus_score"),
-                        "quality_score": payload.get("quality_score"),
-                        "reason": payload.get("reason", ""),
-                        "original_side": original_side,
-                    }
-                }
-                
-                bot = ExecutionBot()
-                result = await bot.open_position(ticket, source="auto_scanner_standalone")
-                
-                raw = result.get("raw", {})
-                is_success = (
-                    result.get("status") in ("opened", "success") and
-                    raw.get("ok", False) is not False
-                )
-                
-                if is_success:
-                    LOGGER.info(f"✅ STANDALONE execution successful: {sym} {original_side}")
-                    
-                    # 📱 Send comprehensive Telegram notification for standalone trade entry
-                    try:
-                        await send_standalone_entry_notification(payload, result, raw)
-                    except Exception as tg_err:
-                        LOGGER.warning(f"⚠️ Telegram notification failed (trade executed successfully): {tg_err}")
-                    
-                    return True
-                else:
-                    reason = result.get("reason") or raw.get("error", "Unknown error")
-                    LOGGER.error(f"❌ STANDALONE execution failed: {sym} {original_side} - {reason}")
-                    return False
-                    
-            except Exception as exec_err:
-                LOGGER.error(f"❌ STANDALONE execution error for {sym} {side}: {exec_err}")
-                return False
-        else:
-            LOGGER.error(
-                f"❌ emit failed for {sym} {side}: {type(e).__name__}: {e}\n"
-                f"   URL: {ALERT_INGEST_URL}\n"
-                f"   Payload keys: {list(payload.keys())}"
-            )
-            return False
+        LOGGER.error(
+            f"❌ Webhook emit failed for {sym} {side}: {type(e).__name__}: {e}\n"
+            f"   URL: {ALERT_INGEST_URL}\n"
+            f"   Payload keys: {list(payload.keys())}"
+        )
+        return False
 
 # ---------------- Telegram Standalone Notifications ----------------
 async def send_standalone_entry_notification(payload: Dict[str, Any], result: Dict[str, Any], raw: Dict[str, Any]) -> None:
@@ -2125,11 +2120,17 @@ async def process_cycle():
             reserved = True
         ok = False
         try:
-            # Cooldown per (symbol,type)
-            if not _pass_cooldown_dyn(payload["symbol"], ttype, cooldown_sec):
+            # 🎯 GRID trades: Use minimal TTLs to avoid blocking reoccurring proposals
+            is_grid = (ttype == "GRID")
+            cooldown_ttl = 0 if is_grid else cooldown_sec  # GRID: no cooldown, others: 60s
+            dedup_ttl = 300 if is_grid else int(float(os.getenv("DEDUP_TTL_SEC","86400")))  # GRID: 5min, others: 24h
+            
+            # Cooldown per (symbol,type) - skip if TTL=0
+            if cooldown_ttl > 0 and not _pass_cooldown_dyn(payload["symbol"], ttype, cooldown_ttl):
+                LOGGER.info(f"⏳ Cooldown active: {payload['symbol']} {ttype} (blocked for {cooldown_ttl}s)")
                 return
-            # Dedup (24h)
-            dedup_ttl = int(float(os.getenv("DEDUP_TTL_SEC","86400")))
+            
+            # Dedup check
             h = _hash_proposal({
                 "trade_type": ttype,
                 "symbol": payload["symbol"],
@@ -2141,7 +2142,9 @@ async def process_cycle():
                 "tp3": payload.get("tp3"),
             })
             if not _pass_dedup(h, dedup_ttl):
+                LOGGER.info(f"🔁 Duplicate proposal blocked: {payload['symbol']} {ttype} (TTL={dedup_ttl}s)")
                 return
+            
             ok = await _emit(payload)
         finally:
             if not ok:

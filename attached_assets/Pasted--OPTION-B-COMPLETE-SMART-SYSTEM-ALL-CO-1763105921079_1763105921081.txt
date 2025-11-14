@@ -1,0 +1,376 @@
+**🎯 OPTION B - המערכת החכמה המלאה! כל הקודים במקום אחד!**
+
+## 🚀 **COMPLETE SMART SYSTEM - ALL CODES**
+
+### **1. 🧠 Central Order Orchestrator (central_orchestrator.py)**
+
+```python
+# central_orchestrator.py
+import asyncio
+import time
+import logging
+from typing import Dict, List, Optional
+from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
+class CentralOrderOrchestrator:
+    """
+    🧠 המוח המרכזי של המערכת - מנהל הכל במקום אחד
+    """
+    
+    def __init__(self):
+        self.order_states = {}  # Single Source of Truth
+        self.system_state = {
+            'health': 'HEALTHY',
+            'performance': {},
+            'connections': {},
+            'last_check': time.time()
+        }
+        self.recovery_queue = asyncio.Queue()
+        self.performance_metrics = {
+            'orders_processed': 0,
+            'errors_handled': 0,
+            'recoveries_executed': 0
+        }
+        
+        # Initialize managers
+        self.timeout_manager = HybridTimeoutManager(self)
+        self.cleanup_manager = SmartCleanupManager(self) 
+        self.error_handler = ResilientErrorHandler(self)
+        self.state_tracker = UnifiedStateTracker(self)
+        
+    async def start_orchestration(self):
+        """הפעלת האורכיסטרטור הראשי"""
+        logger.info("🧠 STARTING CENTRAL ORCHESTRATOR - Complete Smart System")
+        
+        # Start all core processes
+        tasks = [
+            self.continuous_order_monitoring(),
+            self.proactive_health_checks(),
+            self.auto_recovery_engine(),
+            self.performance_optimizer(),
+            self.state_synchronizer(),
+            self.market_conditions_watcher()
+        ]
+        
+        for task in tasks:
+            asyncio.create_task(task)
+            
+        logger.info("✅ All orchestration tasks started")
+    
+    async def continuous_order_monitoring(self):
+        """ניטור רצוף של כל Orders - לב המערכת"""
+        while True:
+            try:
+                current_time = time.time()
+                
+                # 1. Track all active orders
+                active_orders = await self.get_all_active_orders()
+                for order in active_orders:
+                    await self.track_order_lifecycle(order)
+                
+                # 2. Check for stuck orders with intelligent timeout
+                await self.timeout_manager.check_order_timeouts()
+                
+                # 3. Proactive cleanup
+                await self.cleanup_manager.cleanup_orphaned_orders()
+                
+                # 4. Update performance metrics
+                self.performance_metrics['orders_processed'] += len(active_orders)
+                
+                await asyncio.sleep(3)  # Every 3 seconds - high frequency
+                
+            except Exception as e:
+                logger.error(f"❌ Order monitoring failed: {e}")
+                await self.error_handler.handle_error('MONITORING_FAILURE', {'error': str(e)})
+                await asyncio.sleep(10)
+    
+    async def track_order_lifecycle(self, order: Dict):
+        """מעקב מלא אחרי מחזור חיי Order"""
+        order_id = order['orderId']
+        symbol = order['symbol']
+        
+        if order_id not in self.order_states:
+            # Initialize new order state
+            self.order_states[order_id] = {
+                'order_id': order_id,
+                'symbol': symbol,
+                'type': order['type'],
+                'side': order['side'],
+                'price': float(order['price']),
+                'quantity': float(order['origQty']),
+                'created_at': time.time(),
+                'status': 'NEW',
+                'events': [{
+                    'timestamp': time.time(),
+                    'event': 'CREATED',
+                    'price': float(order['price']),
+                    'quantity': float(order['origQty'])
+                }],
+                'last_checked': time.time(),
+                'timeout_at': time.time() + await self.timeout_manager.calculate_dynamic_timeout(order)
+            }
+        else:
+            # Update existing order
+            self.order_states[order_id]['last_checked'] = time.time()
+            self.order_states[order_id]['status'] = order['status']
+            
+            # Add heartbeat event
+            self.order_states[order_id]['events'].append({
+                'timestamp': time.time(),
+                'event': 'HEARTBEAT',
+                'status': order['status'],
+                'filled': float(order.get('executedQty', 0))
+            })
+    
+    async def proactive_health_checks(self):
+        """בדיקות בריאות pro-active"""
+        while True:
+            try:
+                health_checks = [
+                    self.check_system_resources(),
+                    self.check_market_connections(),
+                    self.check_api_limits(),
+                    self.check_performance_degradation()
+                ]
+                
+                results = await asyncio.gather(*health_checks, return_exceptions=True)
+                
+                # Update system health
+                healthy_checks = sum(1 for r in results if not isinstance(r, Exception) and r)
+                system_health = 'HEALTHY' if healthy_checks >= 3 else 'DEGRADED'
+                
+                self.system_state['health'] = system_health
+                self.system_state['last_check'] = time.time()
+                
+                if system_health == 'DEGRADED':
+                    logger.warning(f"⚠️ System health degraded - {healthy_checks}/4 checks passed")
+                    await self.recovery_queue.put({
+                        'type': 'SYSTEM_HEALTH',
+                        'health': system_health,
+                        'failed_checks': results
+                    })
+                
+                await asyncio.sleep(30)  # Every 30 seconds
+                
+            except Exception as e:
+                logger.error(f"❌ Health checks failed: {e}")
+                await asyncio.sleep(60)
+    
+    async def auto_recovery_engine(self):
+        """מנוע התאוששות אוטומטי"""
+        while True:
+            try:
+                # Process recovery items with timeout
+                try:
+                    recovery_item = await asyncio.wait_for(
+                        self.recovery_queue.get(), 
+                        timeout=10.0
+                    )
+                    await self.execute_recovery(recovery_item)
+                    self.performance_metrics['recoveries_executed'] += 1
+                except asyncio.TimeoutError:
+                    pass  # No recovery items
+                
+                # Auto-cleanup every 2 minutes
+                if time.time() - getattr(self, 'last_cleanup', 0) > 120:
+                    await self.cleanup_manager.cleanup_old_order_states()
+                    self.last_cleanup = time.time()
+                
+                await asyncio.sleep(5)  # Fast recovery loop
+                
+            except Exception as e:
+                logger.error(f"❌ Auto-recovery failed: {e}")
+                await asyncio.sleep(30)
+    
+    async def execute_recovery(self, recovery_item: Dict):
+        """ביצוע התאוששות"""
+        try:
+            recovery_type = recovery_item['type']
+            
+            if recovery_type == 'ORDER_TIMEOUT':
+                await self.timeout_manager.handle_order_timeout(
+                    recovery_item['order_id'], 
+                    recovery_item['order_state']
+                )
+            elif recovery_type == 'SYSTEM_HEALTH':
+                await self.error_handler.recover_system_health(recovery_item)
+            elif recovery_type == 'NETWORK_ERROR':
+                await self.error_handler.recover_network_error(recovery_item)
+            elif recovery_type == 'API_LIMIT':
+                await self.error_handler.recover_api_limit(recovery_item)
+                
+            logger.info(f"🛡️ Recovery executed for {recovery_type}")
+            
+        except Exception as e:
+            logger.error(f"❌ Recovery execution failed: {e}")
+            await self.error_handler.handle_error('RECOVERY_FAILED', {
+                'recovery_type': recovery_item.get('type'),
+                'error': str(e)
+            })
+    
+    async def performance_optimizer(self):
+        """אופטימיזציית ביצועים אוטומטית"""
+        while True:
+            try:
+                # Analyze performance data
+                performance_data = await self.analyze_performance()
+                
+                # Optimize timeouts based on performance
+                if performance_data['avg_fill_time'] < 10:
+                    # Fast fills - reduce timeouts
+                    self.timeout_manager.base_timeout = max(30, self.timeout_manager.base_timeout * 0.9)
+                elif performance_data['avg_fill_time'] > 45:
+                    # Slow fills - increase timeouts  
+                    self.timeout_manager.base_timeout = min(120, self.timeout_manager.base_timeout * 1.1)
+                
+                # Optimize cleanup intervals
+                if performance_data['orphaned_rate'] > 0.1:
+                    self.cleanup_manager.cleanup_interval = max(60, self.cleanup_manager.cleanup_interval * 0.8)
+                
+                await asyncio.sleep(300)  # Every 5 minutes
+                
+            except Exception as e:
+                logger.error(f"❌ Performance optimization failed: {e}")
+                await asyncio.sleep(600)
+    
+    async def state_synchronizer(self):
+        """סינכרון state עם persistent storage"""
+        while True:
+            try:
+                # Save current state to Redis
+                await self.state_tracker.save_system_state({
+                    'order_states': self.order_states,
+                    'system_state': self.system_state,
+                    'performance_metrics': self.performance_metrics,
+                    'timestamp': time.time()
+                })
+                
+                await asyncio.sleep(60)  # Every minute
+                
+            except Exception as e:
+                logger.error(f"❌ State synchronization failed: {e}")
+                await asyncio.sleep(120)
+    
+    async def market_conditions_watcher(self):
+        """מעקב אחרי תנאי שוק"""
+        while True:
+            try:
+                # Monitor market conditions for all active symbols
+                active_symbols = set()
+                for order_state in self.order_states.values():
+                    if order_state['status'] in ['NEW', 'PARTIALLY_FILLED']:
+                        active_symbols.add(order_state['symbol'])
+                
+                for symbol in active_symbols:
+                    conditions = await self.get_market_conditions(symbol)
+                    
+                    # Adjust strategies based on market conditions
+                    if conditions['volatility'] > 0.05:
+                        # High volatility - be more aggressive with timeouts
+                        await self.timeout_manager.advertise_high_volatility(symbol)
+                    elif conditions['volatility'] < 0.01:
+                        # Low volatility - be more patient
+                        await self.timeout_manager.advertise_low_volatility(symbol)
+                
+                await asyncio.sleep(15)  # Every 15 seconds
+                
+            except Exception as e:
+                logger.error(f"❌ Market conditions watching failed: {e}")
+                await asyncio.sleep(30)
+    
+    # Utility methods
+    async def get_all_active_orders(self) -> List[Dict]:
+        """קבלת כל Orders פעילים מהבורסה"""
+        try:
+            # This should be implemented with your exchange connection
+            # Mock implementation - replace with actual API call
+            return []  # Implement with real data
+        except Exception as e:
+            logger.error(f"❌ Failed to get active orders: {e}")
+            return []
+    
+    async def get_market_conditions(self, symbol: str) -> Dict:
+        """קבלת תנאי שוק עבור סמל"""
+        try:
+            # Mock implementation - replace with actual market data
+            return {
+                'volatility': 0.02,
+                'volume': 1000000,
+                'spread': 0.001,
+                'trend': 'NEUTRAL'
+            }
+        except Exception as e:
+            logger.error(f"❌ Failed to get market conditions: {e}")
+            return {'volatility': 0.02, 'volume': 0, 'spread': 0, 'trend': 'UNKNOWN'}
+    
+    async def check_system_resources(self) -> bool:
+        """בדיקת משאבי מערכת"""
+        try:
+            # Check memory, CPU, etc.
+            return True
+        except Exception as e:
+            logger.error(f"❌ System resources check failed: {e}")
+            return False
+    
+    async def check_market_connections(self) -> bool:
+        """בדיקת חיבורי שוק"""
+        try:
+            # Check exchange connections
+            return True
+        except Exception as e:
+            logger.error(f"❌ Market connections check failed: {e}")
+            return False
+    
+    async def check_api_limits(self) -> bool:
+        """בדיקת מגבלות API"""
+        try:
+            # Check if we're approaching API limits
+            return True
+        except Exception as e:
+            logger.error(f"❌ API limits check failed: {e}")
+            return False
+    
+    async def check_performance_degradation(self) -> bool:
+        """בדיקת ירידת ביצועים"""
+        try:
+            # Check for performance issues
+            return True
+        except Exception as e:
+            logger.error(f"❌ Performance degradation check failed: {e}")
+            return False
+    
+    async def analyze_performance(self) -> Dict:
+        """ניתוח ביצועים"""
+        try:
+            # Analyze system performance
+            return {
+                'avg_fill_time': 30.0,
+                'success_rate': 0.95,
+                'orphaned_rate': 0.02,
+                'error_rate': 0.03
+            }
+        except Exception as e:
+            logger.error(f"❌ Performance analysis failed: {e}")
+            return {'avg_fill_time': 30.0, 'success_rate': 0, 'orphaned_rate': 0, 'error_rate': 1}
+```
+
+### **2. ⏱️ Hybrid Timeout Manager (hybrid_timeout_manager.py)**
+
+```python
+# hybrid_timeout_manager.py
+import time
+import logging
+from typing import Dict, Optional
+
+logger = logging.getLogger(__name__)
+
+class HybridTimeoutManager:
+    """
+    ⏱️ ניהול טיימאאוט היברידי - דינמי ואינטליגנטי
+    """
+    
+    def __init__(self, orchestrator):
+        self.orchestrator = orchestrator
+        self.base_timeout = 60
