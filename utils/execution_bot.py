@@ -709,8 +709,30 @@ class ExecutionBot:
         price_step = (grid_max - grid_min) / (grid_levels - 1) if grid_levels > 1 else 0
         prices = [grid_min + (i * price_step) for i in range(grid_levels)]
         
-        # Calculate quantity per level (split budget evenly across all levels)
+        # 🛡️ SMART GRID: Ensure each level meets Binance minNotional ($100 per order)
+        MIN_NOTIONAL_USD = 100.0
         budget_per_level = budget_usd / grid_levels
+        
+        # CRITICAL: Check if total budget is sufficient for even 1 order
+        if budget_usd < MIN_NOTIONAL_USD:
+            return {
+                "ok": False,
+                "status": "error",
+                "error": "grid_budget_too_low",
+                "detail": f"Budget ${budget_usd:.2f} < ${MIN_NOTIONAL_USD} minNotional requirement. Need at least ${MIN_NOTIONAL_USD}.",
+            }
+        
+        if budget_per_level < MIN_NOTIONAL_USD:
+            adjusted_levels = max(1, int(budget_usd / MIN_NOTIONAL_USD))
+            self.log.warning(
+                f"⚠️ GRID budget too low for {grid_levels} levels "
+                f"(${budget_per_level:.2f}/level < ${MIN_NOTIONAL_USD} minNotional). "
+                f"Reducing to {adjusted_levels} levels to meet Binance requirements."
+            )
+            grid_levels = adjusted_levels
+            price_step = (grid_max - grid_min) / (grid_levels - 1) if grid_levels > 1 else 0
+            prices = [grid_min + (i * price_step) for i in range(grid_levels)]
+            budget_per_level = budget_usd / grid_levels
         
         # Place LIMIT orders at each level
         grid_orders = []

@@ -191,6 +191,47 @@ async def ensure_positions_protected() -> None:
         if not positions:
             return
         
+        # 🧹 AUTO CLEANUP: Close tiny positions (< $5) to prevent leftover dust
+        MINIMUM_POSITION_SIZE_USD = 5.0
+        for pos in positions:
+            try:
+                symbol = pos.get("symbol", "")
+                position_amt = float(pos.get("positionAmt", 0))
+                mark_price = float(pos.get("markPrice", 0))
+                
+                if position_amt == 0:
+                    continue
+                
+                position_value_usd = abs(position_amt * mark_price)
+                
+                if position_value_usd < MINIMUM_POSITION_SIZE_USD:
+                    logger.warning(
+                        f"🧹 AUTO CLEANUP: Closing tiny position {symbol} "
+                        f"(${position_value_usd:.2f} < ${MINIMUM_POSITION_SIZE_USD})"
+                    )
+                    
+                    try:
+                        from utils.binance_client import futures_create_order
+                        
+                        side = "SELL" if position_amt > 0 else "BUY"
+                        qty = abs(position_amt)
+                        
+                        futures_create_order(
+                            symbol=symbol,
+                            side=side,
+                            type="MARKET",
+                            quantity=str(qty),
+                            reduceOnly=True
+                        )
+                        
+                        logger.info(f"✅ Successfully closed tiny position: {symbol}")
+                        
+                    except Exception as close_err:
+                        logger.error(f"❌ Failed to close tiny position {symbol}: {close_err}")
+                        
+            except Exception as cleanup_err:
+                logger.error(f"❌ Position cleanup error: {cleanup_err}")
+        
         # 🛡️ CRITICAL: Emergency Protection Check FIRST
         try:
             from utils.emergency_protection import get_emergency_protection

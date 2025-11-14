@@ -515,10 +515,11 @@ def _on_trade_completion(symbol: str, exit_time: float):
                 "quantity": quantity,
             }
             
-            # Call async send_trade_closed
+            # Call async send_trade_closed with proper task management
             try:
                 loop = asyncio.get_event_loop()
-                loop.create_task(send_trade_closed(close_info))
+                task = loop.create_task(send_trade_closed(close_info))
+                task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
             except RuntimeError:
                 # No event loop - skip for now
                 log.debug("No event loop for send_trade_closed - skipping notification")

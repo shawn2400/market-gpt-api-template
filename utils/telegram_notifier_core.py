@@ -250,10 +250,11 @@ def _maybe_route_ws_ttl(text: str) -> bool:
         return False
     if _is_ws_ttl_alert(text):
         try:
-            asyncio.create_task(_store_change_event({"kind": "ws_ttl_stale", "text": text, "ts": _now()}))
+            ev = {"kind": "ws_ttl_stale", "text": text, "ts": _now()}
+            with open(_changes_file, "a", encoding="utf-8") as f:
+                f.write(json.dumps(ev, ensure_ascii=False) + "\n")
         except Exception:
             pass
-    # החזר True כשבולע את ההודעה כדי לא לשלוח לטלגרם
         return True
     return False
 
