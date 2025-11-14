@@ -11,8 +11,8 @@ logger = logging.getLogger("algogpt.portfolio")
 
 # Configuration
 MAX_CONCURRENT_TRADES = int(os.getenv("MAX_CONCURRENT_TRADES", "4"))
-MIN_BUDGET_PER_TRADE_USDT = float(os.getenv("MIN_BUDGET_PER_TRADE_USDT", "25"))  # ⬆️ Raised from $20 to $25
-MAX_BUDGET_PER_TRADE_USDT = float(os.getenv("MAX_BUDGET_PER_TRADE_USDT", "200"))
+MIN_BUDGET_PER_TRADE_USDT = float(os.getenv("MIN_BUDGET_PER_TRADE_USDT", "25"))  # $25-150 per trade (before leverage)
+MAX_BUDGET_PER_TRADE_USDT = float(os.getenv("MAX_BUDGET_PER_TRADE_USDT", "150"))  # Max $150 before leverage
 TOTAL_WALLET_ALLOCATION_PCT = float(os.getenv("TOTAL_WALLET_ALLOCATION_PCT", "80"))  # Use 80% of wallet
 
 # Score-based leverage multipliers

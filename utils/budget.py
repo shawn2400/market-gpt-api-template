@@ -190,8 +190,8 @@ def get_trade_budget_usdt(
     raw = base * q_mult * v_mult * risk_mult
 
     # רצפה/תקרה
-    floor_usdt = _f("BUDGET_MIN_USDT", 5.0)
-    ceil_usdt  = _f("BUDGET_MAX_USDT", 30.0)  # תקרה רכה - הורד מ-150 ל-30 כדי לאפשר 5-6 trades בו-זמנית
+    floor_usdt = _f("BUDGET_MIN_USDT", 25.0)  # מינימום $25 per trade (before leverage)
+    ceil_usdt  = _f("BUDGET_MAX_USDT", 150.0)  # מקסימום $150 per trade (before leverage)
     hard_cap   = _f("BUDGET_HARD_CAP_USDT", 0.0)  # 0=כבוי
     if hard_cap > 0:
         ceil_usdt = min(ceil_usdt, hard_cap)
