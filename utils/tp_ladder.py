@@ -92,7 +92,7 @@ class TPLadder:
                 if tp_qty <= 0:
                     continue
                 
-                # VALIDATION: Check if TP price is valid BEFORE normalization
+                # VALIDATION: Check if TP price is valid
                 if tp_price is None or tp_price <= 0:
                     log.error(f"[TPLadder] {symbol} TP{i + 1} INVALID PRICE: {tp_price} (entry={entry_price}) - SKIPPING")
                     continue
@@ -103,24 +103,17 @@ class TPLadder:
                     log.warning(f"[TPLadder] {symbol} TP{i + 1} qty too small after rounding")
                     continue
 
-                # Round price to tick size
-                tp_price_str, tp_price_float = self._normalize_price(symbol, tp_price)
-                
-                # VALIDATION: Double-check normalized price
-                if tp_price_float <= 0:
-                    log.error(f"[TPLadder] {symbol} TP{i + 1} INVALID NORMALIZED PRICE: {tp_price_float} (raw={tp_price}) - SKIPPING")
-                    continue
-
                 try:
                     # Build order kwargs
+                    # NOTE: Send raw float price - binance_client will normalize it (single quantization)
                     order_kwargs = {
                         "symbol": symbol,
                         "side": order_side,
                         "type": "LIMIT",
                         "quantity": tp_qty_str,
-                        "price": tp_price_str,
+                        "price": tp_price,  # Send float, not string - binance_client will quantize
                         "timeInForce": "GTC",
-                        "newClientOrderId": f"TP{i + 1}_{symbol}_{int(tp_price_float)}",
+                        "newClientOrderId": f"TP{i + 1}_{symbol}_{int(tp_price * 10000)}",  # Use raw price for ID
                     }
                     
                     # Add positionSide if set, otherwise add reduceOnly
@@ -134,7 +127,7 @@ class TPLadder:
                     if order and "orderId" in order:
                         placed_orders.append(order["orderId"])
                         log.info(
-                            f"[TPLadder] {symbol} placed TP{i + 1} @ {tp_price_float} qty={tp_qty_float} (order {order['orderId']})"
+                            f"[TPLadder] {symbol} placed TP{i + 1} @ {tp_price:.8f} qty={tp_qty_float} (order {order['orderId']})"
                         )
                 except Exception as e:
                     log.error(f"[TPLadder] {symbol} failed to place TP{i + 1}: {e}")
