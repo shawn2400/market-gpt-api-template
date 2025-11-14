@@ -16,9 +16,21 @@ _TG_GRID  = (os.getenv("TG_NOTIFY_GRID","1").strip().lower() in ("1","true","yes
 _TG_MNGR  = (os.getenv("TG_NOTIFY_MANAGER","0").strip().lower() in ("1","true","yes","on"))
 
 def _ensure_chat_id() -> str:
-    chat_id = (os.getenv("ADMIN_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or "").strip()
-    if chat_id in ("", "0"):
+    admin_id = (os.getenv("ADMIN_CHAT_ID") or "").strip()
+    tg_id = (os.getenv("TELEGRAM_CHAT_ID") or "").strip()
+    
+    # Treat "0" as invalid/empty - normalize to empty string
+    if admin_id == "0":
+        admin_id = ""
+    if tg_id == "0":
+        tg_id = ""
+    
+    # Now use the or logic - this will pick first non-empty value
+    chat_id = admin_id or tg_id
+    
+    if not chat_id:
         raise RuntimeError("ADMIN_CHAT_ID/TELEGRAM_CHAT_ID is not set (got invalid value)")
+    
     return chat_id
 
 # ─────────────────────────────────────────────────────────────────────────────
