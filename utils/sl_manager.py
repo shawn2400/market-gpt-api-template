@@ -12,7 +12,14 @@ from __future__ import annotations
 import logging
 import time
 import os
+import asyncio
+import functools
 from typing import Optional, Dict, Any
+
+try:
+    from utils.redis_helper import acquire_sltp_lock
+except ImportError:
+    acquire_sltp_lock = None
 
 log = logging.getLogger(__name__)
 
@@ -307,3 +314,47 @@ class ZeroGapSLManager:
         except Exception as e:
             log.error(f"[ZeroGapSL] {symbol} error: {e}")
             return {"success": False, "error": str(e), "new_order_id": None, "cancelled_count": 0}
+    
+    async def safe_replace_sl_async(
+        self,
+        symbol: str,
+        new_stop_price: float,
+        qty: float,
+        side: str,
+        position_side: Optional[str] = None,
+        max_verify_attempts: int = 3,
+        is_grid: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        🔒 Async wrapper with RedisLock for safe_replace_sl.
+        Runs existing sync logic in thread executor under distributed lock.
+        """
+        if not acquire_sltp_lock:
+            log.warning(f"⚠️ RedisLock unavailable - using sync fallback: {symbol}")
+            return self.safe_replace_sl(symbol, new_stop_price, qty, side, position_side, max_verify_attempts, is_grid)
+        
+        try:
+            lock_key = position_side or side
+            async with acquire_sltp_lock(symbol, lock_key):
+                log.debug(f"🔒 Acquired lock for SL update: {symbol} {lock_key}")
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        self.safe_replace_sl,
+                        symbol=symbol,
+                        new_stop_price=new_stop_price,
+                        qty=qty,
+                        side=side,
+                        position_side=position_side,
+                        max_verify_attempts=max_verify_attempts,
+                        is_grid=is_grid
+                    )
+                )
+                return result
+        except RuntimeError as e:
+            log.warning(f"⏱️ SL update deferred (lock busy): {symbol} - {e}")
+            return {"success": False, "error": "lock_busy", "time_blocked": True}
+        except Exception as e:
+            log.error(f"❌ SL async wrapper failed: {symbol} - {e}")
+            return {"success": False, "error": str(e)}

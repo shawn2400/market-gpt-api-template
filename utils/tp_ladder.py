@@ -6,7 +6,14 @@ Places TP1-TP4 with configurable weights (50%/30%/20%).
 from __future__ import annotations
 import logging
 import os
+import asyncio
+import functools
 from typing import Dict, Any, List, Optional
+
+try:
+    from utils.redis_helper import acquire_sltp_lock
+except ImportError:
+    acquire_sltp_lock = None
 
 log = logging.getLogger(__name__)
 
@@ -140,6 +147,48 @@ class TPLadder:
 
         except Exception as e:
             log.error(f"[TPLadder] {symbol} error: {e}")
+            return {"success": False, "error": str(e), "placed_orders": []}
+    
+    async def set_tp_ladder_async(
+        self,
+        symbol: str,
+        entry_price: float,
+        qty: float,
+        side: str,
+        tp_prices: List[float],
+        position_side: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        🔒 Async wrapper with RedisLock for set_tp_ladder.
+        Runs existing sync logic in thread executor under distributed lock.
+        """
+        if not acquire_sltp_lock:
+            log.warning(f"⚠️ RedisLock unavailable - using sync fallback: {symbol}")
+            return self.set_tp_ladder(symbol, entry_price, qty, side, tp_prices, position_side)
+        
+        try:
+            lock_key = position_side or side
+            async with acquire_sltp_lock(symbol, lock_key):
+                log.debug(f"🔒 Acquired lock for TP ladder: {symbol} {lock_key}")
+                loop = asyncio.get_running_loop()
+                result = await loop.run_in_executor(
+                    None,
+                    functools.partial(
+                        self.set_tp_ladder,
+                        symbol=symbol,
+                        entry_price=entry_price,
+                        qty=qty,
+                        side=side,
+                        tp_prices=tp_prices,
+                        position_side=position_side
+                    )
+                )
+                return result
+        except RuntimeError as e:
+            log.warning(f"⏱️ TP ladder update deferred (lock busy): {symbol} - {e}")
+            return {"success": False, "error": "lock_busy", "placed_orders": [], "time_blocked": True}
+        except Exception as e:
+            log.error(f"❌ TP async wrapper failed: {symbol} - {e}")
             return {"success": False, "error": str(e), "placed_orders": []}
 
     def _cancel_existing_tps(self, symbol: str, position_side: Optional[str] = None) -> int:

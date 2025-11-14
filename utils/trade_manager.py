@@ -825,7 +825,7 @@ async def manage_open_trades():
                                         
                                         # Execute Zero-Gap SL update
                                         # For hedge mode, we must send positionSide=side
-                                        ok1 = _sl_manager.safe_replace_sl(
+                                        ok1 = await _sl_manager.safe_replace_sl_async(
                                             symbol=context["symbol"],
                                             new_stop_price=sl_p,
                                             qty=qtz,
@@ -847,7 +847,7 @@ async def manage_open_trades():
                                                 tp_level = entry - (sl_dist * mult)
                                             tp_prices.append(quantize_price(tp_level, tick_size))
                                         
-                                        ok2 = _tp_ladder.set_tp_ladder(
+                                        ok2 = await _tp_ladder.set_tp_ladder_async(
                                             context["symbol"],
                                             entry,
                                             qtz,
