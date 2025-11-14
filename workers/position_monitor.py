@@ -340,12 +340,13 @@ async def ensure_positions_protected() -> None:
                             )
                             
                             logger.info(f"🚀 {symbol}: Breakeven SL activated @ {be_price:.8f}")
-                            # 🛡️ FIX: Use Markdown-safe format
+                            # 🛡️ FIX: Use parse_mode="" to disable TELEGRAM_PARSE_MODE env override
                             await send_telegram_message(
-                                f"🚀 *Breakeven Activated*\n\n"
-                                f"Symbol: `{symbol}`\n"
-                                f"SL moved to breakeven: `{be_price:.8f}`\n\n"
-                                f"Position now risk-free!"
+                                f"🚀 Breakeven Activated\n\n"
+                                f"Symbol: {symbol}\n"
+                                f"SL moved to breakeven: {be_price:.8f}\n\n"
+                                f"Position now risk-free!",
+                                parse_mode=""  # Empty string = no formatting, ignores env var
                             )
                             continue
                             

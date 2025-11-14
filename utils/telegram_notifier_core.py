@@ -304,7 +304,11 @@ def _cooldown_ok(key: Optional[str], cooldown_sec: int) -> bool:
     return True
 
 # ===================== Low-level send =====================
-async def _http_send(text: str, chat_id: Optional[int] = None) -> None:
+async def _http_send(text: str, chat_id: Optional[int] = None, parse_mode: str = "HTML") -> None:
+    """
+    🛡️ FIX: Added parse_mode parameter to support both HTML and Markdown
+    Default: HTML (for backward compatibility)
+    """
     if _maybe_route_ws_ttl(text):
         return
     if not BOT_TOKEN or (chat_id is None and CHAT_ID == 0):
@@ -321,12 +325,15 @@ async def _http_send(text: str, chat_id: Optional[int] = None) -> None:
     try:
         import httpx
         async with httpx.AsyncClient(timeout=10.0) as cli:
-            await cli.post(f"{API_BASE}/sendMessage", data={
+            resp = await cli.post(f"{API_BASE}/sendMessage", data={
                 "chat_id": cid,
                 "text": text,
-                "parse_mode": "HTML",
+                "parse_mode": parse_mode,  # 🛡️ FIX: Use parameter instead of hardcoded HTML
                 "disable_web_page_preview": True,
             })
+            # 🛡️ FIX: Log error details on 400
+            if resp.status_code == 400:
+                logger.error({"event":"tg.400_error","response":resp.text,"parse_mode":parse_mode})
     except Exception as e:
         logger.warning({"event":"tg.send_failed","error":str(e)})
 
@@ -358,15 +365,16 @@ async def _http_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_i
     except Exception as e:
         logger.warning({"event":"tg.send_failed","error":str(e)})
 
-async def _tg_send(text: str, chat_id: Optional[int] = None) -> None:
+async def _tg_send(text: str, chat_id: Optional[int] = None, parse_mode: str = "HTML") -> None:
+    """🛡️ FIX: Added parse_mode parameter (default HTML for backward compatibility)"""
     try:
-        await _http_send(text, chat_id=chat_id)
+        await _http_send(text, chat_id=chat_id, parse_mode=parse_mode)
     except RuntimeError:
         try:
-            asyncio.get_event_loop().create_task(_http_send(text, chat_id=chat_id))
+            asyncio.get_event_loop().create_task(_http_send(text, chat_id=chat_id, parse_mode=parse_mode))
         except Exception:
             loop = asyncio.new_event_loop()
-            loop.run_until_complete(_http_send(text, chat_id=chat_id))
+            loop.run_until_complete(_http_send(text, chat_id=chat_id, parse_mode=parse_mode))
             loop.close()
 
 async def _tg_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_id: Optional[int] = None) -> None:

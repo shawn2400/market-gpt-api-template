@@ -48,8 +48,12 @@ async def send_message(
         logger.error("TELEGRAM_BOT_TOKEN missing")
         return {"ok": False, "error": "missing TELEGRAM_BOT_TOKEN"}
 
+    # 🛡️ FIX: Respect explicit parse_mode="" as "no formatting"
+    # Only apply PARSE_MODE_ENV if parse_mode is None (not provided)
     if parse_mode is None:
         parse_mode = PARSE_MODE_ENV
+    elif parse_mode == "":
+        parse_mode = None  # Empty string means "no parse_mode"
 
     payload: Dict[str, Any] = {
         "chat_id": _chat_default(chat_id),
@@ -65,6 +69,9 @@ async def send_message(
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.post(f"{BASE}/sendMessage", json=payload)
+            # 🛡️ FIX: Log detailed error on 400
+            if r.status_code == 400:
+                logger.error({"event":"telegram_400_error","payload":payload,"response":r.text})
             return r.json()
     except Exception as e:
         logger.error("send_message failed: %s", e)
