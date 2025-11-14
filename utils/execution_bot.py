@@ -54,6 +54,17 @@ class ExecutionBot:
         except Exception as e:
             self.log.warning(f"⚠️ SmartOrderRouter unavailable: {e}")
             self._order_router = None
+        
+        # ⏱️ Initialize Order Timeout Monitor
+        try:
+            from utils.order_timeout_monitor import get_timeout_monitor
+            from utils.binance_client import get_futures_client
+            client = get_futures_client()
+            self._timeout_monitor = get_timeout_monitor(client)
+            self.log.info("✅ OrderTimeoutMonitor loaded and started")
+        except Exception as e:
+            self.log.warning(f"⚠️ OrderTimeoutMonitor unavailable: {e}")
+            self._timeout_monitor = None
 
     async def open_position(
         self,
@@ -521,6 +532,24 @@ class ExecutionBot:
 
             try:
                 order = client.futures_create_order(**attempt_order)
+                
+                # ⏱️ Track LIMIT orders for timeout monitoring
+                if order_type == "LIMIT" and self._timeout_monitor and order:
+                    try:
+                        order_id = order.get("orderId")
+                        if order_id:
+                            self._timeout_monitor.track_order(
+                                order_id=order_id,
+                                symbol=symbol,
+                                side=side,
+                                quantity=str(qty),
+                                order_type="ENTRY",
+                                position_side=attempt_order.get("positionSide")
+                            )
+                            self.log.info(f"⏱️ Tracking LIMIT order {order_id} for timeout")
+                    except Exception as track_err:
+                        self.log.warning(f"Failed to track order for timeout: {track_err}")
+                
                 return {"ok": True, "exchange": "binance_futures", "order": order}
             except Exception as e1:
                 if "code=-4061" not in str(e1) and "position side does not match" not in str(e1).lower():
