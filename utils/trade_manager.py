@@ -26,6 +26,7 @@ from utils.binance_client import (
     futures_create_order,
     get_symbol_filters,
 )
+from utils.redis_helper import acquire_sltp_lock
 
 # Guard (optional, safe if missing)
 with suppress(Exception):
@@ -262,7 +263,11 @@ def _current_stop(symbol: str, side: str) -> Optional[float]:
         return None
     return max(stops) if side.upper() == "LONG" else min(stops)
 
-def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
+def _modify_stop_loss_impl(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Internal implementation of SL modification (sync).
+    Use modify_stop_loss_async() for distributed-lock-protected updates.
+    """
     # 🛡️ GUARD: Position Monitor owns all SL/TP management
     if not FILLS_WATCHER_PROTECT_ENABLE:
         return {"ok": False, "error": "Fills Watcher protection disabled - Position Monitor owns SL/TP"}
@@ -323,7 +328,11 @@ def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LON
         logger.error(f"[modify_stop_loss] {sym} failed: {e}")
         return {"ok": False, "error": str(e)}
 
-def modify_take_profit(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
+def _modify_take_profit_impl(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
+    """
+    Internal implementation of TP modification (sync).
+    Use modify_take_profit_async() for distributed-lock-protected updates.
+    """
     # 🛡️ GUARD: Position Monitor owns all SL/TP management
     if not FILLS_WATCHER_PROTECT_ENABLE:
         return {"ok": False, "error": "Fills Watcher protection disabled - Position Monitor owns SL/TP"}
@@ -370,6 +379,54 @@ def modify_take_profit(symbol: str, new_price: float, *, position_side: str = "L
         return {"ok": True, "response": resp}
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+async def modify_stop_loss_async(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
+    """
+    🔒 Distributed-lock-protected SL update.
+    Thread-safe across fills_watcher, position_monitor, and other workers.
+    """
+    try:
+        async with acquire_sltp_lock(symbol, position_side):
+            logger.debug(f"🔒 Acquired lock for SL update: {symbol} {position_side}")
+            return _modify_stop_loss_impl(symbol, new_price, position_side=position_side, qty_hint=qty_hint)
+    except RuntimeError as e:
+        logger.warning(f"⏱️ SL update deferred (lock busy): {symbol} {position_side} - {e}")
+        return {"ok": False, "error": "lock_busy", "reason": str(e)}
+    except Exception as e:
+        logger.error(f"❌ SL update failed: {symbol} {position_side} - {e}")
+        return {"ok": False, "error": str(e)}
+
+async def modify_take_profit_async(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
+    """
+    🔒 Distributed-lock-protected TP update.
+    Thread-safe across fills_watcher, position_monitor, and other workers.
+    """
+    try:
+        async with acquire_sltp_lock(symbol, position_side):
+            logger.debug(f"🔒 Acquired lock for TP update: {symbol} {position_side}")
+            return _modify_take_profit_impl(symbol, new_price, position_side=position_side, qty_hint=qty_hint)
+    except RuntimeError as e:
+        logger.warning(f"⏱️ TP update deferred (lock busy): {symbol} {position_side} - {e}")
+        return {"ok": False, "error": "lock_busy", "reason": str(e)}
+    except Exception as e:
+        logger.error(f"❌ TP update failed: {symbol} {position_side} - {e}")
+        return {"ok": False, "error": str(e)}
+
+def modify_stop_loss(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
+    """
+    ⚠️ Legacy sync wrapper - NO distributed lock protection!
+    Use modify_stop_loss_async() for cross-worker safety.
+    """
+    logger.warning(f"⚠️ modify_stop_loss called sync (no distributed lock): {symbol} {position_side}")
+    return _modify_stop_loss_impl(symbol, new_price, position_side=position_side, qty_hint=qty_hint)
+
+def modify_take_profit(symbol: str, new_price: float, *, position_side: str = "LONG", qty_hint: Optional[float] = None) -> Dict[str, Any]:
+    """
+    ⚠️ Legacy sync wrapper - NO distributed lock protection!
+    Use modify_take_profit_async() for cross-worker safety.
+    """
+    logger.warning(f"⚠️ modify_take_profit called sync (no distributed lock): {symbol} {position_side}")
+    return _modify_take_profit_impl(symbol, new_price, position_side=position_side, qty_hint=qty_hint)
 
 try:
     from utils.binance_client import set_breakeven_stop as _set_be_native  # type: ignore
@@ -846,7 +903,7 @@ async def manage_open_trades():
                                 logger.error("[manage] native BE failed: %s", e)
                         else:
                             try:
-                                modify_stop_loss(sym, entry, position_side=side)
+                                await modify_stop_loss_async(sym, entry, position_side=side)
                                 await notify_sl_tp_update(sym, side, "breakeven", entry, entry=entry, leverage=leverage)
                             except Exception as e:
                                 logger.error("[manage] BE fallback failed: %s", e)
@@ -1021,7 +1078,7 @@ async def handle_order_filled(event: Dict[str, Any]):
                 except Exception:
                     pass
                 
-                modify_stop_loss(symbol, entry, position_side=side)
+                await modify_stop_loss_async(symbol, entry, position_side=side)
                 await notify_sl_tp_update(symbol, side, "breakeven", entry, entry=entry, leverage=leverage)
                 with suppress(Exception):
                     ensure_protective_stop(symbol, prefer_mode="native")
@@ -1094,7 +1151,7 @@ async def _be_guard_tick():
                 _ = _set_be_native(symbol, offset_bps=TP_BE_OFFSET_BPS)
                 await notify_sl_tp_update(symbol, side, "breakeven", entry, entry=entry, leverage=leverage)
             else:
-                modify_stop_loss(symbol, entry, position_side=side)
+                await modify_stop_loss_async(symbol, entry, position_side=side)
                 await notify_sl_tp_update(symbol, side, "breakeven", entry, entry=entry, leverage=leverage)
 
             with suppress(Exception):
