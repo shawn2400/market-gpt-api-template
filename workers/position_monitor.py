@@ -65,6 +65,15 @@ except Exception as e:
     risk_manager = None  # type: ignore
     logger.warning(f"⚠️ Advanced Risk Manager unavailable: {e}")
 
+# 🧠 BREAKEVEN STATE MANAGER (Prevent Duplicate Notifications)
+try:
+    from utils.breakeven_state import get_breakeven_state_manager
+    breakeven_state = get_breakeven_state_manager()
+    logger.info("✅ Breakeven State Manager loaded successfully")
+except Exception as e:
+    breakeven_state = None  # type: ignore
+    logger.warning(f"⚠️ Breakeven State Manager unavailable: {e}")
+
 async def calculate_symbol_atr(symbol: str, period: int = 14) -> float:
     """
     Calculate ATR (Average True Range) for a symbol
@@ -138,6 +147,11 @@ def cleanup_orders_for_closed_positions(closed_symbols: List[str]) -> None:
             
             logger.info(f"🧹 Cleaning up orders for closed position: {symbol}")
             futures_cancel_all_orders(symbol)  # Fire and forget - don't await in sync function
+            
+            # 🧠 Cleanup breakeven state
+            if breakeven_state:
+                breakeven_state.cleanup_symbol(symbol)
+            
             logger.info(f"✅ Cancelled all orders for {symbol}")
         except Exception as e:
             logger.error(f"❌ Error cancelling orders for {symbol}: {e}")
@@ -335,14 +349,28 @@ async def ensure_positions_protected() -> None:
                             )
                             
                             logger.info(f"🚀 {symbol}: Breakeven SL activated @ {be_price:.8f}")
-                            # 🛡️ FIX: Use parse_mode="" to disable TELEGRAM_PARSE_MODE env override
-                            await send_telegram_message(
-                                f"🚀 Breakeven Activated\n\n"
-                                f"Symbol: {symbol}\n"
-                                f"SL moved to breakeven: {be_price:.8f}\n\n"
-                                f"Position now risk-free!",
-                                parse_mode=""  # Empty string = no formatting, ignores env var
-                            )
+                            
+                            # 🧠 DEDUPLICATION: Only send Telegram if price changed or first time
+                            should_notify = True
+                            if breakeven_state:
+                                should_notify = breakeven_state.should_send_notification(symbol, be_price)
+                            
+                            if should_notify:
+                                # 🛡️ FIX: Use parse_mode="" to disable TELEGRAM_PARSE_MODE env override
+                                await send_telegram_message(
+                                    f"🚀 Breakeven Activated\n\n"
+                                    f"Symbol: {symbol}\n"
+                                    f"SL moved to breakeven: {be_price:.8f}\n\n"
+                                    f"Position now risk-free!",
+                                    parse_mode=""  # Empty string = no formatting, ignores env var
+                                )
+                                
+                                # Mark as sent
+                                if breakeven_state:
+                                    breakeven_state.mark_sent(symbol, be_price)
+                            else:
+                                logger.debug(f"🔇 {symbol}: Breakeven notification suppressed (duplicate)")
+                            
                             continue
                             
                         except Exception as be_err:
