@@ -667,10 +667,13 @@ async def _emit(payload: Dict[str, Any]) -> bool:
             quality_value = payload.get("quality_score")
             LOGGER.info(f"🔍 STANDALONE DEBUG {sym}: quality_score={quality_value}, keys={list(payload.keys())}")
             
+            # 💰 DYNAMIC BUDGET FALLBACK: Use MIN budget if payload missing budget_usd
+            min_budget_fallback = float(os.getenv("BUDGET_MIN_USDT", "25.0"))
+            
             ticket = {
                 "symbol": payload.get("symbol"),
                 "side": execution_side,
-                "budget_usd": payload.get("budget_usd") or payload.get("notional_usd", 100.0),
+                "budget_usd": payload.get("budget_usd") or payload.get("notional_usd", min_budget_fallback),
                 "leverage": payload.get("leverage", 2),
                 "entry": payload.get("entry") or payload.get("current_price"),
                 "sl": payload.get("sl"),
@@ -1851,14 +1854,14 @@ async def process_cycle():
         # Use 1x MIN budget as safety buffer for dynamic sizing
         # Changed from 2.0x to 1.0x to allow trading with lower balances
         min_budget = float(os.getenv("BUDGET_MIN_USDT", "25.0"))  # ⬆️ Raised from $10 to $25
-        safety_buffer = min_budget * 1.0  # $10 minimum for realistic trades
+        safety_buffer = min_budget * 1.0  # $25 minimum for realistic trades
         if available < safety_buffer:
             LOGGER.warning(
-                f"⏸️ CYCLE PAUSED: Insufficient free margin (${available:.2f} < ${safety_buffer:.2f}). "
-                f"Skipping entire scan cycle to avoid proposal spam. "
-                f"Will resume when funds available."
+                f"⏸️ ON DEMAND MODE: Insufficient margin (${available:.2f} < ${safety_buffer:.2f}). "
+                f"Skipping scan cycle to save resources. "
+                f"Fast polling enabled - will resume when margin freed."
             )
-            return  # Skip entire cycle
+            return False  # 🔄 Signal fast polling mode (10-15s)
     except Exception as e:
         LOGGER.debug(f"Margin check failed (proceeding anyway): {e}")
 
@@ -1970,7 +1973,8 @@ async def process_cycle():
         # ⚠️ BYPASS for GRID: GRID is range-based, not indicators-based - skip Smart Filter
         if ttype == "GRID":
             LOGGER.info(f"✅ Smart Filter BYPASSED for GRID trade {symbol} (range-based strategy)")
-            payload["quality_score"] = 7.0  # GRID gets default good quality
+            # Use dynamic quality from context (4-9 auto), not hardcoded 7.0
+            payload["quality_score"] = _quality_from_ctx(ctx) or 6.0  # Default 6.0 if no quality in context
         else:
             try:
                 from utils.smart_filter import smart_pre_filter
@@ -2289,6 +2293,7 @@ async def process_cycle():
 
     await asyncio.gather(*(worker(s) for s in symbols), return_exceptions=True)
     LOGGER.info("cycle finished: symbols=%d accepted=%d cap=%d", len(symbols), accepted, cap_per_cycle)
+    return True  # ✅ Successful scan completed
 
 async def main():
     # ========== MODULE VERSION VERIFICATION ==========
@@ -2323,8 +2328,21 @@ async def main():
                 tracker = get_cost_tracker()
                 
                 cycle_start = time.time()
-                await process_cycle()
+                cycle_result = await process_cycle()  # 🔄 Get return value
                 cycle_duration = time.time() - cycle_start
+                
+                # 🔄 ON DEMAND MODE: Fast polling when margin insufficient
+                # If process_cycle() returned False (skipped scan), use 10s polling
+                # If returned True or None (completed scan), use normal interval
+                if cycle_result is False:
+                    # ⚡ FAST POLLING: Check every 10 seconds for freed margin
+                    fast_poll_interval = 10
+                    LOGGER.info(
+                        f"⏸️ ON DEMAND: Next margin check in {fast_poll_interval}s "
+                        f"(fast polling until margin available)"
+                    )
+                    await asyncio.sleep(fast_poll_interval)
+                    continue  # Skip cost logging when no scan occurred
                 
                 # Reset cycle counter and log cost
                 cycle_cost = tracker.reset_cycle()

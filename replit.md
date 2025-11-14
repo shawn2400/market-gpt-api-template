@@ -21,7 +21,7 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **AI-Powered Proposals**: Uses DeepSeek Chat for trade decisions with adaptive Risk/Reward, intelligent brain management, and dynamic quality threshold enforcement.
 -   **GRID Trading**: Integrated FUTURES GRID trading with dynamic symbol selection and tiered strategies.
 -   **Risk Management**: Includes quality filters, dynamic filters, liquidity checks, cooldowns, daily trade caps, and a circuit breaker.
--   **Dynamic Budget System**: Real-time trade budget calculation based on account equity, trade quality, and volatility.
+-   **Dynamic Budget System v2.0**: Real-time trade budget calculation ($25-$150 per trade) based on available wallet balance, trade quality, and volatility. Auto-adapts to available margin with ON DEMAND mode - fast polling (10s) when margin < $25, immediate resume when funds freed. Default: 50% of available balance per trade, scaled by quality score (5-9). Uses withdrawAvailable ($70) instead of availableBalance ($0.17) for accurate free cash reading.
 -   **Dynamic SL/TP Calculation**: ATR-based Stop Loss and RR-based Take Profit.
 -   **Complete Data Persistence**: All critical data is saved to a PostgreSQL database.
 

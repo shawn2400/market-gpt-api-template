@@ -55,8 +55,12 @@ def _load_json_env(v: str, default: Dict[str, Any] | None = None) -> Dict[str, A
 def _get_equity_usdt(*, use_available: bool = True) -> float:
     """
     מביא Equity ב־USDT מחשבון Futures:
-      • קודם מנסה availableBalance/withdrawAvailable
+      • קודם מנסה withdrawAvailable/maxWithdrawAmount (free cash) - HIGHEST PRIORITY
+      • אחר כך availableBalance (may include maintenance margin)
       • אם לא קיים — משתמש ב־walletBalance/balance/total
+    
+    🔧 FIX: Prefer withdrawAvailable over availableBalance to get real free cash ($70)
+            instead of maintenance margin ($0.17)
     """
     try:
         bals = futures_balance() or []
@@ -64,13 +68,27 @@ def _get_equity_usdt(*, use_available: bool = True) -> float:
             asset = str(a.get("asset") or a.get("assetName") or "").upper()
             if asset != "USDT":
                 continue
+            
+            # 💰 PRIORITY ORDER: withdrawAvailable > maxWithdrawAmount > availableBalance
             if use_available:
-                for k in ("availableBalance", "withdrawAvailable", "available"):
+                # First check real free cash (withdrawAvailable/maxWithdrawAmount)
+                for k in ("withdrawAvailable", "maxWithdrawAmount"):
+                    if k in a and a[k] is not None:
+                        try:
+                            val = float(a[k])
+                            if val > 0:  # Return first positive value
+                                return val
+                        except Exception:
+                            pass
+                
+                # Fallback to availableBalance/available (may include maintenance margin)
+                for k in ("availableBalance", "available"):
                     if k in a and a[k] is not None:
                         try:
                             return float(a[k])
                         except Exception:
                             pass
+            
             # fallback total/wallet
             for k in ("walletBalance", "balance", "cashBalance", "total"):
                 if k in a and a[k] is not None:
@@ -168,14 +186,17 @@ def get_trade_budget_usdt(
       • אחרת → חוזר לערך סטטי MAX_TRADE_BUDGET (תאימות לאחור).
     התקציב מוחל באופן אחיד על כל הסימבולים (דינמיקה גלובלית), למעט רצפת ה-minNotional.
     """
-    # כבוי — סטטי
-    if not _b("DYNAMIC_BUDGET_ENABLE", False):
+    # 🔄 DYNAMIC BUDGET: Default TRUE for auto-scaling based on available balance
+    # Set DYNAMIC_BUDGET_ENABLE=0 to use static MAX_TRADE_BUDGET instead
+    if not _b("DYNAMIC_BUDGET_ENABLE", True):  # Changed default from False to True
         return _f("MAX_TRADE_BUDGET", 100.0)
 
     # בסיס: אחוז מההון הזמין/כולל
     use_avail = _b("BUDGET_USE_AVAILABLE_BALANCE", True)
     equity = _get_equity_usdt(use_available=use_avail)
-    base_pct = _f("BUDGET_PCT_OF_EQUITY", 1.0)  # אחוז
+    # 💡 Changed default from 1% to 50% for better capital utilization with small balances
+    # Example: $70 available → 50% = $35 per trade (within $25-$150 range)
+    base_pct = _f("BUDGET_PCT_OF_EQUITY", 50.0)  # אחוז (was 1.0)
     base = float(equity) * (float(base_pct) / 100.0)
 
     # מכפלה לפי איכות (אם יש ציון)
@@ -199,10 +220,13 @@ def get_trade_budget_usdt(
     budget = max(floor_usdt, min(raw, ceil_usdt))
 
     # הבטחת notional מינימלי לפי סימבול (אם הועבר)
+    # 🔧 FIX: Use floor_usdt ($25) instead of DEFAULT_MIN_NOTIONAL ($100) when no symbol
+    #        DEFAULT_MIN_NOTIONAL is a legacy spot value, futures minimums are ~$5
     try:
-        mn = _min_notional_for(symbol) if symbol else DEFAULT_MIN_NOTIONAL
-        # אם התקציב הוא Margin — אין חובה להבטיח כאן נומינלי, אבל נשמור על רצפה מינימלית
-        budget = max(budget, float(mn))
+        if symbol:
+            mn = _min_notional_for(symbol)  # Get symbol-specific minimum
+            budget = max(budget, float(mn))
+        # else: Skip minNotional check - floor_usdt ($25) already enforced above
     except Exception:
         pass
 
@@ -248,8 +272,9 @@ def get_budget_usdt(
 ) -> float:
     """
     מעטפת: אם דינמי דלוק → דינמי; אחרת → סטטי (MAX_TRADE_BUDGET).
+    🔄 Changed default to True for consistent dynamic budget behavior
     """
-    if _b("DYNAMIC_BUDGET_ENABLE", False):
+    if _b("DYNAMIC_BUDGET_ENABLE", True):  # Changed default from False to True
         return get_trade_budget_usdt(symbol=symbol, quality=quality, atr=atr, price=price)
     return _f("MAX_TRADE_BUDGET", 100.0)
 
