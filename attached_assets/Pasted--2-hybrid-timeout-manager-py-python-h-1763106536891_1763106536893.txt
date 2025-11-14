@@ -1,0 +1,492 @@
+# 🚀 **המשך הטמעה - הקבצים הנוספים**
+
+## **📁 שלב 2: hybrid_timeout_manager.py**
+
+```python
+# hybrid_timeout_manager.py
+import time
+import logging
+from typing import Dict
+
+logger = logging.getLogger(__name__)
+
+class HybridTimeoutManager:
+    """
+    🎯 ניהול טיימאאוט היברידי - דינמי + חכם
+    """
+    
+    def __init__(self, orchestrator):
+        self.orchestrator = orchestrator
+        self.base_timeout = 60  # 60 seconds base
+        self.performance_data = {}
+        self.volatility_cache = {}
+        
+    async def calculate_dynamic_timeout(self, order_data: Dict) -> float:
+        """חישוב טיימאאוט דינמי לפי תנאים"""
+        
+        symbol = order_data['symbol']
+        order_type = order_data.get('type', 'LIMIT')
+        
+        # Base calculation
+        timeout = self.base_timeout
+        
+        # Market volatility adjustment
+        volatility = await self.get_symbol_volatility(symbol)
+        if volatility > 0.04:    # High volatility
+            timeout *= 0.6       # 60% - more aggressive
+        elif volatility < 0.015: # Low volatility  
+            timeout *= 1.4       # 140% - more patience
+        
+        # Order type adjustment
+        type_multipliers = {
+            'ENTRY_LIMIT': 1.2,
+            'TP_LIMIT': 0.8, 
+            'STOP_LIMIT': 0.7,
+            'GRID_ORDER': 1.5,
+            'MARKET': 0.3
+        }
+        timeout *= type_multipliers.get(order_type, 1.0)
+        
+        # Time of day adjustment
+        hour = time.localtime().tm_hour
+        if 14 <= hour <= 22:  # Active hours
+            timeout *= 0.8
+        else:  # Quiet hours
+            timeout *= 1.3
+        
+        return max(30, min(timeout, 180))  # Limit 30-180 seconds
+    
+    async def get_symbol_volatility(self, symbol: str) -> float:
+        """חישוב volatility של סמל"""
+        try:
+            # Use cached volatility if recent
+            if symbol in self.volatility_cache:
+                cache_time, volatility = self.volatility_cache[symbol]
+                if time.time() - cache_time < 300:  # 5 minutes cache
+                    return volatility
+            
+            # Calculate volatility from recent price data
+            klines = await self.orchestrator.binance.get_klines(symbol, "1m", limit=20)
+            if len(klines) < 10:
+                return 0.02  # Default medium volatility
+            
+            highs = [float(k[2]) for k in klines]
+            lows = [float(k[3]) for k in klines]
+            
+            price_range = max(highs) - min(lows)
+            avg_price = (sum(highs) + sum(lows)) / (len(highs) * 2)
+            
+            if avg_price == 0:
+                return 0.02
+                
+            volatility = price_range / avg_price
+            
+            # Cache the result
+            self.volatility_cache[symbol] = (time.time(), volatility)
+            return volatility
+            
+        except Exception as e:
+            logger.error(f"❌ Volatility calculation failed for {symbol}: {e}")
+            return 0.02  # Default medium volatility
+    
+    async def check_order_timeouts(self):
+        """בדיקת טיימאאוטים עם intelligence"""
+        current_time = time.time()
+        
+        for order_id, order_state in list(self.orchestrator.order_states.items()):
+            if order_state['status'] != 'ACTIVE':
+                continue
+                
+            timeout_threshold = order_state.get('timeout_at', current_time + 60)
+            
+            # Pre-timeout check (80% of timeout)
+            if current_time >= timeout_threshold * 0.8:
+                await self.pre_timeout_analysis(order_id, order_state)
+            
+            # Actual timeout
+            if current_time >= timeout_threshold:
+                await self.handle_order_timeout(order_id, order_state)
+    
+    async def pre_timeout_analysis(self, order_id: str, order_state: Dict):
+        """ניתוח pro-active לפני טיימאאוט"""
+        try:
+            symbol = order_state['symbol']
+            current_conditions = await self.get_market_conditions(symbol)
+            
+            # Check if order is near fill price
+            if await self.is_near_fill_price(symbol, order_state.get('price', 0)):
+                # Extend timeout for orders near fill
+                new_timeout = order_state['timeout_at'] + 30  # +30 seconds
+                order_state['timeout_at'] = new_timeout
+                logger.info(f"⏱️ Extended timeout for {order_id} - near fill price")
+                return
+            
+            # Check if market is moving towards our price
+            if await self.is_market_moving_towards_price(symbol, order_state.get('price', 0)):
+                new_timeout = order_state['timeout_at'] + 15  # +15 seconds
+                order_state['timeout_at'] = new_timeout
+                logger.info(f"⏱️ Extended timeout for {order_id} - market moving towards price")
+                
+        except Exception as e:
+            logger.error(f"❌ Pre-timeout analysis failed for {order_id}: {e}")
+    
+    async def handle_order_timeout(self, order_id: str, order_state: Dict):
+        """טיפול חכם ב-Order timeout"""
+        try:
+            symbol = order_state['symbol']
+            
+            # Get current market analysis
+            market_analysis = await self.analyze_current_market(symbol)
+            
+            # Make intelligent decision
+            decision = await self.make_escalation_decision(order_state, market_analysis)
+            
+            # Execute decision
+            if decision['action'] == 'CONVERT_TO_MARKET':
+                await self.convert_to_market_order(order_id, order_state)
+            elif decision['action'] == 'ADJUST_AND_RETRY':
+                await self.adjust_and_retry_order(order_id, order_state)
+            elif decision['action'] == 'CANCEL':
+                await self.cancel_order(order_id, order_state)
+            
+            # Update state
+            order_state['status'] = 'TIMEOUT'
+            order_state['events'].append({
+                'timestamp': time.time(),
+                'event': 'TIMEOUT',
+                'action': decision['action'],
+                'reason': decision['reason']
+            })
+            
+            logger.info(f"⏱️ Handled timeout for {order_id} with action: {decision['action']}")
+            
+        except Exception as e:
+            logger.error(f"❌ Timeout handling failed for {order_id}: {e}")
+            # Fallback - cancel the order
+            await self.cancel_order(order_id, order_state)
+    
+    async def get_market_conditions(self, symbol: str) -> Dict:
+        """קבלת תנאי שוק נוכחיים"""
+        try:
+            ticker = await self.orchestrator.binance.get_ticker(symbol)
+            klines = await self.orchestrator.binance.get_klines(symbol, "1m", limit=10)
+            
+            # Calculate basic metrics
+            prices = [float(k[4]) for k in klines]  # Close prices
+            price_change = ((prices[-1] - prices[0]) / prices[0]) if prices[0] != 0 else 0
+            
+            return {
+                'current_price': float(ticker['lastPrice']),
+                'price_change': price_change,
+                'volume': float(ticker['volume']),
+                'volatility': await self.get_symbol_volatility(symbol)
+            }
+        except Exception as e:
+            logger.error(f"❌ Market conditions failed for {symbol}: {e}")
+            return {
+                'current_price': 0,
+                'price_change': 0,
+                'volume': 0,
+                'volatility': 0.02
+            }
+    
+    async def is_near_fill_price(self, symbol: str, order_price: float) -> bool:
+        """בדיקה אם המחיר קרוב למחיר המילוי"""
+        try:
+            if order_price == 0:
+                return False
+                
+            ticker = await self.orchestrator.binance.get_ticker(symbol)
+            current_price = float(ticker['lastPrice'])
+            
+            # Consider "near" if within 0.5% of current price
+            price_diff = abs(current_price - order_price) / order_price
+            return price_diff <= 0.005
+            
+        except Exception as e:
+            logger.error(f"❌ Near fill check failed for {symbol}: {e}")
+            return False
+    
+    async def is_market_moving_towards_price(self, symbol: str, order_price: float) -> bool:
+        """בדיקה אם השוק נע לכיוון מחיר ההזמנה"""
+        try:
+            if order_price == 0:
+                return False
+                
+            klines = await self.orchestrator.binance.get_klines(symbol, "1m", limit=5)
+            if len(klines) < 3:
+                return False
+                
+            current_price = float(klines[-1][4])  # Latest close
+            previous_price = float(klines[-2][4])  # Previous close
+            
+            # Check if price is moving towards our order price
+            if order_price > current_price:
+                return current_price > previous_price  # Moving up towards our price
+            else:
+                return current_price < previous_price  # Moving down towards our price
+                
+        except Exception as e:
+            logger.error(f"❌ Market direction check failed for {symbol}: {e}")
+            return False
+    
+    async def analyze_current_market(self, symbol: str) -> Dict:
+        """ניתוח שוק נוכחי לקבלת החלטות"""
+        try:
+            conditions = await self.get_market_conditions(symbol)
+            
+            # Simple market analysis
+            volatility = conditions['volatility']
+            price_change = abs(conditions['price_change'])
+            
+            if volatility > 0.04 or price_change > 0.02:
+                market_state = "HIGH_VOLATILITY"
+            elif volatility < 0.01 and price_change < 0.005:
+                market_state = "LOW_VOLATILITY" 
+            else:
+                market_state = "NORMAL"
+                
+            return {
+                'market_state': market_state,
+                'volatility': volatility,
+                'price_change': price_change,
+                'volume': conditions['volume']
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Market analysis failed for {symbol}: {e}")
+            return {
+                'market_state': 'UNKNOWN',
+                'volatility': 0.02,
+                'price_change': 0,
+                'volume': 0
+            }
+    
+    async def make_escalation_decision(self, order_state: Dict, market_analysis: Dict) -> Dict:
+        """קבלת החלטה חכמה עבור Order timeout"""
+        symbol = order_state['symbol']
+        order_type = order_state['type']
+        market_state = market_analysis['market_state']
+        
+        # Decision matrix
+        if market_state == "HIGH_VOLATILITY":
+            if order_type in ['ENTRY_LIMIT', 'GRID_ORDER']:
+                return {'action': 'ADJUST_AND_RETRY', 'reason': 'High volatility - adjust price'}
+            else:
+                return {'action': 'CONVERT_TO_MARKET', 'reason': 'High volatility - use market order'}
+                
+        elif market_state == "LOW_VOLATILITY":
+            if order_type in ['TP_LIMIT', 'STOP_LIMIT']:
+                return {'action': 'ADJUST_AND_RETRY', 'reason': 'Low volatility - adjust price slightly'}
+            else:
+                return {'action': 'CANCEL', 'reason': 'Low volatility - cancel and reassess'}
+                
+        else:  # NORMAL or UNKNOWN
+            if order_type in ['ENTRY_LIMIT', 'GRID_ORDER']:
+                return {'action': 'ADJUST_AND_RETRY', 'reason': 'Normal market - retry with adjustment'}
+            else:
+                return {'action': 'CANCEL', 'reason': 'Normal market - cancel order'}
+    
+    async def convert_to_market_order(self, order_id: str, order_state: Dict):
+        """המרה להזמנת market"""
+        try:
+            symbol = order_state['symbol']
+            
+            # Cancel the limit order
+            await self.orchestrator.binance.cancel_order(symbol, order_id)
+            
+            # Place market order (you'll need to determine side and quantity)
+            # This is a placeholder - implement based on your trading logic
+            logger.info(f"🔄 Converting {order_id} to market order")
+            
+        except Exception as e:
+            logger.error(f"❌ Convert to market failed for {order_id}: {e}")
+            raise
+    
+    async def adjust_and_retry_order(self, order_id: str, order_state: Dict):
+        """כוונון והזמנה מחדש"""
+        try:
+            symbol = order_state['symbol']
+            original_price = order_state.get('price', 0)
+            
+            # Cancel original order
+            await self.orchestrator.binance.cancel_order(symbol, order_id)
+            
+            # Calculate new price (adjust based on market conditions)
+            new_price = await self.calculate_adjusted_price(symbol, original_price)
+            
+            # Place new order with adjusted price
+            # This is a placeholder - implement based on your trading logic
+            logger.info(f"🔄 Adjusting and retrying {order_id} - new price: {new_price}")
+            
+        except Exception as e:
+            logger.error(f"❌ Adjust and retry failed for {order_id}: {e}")
+            raise
+    
+    async def cancel_order(self, order_id: str, order_state: Dict):
+        """ביטול הזמנה"""
+        try:
+            symbol = order_state['symbol']
+            await self.orchestrator.binance.cancel_order(symbol, order_id)
+            logger.info(f"❌ Cancelled order {order_id}")
+        except Exception as e:
+            logger.error(f"❌ Cancel order failed for {order_id}: {e}")
+    
+    async def calculate_adjusted_price(self, symbol: str, original_price: float) -> float:
+        """חישוב מחיר מותאם"""
+        try:
+            ticker = await self.orchestrator.binance.get_ticker(symbol)
+            current_price = float(ticker['lastPrice'])
+            
+            # Simple adjustment: move 0.2% towards current price
+            if original_price > current_price:
+                return original_price * 0.998  # Move down
+            else:
+                return original_price * 1.002  # Move up
+                
+        except Exception as e:
+            logger.error(f"❌ Price adjustment calculation failed for {symbol}: {e}")
+            return original_price
+```
+
+## **📁 שלב 3: smart_cleanup_manager.py**
+
+```python
+# smart_cleanup_manager.py
+import time
+import logging
+from typing import Dict, List
+
+logger = logging.getLogger(__name__)
+
+class SmartCleanupManager:
+    """
+    🧹 ניהול ניקוי אוטומטי ואינטליגנטי
+    """
+    
+    def __init__(self, orchestrator):
+        self.orchestrator = orchestrator
+        self.cleanup_interval = 300  # 5 minutes
+        self.orphaned_check_interval = 120  # 2 minutes
+        self.last_orphaned_check = 0
+        
+    async def start_cleanup_engine(self):
+        """הפעלת מנוע הניקוי"""
+        while True:
+            try:
+                cleanup_tasks = [
+                    self.cleanup_orphaned_orders(),
+                    self.cleanup_old_order_states(),
+                    self.cleanup_performance_data(),
+                    self.cleanup_connection_pools()
+                ]
+                
+                # Run all cleanup tasks in parallel
+                await asyncio.gather(*cleanup_tasks)
+                
+                await asyncio.sleep(self.cleanup_interval)
+                
+            except Exception as e:
+                logger.error(f"❌ Cleanup engine failed: {e}")
+                await asyncio.sleep(60)
+    
+    async def cleanup_orphaned_orders(self):
+        """ניקוי Orphaned Orders"""
+        try:
+            # Only check every 2 minutes to avoid excessive API calls
+            current_time = time.time()
+            if current_time - self.last_orphaned_check < self.orphaned_check_interval:
+                return
+                
+            self.last_orphaned_check = current_time
+            
+            # Get all active orders from exchange
+            exchange_orders = await self.orchestrator.binance.get_open_orders()
+            exchange_order_ids = {order['id'] for order in exchange_orders}
+            
+            # Find orphaned orders (in our system but not in exchange)
+            orphaned_count = 0
+            for order_id, order_state in list(self.orchestrator.order_states.items()):
+                if (order_state['status'] == 'ACTIVE' and 
+                    order_id not in exchange_order_ids):
+                    
+                    # Mark as orphaned
+                    order_state['status'] = 'ORPHANED'
+                    order_state['events'].append({
+                        'timestamp': time.time(),
+                        'event': 'ORPHANED_DETECTED'
+                    })
+                    orphaned_count += 1
+            
+            if orphaned_count > 0:
+                logger.warning(f"🧹 Cleaned up {orphaned_count} orphaned orders")
+                
+        except Exception as e:
+            logger.error(f"❌ Orphaned cleanup failed: {e}")
+    
+    async def cleanup_old_order_states(self):
+        """ניקוי state ישן"""
+        current_time = time.time()
+        max_age = 3600  # 1 hour for completed orders
+        max_active_age = 86400  # 24 hours for active orders (safety)
+        
+        cleaned_count = 0
+        for order_id, order_state in list(self.orchestrator.order_states.items()):
+            order_age = current_time - order_state['created_at']
+            
+            # Remove old completed orders
+            if (order_state['status'] in ['FILLED', 'CANCELLED', 'TIMEOUT', 'ORPHANED'] and 
+                order_age > max_age):
+                
+                del self.orchestrator.order_states[order_id]
+                cleaned_count += 1
+            
+            # Safety cleanup for very old active orders
+            elif (order_state['status'] == 'ACTIVE' and 
+                  order_age > max_active_age):
+                
+                logger.warning(f"🧹 Removing very old active order: {order_id}")
+                del self.orchestrator.order_states[order_id]
+                cleaned_count += 1
+        
+        if cleaned_count > 0:
+            logger.info(f"🧹 Cleaned {cleaned_count} old order states")
+    
+    async def cleanup_performance_data(self):
+        """ניקוי נתוני performance ישנים"""
+        try:
+            current_time = time.time()
+            max_performance_age = 3600  # 1 hour
+            
+            # Clean old performance metrics
+            for metric_key in list(self.orchestrator.performance_metrics.keys()):
+                if (isinstance(self.orchestrator.performance_metrics[metric_key], dict) and
+                    'timestamp' in self.orchestrator.performance_metrics[metric_key]):
+                    
+                    metric_age = current_time - self.orchestrator.performance_metrics[metric_key]['timestamp']
+                    if metric_age > max_performance_age:
+                        del self.orchestrator.performance_metrics[metric_key]
+            
+            # Clean old volatility cache
+            for symbol in list(self.orchestrator.timeout_manager.volatility_cache.keys()):
+                cache_time, _ = self.orchestrator.timeout_manager.volatility_cache[symbol]
+                if current_time - cache_time > 600:  # 10 minutes
+                    del self.orchestrator.timeout_manager.volatility_cache[symbol]
+                    
+        except Exception as e:
+            logger.error(f"❌ Performance data cleanup failed: {e}")
+    
+    async def cleanup_connection_pools(self):
+        """ניקוי connection pools"""
+        # This would clean up any connection pools or sessions
+        # Implementation depends on your specific HTTP client
+        pass
+    
+    async def cleanup_old_states(self):
+        """ניקוי state ישן (wrapper for orchestrator)"""
+        await self.cleanup_old_order_states()
+```
+
+**📁 המשך עם הקבצים הבאים...**
+
+רוצה שאמשיך עם `resilient_error_handler.py` ו-`unified_state_tracker.py` או שתרצה לבדוק את הקבצים הראשונים? 🔥
