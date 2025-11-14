@@ -1,0 +1,367 @@
+# 🚀 **תוכנית אינטגרציה חכמה - עדכון הקבצים הקיימים**
+
+מצוין! בוא נבצע אינטגרציה חכמה במקום ליצור קבצים חדשים. אעדכן את הקבצים הקיימים עם הלוגיקה המתקדמת.
+
+## 📋 **תוכנית פעולה מעודכנת:**
+
+### **חלק 1: עדכון קבצים קיימים (45 דקות)**
+
+#### **1. 🎯 `utils/metabrain_orchestrator.py` → `utils/central_orchestrator.py`**
+```python
+# אעדכן את הקובץ הקיים עם הפונקציונליות המתקדמת
+# אוסיף: Single Source of Truth, Hybrid Timeout, Auto-Recovery
+```
+
+#### **2. ⏱️ `utils/order_timeout_monitor.py` → `utils/hybrid_timeout_manager.py`**
+```python
+# אשדרג את ניהול הטיימאאוט הקיים להיברידי ודינמי
+# אוסיף: חישוב טיימאאוט לפי volatility, סוג order, זמן יום
+```
+
+#### **3. 🧹 `workers/auto_cleanup.py` → `utils/smart_cleanup_manager.py`**
+```python
+# אשפר את הניקוי הקיים לאינטליגנטי יותר
+# אוסיף: איתור orphaned orders, ניקוי state אוטומטי
+```
+
+### **חלק 2: יצירת קבצים חדשים הכרחיים (30 דקות)**
+
+#### **4. 🛡️ `utils/resilient_error_handler.py` (חדש)**
+#### **5. 📊 `utils/unified_state_tracker.py` (חדש)**
+
+### **חלק 3: אינטגרציה עם המערכת הקיימת (30 דקות)**
+
+## 🔧 **בוא נתחיל בעדכון הקבצים הקיימים:**
+
+### **1. עדכון `utils/metabrain_orchestrator.py`:**
+
+```python
+# utils/metabrain_orchestrator.py - גרסה משודרגת
+import asyncio
+import time
+import logging
+from typing import Dict, List, Optional
+from binance.client import Client as BinanceClient
+
+logger = logging.getLogger(__name__)
+
+class CentralOrderOrchestrator:
+    """
+    🧠 CENTRAL ORCHESTRATOR - המוח המרכזי המשודרג
+    מיזוג של metabrain_orchestrator + הפונקציונליות החדשה
+    """
+    
+    def __init__(self, binance_client: BinanceClient):
+        self.binance = binance_client
+        self.order_states = {}  # Single Source of Truth
+        self.system_health = {}
+        self.recovery_queue = asyncio.Queue()
+        self.performance_metrics = {}
+        self.last_cleanup = time.time()
+        self.is_running = False
+        
+        # Initialize modules - ישתמשו בקודים הקיימים + שדרוגים
+        self.timeout_manager = self._init_timeout_manager()
+        self.cleanup_manager = self._init_cleanup_manager()
+        self.error_handler = self._init_error_handler()
+        self.state_tracker = self._init_state_tracker()
+        
+    def _init_timeout_manager(self):
+        """אתחול מנהל טיימאאוט משודרג"""
+        from utils.hybrid_timeout_manager import HybridTimeoutManager
+        return HybridTimeoutManager(self)
+    
+    def _init_cleanup_manager(self):
+        """אתחול מנהל ניקוי משודרג"""
+        from utils.smart_cleanup_manager import SmartCleanupManager
+        return SmartCleanupManager(self)
+    
+    def _init_error_handler(self):
+        """אתחול מטפל שגיאות"""
+        from utils.resilient_error_handler import ResilientErrorHandler
+        return ResilientErrorHandler(self)
+    
+    def _init_state_tracker(self):
+        """אתחול מעקב state"""
+        from utils.unified_state_tracker import UnifiedStateTracker
+        return UnifiedStateTracker(self)
+    
+    async def start_orchestration(self):
+        """הפעלת האורכיסטרטור - גרסה משודרגת"""
+        if self.is_running:
+            logger.warning("⚠️ Orchestrator already running")
+            return
+            
+        logger.info("🧠 STARTING CENTRAL ORCHESTRATOR - Enhanced Version")
+        self.is_running = True
+        
+        # Start core processes
+        tasks = [
+            self.continuous_order_monitoring(),
+            self.proactive_health_checks(),
+            self.auto_recovery_engine(),
+            self.performance_optimizer(),
+            self.state_synchronizer()
+        ]
+        
+        for task in tasks:
+            asyncio.create_task(task)
+            
+        logger.info("✅ Enhanced Orchestrator started successfully")
+    
+    async def continuous_order_monitoring(self):
+        """ניטור רצוף - עם הלוגיקה החדשה"""
+        while self.is_running:
+            try:
+                # 1. Track all active orders using existing system
+                active_orders = await self._get_all_active_orders()
+                
+                # 2. Enhanced tracking with new logic
+                for order in active_orders:
+                    await self._track_order_lifecycle_enhanced(order)
+                
+                # 3. New: Detect stuck orders
+                await self._detect_stuck_orders()
+                
+                # 4. New: Validate system state
+                await self._validate_system_state()
+                
+                await asyncio.sleep(5)
+                
+            except Exception as e:
+                logger.error(f"❌ Order monitoring failed: {e}")
+                await asyncio.sleep(10)
+    
+    async def _get_all_active_orders(self):
+        """שימוש במערכת הקיימת + שיפורים"""
+        try:
+            # Use existing order tracking + enhancements
+            exchange_orders = await self.binance.get_open_orders()
+            
+            # Combine with internal tracking
+            internal_orders = []
+            for order_id, state in self.order_states.items():
+                if state['status'] == 'ACTIVE':
+                    internal_orders.append({
+                        'id': order_id,
+                        'symbol': state['symbol'],
+                        'type': state['type'],
+                        'price': state.get('price'),
+                        'filled': state.get('filled', 0)
+                    })
+            
+            return exchange_orders + internal_orders
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to get active orders: {e}")
+            return []
+    
+    async def _track_order_lifecycle_enhanced(self, order):
+        """מעקב order משודרג"""
+        order_id = order['id']
+        
+        if order_id not in self.order_states:
+            self.order_states[order_id] = {
+                'created_at': time.time(),
+                'symbol': order['symbol'],
+                'type': order['type'],
+                'status': 'ACTIVE',
+                'events': [],
+                'last_checked': time.time(),
+                'timeout_at': time.time() + await self.timeout_manager.calculate_dynamic_timeout(order)
+            }
+        
+        # Enhanced tracking
+        self.order_states[order_id]['events'].append({
+            'timestamp': time.time(),
+            'event': 'HEARTBEAT',
+            'price': order.get('price'),
+            'filled': order.get('filled', 0)
+        })
+        
+        self.order_states[order_id]['last_checked'] = time.time()
+    
+    async def _detect_stuck_orders(self):
+        """איתור הזמנות תקועות - פיצ'ר חדש"""
+        current_time = time.time()
+        for order_id, state in self.order_states.items():
+            if state['status'] == 'ACTIVE':
+                time_since_check = current_time - state['last_checked']
+                if time_since_check > 300:  # 5 minutes
+                    logger.warning(f"⚠️ Potentially stuck order: {order_id}")
+                    await self.recovery_queue.put({
+                        'type': 'STUCK_ORDER',
+                        'order_id': order_id,
+                        'state': state
+                    })
+    
+    async def _validate_system_state(self):
+        """ולידציית state - פיצ'ר חדש"""
+        try:
+            exchange_orders = await self.binance.get_open_orders()
+            exchange_ids = {order['id'] for order in exchange_orders}
+            
+            for order_id, state in list(self.order_states.items()):
+                if state['status'] == 'ACTIVE' and order_id not in exchange_ids:
+                    logger.warning(f"🔍 State inconsistency: {order_id}")
+                    state['status'] = 'INCONSISTENT'
+                    await self.recovery_queue.put({
+                        'type': 'STATE_INCONSISTENCY', 
+                        'order_id': order_id,
+                        'state': state
+                    })
+                    
+        except Exception as e:
+            logger.error(f"❌ System state validation failed: {e}")
+    
+    async def proactive_health_checks(self):
+        """בדיקות בריאות pro-active"""
+        while self.is_running:
+            try:
+                checks = [
+                    self.timeout_manager.check_order_timeouts(),
+                    self._check_system_resources(),
+                    self._check_market_connections(),
+                    self._check_performance_degradation()
+                ]
+                
+                await asyncio.gather(*checks)
+                await asyncio.sleep(15)
+                
+            except Exception as e:
+                logger.error(f"❌ Health checks failed: {e}")
+                await asyncio.sleep(30)
+    
+    async def auto_recovery_engine(self):
+        """מנוע התאוששות אוטומטי - פיצ'ר חדש"""
+        while self.is_running:
+            try:
+                if not self.recovery_queue.empty():
+                    recovery_item = await self.recovery_queue.get()
+                    await self._execute_recovery(recovery_item)
+                
+                # Auto-cleanup
+                if time.time() - self.last_cleanup > 300:
+                    await self.cleanup_manager.cleanup_old_states()
+                    self.last_cleanup = time.time()
+                
+                await asyncio.sleep(10)
+                
+            except Exception as e:
+                logger.error(f"❌ Auto-recovery failed: {e}")
+                await asyncio.sleep(30)
+    
+    async def _execute_recovery(self, recovery_item):
+        """ביצוע התאוששות"""
+        try:
+            recovery_type = recovery_item['type']
+            
+            if recovery_type == 'STUCK_ORDER':
+                await self.error_handler.recover_stuck_order(recovery_item)
+            elif recovery_type == 'STATE_INCONSISTENCY':
+                await self.error_handler.recover_state_inconsistency(recovery_item)
+            elif recovery_type == 'ORDER_TIMEOUT':
+                await self.error_handler.recover_order_timeout(recovery_item)
+                
+        except Exception as e:
+            logger.error(f"❌ Recovery execution failed: {e}")
+    
+    async def performance_optimizer(self):
+        """אופטימיזציית ביצועים"""
+        while self.is_running:
+            try:
+                self.performance_metrics = {
+                    'active_orders': len([s for s in self.order_states.values() if s['status'] == 'ACTIVE']),
+                    'total_orders': len(self.order_states),
+                    'recovery_queue_size': self.recovery_queue.qsize(),
+                    'system_uptime': time.time() - getattr(self, 'start_time', time.time()),
+                    'last_cleanup': self.last_cleanup
+                }
+                await asyncio.sleep(60)
+            except Exception as e:
+                logger.error(f"❌ Performance optimization failed: {e}")
+                await asyncio.sleep(120)
+    
+    async def state_synchronizer(self):
+        """סינכרון state"""
+        while self.is_running:
+            try:
+                await self.state_tracker.sync_to_redis()
+                await asyncio.sleep(30)
+            except Exception as e:
+                logger.error(f"❌ State synchronization failed: {e}")
+                await asyncio.sleep(60)
+    
+    async def _check_system_resources(self):
+        """בדיקת משאבי מערכת"""
+        # Implementation based on existing system
+        pass
+    
+    async def _check_market_connections(self):
+        """בדיקת חיבורי שוק"""
+        # Implementation based on existing system
+        pass
+    
+    async def _check_performance_degradation(self):
+        """בדיקת ירידה בביצועים"""
+        # Implementation based on existing system
+        pass
+
+    # שמירה על פונקציות קיימות מהמערכת הישנה
+    async def place_order(self, symbol: str, order_type: str, quantity: float, price: float = None):
+        """פונקציה קיימת - עם שיפורים"""
+        try:
+            # הלוגיקה הקיימת + מעקב משופר
+            order = await self.binance.create_order(
+                symbol=symbol,
+                type=order_type,
+                quantity=quantity,
+                price=price
+            )
+            
+            # Enhanced tracking
+            await self._track_order_lifecycle_enhanced(order)
+            
+            return order
+            
+        except Exception as e:
+            logger.error(f"❌ Order placement failed: {e}")
+            await self.error_handler.handle_error('ORDER_PLACEMENT_FAILED', {
+                'symbol': symbol,
+                'type': order_type,
+                'quantity': quantity,
+                'price': price,
+                'error': str(e)
+            })
+            raise
+    
+    async def cancel_order(self, symbol: str, order_id: str):
+        """ביטול order - עם שיפורים"""
+        try:
+            result = await self.binance.cancel_order(symbol, order_id)
+            
+            # Enhanced state update
+            if order_id in self.order_states:
+                self.order_states[order_id]['status'] = 'CANCELLED'
+                self.order_states[order_id]['events'].append({
+                    'timestamp': time.time(),
+                    'event': 'CANCELLED'
+                })
+            
+            return result
+            
+        except Exception as e:
+            logger.error(f"❌ Order cancellation failed: {e}")
+            await self.error_handler.handle_error('ORDER_CANCELLATION_FAILED', {
+                'symbol': symbol,
+                'order_id': order_id,
+                'error': str(e)
+            })
+            raise
+```
+
+**המשך עם הקבצים הבאים...**
+
+רוצה שאמשיך עם שדרוג `order_timeout_monitor.py` ל-`hybrid_timeout_manager.py`? 🔥
+
+או שתרצה שאראה לך קודם איך הקבצים הקיימים נראים לפני השדרוג?

@@ -1,0 +1,136 @@
+Pasted--OPTION-B-ROOT-CAUSE-SOLUTION-1--1763106315150_1763106315151.txt
+# 🚀 **התחל הטמעה - OPTION B ROOT CAUSE SOLUTION**
+
+## **📁 שלב 1: יצירת הקבצים החדשים**
+
+### **1. central_orchestrator.py**
+```python
+# central_orchestrator.py
+import asyncio
+import time
+from typing import Dict, List, Optional
+import logging
+
+logger = logging.getLogger(__name__)
+
+class CentralOrderOrchestrator:
+    """
+    🧠 המוח המרכזי של המערכת - מנהל הכל
+    """
+    
+    def __init__(self, binance_client):
+        self.binance = binance_client
+        self.order_states = {}  # Single Source of Truth
+        self.system_health = {}
+        self.recovery_queue = asyncio.Queue()
+        self.performance_metrics = {}
+        self.last_cleanup = time.time()
+        
+        # Initialize modules
+        self.timeout_manager = HybridTimeoutManager(self)
+        self.cleanup_manager = SmartCleanupManager(self) 
+        self.error_handler = ResilientErrorHandler(self)
+        self.state_tracker = UnifiedStateTracker(self)
+        
+    async def start_orchestration(self):
+        """הפעלת האורכיסטרטור הראשי"""
+        logger.info("🧠 STARTING CENTRAL ORCHESTRATOR - Root Cause Solution")
+        
+        # Start all core processes
+        tasks = [
+            self.continuous_order_monitoring(),
+            self.proactive_health_checks(),
+            self.auto_recovery_engine(),
+            self.performance_optimizer(),
+            self.state_synchronizer()
+        ]
+        
+        for task in tasks:
+            asyncio.create_task(task)
+            
+    async def continuous_order_monitoring(self):
+        """ניטור רצוף של כל Orders"""
+        while True:
+            try:
+                # 1. Track all active orders
+                active_orders = await self.get_all_active_orders()
+                for order in active_orders:
+                    await self.track_order_lifecycle(order)
+                
+                # 2. Check for stuck orders
+                await self.detect_stuck_orders()
+                
+                # 3. Validate system state
+                await self.validate_system_state()
+                
+                await asyncio.sleep(5)  # Every 5 seconds
+                
+            except Exception as e:
+                logger.error(f"❌ Order monitoring failed: {e}")
+                await asyncio.sleep(10)
+    
+    async def get_all_active_orders(self):
+        """קבלת כל ההזמנות הפעילות מהמערכת"""
+        try:
+            # Get from exchange
+            exchange_orders = await self.binance.get_open_orders()
+            
+            # Combine with our internal tracking
+            internal_orders = []
+            for order_id, state in self.order_states.items():
+                if state['status'] == 'ACTIVE':
+                    internal_orders.append({
+                        'id': order_id,
+                        'symbol': state['symbol'],
+                        'type': state['type'],
+                        'price': state.get('price'),
+                        'filled': state.get('filled', 0)
+                    })
+            
+            return exchange_orders + internal_orders
+        except Exception as e:
+            logger.error(f"❌ Failed to get active orders: {e}")
+            return []
+    
+    async def track_order_lifecycle(self, order):
+        """מעקב מלא אחרי מחזור חיי Order"""
+        order_id = order['id']
+        
+        if order_id not in self.order_states:
+            self.order_states[order_id] = {
+                'created_at': time.time(),
+                'symbol': order['symbol'],
+                'type': order['type'],
+                'status': 'ACTIVE',
+                'events': [],
+                'last_checked': time.time(),
+                'timeout_at': time.time() + await self.timeout_manager.calculate_dynamic_timeout(order)
+            }
+        
+        # Log current state
+        self.order_states[order_id]['events'].append({
+            'timestamp': time.time(),
+            'event': 'HEARTBEAT',
+            'price': order.get('price'),
+            'filled': order.get('filled', 0)
+        })
+        
+        self.order_states[order_id]['last_checked'] = time.time()
+    
+    async def detect_stuck_orders(self):
+        """איתור הזמנות תקועות"""
+        current_time = time.time()
+        for order_id, state in self.order_states.items():
+            if state['status'] == 'ACTIVE':
+                time_since_check = current_time - state['last_checked']
+                if time_since_check > 300:  # 5 minutes without update
+                    logger.warning(f"⚠️ Potentially stuck order: {order_id}")
+                    await self.recovery_queue.put({
+                        'type': 'STUCK_ORDER',
+                        'order_id': order_id,
+                        'state': state
+                    })
+    
+    async def validate_system_state(self):
+        """ולידציה של state המערכת"""
+        # Check for consistency between our...

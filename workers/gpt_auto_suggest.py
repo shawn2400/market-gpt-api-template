@@ -2130,7 +2130,7 @@ async def process_cycle():
                 LOGGER.info(f"⏳ Cooldown active: {payload['symbol']} {ttype} (blocked for {cooldown_ttl}s)")
                 return
             
-            # Dedup check
+            # 🔍 Dedup check - CHECK ONLY (don't write yet)
             h = _hash_proposal({
                 "trade_type": ttype,
                 "symbol": payload["symbol"],
@@ -2141,11 +2141,18 @@ async def process_cycle():
                 "tp2": payload.get("tp2"),
                 "tp3": payload.get("tp3"),
             })
-            if not _pass_dedup(h, dedup_ttl):
+            k = _dedup_key(h)
+            if RED and RED.get(k):
                 LOGGER.info(f"🔁 Duplicate proposal blocked: {payload['symbol']} {ttype} (TTL={dedup_ttl}s)")
                 return
             
+            # 🚀 Emit to ExecutionBot
             ok = await _emit(payload)
+            
+            # ✅ Only save dedup AFTER successful emit (prevents poisoned keys)
+            if ok and RED:
+                RED.setex(k, dedup_ttl, "1")
+                LOGGER.info(f"✅ Dedup saved after successful emit: {payload['symbol']} {ttype} (TTL={dedup_ttl}s)")
         finally:
             if not ok:
                 # החזרה של הטוקן אם נכשלנו בכל זאת
