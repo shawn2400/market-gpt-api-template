@@ -250,6 +250,7 @@ def _maybe_route_ws_ttl(text: str) -> bool:
         return False
     if _is_ws_ttl_alert(text):
         try:
+            # Store to file only (sync-safe, Redis requires async)
             ev = {"kind": "ws_ttl_stale", "text": text, "ts": _now()}
             with open(_changes_file, "a", encoding="utf-8") as f:
                 f.write(json.dumps(ev, ensure_ascii=False) + "\n")
@@ -372,7 +373,8 @@ async def _tg_send(text: str, chat_id: Optional[int] = None, parse_mode: str = "
         await _http_send(text, chat_id=chat_id, parse_mode=parse_mode)
     except RuntimeError:
         try:
-            asyncio.get_event_loop().create_task(_http_send(text, chat_id=chat_id, parse_mode=parse_mode))
+            task = asyncio.get_event_loop().create_task(_http_send(text, chat_id=chat_id, parse_mode=parse_mode))
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         except Exception:
             loop = asyncio.new_event_loop()
             loop.run_until_complete(_http_send(text, chat_id=chat_id, parse_mode=parse_mode))
@@ -383,7 +385,8 @@ async def _tg_send_with_markup(text: str, reply_markup: Dict[str, Any], chat_id:
         await _http_send_with_markup(text, reply_markup, chat_id=chat_id)
     except RuntimeError:
         try:
-            asyncio.get_event_loop().create_task(_http_send_with_markup(text, reply_markup, chat_id=chat_id))
+            task = asyncio.get_event_loop().create_task(_http_send_with_markup(text, reply_markup, chat_id=chat_id))
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
         except Exception:
             loop = asyncio.new_event_loop()
             loop.run_until_complete(_http_send_with_markup(text, reply_markup, chat_id=chat_id))

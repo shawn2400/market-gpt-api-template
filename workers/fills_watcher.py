@@ -515,14 +515,20 @@ def _on_trade_completion(symbol: str, exit_time: float):
                 "quantity": quantity,
             }
             
-            # Call async send_trade_closed with proper task management
+            # Call async send_trade_closed synchronously (blocking) to ensure completion
             try:
-                loop = asyncio.get_event_loop()
-                task = loop.create_task(send_trade_closed(close_info))
-                task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
-            except RuntimeError:
-                # No event loop - skip for now
-                log.debug("No event loop for send_trade_closed - skipping notification")
+                # Try to get existing loop
+                try:
+                    loop = asyncio.get_running_loop()
+                    # If loop is running, schedule in thread-safe way
+                    future = asyncio.run_coroutine_threadsafe(send_trade_closed(close_info), loop)
+                    # Wait briefly for completion (non-blocking for main thread)
+                    future.result(timeout=2.0)
+                except RuntimeError:
+                    # No running loop, create new one and run synchronously
+                    asyncio.run(send_trade_closed(close_info))
+            except Exception as async_err:
+                log.debug(f"send_trade_closed failed: {async_err}")
         except Exception as notif_err:
             log.warning(f"Failed to send close notification: {notif_err}")
         
@@ -667,6 +673,12 @@ class _TradeManagerThread(threading.Thread):
                 loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(loop)
                 loop.run_until_complete(manage_open_trades())
+                
+                # 🛡️ FIX: Wait for all pending tasks before closing loop
+                pending = asyncio.all_tasks(loop)
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                
                 loop.close()
                 print(f"✅ [TradeManagerThread] Completed manage_open_trades() at {time.strftime('%H:%M:%S')}")
             except Exception as e:
