@@ -21,7 +21,7 @@ from utils.alerts import send_telegram_message
 try:
     from utils.telegram_digest import get_digest
 except Exception:
-    def get_digest():  # type: ignore
+    def get_digest():  # type: ignore[return]
         class MockDigest:
             def add_health_alert(self, *args, **kwargs):  # type: ignore
                 pass
