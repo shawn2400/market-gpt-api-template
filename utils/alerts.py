@@ -10,16 +10,16 @@ from utils import telegram_api  # מקור יחיד לשכבת טלגרם
 logger = logging.getLogger("algogpt.alerts")
 
 TELEGRAM_BOT_TOKEN = (os.getenv("TELEGRAM_BOT_TOKEN") or "").strip()
-ADMIN_CHAT_ID = (os.getenv("ADMIN_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or "").strip()
 
 _TG_REC   = (os.getenv("TG_NOTIFY_RECONCILE","1").strip().lower() in ("1","true","yes","on"))
 _TG_GRID  = (os.getenv("TG_NOTIFY_GRID","1").strip().lower() in ("1","true","yes","on"))
 _TG_MNGR  = (os.getenv("TG_NOTIFY_MANAGER","0").strip().lower() in ("1","true","yes","on"))
 
 def _ensure_chat_id() -> str:
-    if not ADMIN_CHAT_ID:
-        raise RuntimeError("ADMIN_CHAT_ID/TELEGRAM_CHAT_ID is not set")
-    return ADMIN_CHAT_ID
+    chat_id = (os.getenv("ADMIN_CHAT_ID") or os.getenv("TELEGRAM_CHAT_ID") or "").strip()
+    if chat_id in ("", "0"):
+        raise RuntimeError("ADMIN_CHAT_ID/TELEGRAM_CHAT_ID is not set (got invalid value)")
+    return chat_id
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Proxies (API יציב לשאר המערכת)
