@@ -91,6 +91,11 @@ class TPLadder:
             for i, (tp_price, tp_qty) in enumerate(zip(tp_prices, tp_quantities)):
                 if tp_qty <= 0:
                     continue
+                
+                # VALIDATION: Check if TP price is valid BEFORE normalization
+                if tp_price is None or tp_price <= 0:
+                    log.error(f"[TPLadder] {symbol} TP{i + 1} INVALID PRICE: {tp_price} (entry={entry_price}) - SKIPPING")
+                    continue
 
                 # Round qty to step size
                 tp_qty_str, tp_qty_float = self._normalize_qty(symbol, tp_qty)
@@ -100,6 +105,11 @@ class TPLadder:
 
                 # Round price to tick size
                 tp_price_str, tp_price_float = self._normalize_price(symbol, tp_price)
+                
+                # VALIDATION: Double-check normalized price
+                if tp_price_float <= 0:
+                    log.error(f"[TPLadder] {symbol} TP{i + 1} INVALID NORMALIZED PRICE: {tp_price_float} (raw={tp_price}) - SKIPPING")
+                    continue
 
                 try:
                     # Build order kwargs

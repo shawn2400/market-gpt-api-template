@@ -1,0 +1,752 @@
+# 🚀 **המשך הטמעה - הקבצים הנותרים**
+
+## **📁 שלב 4: resilient_error_handler.py**
+
+```python
+# resilient_error_handler.py
+import time
+import logging
+from typing import Dict, List
+import asyncio
+
+logger = logging.getLogger(__name__)
+
+class ResilientErrorHandler:
+    """
+    🛡️ מנוע טיפול בשגיאות עם התאוששות אוטומטית
+    """
+    
+    def __init__(self, orchestrator):
+        self.orchestrator = orchestrator
+        self.error_counts = {}
+        self.circuit_breakers = {}
+        self.recovery_strategies = {}
+        self.last_error_report = time.time()
+        
+    async def handle_error(self, error_type: str, context: Dict):
+        """טיפול מרכזי בכל השגיאות"""
+        error_id = f"{error_type}_{context.get('symbol', 'global')}"
+        
+        # Track error frequency
+        self.error_counts[error_id] = self.error_counts.get(error_id, 0) + 1
+        
+        # Log the error
+        logger.error(f"🛡️ Error {error_type}: {context.get('message', 'No details')}")
+        
+        # Check if circuit breaker should trigger
+        if await self.should_trigger_circuit_breaker(error_id):
+            await self.activate_circuit_breaker(error_id, context)
+            return
+        
+        # Execute recovery strategy
+        recovery_success = await self.execute_recovery_strategy(error_type, context)
+        
+        if not recovery_success:
+            await self.escalate_error(error_type, context)
+    
+    async def should_trigger_circuit_breaker(self, error_id: str) -> bool:
+        """בדיקה אם להפעיל circuit breaker"""
+        error_count = self.error_counts.get(error_id, 0)
+        
+        # Circuit breaker rules
+        if error_count > 10:  # More than 10 errors in short time
+            return True
+        if error_count > 5 and time.time() - self.last_error_report < 60:  # 5 errors in 1 minute
+            return True
+            
+        return False
+    
+    async def activate_circuit_breaker(self, error_id: str, context: Dict):
+        """הפעלת circuit breaker"""
+        logger.warning(f"🚨 CIRCUIT BREAKER ACTIVATED for {error_id}")
+        
+        # Set circuit breaker state
+        self.circuit_breakers[error_id] = {
+            'activated_at': time.time(),
+            'error_count': self.error_counts[error_id],
+            'context': context
+        }
+        
+        # Stop related operations temporarily
+        await self.pause_related_operations(error_id, context)
+        
+        # Schedule automatic reset
+        asyncio.create_task(self.reset_circuit_breaker(error_id))
+    
+    async def reset_circuit_breaker(self, error_id: str):
+        """איפוס circuit breaker אוטומטי"""
+        await asyncio.sleep(300)  # 5 minutes cooldown
+        
+        if error_id in self.circuit_breakers:
+            del self.circuit_breakers[error_id]
+            self.error_counts[error_id] = 0
+            logger.info(f"🔄 Circuit breaker reset for {error_id}")
+    
+    async def pause_related_operations(self, error_id: str, context: Dict):
+        """השהיית פעולות קשורות"""
+        error_type = error_id.split('_')[0]
+        
+        if 'symbol' in context:
+            symbol = context['symbol']
+            logger.warning(f"⏸️ Pausing operations for {symbol} due to {error_type}")
+            
+            # Mark orders for this symbol as suspended
+            for order_id, order_state in self.orchestrator.order_states.items():
+                if (order_state['symbol'] == symbol and 
+                    order_state['status'] == 'ACTIVE'):
+                    
+                    order_state['status'] = 'SUSPENDED'
+                    order_state['events'].append({
+                        'timestamp': time.time(),
+                        'event': 'SUSPENDED',
+                        'reason': f'Circuit breaker: {error_type}'
+                    })
+    
+    async def execute_recovery_strategy(self, error_type: str, context: Dict) -> bool:
+        """ביצוע אסטרטגיית התאוששות"""
+        strategies = {
+            'ORDER_TIMEOUT': self.recover_order_timeout,
+            'NETWORK_ERROR': self.recover_network_error,
+            'INSUFFICIENT_BALANCE': self.recover_balance_error,
+            'API_LIMIT': self.recover_api_limit,
+            'MARKET_CLOSED': self.recover_market_closed,
+            'STUCK_ORDER': self.recover_stuck_order,
+            'STATE_INCONSISTENCY': self.recover_state_inconsistency,
+            'SYSTEM_HEALTH': self.recover_system_health
+        }
+        
+        strategy = strategies.get(error_type)
+        if strategy:
+            return await strategy(context)
+        
+        logger.warning(f"⚠️ No recovery strategy for error type: {error_type}")
+        return False
+    
+    async def recover_order_timeout(self, context: Dict) -> bool:
+        """התאוששות מ-Order Timeout"""
+        try:
+            order_id = context.get('order_id')
+            symbol = context.get('symbol')
+            
+            if not order_id or not symbol:
+                logger.error("❌ Missing order_id or symbol for timeout recovery")
+                return False
+            
+            # 1. Cancel the stuck order
+            try:
+                await self.orchestrator.binance.cancel_order(symbol, order_id)
+                logger.info(f"✅ Cancelled timeout order: {order_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not cancel order {order_id}: {e}")
+            
+            # 2. Decide retry strategy based on market conditions
+            market_conditions = await self.orchestrator.timeout_manager.get_market_conditions(symbol)
+            
+            if market_conditions['volatility'] < 0.02:
+                # Low volatility - retry with limit order
+                await self.place_adjusted_limit_order(context, market_conditions)
+                logger.info(f"🔄 Retrying with adjusted limit order for {symbol}")
+            else:
+                # High volatility - use market order
+                await self.place_market_order(context)
+                logger.info(f"🔄 Using market order for {symbol} due to high volatility")
+            
+            # 3. Update order state
+            if order_id in self.orchestrator.order_states:
+                self.orchestrator.order_states[order_id]['status'] = 'RECOVERED'
+                self.orchestrator.order_states[order_id]['events'].append({
+                    'timestamp': time.time(),
+                    'event': 'RECOVERED_FROM_TIMEOUT',
+                    'action': 'RETRY_ORDER'
+                })
+            
+            logger.info(f"🛡️ Successfully recovered from order timeout for {symbol}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Order timeout recovery failed: {e}")
+            return False
+    
+    async def recover_stuck_order(self, context: Dict) -> bool:
+        """התאוששות מ-Stuck Order"""
+        try:
+            order_id = context.get('order_id')
+            order_state = context.get('state', {})
+            symbol = order_state.get('symbol')
+            
+            if not order_id or not symbol:
+                return False
+            
+            # Try to get current order status from exchange
+            try:
+                exchange_order = await self.orchestrator.binance.get_order(symbol, order_id)
+                if exchange_order and exchange_order['status'] in ['FILLED', 'CANCELED']:
+                    # Order is actually completed on exchange
+                    self.orchestrator.order_states[order_id]['status'] = exchange_order['status']
+                    logger.info(f"✅ Fixed stuck order {order_id} - was actually {exchange_order['status']}")
+                    return True
+            except Exception as e:
+                logger.warning(f"⚠️ Could not get exchange status for {order_id}: {e}")
+            
+            # If still active, cancel it
+            try:
+                await self.orchestrator.binance.cancel_order(symbol, order_id)
+                self.orchestrator.order_states[order_id]['status'] = 'CANCELLED'
+                logger.info(f"✅ Cancelled stuck order: {order_id}")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not cancel stuck order {order_id}: {e}")
+                # Mark as orphaned if we can't cancel
+                self.orchestrator.order_states[order_id]['status'] = 'ORPHANED'
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Stuck order recovery failed: {e}")
+            return False
+    
+    async def recover_state_inconsistency(self, context: Dict) -> bool:
+        """התאוששות מ-State Inconsistency"""
+        try:
+            order_id = context.get('order_id')
+            order_state = context.get('state', {})
+            
+            # Verify order status with exchange
+            symbol = order_state.get('symbol')
+            if not symbol:
+                return False
+            
+            try:
+                exchange_order = await self.orchestrator.binance.get_order(symbol, order_id)
+                if exchange_order:
+                    # Sync with exchange state
+                    self.orchestrator.order_states[order_id]['status'] = exchange_order['status']
+                    self.orchestrator.order_states[order_id]['events'].append({
+                        'timestamp': time.time(),
+                        'event': 'STATE_SYNCED',
+                        'exchange_status': exchange_order['status']
+                    })
+                    logger.info(f"✅ Synced state for {order_id} to {exchange_order['status']}")
+                    return True
+                else:
+                    # Order doesn't exist on exchange - mark as orphaned
+                    self.orchestrator.order_states[order_id]['status'] = 'ORPHANED'
+                    logger.info(f"✅ Marked {order_id} as orphaned")
+                    return True
+                    
+            except Exception as e:
+                logger.warning(f"⚠️ Could not verify order {order_id}: {e}")
+                # If we can't verify, assume it's completed and remove
+                del self.orchestrator.order_states[order_id]
+                logger.info(f"✅ Removed unverifiable order: {order_id}")
+                return True
+                
+        except Exception as e:
+            logger.error(f"❌ State inconsistency recovery failed: {e}")
+            return False
+    
+    async def recover_network_error(self, context: Dict) -> bool:
+        """התאוששות משגיאות רשת"""
+        try:
+            logger.warning("🌐 Recovering from network error...")
+            
+            # Wait a bit for network to recover
+            await asyncio.sleep(5)
+            
+            # Test connection
+            try:
+                await self.orchestrator.binance.ping()
+                logger.info("✅ Network recovery successful")
+                return True
+            except Exception as e:
+                logger.error(f"❌ Network still down: {e}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Network error recovery failed: {e}")
+            return False
+    
+    async def recover_balance_error(self, context: Dict) -> bool:
+        """התאוששות משגיאות יתרה"""
+        try:
+            symbol = context.get('symbol', '')
+            logger.warning(f"💰 Recovering from balance error for {symbol}")
+            
+            # Get current balances
+            balances = await self.orchestrator.binance.get_account_balances()
+            
+            # Log available balances
+            if symbol:
+                base_currency = symbol.replace('USDT', '')
+                base_balance = balances.get(base_currency, {}).get('free', 0)
+                quote_balance = balances.get('USDT', {}).get('free', 0)
+                
+                logger.info(f"💰 Balances - {base_currency}: {base_balance}, USDT: {quote_balance}")
+            
+            # For now, just log and wait
+            await asyncio.sleep(10)
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Balance error recovery failed: {e}")
+            return False
+    
+    async def recover_api_limit(self, context: Dict) -> bool:
+        """התאוששות מ-API Rate Limiting"""
+        try:
+            logger.warning("🚦 API rate limit hit, waiting...")
+            
+            # Wait for rate limit to reset
+            wait_time = 60  # 1 minute
+            logger.info(f"⏳ Waiting {wait_time} seconds for API limit reset")
+            
+            await asyncio.sleep(wait_time)
+            logger.info("✅ API limit recovery complete")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ API limit recovery failed: {e}")
+            return False
+    
+    async def recover_market_closed(self, context: Dict) -> bool:
+        """התאוששות משוק סגור"""
+        try:
+            symbol = context.get('symbol', '')
+            logger.warning(f"🏪 Market closed for {symbol}, waiting...")
+            
+            # Wait and retry later
+            await asyncio.sleep(300)  # 5 minutes
+            logger.info(f"✅ Retrying after market closed for {symbol}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ Market closed recovery failed: {e}")
+            return False
+    
+    async def recover_system_health(self, context: Dict) -> bool:
+        """התאוששות מבעיות בריאות מערכת"""
+        try:
+            issues = context.get('issues', [])
+            logger.warning(f"🏥 Recovering from system health issues: {issues}")
+            
+            # Implement specific recovery based on issues
+            for issue in issues:
+                if 'memory' in issue.lower():
+                    await self.handle_memory_issue()
+                elif 'cpu' in issue.lower():
+                    await self.handle_cpu_issue()
+                elif 'connection' in issue.lower():
+                    await self.handle_connection_issue()
+            
+            logger.info("✅ System health recovery completed")
+            return True
+            
+        except Exception as e:
+            logger.error(f"❌ System health recovery failed: {e}")
+            return False
+    
+    async def handle_memory_issue(self):
+        """טיפול בבעיות זיכרון"""
+        # Clear caches and temporary data
+        self.orchestrator.timeout_manager.volatility_cache.clear()
+        
+        # Force cleanup
+        await self.orchestrator.cleanup_manager.cleanup_old_order_states()
+        
+        logger.info("🧹 Memory cleanup completed")
+    
+    async def handle_cpu_issue(self):
+        """טיפול בבעיות CPU"""
+        # Reduce monitoring frequency temporarily
+        logger.info("⚡ CPU optimization activated")
+    
+    async def handle_connection_issue(self):
+        """טיפול בבעיות חיבור"""
+        # Implement connection reset logic
+        logger.info("🔗 Connection reset performed")
+    
+    async def place_adjusted_limit_order(self, context: Dict, market_conditions: Dict):
+        """הצבת limit order מותאם"""
+        # Implement based on your trading logic
+        logger.info("📈 Placing adjusted limit order")
+    
+    async def place_market_order(self, context: Dict):
+        """הצבת market order"""
+        # Implement based on your trading logic  
+        logger.info("📈 Placing market order")
+    
+    async def escalate_error(self, error_type: str, context: Dict):
+        """הסלמת שגיאה שלא ניתן להתאושש ממנה"""
+        logger.critical(f"💥 ESCALATING ERROR: {error_type} - {context}")
+        
+        # Send alert/notification
+        await self.send_alert(error_type, context)
+        
+        # Emergency shutdown if needed
+        if self.error_counts.get(error_type, 0) > 20:
+            logger.critical("💥 EMERGENCY SHUTDOWN TRIGGERED")
+            await self.emergency_shutdown()
+    
+    async def send_alert(self, error_type: str, context: Dict):
+        """שליחת התראה"""
+        # Implement your alert system (email, telegram, etc.)
+        alert_message = f"🚨 CRITICAL ERROR: {error_type}\nContext: {context}"
+        logger.info(f"📢 Alert: {alert_message}")
+    
+    async def emergency_shutdown(self):
+        """כיבוי חירום"""
+        # Implement graceful shutdown procedure
+        logger.critical("🛑 EMERGENCY SHUTDOWN INITIATED")
+        
+        # Cancel all active orders
+        for order_id, order_state in list(self.orchestrator.order_states.items()):
+            if order_state['status'] == 'ACTIVE':
+                try:
+                    await self.orchestrator.binance.cancel_order(
+                        order_state['symbol'], 
+                        order_id
+                    )
+                    logger.info(f"✅ Emergency cancelled: {order_id}")
+                except Exception as e:
+                    logger.error(f"❌ Failed to emergency cancel {order_id}: {e}")
+        
+        # Stop the orchestrator
+        self.orchestrator.is_running = False
+```
+
+## **📁 שלב 5: unified_state_tracker.py**
+
+```python
+# unified_state_tracker.py
+import time
+import logging
+from typing import Dict, List
+import json
+
+logger = logging.getLogger(__name__)
+
+class UnifiedStateTracker:
+    """
+    📊 מעקב state מאוחד - Single Source of Truth
+    """
+    
+    def __init__(self, orchestrator):
+        self.orchestrator = orchestrator
+        self.system_state = {
+            'orders': {},
+            'positions': {},
+            'performance': {},
+            'health': {},
+            'connections': {}
+        }
+        self.state_history = []
+        self.last_sync = time.time()
+        self.redis_client = None  # Initialize with your Redis client
+        
+    async def initialize(self):
+        """אתחול State Tracker"""
+        try:
+            # Try to load previous state from Redis
+            await self.load_from_redis()
+            logger.info("✅ Unified State Tracker initialized")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not load state from Redis: {e}")
+    
+    async def track_system_state(self):
+        """מעקב רצוף אחרי state המערכת"""
+        while self.orchestrator.is_running:
+            try:
+                # Capture comprehensive system state
+                state_snapshot = {
+                    'timestamp': time.time(),
+                    'orders': await self.capture_order_states(),
+                    'positions': await self.capture_position_states(),
+                    'performance': await self.capture_performance_metrics(),
+                    'health': await self.capture_health_metrics(),
+                    'connections': await self.capture_connection_states()
+                }
+                
+                # Store in history (keep last 1000 snapshots)
+                self.state_history.append(state_snapshot)
+                if len(self.state_history) > 1000:
+                    self.state_history.pop(0)
+                
+                # Update current state
+                self.system_state = state_snapshot
+                
+                # Sync to Redis every 30 seconds
+                if time.time() - self.last_sync > 30:
+                    await self.sync_to_redis()
+                    self.last_sync = time.time()
+                
+                await asyncio.sleep(10)  # Every 10 seconds
+                
+            except Exception as e:
+                logger.error(f"❌ State tracking failed: {e}")
+                await asyncio.sleep(30)
+    
+    async def capture_order_states(self) -> Dict:
+        """לכידת state של כל Orders"""
+        order_states = {}
+        
+        for order_id, order_data in self.orchestrator.order_states.items():
+            order_states[order_id] = {
+                'symbol': order_data['symbol'],
+                'type': order_data['type'],
+                'status': order_data['status'],
+                'age': time.time() - order_data['created_at'],
+                'event_count': len(order_data['events']),
+                'last_event': order_data['events'][-1] if order_data['events'] else None,
+                'timeout_at': order_data.get('timeout_at', 0),
+                'time_until_timeout': max(0, order_data.get('timeout_at', 0) - time.time())
+            }
+        
+        return order_states
+    
+    async def capture_position_states(self) -> Dict:
+        """לכידת state של פוזיציות"""
+        try:
+            # Get account information
+            account = await self.orchestrator.binance.get_account()
+            positions = {}
+            
+            for balance in account['balances']:
+                asset = balance['asset']
+                free = float(balance['free'])
+                locked = float(balance['locked'])
+                
+                if free > 0 or locked > 0:
+                    positions[asset] = {
+                        'free': free,
+                        'locked': locked,
+                        'total': free + locked
+                    }
+            
+            return positions
+            
+        except Exception as e:
+            logger.error(f"❌ Position state capture failed: {e}")
+            return {}
+    
+    async def capture_performance_metrics(self) -> Dict:
+        """לכידת מדדי ביצועים"""
+        try:
+            current_time = time.time()
+            
+            # Calculate order success rate
+            total_orders = len(self.orchestrator.order_states)
+            filled_orders = len([o for o in self.orchestrator.order_states.values() 
+                               if o['status'] == 'FILLED'])
+            success_rate = filled_orders / total_orders if total_orders > 0 else 0
+            
+            # Calculate average order lifetime
+            lifetimes = []
+            for order_data in self.orchestrator.order_states.values():
+                if order_data['status'] in ['FILLED', 'CANCELLED', 'TIMEOUT']:
+                    lifetime = order_data.get('completed_at', current_time) - order_data['created_at']
+                    lifetimes.append(lifetime)
+            
+            avg_lifetime = sum(lifetimes) / len(lifetimes) if lifetimes else 0
+            
+            return {
+                'success_rate': success_rate,
+                'total_orders': total_orders,
+                'active_orders': len([o for o in self.orchestrator.order_states.values() 
+                                    if o['status'] == 'ACTIVE']),
+                'avg_order_lifetime': avg_lifetime,
+                'recovery_queue_size': self.orchestrator.recovery_queue.qsize(),
+                'error_counts': self.orchestrator.error_handler.error_counts,
+                'timestamp': current_time
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Performance metrics capture failed: {e}")
+            return {}
+    
+    async def capture_health_metrics(self) -> Dict:
+        """לכידת מדדי בריאות"""
+        try:
+            current_time = time.time()
+            
+            # Check circuit breakers
+            active_circuit_breakers = len(self.orchestrator.error_handler.circuit_breakers)
+            
+            # Check error rates
+            total_errors = sum(self.orchestrator.error_handler.error_counts.values())
+            error_rate = total_errors / max(1, len(self.orchestrator.order_states))
+            
+            # Check system responsiveness
+            latest_events = []
+            for order_data in self.orchestrator.order_states.values():
+                if order_data['events']:
+                    latest_event = order_data['events'][-1]
+                    event_age = current_time - latest_event['timestamp']
+                    latest_events.append(event_age)
+            
+            avg_event_freshness = sum(latest_events) / len(latest_events) if latest_events else 0
+            
+            health_status = 'HEALTHY'
+            if active_circuit_breakers > 0:
+                health_status = 'DEGRADED'
+            if error_rate > 0.1:  # More than 10% error rate
+                health_status = 'UNHEALTHY'
+            if avg_event_freshness > 300:  # 5 minutes without updates
+                health_status = 'STALLED'
+            
+            return {
+                'status': health_status,
+                'active_circuit_breakers': active_circuit_breakers,
+                'total_errors': total_errors,
+                'error_rate': error_rate,
+                'avg_event_freshness': avg_event_freshness,
+                'last_cleanup': self.orchestrator.last_cleanup,
+                'system_uptime': current_time - getattr(self.orchestrator, 'start_time', current_time),
+                'timestamp': current_time
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Health metrics capture failed: {e}")
+            return {'status': 'UNKNOWN', 'timestamp': time.time()}
+    
+    async def capture_connection_states(self) -> Dict:
+        """לכידת state של חיבורים"""
+        try:
+            # Test exchange connection
+            ping_start = time.time()
+            await self.orchestrator.binance.ping()
+            ping_time = time.time() - ping_start
+            
+            connection_quality = 'EXCELLENT' if ping_time < 0.1 else \
+                                'GOOD' if ping_time < 0.5 else \
+                                'SLOW' if ping_time < 2.0 else 'POOR'
+            
+            return {
+                'exchange_connection': connection_quality,
+                'ping_time': ping_time,
+                'last_successful_sync': self.last_sync,
+                'redis_connected': self.redis_client is not None,
+                'timestamp': time.time()
+            }
+            
+        except Exception as e:
+            logger.error(f"❌ Connection state capture failed: {e}")
+            return {
+                'exchange_connection': 'DISCONNECTED',
+                'ping_time': -1,
+                'last_successful_sync': self.last_sync,
+                'redis_connected': self.redis_client is not None,
+                'timestamp': time.time()
+            }
+    
+    async def sync_to_redis(self):
+        """סינכרון state ל-Redis"""
+        try:
+            if self.redis_client:
+                state_data = {
+                    'system_state': self.system_state,
+                    'last_updated': time.time(),
+                    'orchestrator_metrics': self.orchestrator.performance_metrics
+                }
+                
+                await self.redis_client.set(
+                    'trading_system:state',
+                    json.dumps(state_data),
+                    ex=300  # Expire after 5 minutes
+                )
+                
+                logger.debug("✅ State synced to Redis")
+                
+        except Exception as e:
+            logger.error(f"❌ Redis sync failed: {e}")
+    
+    async def load_from_redis(self):
+        """טעינת state מ-Redis"""
+        try:
+            if self.redis_client:
+                state_data = await self.redis_client.get('trading_system:state')
+                if state_data:
+                    loaded_state = json.loads(state_data)
+                    
+                    # Merge with current state (be careful with conflicts)
+                    if 'system_state' in loaded_state:
+                        # Only load non-conflicting data
+                        logger.info("✅ Loaded previous state from Redis")
+                        
+        except Exception as e:
+            logger.error(f"❌ Redis load failed: {e}")
+    
+    async def get_system_summary(self) -> Dict:
+        """קבלת סיכום מערכת"""
+        return {
+            'orders_summary': {
+                'total': len(self.system_state['orders']),
+                'active': len([o for o in self.system_state['orders'].values() 
+                             if o['status'] == 'ACTIVE']),
+                'filled': len([o for o in self.system_state['orders'].values() 
+                             if o['status'] == 'FILLED']),
+                'cancelled': len([o for o in self.system_state['orders'].values() 
+                                if o['status'] == 'CANCELLED']),
+                'timed_out': len([o for o in self.system_state['orders'].values() 
+                                if o['status'] == 'TIMEOUT'])
+            },
+            'performance': self.system_state['performance'],
+            'health': self.system_state['health'],
+            'connections': self.system_state['connections'],
+            'last_updated': self.system_state['timestamp']
+        }
+    
+    async def get_order_details(self, order_id: str) -> Dict:
+        """קבלת פרטי order ספציפי"""
+        if order_id in self.system_state['orders']:
+            return self.system_state['orders'][order_id]
+        
+        # Check historical data
+        for snapshot in reversed(self.state_history):
+            if order_id in snapshot['orders']:
+                return snapshot['orders'][order_id]
+        
+        return {'error': 'Order not found'}
+    
+    async def export_state_report(self) -> Dict:
+        """יצוא דוח state מלא"""
+        return {
+            'current_state': self.system_state,
+            'history_size': len(self.state_history),
+            'performance_trends': await self.calculate_performance_trends(),
+            'health_history': await self.get_health_history(),
+            'exported_at': time.time()
+        }
+    
+    async def calculate_performance_trends(self) -> Dict:
+        """חישוב מגמות ביצועים"""
+        if len(self.state_history) < 2:
+            return {}
+        
+        recent_states = self.state_history[-10:]  # Last 10 snapshots
+        
+        success_rates = [s['performance'].get('success_rate', 0) for s in recent_states]
+        error_rates = [s['health'].get('error_rate', 0) for s in recent_states]
+        
+        return {
+            'success_rate_trend': 'IMPROVING' if success_rates[-1] > success_rates[0] else 'DECLINING',
+            'error_rate_trend': 'IMPROVING' if error_rates[-1] < error_rates[0] else 'WORSENING',
+            'avg_success_rate': sum(success_rates) / len(success_rates),
+            'avg_error_rate': sum(error_rates) / len(error_rates)
+        }
+    
+    async def get_health_history(self) -> List[Dict]:
+        """קבלת היסטוריית בריאות"""
+        health_history = []
+        
+        for snapshot in self.state_history[-50:]:  # Last 50 snapshots
+            health_history.append({
+                'timestamp': snapshot['timestamp'],
+                'status': snapshot['health'].get('status', 'UNKNOWN'),
+                'error_rate': snapshot['health'].get('error_rate', 0)
+            })
+        
+        return health_history
+```
+
+**📁 המשך עם הקבצים העיקריים...**
+
+רוצה שאמשיך עם `main_system_integrator.py` ועדכון `main.py`? 🔥

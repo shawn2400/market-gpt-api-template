@@ -2202,7 +2202,7 @@ async def process_cycle():
                                 except Exception as e:
                                     LOGGER.exception(f"propose_futures fallback error {sym}: {e}")
                 except Exception as e:
-                    LOGGER.info(f"propose_grid ERROR {sym}: {e}")
+                    LOGGER.exception(f"propose_grid ERROR {sym}: {e}")  # CHANGED: Use exception() for full traceback
                     # Fallback to FUTURES on error
                     if SUGGEST_FUTURES:
                         try:
