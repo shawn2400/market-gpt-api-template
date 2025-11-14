@@ -114,8 +114,8 @@ _daily_pnl = 0.0
 _trades_today: List[dict] = []
 _cap_triggered = False
 
-# 🛡️ SL/TP PROTECTION FLAG - Position Monitor owns all protection (default: false)
-FILLS_WATCHER_PROTECT_ENABLE = os.getenv("FILLS_WATCHER_PROTECT_ENABLE", "false").lower() in ("1", "true", "yes")
+# 🛡️ SL/TP PROTECTION FLAG - DynPath enabled by default for SL/TP synchronization
+FILLS_WATCHER_PROTECT_ENABLE = os.getenv("FILLS_WATCHER_PROTECT_ENABLE", "true").lower() in ("1", "true", "yes")
 
 _health_fails = 0
 _HEALTH_FAIL_MAX = int(os.getenv("KILLSWITCH_THRESHOLD", "3"))
