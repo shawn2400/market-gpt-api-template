@@ -1928,6 +1928,23 @@ async def process_cycle():
         if not payload:
             return
         
+        # 📊 CALCULATE QUALITY SCORE FIRST (for GRID) - always run for telemetry even if margin insufficient
+        symbol = payload.get("symbol", "")
+        if ttype == "GRID":
+            LOGGER.info(f"✅ Smart Filter BYPASSED for GRID trade {symbol} (range-based strategy)")
+            # 🔧 FIX: Calculate dynamic quality from Market Intelligence, NOT static watchlist
+            # ctx["filters"]["quality_score"] comes from watchlist (static 5-7), not dynamic analysis!
+            try:
+                from utils.market_intelligence import get_market_intelligence
+                mi_engine = get_market_intelligence()
+                mi_quality = mi_engine.calculate_quality_score(ctx, strategy="grid")
+                # 🛡️ PROTECTION: Clamp quality to 6.0-10.0 range for safety
+                payload["quality_score"] = max(6.0, min(mi_quality if mi_quality and mi_quality > 0 else 6.0, 10.0))
+                LOGGER.info(f"📊 GRID quality from MI: {payload['quality_score']:.1f}/10 (dynamic, clamped 6-10)")
+            except Exception as e:
+                LOGGER.warning(f"⚠️ Failed to calculate MI quality for GRID {symbol}: {e}, using default 6.0")
+                payload["quality_score"] = 6.0  # Safe fallback
+        
         # 💰 CHECK AVAILABLE MARGIN: Skip proposals if insufficient funds
         available = 0.0  # Initialize before try block
         try:
@@ -1970,12 +1987,8 @@ async def process_cycle():
             return
         
         # 🎯 SMART 3-STAGE FILTER: Check quality BEFORE expensive AI calls (95% cost reduction)
-        # ⚠️ BYPASS for GRID: GRID is range-based, not indicators-based - skip Smart Filter
-        if ttype == "GRID":
-            LOGGER.info(f"✅ Smart Filter BYPASSED for GRID trade {symbol} (range-based strategy)")
-            # Use dynamic quality from context (4-9 auto), not hardcoded 7.0
-            payload["quality_score"] = _quality_from_ctx(ctx) or 6.0  # Default 6.0 if no quality in context
-        else:
+        # ⚠️ BYPASS for GRID: Quality score already calculated above (before margin check)
+        if ttype != "GRID":
             try:
                 from utils.smart_filter import smart_pre_filter
                 
