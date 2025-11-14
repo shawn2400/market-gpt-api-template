@@ -15,7 +15,11 @@ __all__ = [
     "get_trade_budget_usdt",
     "get_dynamic_budget_for",
     "get_budget_usdt",
+    "MIN_BUDGET",  # Export for execution_bot.py GRID validation
 ]
+
+# 💰 GRID trading minimum budget per order ($25 USDT before leverage)
+MIN_BUDGET = 25.0
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV helpers

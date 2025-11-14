@@ -709,8 +709,9 @@ class ExecutionBot:
         price_step = (grid_max - grid_min) / (grid_levels - 1) if grid_levels > 1 else 0
         prices = [grid_min + (i * price_step) for i in range(grid_levels)]
         
-        # 🛡️ SMART GRID: Ensure each level meets Binance minNotional ($100 per order)
-        MIN_NOTIONAL_USD = 100.0
+        # 🛡️ SMART GRID: Ensure each level meets Binance minNotional ($25 per order - DYNAMIC BUDGET v2.0)
+        from utils.budget import MIN_BUDGET
+        MIN_NOTIONAL_USD = MIN_BUDGET  # Dynamic: $25 minimum (was $100 hardcoded)
         budget_per_level = budget_usd / grid_levels
         
         # CRITICAL: Check if total budget is sufficient for even 1 order
