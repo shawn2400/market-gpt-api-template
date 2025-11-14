@@ -173,7 +173,7 @@ CAP_PER_CYCLE_ENV = int(os.getenv("SUGGEST_CAP_PER_CYCLE","5"))
 SUCCESS_PCT_MIN   = float(os.getenv("SUCCESS_PCT_MIN","70"))
 
 # תקציב בסיס (ישמש כפולבק אם הדינמי כבוי)
-BUDGET_USD_FALLBK = float(os.getenv("MAX_TRADE_BUDGET","100"))
+BUDGET_USD_FALLBK = float(os.getenv("MAX_TRADE_BUDGET","100"))  # Fallback OK - dynamic budget system handles minimums
 
 # סוגי הצעות להפעלה
 SUGGEST_FUTURES   = os.getenv("SUGGEST_FUTURES","1").strip().lower() in ("1","true","yes")
@@ -1850,7 +1850,7 @@ async def process_cycle():
         
         # Use 1x MIN budget as safety buffer for dynamic sizing
         # Changed from 2.0x to 1.0x to allow trading with lower balances
-        min_budget = float(os.getenv("BUDGET_MIN_USDT", "10.0"))
+        min_budget = float(os.getenv("BUDGET_MIN_USDT", "25.0"))  # ⬆️ Raised from $10 to $25
         safety_buffer = min_budget * 1.0  # $10 minimum for realistic trades
         if available < safety_buffer:
             LOGGER.warning(
@@ -1937,7 +1937,7 @@ async def process_cycle():
             
             # Use 1x MIN budget as safety buffer for dynamic sizing
             # Changed from 2.0x to 1.0x to allow trading with lower balances
-            min_budget = float(os.getenv("BUDGET_MIN_USDT", "10.0"))
+            min_budget = float(os.getenv("BUDGET_MIN_USDT", "25.0"))  # ⬆️ Raised from $10 to $25
             safety_buffer = min_budget * 1.0  # $10 minimum for realistic trades
             if available < safety_buffer:
                 LOGGER.warning(

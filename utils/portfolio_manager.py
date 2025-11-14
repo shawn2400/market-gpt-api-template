@@ -11,7 +11,7 @@ logger = logging.getLogger("algogpt.portfolio")
 
 # Configuration
 MAX_CONCURRENT_TRADES = int(os.getenv("MAX_CONCURRENT_TRADES", "4"))
-MIN_BUDGET_PER_TRADE_USDT = float(os.getenv("MIN_BUDGET_PER_TRADE_USDT", "20"))
+MIN_BUDGET_PER_TRADE_USDT = float(os.getenv("MIN_BUDGET_PER_TRADE_USDT", "25"))  # ⬆️ Raised from $20 to $25
 MAX_BUDGET_PER_TRADE_USDT = float(os.getenv("MAX_BUDGET_PER_TRADE_USDT", "200"))
 TOTAL_WALLET_ALLOCATION_PCT = float(os.getenv("TOTAL_WALLET_ALLOCATION_PCT", "80"))  # Use 80% of wallet
 
