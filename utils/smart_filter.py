@@ -130,6 +130,64 @@ def stage2_technical_quality(ctx: Dict[str, Any]) -> Tuple[bool, str, float]:
         return True, "technical_check_failed", 5.0  # Don't block on errors
 
 
+def stage3_market_direction(ctx: Dict[str, Any], proposed_side: str = "LONG") -> Tuple[bool, str]:
+    """
+    🔍 Stage 3: Market Direction Filter
+    Blocks trades against prevailing market trend to prevent losses
+    
+    Logic:
+    - BEARISH Market (price < EMA20 < EMA50): Block LONG trades
+    - BULLISH Market (price > EMA20 > EMA50): Block SHORT trades
+    - NEUTRAL/CHOPPY: Allow both directions
+    
+    Args:
+        ctx: Market context with price and EMAs
+        proposed_side: Trade direction ("LONG" or "SHORT")
+    
+    Returns: (passed, reason)
+    """
+    try:
+        price = float(ctx.get("close") or ctx.get("price") or 0)
+        ema_20 = float(ctx.get("ema_20") or ctx.get("ema21") or price)
+        ema_50 = float(ctx.get("ema_50") or price)
+        
+        if price == 0:
+            return True, "no_price_data"
+        
+        # Detect market direction via EMA alignment
+        if price < ema_20 < ema_50:
+            market_direction = "BEARISH"
+        elif price > ema_20 > ema_50:
+            market_direction = "BULLISH"
+        else:
+            market_direction = "NEUTRAL"
+        
+        # Block trades against the trend
+        if market_direction == "BEARISH" and proposed_side == "LONG":
+            logger.warning(
+                f"❌ Stage 3 FAIL: LONG trade blocked in BEARISH market "
+                f"(price={price:.2f} < EMA20={ema_20:.2f} < EMA50={ema_50:.2f})"
+            )
+            return False, "bearish_market_blocks_long"
+        
+        if market_direction == "BULLISH" and proposed_side == "SHORT":
+            logger.warning(
+                f"❌ Stage 3 FAIL: SHORT trade blocked in BULLISH market "
+                f"(price={price:.2f} > EMA20={ema_20:.2f} > EMA50={ema_50:.2f})"
+            )
+            return False, "bullish_market_blocks_short"
+        
+        logger.info(
+            f"✅ Stage 3 PASS: {proposed_side} allowed in {market_direction} market "
+            f"(price={price:.2f}, EMA20={ema_20:.2f}, EMA50={ema_50:.2f})"
+        )
+        return True, f"{proposed_side.lower()}_ok_in_{market_direction.lower()}"
+        
+    except Exception as e:
+        logger.debug(f"Stage 3 error: {e}")
+        return True, "direction_check_failed"
+
+
 def smart_pre_filter(symbol: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
     """
     🎯 Smart 3-Stage Pre-Filter
@@ -163,11 +221,22 @@ def smart_pre_filter(symbol: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
             "quality_score": quality_score
         }
     
+    # Stage 3: Market Direction (check if trade direction is provided)
+    proposed_side = ctx.get("side", "LONG")
+    stage3_pass, stage3_reason = stage3_market_direction(ctx, proposed_side)
+    if not stage3_pass:
+        return {
+            "passed": False,
+            "stage": 3,
+            "reason": stage3_reason,
+            "quality_score": quality_score
+        }
+    
     # All stages passed → proceed to AI consensus
     logger.info(f"🎯 {symbol}: Smart filter PASSED - Quality={quality_score:.1f}/10, proceeding to AI consensus")
     return {
         "passed": True,
-        "stage": 2,
-        "reason": f"{stage1_reason} + {stage2_reason}",
+        "stage": 3,
+        "reason": f"{stage1_reason} + {stage2_reason} + {stage3_reason}",
         "quality_score": quality_score
     }
