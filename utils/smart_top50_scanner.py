@@ -33,12 +33,12 @@ class SmartTop50Scanner:
     def __init__(self):
         self.client = get_client() if get_client else None
         self.redis = get_redis() if get_redis else None
-        self.candidate_pool_size = 120
+        self.candidate_pool_size = 160  # Expanded from 120 to 160
         self.previous_top_100_key = "top50:previous_top_100"
         self.min_volume_24h = 20_000_000
         self.min_liquidity = 100_000
         
-        logger.info("SmartTop50Scanner initialized - scanning 120 candidates instead of 538")
+        logger.info("SmartTop50Scanner initialized - scanning 160 candidates instead of 538")
     
     def get_optimized_candidate_pool(self) -> List[str]:
         if not self.client:
@@ -50,19 +50,19 @@ class SmartTop50Scanner:
         
         candidates = []
         if previous_top_100:
-            candidates = previous_top_100[:80]
-            logger.info(f"Added 80 symbols from previous TOP 100")
+            candidates = previous_top_100[:100]  # Expanded from 80 to 100
+            logger.info(f"Added 100 symbols from previous TOP 100")
         else:
             logger.info("No previous TOP 100, using random sample")
         
         remaining_symbols = [s for s in all_symbols if s not in candidates]
-        new_candidates_count = min(40, len(remaining_symbols))
+        new_candidates_count = min(60, len(remaining_symbols))  # Expanded from 40 to 60
         if new_candidates_count > 0:
             new_candidates = random.sample(remaining_symbols, new_candidates_count)
             candidates.extend(new_candidates)
             logger.info(f"Added {new_candidates_count} new random candidates")
         
-        logger.info(f"Candidate pool: {len(candidates)} symbols (vs 538 full scan)")
+        logger.info(f"Candidate pool: {len(candidates)} symbols (target: 160, vs 538 full scan)")
         return candidates
     
     def _get_all_symbols(self) -> List[str]:
