@@ -25,13 +25,13 @@ except Exception:
 
 # Import AI post-trade review and consensus improver
 try:
-    from utils.ai_post_trade_review import review_completed_trade, TradeReviewResult
-    from utils.ai_consensus_improver import analyze_and_apply_improvements
-    from utils.telegram_digest import get_digest, TelegramDigest
+    from utils.ai_post_trade_review import review_completed_trade, TradeReviewResult  # type: ignore
+    from utils.ai_consensus_improver import analyze_and_apply_improvements  # type: ignore
+    from utils.telegram_digest import get_digest, TelegramDigest  # type: ignore
     from utils.telegram_notifier_core import _tg_send
     
     # Wrapper for compatibility (passes parse_mode to Telegram for HTML formatting)
-    def send_telegram(message: str, parse_mode: str = "HTML", **kwargs):
+    def send_telegram(message: str, parse_mode: str = "HTML", **kwargs):  # type: ignore
         """Send message via Telegram (sync wrapper for async _tg_send with HTML support)"""
         try:
             loop = asyncio.get_event_loop()
@@ -52,14 +52,14 @@ except Exception as e:
     
     async def review_completed_trade(trade_data: Dict[str, Any]) -> Dict[str, Any]:  # type: ignore
         return {}
-    async def analyze_and_apply_improvements(reviews: List[Dict[str, Any]]) -> Dict[str, Any]:  # type: ignore
+    async def analyze_and_apply_improvements(review_results: List[Dict[str, Any]]) -> Dict[str, Any]:  # type: ignore
         return {}
     def get_digest():  # type: ignore
         class MockDigest:
             def add_trade_completion(self, *args, **kwargs):
                 pass
         return MockDigest()
-    def send_telegram(message: str, **kwargs):  # type: ignore
+    def send_telegram(message: str, parse_mode: str = "HTML", **kwargs):  # type: ignore
         pass
     AI_REVIEW_AVAILABLE = False
 
@@ -653,7 +653,7 @@ def _on_trade_completion(symbol: str, exit_time: float):
                 f"━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"🤖 <i>AI Review in progress...</i>"
             )
-            send_telegram(msg, parse_mode="HTML")
+            send_telegram(msg_disabled, parse_mode="HTML")
             log.info(f"✅ Professional trade close notification sent: {symbol} PnL={pnl_pct:+.2f}%")
         except Exception as e:
             log.warning(f"Failed to send trade close Telegram: {e}")
@@ -715,8 +715,9 @@ def _on_trade_completion(symbol: str, exit_time: float):
                         log.error(f"AI Review failed for {symbol}: {e}")
                 
                 # Run async review in background
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
+                import asyncio as async_lib
+                loop = async_lib.new_event_loop()
+                async_lib.set_event_loop(loop)
                 loop.run_until_complete(run_ai_review())
                 loop.close()
                 
