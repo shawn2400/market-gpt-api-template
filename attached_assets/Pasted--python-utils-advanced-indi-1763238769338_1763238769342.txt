@@ -1,0 +1,515 @@
+**🎯 יצירת שילובים חכמים מהאינדיקטורים הקיימים + הוספת מה שחסר**
+
+```python
+# utils/advanced_indicators_combo.py
+
+import numpy as np
+from typing import Dict, List, Optional
+from dataclasses import dataclass
+from enum import Enum
+
+class MarketRegime(Enum):
+    TRENDING_UP = "trending_up"
+    TRENDING_DOWN = "trending_down" 
+    CHOPPY = "choppy"
+    VOLATILE = "volatile"
+    SIDEWAYS = "sideways"
+
+class ComboStrength(Enum):
+    STRONG = "strong"
+    MODERATE = "moderate"
+    WEAK = "weak"
+
+@dataclass
+class ComboSignal:
+    name: str
+    strength: ComboStrength
+    direction: str  # "long" or "short"
+    confidence: float  # 0-1
+    conditions: List[str]
+    indicators_used: List[str]
+    recommended_action: str
+
+class AdvancedIndicatorsCombo:
+    """
+    שילוב חכם של כל האינדיקטורים הקיימים במערכת
+    """
+    
+    def __init__(self):
+        self.combos_registry = {}
+        self.setup_combos()
+    
+    def setup_combos(self):
+        """מגדיר את כל שילובי האינדיקטורים החכמים"""
+        
+        # 🟢 COMBO 1: מגמה חזקה + מומנטום + תמיכה
+        self.combos_registry["strong_trend_momentum_support"] = {
+            "name": "מגמה חזקה עם אישורי מומנטום ותמיכה",
+            "required_indicators": ["EMA_9", "EMA_20", "EMA_50", "RSI", "ADX", "Support_Levels"],
+            "calculation": self._calc_strong_trend_combo,
+            "min_confidence": 0.7
+        }
+        
+        # 🟢 COMBO 2: פריצה עם אישורי נפח ווליטיליות
+        self.combos_registry["breakout_volume_volatility"] = {
+            "name": "פריצה עם אישורי נפח ווליטיליות",
+            "required_indicators": ["EMA_20", "RSI", "VWAP", "ATR", "Volume", "Resistance_Levels"],
+            "calculation": self._calc_breakout_combo,
+            "min_confidence": 0.65
+        }
+        
+        # 🟢 COMBO 3: פולבק איכותי במגמה
+        self.combos_registry["quality_pullback_trend"] = {
+            "name": "פולבק איכותי במגמה חזקה",
+            "required_indicators": ["EMA_20", "EMA_50", "RSI", "MACD", "Support_Levels", "VWAP"],
+            "calculation": self._calc_pullback_combo,
+            "min_confidence": 0.75
+        }
+        
+        # 🔴 COMBO 4: מגמת ירידה עם התנגדות
+        self.combos_registry["downtrend_resistance_momentum"] = {
+            "name": "מגמת ירידה עם אישורי התנגדות ומומנטום",
+            "required_indicators": ["EMA_20", "EMA_50", "RSI", "ADX", "Resistance_Levels", "Volume"],
+            "calculation": self._calc_downtrend_combo,
+            "min_confidence": 0.7
+        }
+        
+        # 🟡 COMBO 5: תנאי שוק מתנדנד עם גבולות ברורים
+        self.combos_registry["ranging_market_edges"] = {
+            "name": "שוק מתנדנד עם גבולות ברורים",
+            "required_indicators": ["Bollinger_Bands", "RSI", "Support_Levels", "Resistance_Levels", "Volume"],
+            "calculation": self._calc_ranging_combo,
+            "min_confidence": 0.6
+        }
+    
+    def analyze_market_regime(self, indicator_data: Dict) -> MarketRegime:
+        """מנתח את סוג השוק הנוכחי"""
+        
+        # ניתוח מגמה
+        ema_9 = indicator_data.get('ema_9', 0)
+        ema_20 = indicator_data.get('ema_20', 0)
+        ema_50 = indicator_data.get('ema_50', 0)
+        adx = indicator_data.get('adx', 0)
+        
+        # ניתוח תנודתיות
+        atr = indicator_data.get('atr', 0)
+        atr_percentage = indicator_data.get('atr_percentage', 0)
+        bb_width = indicator_data.get('bb_width', 0)
+        
+        # ניתוח מגמה
+        if adx > 25:
+            if ema_9 > ema_20 > ema_50:
+                return MarketRegime.TRENDING_UP
+            elif ema_9 < ema_20 < ema_50:
+                return MarketRegime.TRENDING_DOWN
+        
+        # ניתוח תנודתיות
+        if atr_percentage > 0.03 or bb_width > 0.05:  # 3% ATR או 5% Bollinger Width
+            return MarketRegime.VOLATILE
+        
+        # ניתוח שוק מתנדנד
+        if adx < 20:
+            return MarketRegime.CHOPPY
+        
+        return MarketRegime.SIDEWAYS
+    
+    def _calc_strong_trend_combo(self, data: Dict) -> ComboSignal:
+        """קומבו 1: מגמה חזקה + מומנטום + תמיכה"""
+        score = 0
+        max_score = 6
+        conditions = []
+        
+        # מגמה חזקה (2 נקודות)
+        if data.get('ema_9', 0) > data.get('ema_20', 0) > data.get('ema_50', 0):
+            score += 2
+            conditions.append("✅ מגמה עולה חזקה (EMA9 > EMA20 > EMA50)")
+        elif data.get('ema_9', 0) < data.get('ema_20', 0) < data.get('ema_50', 0):
+            score += 2
+            conditions.append("✅ מגמה יורדת חזקה (EMA9 < EMA20 < EMA50)")
+        
+        # ADX חזק (1 נקודה)
+        if data.get('adx', 0) > 25:
+            score += 1
+            conditions.append("✅ מגמה חזקה (ADX > 25)")
+        
+        # RSI אופטימלי (1 נקודה)
+        rsi = data.get('rsi', 50)
+        if 35 <= rsi <= 65:
+            score += 1
+            conditions.append("✅ RSI באזור אופטימלי (35-65)")
+        
+        # תמיכה/התנגדות (1 נקודה)
+        if data.get('near_support', False) or data.get('near_resistance', False):
+            score += 1
+            conditions.append("✅ קרוב לקו תמיכה/התנגדות משמעותי")
+        
+        # ווליום (1 נקודה)
+        if data.get('volume_above_avg', False):
+            score += 1
+            conditions.append("✅ ווליום גבוה מהממוצע")
+        
+        confidence = score / max_score
+        direction = "long" if data.get('ema_9', 0) > data.get('ema_50', 0) else "short"
+        
+        return ComboSignal(
+            name="מגמה חזקה עם אישורי מומנטום ותמיכה",
+            strength=ComboStrength.STRONG if confidence >= 0.7 else ComboStrength.MODERATE,
+            direction=direction,
+            confidence=confidence,
+            conditions=conditions,
+            indicators_used=["EMA_9", "EMA_20", "EMA_50", "RSI", "ADX", "Support/Resistance", "Volume"],
+            recommended_action="ENTER עם 1-2% מהון" if confidence >= 0.7 else "ENTER עם 0.5-1% מהון"
+        )
+    
+    def _calc_breakout_combo(self, data: Dict) -> ComboSignal:
+        """קומבו 2: פריצה עם אישורי נפח ווליטיליות"""
+        score = 0
+        max_score = 5
+        conditions = []
+        
+        # פריצה (2 נקודות)
+        if data.get('breakout_occurred', False):
+            score += 2
+            conditions.append("✅ פריצה מתרחשת/התרחשה")
+        
+        # ווליום פריצה (1 נקודה)
+        if data.get('volume_breakout', False):
+            score += 1
+            conditions.append("✅ ווליום גבוה בפריצה")
+        
+        # ATR מתאים (1 נקודה)
+        if data.get('atr_percentage', 0) > 0.02:  # 2% ATR מינימלי
+            score += 1
+            conditions.append("✅ תנודתיות מתאימה לפריצה")
+        
+        # VWAP אישור (1 נקודה)
+        if data.get('price_above_vwap', False):
+            score += 1
+            conditions.append("✅ מחיר מעל VWAP")
+        
+        confidence = score / max_score
+        
+        return ComboSignal(
+            name="פריצה עם אישורי נפח ווליטיליות",
+            strength=ComboStrength.STRONG if confidence >= 0.7 else ComboStrength.MODERATE,
+            direction="long" if data.get('breakout_direction') == 'up' else "short",
+            confidence=confidence,
+            conditions=conditions,
+            indicators_used=["EMA_20", "RSI", "VWAP", "ATR", "Volume", "Resistance_Levels"],
+            recommended_action="ENTER עם 1-1.5% מהון" if confidence >= 0.7 else "ENTER עם 0.5-1% מהון"
+        )
+    
+    def _calc_pullback_combo(self, data: Dict) -> ComboSignal:
+        """קומבו 3: פולבק איכותי במגמה"""
+        score = 0
+        max_score = 6
+        conditions = []
+        
+        # מגמה ראשית (2 נקודות)
+        if data.get('ema_20', 0) > data.get('ema_50', 0):
+            score += 2
+            conditions.append("✅ מגמה ראשית עולה")
+        
+        # פולבק לתמיכה (2 נקודות)
+        if data.get('pullback_to_support', False):
+            score += 2
+            conditions.append("✅ פולבק לתמיכה משמעותית")
+        
+        # RSI oversold במגמה עולה (1 נקודה)
+        if data.get('rsi', 50) < 40 and data.get('ema_20', 0) > data.get('ema_50', 0):
+            score += 1
+            conditions.append("✅ RSO oversold קל במגמה עולה")
+        
+        # MACD אישור (1 נקודה)
+        if data.get('macd_histogram_turning', False):
+            score += 1
+            conditions.append("✅ MACD histogram משתפר")
+        
+        confidence = score / max_score
+        
+        return ComboSignal(
+            name="פולבק איכותי במגמה חזקה",
+            strength=ComboStrength.STRONG if confidence >= 0.75 else ComboStrength.MODERATE,
+            direction="long",
+            confidence=confidence,
+            conditions=conditions,
+            indicators_used=["EMA_20", "EMA_50", "RSI", "MACD", "Support_Levels", "VWAP"],
+            recommended_action="ENTER עם 1-2% מהון - פוטנציאל גבוה"
+        )
+    
+    def _calc_downtrend_combo(self, data: Dict) -> ComboSignal:
+        """קומבו 4: מגמת ירידה עם התנגדות"""
+        score = 0
+        max_score = 5
+        conditions = []
+        
+        # מגמת ירידה (2 נקודות)
+        if data.get('ema_20', 0) < data.get('ema_50', 0):
+            score += 2
+            conditions.append("✅ מגמה ראשית יורדת")
+        
+        # התנגדות (1 נקודה)
+        if data.get('near_resistance', False):
+            score += 1
+            conditions.append("✅ קרוב להתנגדות משמעותית")
+        
+        # RSI overbought במגמת ירידה (1 נקודה)
+        if data.get('rsi', 50) > 60 and data.get('ema_20', 0) < data.get('ema_50', 0):
+            score += 1
+            conditions.append("✅ RSI overbought קל במגמת ירידה")
+        
+        # ווליום אישור (1 נקודה)
+        if data.get('volume_above_avg', False):
+            score += 1
+            conditions.append("✅ ווליום תומך")
+        
+        confidence = score / max_score
+        
+        return ComboSignal(
+            name="מגמת ירידה עם אישורי התנגדות ומומנטום",
+            strength=ComboStrength.STRONG if confidence >= 0.7 else ComboStrength.MODERATE,
+            direction="short",
+            confidence=confidence,
+            conditions=conditions,
+            indicators_used=["EMA_20", "EMA_50", "RSI", "ADX", "Resistance_Levels", "Volume"],
+            recommended_action="ENTER SHORT עם 1-1.5% מהון"
+        )
+    
+    def _calc_ranging_combo(self, data: Dict) -> ComboSignal:
+        """קומבו 5: שוק מתנדנד עם גבולות ברורים"""
+        score = 0
+        max_score = 5
+        conditions = []
+        
+        # Bollinger Bands flat (2 נקודות)
+        if data.get('bb_squeeze', False) or data.get('bb_width', 0) < 0.03:
+            score += 2
+            conditions.append("✅ Bollinger Bands צרים/שטוחים")
+        
+        # RSI באזור edges (1 נקודה)
+        rsi = data.get('rsi', 50)
+        if rsi < 35 or rsi > 65:
+            score += 1
+            conditions.append("✅ RSI באזור קיצוני")
+        
+        # תמיכה/התנגדות ברורים (1 נקודה)
+        if data.get('clear_support_resistance', False):
+            score += 1
+            conditions.append("✅ גבולות תמיכה/התנגדות ברורים")
+        
+        # ווליום נמוך (1 נקודה)
+        if data.get('volume_below_avg', False):
+            score += 1
+            conditions.append("✅ ווליום נמוך - שוק מתנדנד")
+        
+        confidence = score / max_score
+        direction = "long" if rsi < 35 else "short" if rsi > 65 else "neutral"
+        
+        return ComboSignal(
+            name="שוק מתנדנד עם גבולות ברורים",
+            strength=ComboStrength.MODERATE if confidence >= 0.6 else ComboStrength.WEAK,
+            direction=direction,
+            confidence=confidence,
+            conditions=conditions,
+            indicators_used=["Bollinger_Bands", "RSI", "Support_Levels", "Resistance_Levels", "Volume"],
+            recommended_action="ENTER עם 0.5-1% מהון - range trading"
+        )
+    
+    def calculate_all_combos(self, market_data: Dict) -> List[ComboSignal]:
+        """מחשב את כל הקומבויים האפשריים עבור נתוני השוק"""
+        
+        signals = []
+        regime = self.analyze_market_regime(market_data)
+        
+        # הוספת נתוני regime ל-market_data
+        market_data['market_regime'] = regime
+        
+        for combo_id, combo_config in self.combos_registry.items():
+            try:
+                signal = combo_config["calculation"](market_data)
+                if signal.confidence >= combo_config["min_confidence"]:
+                    signals.append(signal)
+            except Exception as e:
+                print(f"❌ שגיאה בחישוב קומבו {combo_id}: {e}")
+                continue
+        
+        # מיון לפי confidence
+        signals.sort(key=lambda x: x.confidence, reverse=True)
+        return signals
+    
+    def get_best_signal(self, market_data: Dict) -> Optional[ComboSignal]:
+        """מחזיר את האות הטוב ביותר"""
+        signals = self.calculate_all_combos(market_data)
+        return signals[0] if signals else None
+    
+    def generate_combo_report(self, market_data: Dict) -> Dict:
+        """מייצר דוח מלא של כל הקומבויים"""
+        
+        signals = self.calculate_all_combos(market_data)
+        regime = self.analyze_market_regime(market_data)
+        
+        report = {
+            "market_regime": regime.value,
+            "total_signals": len(signals),
+            "best_signal": None,
+            "all_signals": [],
+            "recommendation": "NO_TRADE"
+        }
+        
+        if signals:
+            report["best_signal"] = {
+                "name": signals[0].name,
+                "direction": signals[0].direction,
+                "confidence": round(signals[0].confidence, 3),
+                "strength": signals[0].strength.value,
+                "action": signals[0].recommended_action
+            }
+            
+            for signal in signals:
+                report["all_signals"].append({
+                    "name": signal.name,
+                    "direction": signal.direction,
+                    "confidence": round(signal.confidence, 3),
+                    "strength": signal.strength.value,
+                    "conditions": signal.conditions
+                })
+            
+            # המלצה כללית
+            best = signals[0]
+            if best.confidence >= 0.75 and best.strength == ComboStrength.STRONG:
+                report["recommendation"] = "STRONG_ENTRY"
+            elif best.confidence >= 0.65:
+                report["recommendation"] = "MODERATE_ENTRY"
+            elif best.confidence >= 0.55:
+                report["recommendation"] = "LIGHT_ENTRY"
+        
+        return report
+
+# ========================
+# אינטגרציה עם המערכת הקיימת
+# ========================
+
+def integrate_with_existing_system():
+    """מראה איך לשלב את הקומבויים במערכת הקיימת"""
+    
+    integration_example = """
+    # 📍 אינטגרציה עם market_analysis.py הקיים
+    
+    from utils.advanced_indicators_combo import AdvancedIndicatorsCombo
+    
+    class EnhancedMarketAnalysis:
+        def __init__(self):
+            self.combo_analyzer = AdvancedIndicatorsCombo()
+            
+        def get_trading_signals(self, symbol: str):
+            # קבלת נתונים מהאינדיקטורים הקיימים
+            indicator_data = self.get_all_indicators(symbol)
+            
+            # חישוב קומבויים
+            combo_report = self.combo_analyzer.generate_combo_report(indicator_data)
+            
+            # שילוב בתוצאות הקיימות
+            signals = {
+                'traditional_analysis': self.calculate_basic_signals(indicator_data),
+                'combo_analysis': combo_report,
+                'final_recommendation': self.merge_recommendations(combo_report)
+            }
+            
+            return signals
+    
+    # 📍 שימוש ב-analysis_engine.py
+    
+    def analyze_with_combos(self, market_data):
+        combo_analyzer = AdvancedIndicatorsCombo()
+        report = combo_analyzer.generate_combo_report(market_data)
+        
+        if report['recommendation'] != 'NO_TRADE':
+            best_signal = report['best_signal']
+            logger.info(f"🎯 COMBO SIGNAL: {best_signal['name']} "
+                       f"({best_signal['direction']}) - Confidence: {best_signal['confidence']}")
+    """
+    
+    return integration_example
+
+# ========================
+# הרצת דוגמה ובדיקה
+# ========================
+
+def test_advanced_combos():
+    """מבצע בדיקה למערכת הקומבויים המתקדמת"""
+    
+    print("🧪 מבצע בדיקה למערכת הקומבויים המתקדמת...")
+    print("=" * 60)
+    
+    # נתוני שוק לדוגמה
+    sample_data = {
+        'ema_9': 3250,
+        'ema_20': 3220,
+        'ema_50': 3180,
+        'rsi': 45,
+        'adx': 32,
+        'atr': 85,
+        'atr_percentage': 0.026,
+        'bb_width': 0.042,
+        'volume_above_avg': True,
+        'near_support': True,
+        'breakout_occurred': False,
+        'price_above_vwap': True,
+        'pullback_to_support': True,
+        'macd_histogram_turning': True,
+        'bb_squeeze': False,
+        'clear_support_resistance': True,
+        'volume_below_avg': False
+    }
+    
+    # יצירת האנלייזר
+    analyzer = AdvancedIndicatorsCombo()
+    
+    # חישוב הקומבויים
+    report = analyzer.generate_combo_report(sample_data)
+    
+    # הצגת התוצאות
+    print(f"📊 סוג שוק: {report['market_regime']}")
+    print(f"🎯 מספר אותות: {report['total_signals']}")
+    print(f"💡 המלצה כללית: {report['recommendation']}")
+    
+    if report['best_signal']:
+        best = report['best_signal']
+        print(f"\n🏆 האות הטוב ביותר:")
+        print(f"   שם: {best['name']}")
+        print(f"   כיוון: {best['direction']}")
+        print(f"   confidence: {best['confidence']}")
+        print(f"   חוזק: {best['strength']}")
+        print(f"   פעולה: {best['action']}")
+    
+    print(f"\n🔍 כל האותות:")
+    for i, signal in enumerate(report['all_signals'], 1):
+        print(f"   {i}. {signal['name']} ({signal['direction']}) - confidence: {signal['confidence']}")
+    
+    return report
+
+if __name__ == "__main__":
+    # הרצת הבדיקה
+    test_results = test_advanced_combos()
+    
+    print("\n" + "=" * 60)
+    print("📋 דוגמת אינטגרציה:")
+    integration_code = integrate_with_existing_system()
+    print(integration_code)
+```
+
+**🎯 מה נוסף במערכת המתקדמת:**
+
+1. **5 קומבויים חכמים** המשלבים את כל האינדיקטורים הקיימים
+2. **זיהוי סוג שוק** אוטומטי (Trending/Choppy/Volatile)
+3. **דוח מלא** עם confidence scores והמלצות
+4. **אינטגרציה חלקה** עם המערכת הקיימת
+5. **ניתוח multi-factor** - כל קומבו בודק 5-6 תנאים
+
+**🚀 הרצה מהירה:**
+
+```bash
+python utils/advanced_indicators_combo.py
+```
+
+המערכת תבצע בדיקה אוטומטית ותציג את כל הקומבויים האפשריים עם דירוגי confidence!

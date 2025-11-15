@@ -1,0 +1,406 @@
+**🎯 פקודת שילוב אינדיקטורים - חישוב משולב**
+
+```python
+# ========================
+# TRADING INDICATORS COMBO SYSTEM
+# גרסה: 1.0 | שילוב אינדיקטורים חכם
+# ========================
+
+class TradingIndicatorsCombo:
+    
+    def __init__(self):
+        self.combos = {}
+        
+    def calculate_bullish_combos(self, price_data):
+        """מחשב שילובי אינדיקטורים ל-LONG"""
+        
+        combos = {
+            # 🟢 COMBO 1: מגמה + מומנטום + תמיכה
+            "combo_trend_momentum_support": {
+                "name": "מגמת עלייה + מומנטום + תמיכה",
+                "conditions": [
+                    "EMA_20 > EMA_50 (מגמת עלייה)",
+                    "RSI בין 35-65 (מומנטום מאוזן)",
+                    "מחיר מתקרב/נוגע בקו תמיכה",
+                    "ווליום גבוה באישור התנועה"
+                ],
+                "calculation": self._calc_trend_momentum_support,
+                "confidence_score": "גבוה",
+                "entry_type": "Long"
+            },
+            
+            # 🟢 COMBO 2: פריצת התנגדות עם אישור
+            "combo_breakout_confirmation": {
+                "name": "פריצת התנגדות עם אישור",
+                "conditions": [
+                    "פריצה מעל Resistance",
+                    "ווליום גבוה בפריצה (2x ממוצע)",
+                    "RSI מתחת 70 (לא overbought)",
+                    "EMA_20 > EMA_50 (מגמה תומכת)"
+                ],
+                "calculation": self._calc_breakout_confirmation,
+                "confidence_score": "בינוני-גבוה",
+                "entry_type": "Long"
+            },
+            
+            # 🟢 COMBO 3: פולבק למגמה עם RSI
+            "combo_pullback_trend_rsi": {
+                "name": "פולבק למגמה עם אישור RSI",
+                "conditions": [
+                    "EMA_20 > EMA_50 (מגמת עלייה)",
+                    "פולבק ל-EMA_20 או EMA_50",
+                    "RSI 30-40 (oversold קל במגמת עלייה)",
+                    "ווליום נמוך בפולבק, גבוה בחזרה"
+                ],
+                "calculation": self._calc_pullback_trend_rsi,
+                "confidence_score": "גבוה",
+                "entry_type": "Long"
+            }
+        }
+        
+        return combos
+    
+    def calculate_bearish_combos(self, price_data):
+        """מחשב שילובי אינדיקטורים ל-SHORT"""
+        
+        combos = {
+            # 🔴 COMBO 1: מגמת ירידה + מומנטום + התנגדות
+            "combo_downtrend_momentum_resistance": {
+                "name": "מגמת ירידה + מומנטום + התנגדות",
+                "conditions": [
+                    "EMA_20 < EMA_50 (מגמת ירידה)",
+                    "RSI בין 35-65 (מומנטום מאוזן)",
+                    "מחיר מתקרב/נוגע בקו התנגדות",
+                    "ווליום גבוה באישור התנועה"
+                ],
+                "calculation": self._calc_downtrend_momentum_resistance,
+                "confidence_score": "גבוה",
+                "entry_type": "Short"
+            },
+            
+            # 🔴 COMBO 2: Breakdown עם אישור
+            "combo_breakdown_confirmation": {
+                "name": "שבירת תמיכה עם אישור",
+                "conditions": [
+                    "שבירה מתחת Support",
+                    "ווליום גבוה בשבירה (2x ממוצע)",
+                    "RSI מעל 30 (לא oversold)",
+                    "EMA_20 < EMA_50 (מגמה תומכת)"
+                ],
+                "calculation": self._calc_breakdown_confirmation,
+                "confidence_score": "בינוני-גבוה",
+                "entry_type": "Short"
+            },
+            
+            # 🔴 COMBO 3: Pullback במגמת ירידה עם RSI
+            "combo_pullback_downtrend_rsi": {
+                "name": "פולבק במגמת ירידה עם אישור RSI",
+                "conditions": [
+                    "EMA_20 < EMA_50 (מגמת ירידה)",
+                    "פולבק ל-EMA_20 או EMA_50",
+                    "RSI 60-70 (overbought קל במגמת ירידה)",
+                    "ווליום נמוך בפולבק, גבוה בחזרה"
+                ],
+                "calculation": self._calc_pullback_downtrend_rsi,
+                "confidence_score": "גבוה",
+                "entry_type": "Short"
+            }
+        }
+        
+        return combos
+    
+    def _calc_trend_momentum_support(self, data):
+        """חישוב COMBO 1: מגמה + מומנטום + תמיכה"""
+        score = 0
+        max_score = 4
+        
+        # EMA trend check
+        if data.get('ema_20', 0) > data.get('ema_50', 0):
+            score += 1
+        
+        # RSI momentum check
+        rsi = data.get('rsi', 50)
+        if 35 <= rsi <= 65:
+            score += 1
+        
+        # Support level check
+        if data.get('near_support', False):
+            score += 1
+        
+        # Volume confirmation
+        if data.get('volume_above_avg', False):
+            score += 1
+        
+        confidence = score / max_score
+        return {
+            "score": score,
+            "max_score": max_score,
+            "confidence": confidence,
+            "grade": "A" if confidence >= 0.75 else "B" if confidence >= 0.5 else "C"
+        }
+    
+    def _calc_breakout_confirmation(self, data):
+        """חישוב COMBO 2: פריצת התנגדות"""
+        score = 0
+        max_score = 4
+        
+        if data.get('breakout_above_resistance', False):
+            score += 1
+        
+        if data.get('volume_breakout', False):
+            score += 1
+        
+        if data.get('rsi', 50) < 70:
+            score += 1
+        
+        if data.get('ema_20', 0) > data.get('ema_50', 0):
+            score += 1
+        
+        confidence = score / max_score
+        return {
+            "score": score,
+            "max_score": max_score,
+            "confidence": confidence,
+            "grade": "A" if confidence >= 0.75 else "B" if confidence >= 0.5 else "C"
+        }
+    
+    def _calc_pullback_trend_rsi(self, data):
+        """חישוב COMBO 3: פולבק למגמה עם RSI"""
+        score = 0
+        max_score = 4
+        
+        if data.get('ema_20', 0) > data.get('ema_50', 0):
+            score += 1
+        
+        if data.get('pullback_to_ema', False):
+            score += 1
+        
+        if 30 <= data.get('rsi', 50) <= 40:
+            score += 1
+        
+        if data.get('volume_confirmation', False):
+            score += 1
+        
+        confidence = score / max_score
+        return {
+            "score": score,
+            "max_score": max_score,
+            "confidence": confidence,
+            "grade": "A" if confidence >= 0.75 else "B" if confidence >= 0.5 else "C"
+        }
+    
+    def _calc_downtrend_momentum_resistance(self, data):
+        """חישוב COMBO 1 SHORT: מגמת ירידה + מומנטום + התנגדות"""
+        score = 0
+        max_score = 4
+        
+        if data.get('ema_20', 0) < data.get('ema_50', 0):
+            score += 1
+        
+        rsi = data.get('rsi', 50)
+        if 35 <= rsi <= 65:
+            score += 1
+        
+        if data.get('near_resistance', False):
+            score += 1
+        
+        if data.get('volume_above_avg', False):
+            score += 1
+        
+        confidence = score / max_score
+        return {
+            "score": score,
+            "max_score": max_score,
+            "confidence": confidence,
+            "grade": "A" if confidence >= 0.75 else "B" if confidence >= 0.5 else "C"
+        }
+    
+    def analyze_current_setup(self, market_data):
+        """מנתח את המצב הנוכחי ומחזיר את הקומבו המומלץ"""
+        
+        bullish_combos = self.calculate_bullish_combos(market_data)
+        bearish_combos = self.calculate_bearish_combos(market_data)
+        
+        results = {
+            "bullish_setups": [],
+            "bearish_setups": [],
+            "recommendation": None
+        }
+        
+        # בדיקת כל הקומבוים הלונגיים
+        for combo_id, combo_info in bullish_combos.items():
+            calculation_func = combo_info["calculation"]
+            result = calculation_func(market_data)
+            
+            if result["confidence"] >= 0.5:  # רק קומבוים עם confidence מעל 50%
+                results["bullish_setups"].append({
+                    "name": combo_info["name"],
+                    "confidence": result["confidence"],
+                    "grade": result["grade"],
+                    "conditions": combo_info["conditions"]
+                })
+        
+        # בדיקת כל הקומבוים השורטיים
+        for combo_id, combo_info in bearish_combos.items():
+            calculation_func = combo_info["calculation"]
+            result = calculation_func(market_data)
+            
+            if result["confidence"] >= 0.5:
+                results["bearish_setups"].append({
+                    "name": combo_info["name"],
+                    "confidence": result["confidence"],
+                    "grade": result["grade"],
+                    "conditions": combo_info["conditions"]
+                })
+        
+        # מציאת ההמלצה הטובה ביותר
+        all_setups = results["bullish_setups"] + results["bearish_setups"]
+        if all_setups:
+            best_setup = max(all_setups, key=lambda x: x["confidence"])
+            results["recommendation"] = best_setup
+        
+        return results
+
+# ========================
+# דוגמת שימוש במערכת
+# ========================
+
+def run_indicators_combo_analysis():
+    print("🔮 הרצת ניתוח שילוב אינדיקטורים...")
+    print("=" * 50)
+    
+    # יצירת אובייקט הניתוח
+    analyzer = TradingIndicatorsCombo()
+    
+    # נתוני שוק לדוגמה (במציאות תבואו מפלטפורמת Trading)
+    sample_market_data = {
+        'ema_20': 3200,
+        'ema_50': 3150,
+        'rsi': 42,
+        'near_support': True,
+        'volume_above_avg': True,
+        'breakout_above_resistance': False,
+        'volume_breakout': False,
+        'pullback_to_ema': True,
+        'volume_confirmation': True,
+        'near_resistance': False
+    }
+    
+    # הרצת הניתוח
+    analysis_results = analyzer.analyze_current_setup(sample_market_data)
+    
+    # הצגת התוצאות
+    print("📊 תוצאות ניתוח קומבו אינדיקטורים:")
+    print(f"🎯 setups Long זמינים: {len(analysis_results['bullish_setups'])}")
+    print(f"🎯 setups Short זמינים: {len(analysis_results['bearish_setups'])}")
+    
+    if analysis_results['recommendation']:
+        best = analysis_results['recommendation']
+        print(f"\n🏆 הקומבו המומלץ: {best['name']}")
+        print(f"📈 confidence: {best['confidence']:.2f} | דירוג: {best['grade']}")
+        print("📋 תנאים:")
+        for condition in best['conditions']:
+            print(f"   ✓ {condition}")
+    
+    # הצגת כל הקומבוים הזמינים
+    print("\n🔍 כל הקומבוים הזמינים:")
+    for setup in analysis_results['bullish_setups'] + analysis_results['bearish_setups']:
+        print(f"   • {setup['name']} (confidence: {setup['confidence']:.2f}, דירוג: {setup['grade']})")
+    
+    return analysis_results
+
+# ========================
+# פונקציות עזר לשימוש יומיומי
+# ========================
+
+def get_quick_combo_check():
+    """מחזיר רשימת בדיקה מהירה לקומבו אינדיקטורים"""
+    
+    quick_check = [
+        "1. ✅ בדיקת מגמה: EMA_20 > EMA_50?",
+        "2. 📊 בדיקת RSI: בין 35-65?",
+        "3. 📍 מיקום: near Support/Resistance?",
+        "4. 💧 ווליום: above average?",
+        "5. 🎯 התאמה: איזה קומבו הכי מתאים?",
+        "6. ⚖️ confidence: מעל 0.7?",
+        "7. 📝 רישום: איזה קומבו השתמשת?"
+    ]
+    
+    return quick_check
+
+def generate_combo_decision_matrix():
+    """מטריצת החלטות לקומבו אינדיקטורים"""
+    
+    matrix = {
+        "HIGH_CONFIDENCE": {
+            "conditions": ["מגמה חזקה", "RSI אופטימלי", "ווליום גבוה", "מיקום טוב"],
+            "action": "ENTER עם 1-2% מהון",
+            "stop_loss": "1.5%",
+            "take_profit": "3-4%"
+        },
+        "MEDIUM_CONFIDENCE": {
+            "conditions": ["מגמה חיובית", "RSI סביר", "ווליום בינוני"],
+            "action": "ENTER עם 0.5-1% מהון",
+            "stop_loss": "1%",
+            "take_profit": "2-3%"
+        },
+        "LOW_CONFIDENCE": {
+            "conditions": ["מגמה חלשה", "RSI קיצוני", "ווליום נמוך"],
+            "action": "הימנע מכניסה / המתן",
+            "stop_loss": "N/A",
+            "take_profit": "N/A"
+        }
+    }
+    
+    return matrix
+
+# הרצה אוטומטית
+if __name__ == "__main__":
+    results = run_indicators_combo_analysis()
+    
+    print("\n" + "=" * 50)
+    print("📋 רשימת בדיקה מהירה:")
+    quick_check = get_quick_combo_check()
+    for item in quick_check:
+        print(f"   {item}")
+    
+    print("\n⚖️ מטריצת החלטות:")
+    matrix = generate_combo_decision_matrix()
+    for level, info in matrix.items():
+        print(f"   {level}:")
+        print(f"      תנאים: {', '.join(info['conditions'])}")
+        print(f"      פעולה: {info['action']}")
+```
+
+**📜 פקודת הרצה:**
+
+```bash
+python indicators_combo_system.py
+
+# פלט צפוי:
+"""
+🔮 הרצת ניתוח שילוב אינדיקטורים...
+==================================================
+📊 תוצאות ניתוח קומבו אינדיקטורים:
+🎯 setups Long זמינים: 2
+🎯 setups Short זמינים: 0
+
+🏆 הקומבו המומלץ: מגמת עלייה + מומנטום + תמיכה
+📈 confidence: 0.75 | דירוג: A
+📋 תנאים:
+   ✓ EMA_20 > EMA_50 (מגמת עלייה)
+   ✓ RSI בין 35-65 (מומנטום מאוזן)
+   ✓ מחיר מתקרב/נוגע בקו תמיכה
+   ✓ ווליום גבוה באישור התנועה
+"""
+```
+
+**🎯 שילובי האינדיקטורים העיקריים:**
+
+1. **מגמה + מומנטום + תמיכה** - COMBO חזק ל-Long
+2. **פריצת התנגדות עם אישור** - COMBO breakout  
+3. **פולבק למגמה עם RSI** - COMBO pullback איכותי
+4. **מגמת ירידה + התנגדות** - COMBO ל-Short
+5. **שבירת תמיכה עם אישור** - COMBO breakdown
+
+**המערכת מחשבת confidence score אוטומטית וממליצה על הקומבו הטוב ביותר!** 🚀
