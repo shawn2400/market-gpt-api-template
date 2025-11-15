@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Dict, Optional, Literal
+import time
+from typing import Any, Dict, Optional, Literal, cast
 
 FlowType = Literal["MARKET", "HYBRID", "LIMIT"]
 
@@ -83,15 +84,16 @@ class ExecutionBot:
         Returns:
             dict with status, flow, symbol, side, position_id, orders, reason etc.
         """
-        symbol = ticket_exec.get("symbol")
-        side = ticket_exec.get("side")
-        self.log.info(f"ExecutionBot.open_position called: symbol={symbol} side={side} source={source}")
-
         # 1) Basic validation (lean - not repeating what's already in Pydantic in route)
         try:
             self._validate_ticket_basic(ticket_exec)
         except Exception as e:
             raise
+        
+        # Cast symbol and side to non-null after validation
+        symbol = cast(str, ticket_exec["symbol"])
+        side = cast(str, ticket_exec["side"])
+        self.log.info(f"ExecutionBot.open_position called: symbol={symbol} side={side} source={source}")
 
         # 🛡️ 1.5) TradingGatekeeper validation - CRITICAL PROTECTION LAYER
         if self._gatekeeper:
@@ -388,6 +390,8 @@ class ExecutionBot:
             
             # Get current positions
             client = get_client()
+            if client is None:
+                raise RuntimeError("Binance client unavailable")
             positions = client.futures_position_information()
             
             # Count open ISOLATED positions
@@ -469,12 +473,6 @@ class ExecutionBot:
         - volatile market conditions
         """
         try:
-            from utils.trade_executor import place_futures_market
-            return await place_futures_market(ticket)
-        except Exception:
-            pass
-
-        try:
             from binance.client import Client
         except Exception:
             return {"ok": False, "error": "binance_client_unavailable"}
@@ -515,8 +513,9 @@ class ExecutionBot:
             }
             
             # Add price for LIMIT orders
-            if order_type == "LIMIT":
-                base_kwargs["price"] = _q_price(symbol, float(entry_price))
+            if order_type == "LIMIT" and entry_price:
+                entry_price_float = float(entry_price) if entry_price else 0.0
+                base_kwargs["price"] = _q_price(symbol, entry_price_float)
                 base_kwargs["timeInForce"] = "GTC"
                 self.log.info(f"Using LIMIT order @ {entry_price} for {symbol}")
             else:
@@ -865,7 +864,8 @@ class ExecutionBot:
 
         tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
         tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0", "0.0") and float(x) > 0]
-        sl_targets = [float(ticket.get("sl"))] if (ticket.get("sl") not in (None, 0, "0", "0.0")) else None
+        sl_value = ticket.get("sl")
+        sl_targets = [float(sl_value)] if (sl_value not in (None, 0, "0", "0.0")) else None
 
         if not (symbol and side in ("BUY", "SELL") and leverage > 0):
             return {"ok": False, "error": "bad_ticket_params"}
@@ -906,17 +906,28 @@ class ExecutionBot:
                 clean = _filter_kwargs_for_callable(exec_live_async, base_kwargs)
                 return await exec_live_async(clean)
 
+        if exec_live is None:
+            return {"ok": False, "error": "execute_trade_live_unavailable"}
+        
         try:
             if inspect.iscoroutinefunction(exec_live):
                 return await exec_live(base_kwargs)
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(None, lambda: exec_live(base_kwargs))
+            else:
+                # Synchronous function - run in executor
+                loop = asyncio.get_running_loop()
+                return await loop.run_in_executor(None, exec_live, base_kwargs)
         except TypeError:
             clean = _filter_kwargs_for_callable(exec_live, base_kwargs)
             if inspect.iscoroutinefunction(exec_live):
                 return await exec_live(**clean)
-            loop = asyncio.get_running_loop()
-            return await loop.run_in_executor(None, lambda: exec_live(**clean))
+            else:
+                # Synchronous function - run in executor
+                def sync_call() -> Dict[str, Any]:
+                    result = exec_live(**clean)
+                    # Ensure we return Dict, not coroutine
+                    return result if isinstance(result, dict) else {}
+                loop = asyncio.get_running_loop()
+                return await loop.run_in_executor(None, sync_call)
 
     async def _execute_grid_trade(self, ticket: Dict[str, Any]) -> Dict[str, Any]:
         """

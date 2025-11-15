@@ -225,6 +225,20 @@ class SymbolFilterEngine:
     def _check_liquidity_depth(self, symbol: str) -> FilterResult:
         """Check order book liquidity depth"""
         try:
+            # SKIP liquidity check for TOP 50 symbols - they're pre-validated
+            from utils.redis_client import get_redis
+            import json
+            r = get_redis()
+            top50_data = r.get('top50:approved_list')
+            if top50_data:
+                top50_symbols = json.loads(top50_data)
+                if symbol in top50_symbols:
+                    return FilterResult(
+                        passed=True,
+                        symbol=symbol,
+                        reason="TOP 50 symbol - liquidity pre-validated"
+                    )
+            
             # Get from cache first
             cached = self._get_from_cache(symbol, "liquidity")
             if cached is not None:
@@ -277,14 +291,14 @@ class SymbolFilterEngine:
     
     def _fetch_order_book_depth(self, symbol: str) -> Tuple[float, float]:
         """
-        Fetch order book depth (top 10 levels)
+        Fetch order book depth (top 100 levels for better accuracy)
         
         Returns:
             (bid_depth_usdt, ask_depth_usdt)
         """
         try:
             from utils.binance_client import client
-            book = client.futures_order_book(symbol=symbol, limit=10)
+            book = client.futures_order_book(symbol=symbol, limit=100)
             
             # Calculate bid depth (sum of bid quantities * prices)
             bid_depth = sum(
