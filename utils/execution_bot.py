@@ -553,6 +553,11 @@ class ExecutionBot:
                 # 🛡️ CRITICAL: Send SL/TP orders immediately after entry
                 sl_order = None
                 tp_order = None
+                sltp_failed = False
+                
+                # 🔧 FIX: Define position_side BEFORE SL/TP block (for emergency close)
+                position_side = attempt_order.get("positionSide") or ("LONG" if side == "BUY" else "SHORT")
+                
                 try:
                     # Get entry price from order
                     entry_price_actual = float(order.get("avgPrice") or order.get("price") or ticket.get("price") or 0)
@@ -561,7 +566,10 @@ class ExecutionBot:
                         from utils.binance_client import get_price
                         entry_price_actual = get_price(symbol) or 0
                     
-                    if entry_price_actual > 0:
+                    if entry_price_actual <= 0:
+                        self.log.error(f"🚨 CRITICAL: Could not determine entry price for {symbol} - CANNOT SET SL/TP")
+                        sltp_failed = True
+                    else:
                         # Calculate SL/TP using ATR-based logic
                         from utils.sltp import calc_sl_tp_for_symbol
                         from utils.trade_execution_core import _q_price, _q_qty
@@ -572,55 +580,107 @@ class ExecutionBot:
                         sl_price, tp_price = calc_sl_tp_for_symbol(
                             symbol=symbol,
                             entry=entry_price_actual,
-                            side=side,
+                            side=position_side,  # 🔧 FIX: Use LONG/SHORT instead of BUY/SELL
                             atr=atr,
                             atr_mult=atr_mult
                         )
                         
-                        position_side = attempt_order.get("positionSide") or ("LONG" if side == "BUY" else "SHORT")
+                        # 🔧 FIX: Fallback if ATR missing - use 2% SL, 3% TP
+                        if not sl_price or sl_price <= 0:
+                            fallback_sl_pct = 0.02  # 2% stop loss
+                            if position_side == "LONG":
+                                sl_price = entry_price_actual * (1 - fallback_sl_pct)
+                            else:
+                                sl_price = entry_price_actual * (1 + fallback_sl_pct)
+                            self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 2% SL @ {sl_price:.6f}")
+                        
+                        if not tp_price or tp_price <= 0:
+                            fallback_tp_pct = 0.03  # 3% take profit
+                            if position_side == "LONG":
+                                tp_price = entry_price_actual * (1 + fallback_tp_pct)
+                            else:
+                                tp_price = entry_price_actual * (1 - fallback_tp_pct)
+                            self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 3% TP @ {tp_price:.6f}")
+                        
                         close_side = "SELL" if side == "BUY" else "BUY"
                         
                         # Send STOP_MARKET (SL) order
-                        if sl_price and sl_price > 0:
-                            try:
-                                sl_kwargs = {
-                                    "symbol": symbol,
-                                    "side": close_side,
-                                    "type": "STOP_MARKET",
-                                    "quantity": qty,
-                                    "stopPrice": _q_price(symbol, sl_price),
-                                    "newClientOrderId": build_client_order_id(symbol, close_side, role="SL"),
-                                }
-                                if position_side:
-                                    sl_kwargs["positionSide"] = position_side
-                                
-                                sl_order = client.futures_create_order(**sl_kwargs)
-                                self.log.info(f"✅ SL order placed @ {sl_price:.6f} for {symbol}")
-                            except Exception as sl_err:
-                                self.log.error(f"❌ Failed to place SL order for {symbol}: {sl_err}")
+                        try:
+                            sl_kwargs = {
+                                "symbol": symbol,
+                                "side": close_side,
+                                "type": "STOP_MARKET",
+                                "quantity": qty,
+                                "stopPrice": _q_price(symbol, sl_price),
+                                "newClientOrderId": build_client_order_id(symbol, close_side, role="SL"),
+                            }
+                            if position_side:
+                                sl_kwargs["positionSide"] = position_side
+                            
+                            sl_order = client.futures_create_order(**sl_kwargs)
+                            self.log.info(f"✅ SL order placed @ {sl_price:.6f} for {symbol}")
+                        except Exception as sl_err:
+                            self.log.error(f"🚨 CRITICAL: Failed to place SL order for {symbol}: {sl_err}")
+                            sltp_failed = True
                         
                         # Send TAKE_PROFIT_MARKET (TP) order
-                        if tp_price and tp_price > 0:
-                            try:
-                                tp_kwargs = {
-                                    "symbol": symbol,
-                                    "side": close_side,
-                                    "type": "TAKE_PROFIT_MARKET",
-                                    "quantity": qty,
-                                    "stopPrice": _q_price(symbol, tp_price),
-                                    "newClientOrderId": build_client_order_id(symbol, close_side, role="TP"),
-                                }
-                                if position_side:
-                                    tp_kwargs["positionSide"] = position_side
-                                
-                                tp_order = client.futures_create_order(**tp_kwargs)
-                                self.log.info(f"✅ TP order placed @ {tp_price:.6f} for {symbol}")
-                            except Exception as tp_err:
-                                self.log.error(f"❌ Failed to place TP order for {symbol}: {tp_err}")
-                    else:
-                        self.log.warning(f"⚠️ Could not determine entry price for {symbol}, skipping SL/TP")
+                        try:
+                            tp_kwargs = {
+                                "symbol": symbol,
+                                "side": close_side,
+                                "type": "TAKE_PROFIT_MARKET",
+                                "quantity": qty,
+                                "stopPrice": _q_price(symbol, tp_price),
+                                "newClientOrderId": build_client_order_id(symbol, close_side, role="TP"),
+                            }
+                            if position_side:
+                                tp_kwargs["positionSide"] = position_side
+                            
+                            tp_order = client.futures_create_order(**tp_kwargs)
+                            self.log.info(f"✅ TP order placed @ {tp_price:.6f} for {symbol}")
+                        except Exception as tp_err:
+                            self.log.error(f"🚨 CRITICAL: Failed to place TP order for {symbol}: {tp_err}")
+                            sltp_failed = True
                 except Exception as sltp_err:
-                    self.log.error(f"❌ Failed to set SL/TP for {symbol}: {sltp_err}")
+                    self.log.error(f"🚨 CRITICAL: Failed to set SL/TP for {symbol}: {sltp_err}")
+                    sltp_failed = True
+                
+                # 🔧 FIX: Close position if SL/TP failed (cannot leave unprotected!)
+                if sltp_failed:
+                    self.log.error(f"🚨 EMERGENCY: SL/TP failed for {symbol} - CANCELING ORDERS & CLOSING POSITION")
+                    
+                    # 🔧 FIX: Cancel any successfully placed SL/TP orders first (prevent dangling orders)
+                    try:
+                        from utils.binance_client import futures_cancel_all_orders
+                        if sl_order or tp_order:
+                            cancelled_count = futures_cancel_all_orders(symbol)
+                            self.log.info(f"🗑️ Cancelled {cancelled_count} orders for {symbol} (cleanup before emergency close)")
+                    except Exception as cancel_err:
+                        self.log.warning(f"⚠️ Failed to cancel orders for {symbol}: {cancel_err}")
+                    
+                    # Close the just-opened position immediately
+                    try:
+                        from utils.binance_client import futures_create_order
+                        close_side = "SELL" if side == "BUY" else "BUY"
+                        close_order = futures_create_order(
+                            symbol=symbol,
+                            side=close_side,
+                            type="MARKET",
+                            quantity=qty,
+                            positionSide=position_side if position_side else None,
+                            newClientOrderId=build_client_order_id(symbol, close_side, role="EMERGENCY_CLOSE")
+                        )
+                        self.log.warning(f"🚨 Emergency closed {symbol} position (no SL/TP protection available)")
+                    except Exception as close_err:
+                        self.log.error(f"🚨🚨 CRITICAL: Failed to emergency close {symbol}: {close_err} - MANUAL INTERVENTION REQUIRED!")
+                    
+                    return {
+                        "ok": False,
+                        "status": "error",  # 🔧 FIX: Explicit status so open_position doesn't default to "opened"
+                        "error": "sltp_protection_failed",
+                        "detail": f"Position opened but SL/TP orders failed - position emergency closed!",
+                        "order": order,
+                    }
                 
                 return {
                     "ok": True,
@@ -645,13 +705,21 @@ class ExecutionBot:
                     # 🛡️ CRITICAL: Send SL/TP orders after retry entry
                     sl_order = None
                     tp_order = None
+                    sltp_failed = False
+                    
+                    # 🔧 FIX: Define position_side BEFORE SL/TP block (for emergency close)
+                    position_side = retry_kwargs.get("positionSide") or ("LONG" if side == "BUY" else "SHORT")
+                    
                     try:
                         entry_price_actual = float(order.get("avgPrice") or order.get("price") or ticket.get("price") or 0)
                         if entry_price_actual <= 0:
                             from utils.binance_client import get_price
                             entry_price_actual = get_price(symbol) or 0
                         
-                        if entry_price_actual > 0:
+                        if entry_price_actual <= 0:
+                            self.log.error(f"🚨 CRITICAL: Could not determine entry price for {symbol} (retry) - CANNOT SET SL/TP")
+                            sltp_failed = True
+                        else:
                             from utils.sltp import calc_sl_tp_for_symbol
                             from utils.trade_execution_core import _q_price
                             
@@ -659,38 +727,92 @@ class ExecutionBot:
                             atr_mult = float(os.getenv("SL_ATR_MULT", "1.5"))
                             
                             sl_price, tp_price = calc_sl_tp_for_symbol(
-                                symbol=symbol, entry=entry_price_actual, side=side,
+                                symbol=symbol, entry=entry_price_actual, side=position_side,  # 🔧 FIX: LONG/SHORT
                                 atr=atr, atr_mult=atr_mult
                             )
                             
-                            position_side = retry_kwargs.get("positionSide") or ("LONG" if side == "BUY" else "SHORT")
+                            # 🔧 FIX: Fallback if ATR missing - use 2% SL, 3% TP
+                            if not sl_price or sl_price <= 0:
+                                fallback_sl_pct = 0.02
+                                if position_side == "LONG":
+                                    sl_price = entry_price_actual * (1 - fallback_sl_pct)
+                                else:
+                                    sl_price = entry_price_actual * (1 + fallback_sl_pct)
+                                self.log.warning(f"⚠️ ATR missing for {symbol} (retry), using fallback 2% SL @ {sl_price:.6f}")
+                            
+                            if not tp_price or tp_price <= 0:
+                                fallback_tp_pct = 0.03
+                                if position_side == "LONG":
+                                    tp_price = entry_price_actual * (1 + fallback_tp_pct)
+                                else:
+                                    tp_price = entry_price_actual * (1 - fallback_tp_pct)
+                                self.log.warning(f"⚠️ ATR missing for {symbol} (retry), using fallback 3% TP @ {tp_price:.6f}")
+                            
                             close_side = "SELL" if side == "BUY" else "BUY"
                             
-                            if sl_price and sl_price > 0:
-                                try:
-                                    sl_order = client.futures_create_order(
-                                        symbol=symbol, side=close_side, type="STOP_MARKET",
-                                        quantity=qty, stopPrice=_q_price(symbol, sl_price),
-                                        positionSide=position_side,
-                                        newClientOrderId=build_client_order_id(symbol, close_side, role="SL")
-                                    )
-                                    self.log.info(f"✅ SL order placed @ {sl_price:.6f} for {symbol} (retry)")
-                                except Exception as sl_err:
-                                    self.log.error(f"❌ Failed to place SL (retry): {sl_err}")
+                            try:
+                                sl_order = client.futures_create_order(
+                                    symbol=symbol, side=close_side, type="STOP_MARKET",
+                                    quantity=qty, stopPrice=_q_price(symbol, sl_price),
+                                    positionSide=position_side,
+                                    newClientOrderId=build_client_order_id(symbol, close_side, role="SL")
+                                )
+                                self.log.info(f"✅ SL order placed @ {sl_price:.6f} for {symbol} (retry)")
+                            except Exception as sl_err:
+                                self.log.error(f"🚨 CRITICAL: Failed to place SL (retry): {sl_err}")
+                                sltp_failed = True
                             
-                            if tp_price and tp_price > 0:
-                                try:
-                                    tp_order = client.futures_create_order(
-                                        symbol=symbol, side=close_side, type="TAKE_PROFIT_MARKET",
-                                        quantity=qty, stopPrice=_q_price(symbol, tp_price),
-                                        positionSide=position_side,
-                                        newClientOrderId=build_client_order_id(symbol, close_side, role="TP")
-                                    )
-                                    self.log.info(f"✅ TP order placed @ {tp_price:.6f} for {symbol} (retry)")
-                                except Exception as tp_err:
-                                    self.log.error(f"❌ Failed to place TP (retry): {tp_err}")
+                            try:
+                                tp_order = client.futures_create_order(
+                                    symbol=symbol, side=close_side, type="TAKE_PROFIT_MARKET",
+                                    quantity=qty, stopPrice=_q_price(symbol, tp_price),
+                                    positionSide=position_side,
+                                    newClientOrderId=build_client_order_id(symbol, close_side, role="TP")
+                                )
+                                self.log.info(f"✅ TP order placed @ {tp_price:.6f} for {symbol} (retry)")
+                            except Exception as tp_err:
+                                self.log.error(f"🚨 CRITICAL: Failed to place TP (retry): {tp_err}")
+                                sltp_failed = True
                     except Exception as sltp_err:
-                        self.log.error(f"❌ Failed to set SL/TP after retry: {sltp_err}")
+                        self.log.error(f"🚨 CRITICAL: Failed to set SL/TP after retry: {sltp_err}")
+                        sltp_failed = True
+                    
+                    # 🔧 FIX: Close position if SL/TP failed (retry path)
+                    if sltp_failed:
+                        self.log.error(f"🚨 EMERGENCY: SL/TP failed for {symbol} (retry) - CANCELING ORDERS & CLOSING POSITION")
+                        
+                        # 🔧 FIX: Cancel any successfully placed SL/TP orders first
+                        try:
+                            from utils.binance_client import futures_cancel_all_orders
+                            if sl_order or tp_order:
+                                cancelled_count = futures_cancel_all_orders(symbol)
+                                self.log.info(f"🗑️ Cancelled {cancelled_count} orders for {symbol} (retry cleanup)")
+                        except Exception as cancel_err:
+                            self.log.warning(f"⚠️ Failed to cancel orders for {symbol}: {cancel_err}")
+                        
+                        # Close the position
+                        try:
+                            from utils.binance_client import futures_create_order
+                            close_side = "SELL" if side == "BUY" else "BUY"
+                            close_order = futures_create_order(
+                                symbol=symbol,
+                                side=close_side,
+                                type="MARKET",
+                                quantity=qty,
+                                positionSide=position_side if position_side else None,
+                                newClientOrderId=build_client_order_id(symbol, close_side, role="EMERGENCY_CLOSE")
+                            )
+                            self.log.warning(f"🚨 Emergency closed {symbol} position (retry - no SL/TP)")
+                        except Exception as close_err:
+                            self.log.error(f"🚨🚨 CRITICAL: Failed to emergency close {symbol}: {close_err} - MANUAL INTERVENTION REQUIRED!")
+                        
+                        return {
+                            "ok": False,
+                            "status": "error",  # 🔧 FIX: Explicit status
+                            "error": "sltp_protection_failed",
+                            "detail": f"Position opened (retry) but SL/TP orders failed - position emergency closed!",
+                            "order": order,
+                        }
                     
                     return {
                         "ok": True, "exchange": "binance_futures", "order": order,
