@@ -321,6 +321,19 @@ def _tick_symbol(symbol: str):
                 f"  📦 Quantity: <code>{qty:.4f}</code>",
             ]
             
+            # Add SL/TP if available (from DB or calculation)
+            if sl_price_from_db and sl_price_from_db > 0:
+                sl_pct = abs((sl_price_from_db - ep) / ep * 100)
+                msg_lines.append(f"  🛡️ Stop Loss: <code>{sl_price_from_db:.6f}</code> (-{sl_pct:.2f}%)")
+            else:
+                msg_lines.append(f"  🛡️ Stop Loss: <code>Not set</code> ⚠️")
+            
+            if tp_price_from_db and tp_price_from_db > 0:
+                tp_pct = abs((tp_price_from_db - ep) / ep * 100)
+                msg_lines.append(f"  🎯 Take Profit: <code>{tp_price_from_db:.6f}</code> (+{tp_pct:.2f}%)")
+            else:
+                msg_lines.append(f"  🎯 Take Profit: <code>Not set</code> ⚠️")
+            
             # Add leverage if available
             if position_leverage:
                 msg_lines.append(f"  ⚡ Leverage: <code>{position_leverage}x</code>")
