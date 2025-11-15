@@ -229,15 +229,16 @@ class SymbolFilterEngine:
             from utils.redis_client import get_redis
             import json
             r = get_redis()
-            top50_data = r.get('top50:approved_list')
-            if top50_data:
-                top50_symbols = json.loads(top50_data)
-                if symbol in top50_symbols:
-                    return FilterResult(
-                        passed=True,
-                        symbol=symbol,
-                        reason="TOP 50 symbol - liquidity pre-validated"
-                    )
+            if r:  # Guard: only bypass if Redis is available
+                top50_data = r.get('top50:approved_list')
+                if top50_data:
+                    top50_symbols = json.loads(top50_data)
+                    if symbol in top50_symbols:
+                        return FilterResult(
+                            passed=True,
+                            symbol=symbol,
+                            reason="TOP 50 symbol - liquidity pre-validated"
+                        )
             
             # Get from cache first
             cached = self._get_from_cache(symbol, "liquidity")
