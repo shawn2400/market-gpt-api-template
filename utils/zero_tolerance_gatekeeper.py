@@ -358,10 +358,11 @@ class ZeroToleranceGatekeeper:
         }
 
 
-_gatekeeper_instance: Optional[ZeroToleranceGatekeeper] = None
-
 def get_gatekeeper() -> ZeroToleranceGatekeeper:
-    global _gatekeeper_instance
-    if _gatekeeper_instance is None:
-        _gatekeeper_instance = ZeroToleranceGatekeeper()
-    return _gatekeeper_instance
+    """
+    Creates a NEW instance every time to ensure fresh Redis data.
+    
+    CRITICAL: No caching! This ensures that blacklist changes in Redis
+    are immediately reflected in all workers without needing restarts.
+    """
+    return ZeroToleranceGatekeeper()
