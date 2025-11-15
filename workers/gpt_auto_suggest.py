@@ -670,11 +670,15 @@ async def _emit(payload: Dict[str, Any]) -> bool:
             # 💰 DYNAMIC BUDGET FALLBACK: Use MIN budget if payload missing budget_usd
             min_budget_fallback = float(os.getenv("BUDGET_MIN_USDT", "25.0"))
             
+            # 🔧 FIX: Use dynamic leverage from payload (calculated by Dynamic Sizing Engine)
+            # Default to 5x (middle of 1-35x range) ONLY if payload missing leverage
+            default_leverage = 5.0  # Middle of 1-35x range
+            
             ticket = {
                 "symbol": payload.get("symbol"),
                 "side": execution_side,
                 "budget_usd": payload.get("budget_usd") or payload.get("notional_usd", min_budget_fallback),
-                "leverage": payload.get("leverage", 2),
+                "leverage": payload.get("leverage", default_leverage),  # 🔧 FIX: Dynamic leverage, not hardcoded 2x
                 "entry": payload.get("entry") or payload.get("current_price"),
                 "sl": payload.get("sl"),
                 "tp": payload.get("tp1") or payload.get("tp"),
@@ -1633,11 +1637,48 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
         LOGGER.info(f"propose_grid REJECTED {symbol}: build_grid_plan returned None (no range)")
         return None
 
-    # נזילות לנוטיונל ≈ budget (גריד לא ממונף כאן)
-    budget = float(plan.get("budget_usd") or _calc_dynamic_budget(symbol, ctx))
-    lg = liquidity_gate_safe(symbol, plan["grid_side"], notional_usd=budget)
+    # 💰 DYNAMIC SIZING ENGINE: Calculate exact leverage and budget for GRID
+    from utils.dynamic_sizing import get_dynamic_sizing_engine
+    from utils.binance_client import futures_balance
+    
+    # Get account equity
+    try:
+        bals = futures_balance() or []
+        usdt_bal = next((b for b in bals if b.get("asset") == "USDT"), {})
+        account_equity = float(usdt_bal.get("balance", 0.0))
+    except Exception:
+        account_equity = 100.0  # Fallback
+    
+    # Get quality score from context
+    quality_score = _quality_from_ctx(ctx) or 6.0  # GRID minimum quality
+    volatility = (ctx.get("filters") or {}).get("vol_regime", "medium") or "medium"
+    market_condition = ctx.get("_market_condition")
+    
+    # Calculate dynamic sizing
+    dynamic_sizing_engine = get_dynamic_sizing_engine()
+    sizing = dynamic_sizing_engine.calculate_position(
+        quality_score=quality_score,
+        risk_reward=1.5,  # GRID typically has lower RR but more frequent fills
+        ai_confidence=70.0,  # GRID is mechanical, not AI-driven
+        volatility=volatility,
+        account_equity=account_equity,
+        market_regime=market_condition.regime if market_condition else "unknown",
+        market_mood=market_condition.mood if market_condition else "neutral"
+    )
+    
+    leverage = sizing.leverage
+    budget = sizing.size_usd / leverage  # Budget BEFORE leverage
+    notional = sizing.size_usd  # Position size AFTER leverage
+    
+    LOGGER.info(
+        f"💰 GRID Dynamic Sizing: {symbol} → "
+        f"Leverage={leverage}x, Budget=${budget:.2f} (before leverage), Position=${notional:.2f}"
+    )
+    
+    # נזילות לנוטיונל
+    lg = liquidity_gate_safe(symbol, plan["grid_side"], notional_usd=notional)
     if not (lg.get("ok") if isinstance(lg, dict) else lg):
-        LOGGER.info(f"propose_grid REJECTED {symbol}: liquidity_gate failed (budget={budget})")
+        LOGGER.info(f"propose_grid REJECTED {symbol}: liquidity_gate failed (notional=${notional})")
         return None
     
     LOGGER.info(f"✅ GRID PROPOSAL {symbol}: range {plan['grid_min']:.2f}-{plan['grid_max']:.2f}, levels={plan['grid_levels']}")
@@ -1658,8 +1699,9 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
         "grid_take_profit_pct": float(plan["grid_take_profit_pct"]),
         "grid_side": plan["grid_side"],
         "reason": plan["reason"],
-        "budget_usd": float(budget),
-        "notional_usd": float(budget),
+        "leverage": leverage,  # 🔧 FIX: Dynamic leverage (1-35x)
+        "budget_usd": float(budget),  # 🔧 FIX: Budget BEFORE leverage ($25-150)
+        "notional_usd": float(notional),  # Position size AFTER leverage
         "chat_id": TELEGRAM_CHAT_ID or None,
     }
     LOGGER.info(f"GRID PAYLOAD for {symbol}: {json.dumps(payload, default=str)}")
