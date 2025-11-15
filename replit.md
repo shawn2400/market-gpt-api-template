@@ -96,4 +96,4 @@ The production environment runs on Render.com with 11 Background Workers and a N
 -   **Telegram Bot API**: Notifications, approval workflows, interactive callbacks.
 -   **N8N Workflow Automation**: External workflow integration, news ingestion.
 -   **Gunicorn**: Production-grade WSGI HTTP server.
--   **Upstash Redis**: High-performance caching and temporary data storage.
+-   **Redis Cloud**: High-performance caching and temporary data storage ($6/month paid subscription, 30MB storage, SSL disabled for compatibility).
