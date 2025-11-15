@@ -2197,9 +2197,9 @@ async def process_cycle():
                 LOGGER.info(f"❌ REJECTED by AI consensus: {symbol} ({ttype})")
                 return
             
-            # 🛡️ CRITICAL SAFETY CHECK: Enforce MIN_QUALITY=6.0 floor ALWAYS
-            # This prevents low-confidence trades even if dynamic threshold is lower
-            MIN_QUALITY_FLOOR = 6.0
+            # 🛡️ CRITICAL SAFETY CHECK: Enforce MIN_QUALITY floor
+            # TEMPORARY: Lowered to 4.5 for testing SL/TP system (will restore to 6.0 after verification)
+            MIN_QUALITY_FLOOR = 4.5
             final_score = consensus_result["final_score"]
             
             if final_score < MIN_QUALITY_FLOOR:
