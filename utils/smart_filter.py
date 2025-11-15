@@ -130,21 +130,22 @@ def stage2_technical_quality(ctx: Dict[str, Any]) -> Tuple[bool, str, float]:
         return True, "technical_check_failed", 5.0  # Don't block on errors
 
 
-def stage3_market_direction(ctx: Dict[str, Any], proposed_side: str = "LONG") -> Tuple[bool, str]:
+def stage3_market_direction(ctx: Dict[str, Any], proposed_side: str = "LONG") -> Tuple[bool, str, float]:
     """
-    🔍 Stage 3: Market Direction Filter
-    Blocks trades against prevailing market trend to prevent losses
+    🔍 Stage 3: Market Direction Filter (DYNAMIC PENALTY SYSTEM)
+    Applies quality penalty for counter-trend trades instead of blocking
     
     Logic:
-    - BEARISH Market (price < EMA20 < EMA50): Block LONG trades
-    - BULLISH Market (price > EMA20 > EMA50): Block SHORT trades
-    - NEUTRAL/CHOPPY: Allow both directions
+    - BEARISH Market (price < EMA20 < EMA50): LONG trades get -1.5 penalty
+    - BULLISH Market (price > EMA20 > EMA50): SHORT trades get -1.5 penalty
+    - NEUTRAL/CHOPPY: No penalty (both directions welcome)
+    - WITH-TREND trades: +0.5 bonus (encouraged)
     
     Args:
         ctx: Market context with price and EMAs
         proposed_side: Trade direction ("LONG" or "SHORT")
     
-    Returns: (passed, reason)
+    Returns: (passed, reason, penalty_score)
     """
     try:
         price = float(ctx.get("close") or ctx.get("price") or 0)
@@ -152,7 +153,7 @@ def stage3_market_direction(ctx: Dict[str, Any], proposed_side: str = "LONG") ->
         ema_50 = float(ctx.get("ema_50") or price)
         
         if price == 0:
-            return True, "no_price_data"
+            return True, "no_price_data", 0.0
         
         # Detect market direction via EMA alignment
         if price < ema_20 < ema_50:
@@ -162,30 +163,42 @@ def stage3_market_direction(ctx: Dict[str, Any], proposed_side: str = "LONG") ->
         else:
             market_direction = "NEUTRAL"
         
-        # Block trades against the trend
+        penalty = 0.0
+        
+        # Counter-trend trades: Apply penalty (not blocking!)
         if market_direction == "BEARISH" and proposed_side == "LONG":
+            penalty = -1.5
             logger.warning(
-                f"❌ Stage 3 FAIL: LONG trade blocked in BEARISH market "
+                f"⚠️ Stage 3 PENALTY: LONG in BEARISH market → -1.5 quality penalty "
                 f"(price={price:.2f} < EMA20={ema_20:.2f} < EMA50={ema_50:.2f})"
             )
-            return False, "bearish_market_blocks_long"
+            return True, "counter_trend_penalty_long", penalty
         
         if market_direction == "BULLISH" and proposed_side == "SHORT":
+            penalty = -1.5
             logger.warning(
-                f"❌ Stage 3 FAIL: SHORT trade blocked in BULLISH market "
+                f"⚠️ Stage 3 PENALTY: SHORT in BULLISH market → -1.5 quality penalty "
                 f"(price={price:.2f} > EMA20={ema_20:.2f} > EMA50={ema_50:.2f})"
             )
-            return False, "bullish_market_blocks_short"
+            return True, "counter_trend_penalty_short", penalty
+        
+        # With-trend trades: Small bonus (encouraged)
+        if market_direction == "BEARISH" and proposed_side == "SHORT":
+            penalty = +0.5
+            logger.info(f"✅ Stage 3 BONUS: SHORT with BEARISH trend → +0.5 quality bonus")
+        elif market_direction == "BULLISH" and proposed_side == "LONG":
+            penalty = +0.5
+            logger.info(f"✅ Stage 3 BONUS: LONG with BULLISH trend → +0.5 quality bonus")
         
         logger.info(
-            f"✅ Stage 3 PASS: {proposed_side} allowed in {market_direction} market "
-            f"(price={price:.2f}, EMA20={ema_20:.2f}, EMA50={ema_50:.2f})"
+            f"✅ Stage 3 PASS: {proposed_side} in {market_direction} market "
+            f"(price={price:.2f}, EMA20={ema_20:.2f}, EMA50={ema_50:.2f}) | Penalty={penalty:+.1f}"
         )
-        return True, f"{proposed_side.lower()}_ok_in_{market_direction.lower()}"
+        return True, f"{proposed_side.lower()}_in_{market_direction.lower()}", penalty
         
     except Exception as e:
         logger.debug(f"Stage 3 error: {e}")
-        return True, "direction_check_failed"
+        return True, "direction_check_failed", 0.0
 
 
 def smart_pre_filter(symbol: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
@@ -221,22 +234,39 @@ def smart_pre_filter(symbol: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
             "quality_score": quality_score
         }
     
-    # Stage 3: Market Direction (check if trade direction is provided)
+    # Stage 3: Market Direction (Dynamic Penalty System - no blocking!)
     proposed_side = ctx.get("side", "LONG")
-    stage3_pass, stage3_reason = stage3_market_direction(ctx, proposed_side)
-    if not stage3_pass:
+    stage3_pass, stage3_reason, direction_penalty = stage3_market_direction(ctx, proposed_side)
+    
+    # Apply direction penalty to quality score
+    adjusted_quality = quality_score + direction_penalty
+    
+    # Log penalty application
+    if direction_penalty != 0:
+        logger.info(
+            f"📊 Direction adjustment: {quality_score:.1f} {direction_penalty:+.1f} = {adjusted_quality:.1f}"
+        )
+    
+    # Check if adjusted quality still meets minimum threshold
+    if adjusted_quality < QUALITY_SCORE_MIN:
+        logger.warning(
+            f"❌ Quality too low after direction penalty: {adjusted_quality:.1f} < {QUALITY_SCORE_MIN}"
+        )
         return {
             "passed": False,
             "stage": 3,
-            "reason": stage3_reason,
-            "quality_score": quality_score
+            "reason": f"{stage3_reason}_final_quality_{adjusted_quality:.1f}",
+            "quality_score": adjusted_quality
         }
     
     # All stages passed → proceed to AI consensus
-    logger.info(f"🎯 {symbol}: Smart filter PASSED - Quality={quality_score:.1f}/10, proceeding to AI consensus")
+    logger.info(
+        f"🎯 {symbol}: Smart filter PASSED - Quality={adjusted_quality:.1f}/10 "
+        f"(base={quality_score:.1f} {direction_penalty:+.1f}), proceeding to AI consensus"
+    )
     return {
         "passed": True,
         "stage": 3,
         "reason": f"{stage1_reason} + {stage2_reason} + {stage3_reason}",
-        "quality_score": quality_score
+        "quality_score": adjusted_quality
     }
