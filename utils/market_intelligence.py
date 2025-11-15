@@ -346,27 +346,27 @@ class MarketIntelligence:
         
         🎯 GOAL: Generate trades in ALL market conditions (big, small, intermediate)
         """
-        # 🚀 NEW ADAPTIVE BASE - Much lower for more opportunities
+        # 🛡️ SAFETY-FIRST QUALITY BASELINE - All regimes start at 6.0 minimum
         if regime == "choppy":
-            # CHOPPY = Perfect for scalping & small range trades
-            base_rr = 1.1  # ✅ LOWERED from 1.3 to 1.1
-            base_quality = 4.0  # Accept more setups
+            # CHOPPY = Scalping & range trades (still need minimum quality!)
+            base_rr = 1.1
+            base_quality = 6.0  # 🚨 RAISED from 4.0 to 6.0
         elif regime == "sideways":
             # SIDEWAYS = GRID trading + range bounces
-            base_rr = 1.15  # ✅ LOWERED from 1.3 to 1.15
-            base_quality = 4.2
+            base_rr = 1.15
+            base_quality = 6.2  # 🚨 RAISED from 4.2 to 6.2
         elif regime == "trending":
             # TRENDING = Traditional breakout trades
-            base_rr = 1.25  # ✅ LOWERED from 1.3 to 1.25
-            base_quality = 4.5
+            base_rr = 1.25
+            base_quality = 6.5  # 🚨 RAISED from 4.5 to 6.5
         elif regime == "volatile":
             # VOLATILE = Need higher RR due to wider stops
             base_rr = 1.4
-            base_quality = 5.0
+            base_quality = 7.0  # 🚨 RAISED from 5.0 to 7.0
         else:
             # Fallback
             base_rr = 1.2
-            base_quality = 4.5
+            base_quality = 6.5  # 🚨 RAISED from 4.5 to 6.5
         
         # Mood adjustments - MINIMAL impact for CHOPPY markets
         # CHOPPY/SIDEWAYS don't need mood penalty (they're meant for neutral markets!)

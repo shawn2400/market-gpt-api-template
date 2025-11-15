@@ -1,0 +1,84 @@
+## 🚨 **פקודה מעודכנת ומשופרת לסוכן:**
+
+**"בטל מיידית את כל ההזמנות הפתוחות ובצע את הפעולות הבאות:"**
+
+### 🎯 **אסטרטגיה דינמית - LONG & SHORT אוטומטי**
+```
+set_dynamic_strategy:
+- market_regime_analysis: true
+- auto_direction_selection: true
+- long_conditions: bullish_or_neutral
+- short_conditions: bearish_confirmed
+- regime_scoring_threshold: 6.0/10
+```
+
+### 🔧 **מנוע קבלת החלטות חכם**
+```
+decision_engine:
+- dynamic_position_sizing:
+  * bullish_high_confidence: 100%_position_size
+  * bullish_low_confidence: 60%_position_size  
+  * bearish_high_confidence: 80%_short_size
+  * neutral_market: 40%_position_size
+  * unknown_regime: no_new_positions
+```
+
+### ⚡ **הגנות ספציפיות לכל כיוון**
+```
+risk_management_per_direction:
+- LONG_positions:
+  * stop_loss: 5-7%_below_entry
+  * take_profit: 10-15%_above_entry
+  * trailing_stop: activate_at_8%_profit
+
+- SHORT_positions: 
+  * stop_loss: 5-7%_above_entry
+  * take_profit: 10-15%_below_entry
+  * trailing_stop: activate_at_8%_profit
+```
+
+### 📊 **פרמטרים טכניים למנוע הדינמי**
+```
+technical_filters:
+- trend_confirmation:
+  * require_2_timeframes_alignment
+  * EMA_cross_validation: 20/50_periods
+  * RSI_momentum_filter: avoid_overbought_short, oversold_long
+  * volume_confirmation: required_for_breakouts
+```
+
+### 🛡️ **הגנות פורטפוליו מתקדמות**
+```
+advanced_portfolio_protection:
+- max_concurrent_positions: 5
+- correlation_limiter: max_3_similar_assets
+- hedge_allowance: 30%_of_portfolio
+- daily_loss_circuit_breaker: 4%_drawdown
+- volatility_adjustment: auto_reduce_size_in_high_vol
+```
+
+### 🎪 **לוגיקת SHORT מתקדמת**
+```
+short_trading_rules:
+- require_strong_bearish_confirmation: 
+  * descending_trend_structure
+  * breakdown_key_support
+  * negative_fundamentals
+  * high_volume_selling
+- avoid_shorting_in:
+  * extreme_oversold_conditions
+  * potential_reversal_zones
+  * high_funding_rates
+```
+
+## 💡 **יתרונות הגישה הדינמית:**
+
+✅ **לא חוסם - מתאים** - הסוכן בוחר אוטומטית את הכיוון הטוב ביותר  
+✅ **מנצל כל תנאי שוק** - bullish, bearish, או sideways  
+✅ **גמישות אסטרטגית** - משנה גודל פוזיציה לפי רמת בטחון  
+✅ **הגנה משופרת** - סטופים שונים ל-LONG vs SHORT  
+✅ **ניהול סיכונים חכם** - circuit breakers והגבלות מתאמות  
+
+**האם להפעיל את האסטרטגיה הדינמית החדשה?** 🚀
+
+*"הסוכן יבצע ניתוח שוק בזמן אמת ויבחר אוטומטית בין LONG, SHORT, או הימנעות מסחר - בהתבסס על תנאי השוק הנוכחיים"*

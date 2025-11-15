@@ -4,6 +4,14 @@
 AlgoGPT is an autonomous algorithmic trading platform designed for 24/7 Binance Futures trading. It leverages AI, specifically DeepSeek Chat, to scan 534 symbols and make intelligent trade decisions. The platform integrates 7 trading strategies, dynamic capital management, and aims for 4-10 high-quality daily trades. Its MetaBrain v9.1 eliminates hardcoded logic, with all trade parameters determined by AI analysis. The system features intelligent brain management with auto-suspend/resume for failed providers and is built for scalability and autonomous operation with a self-adaptive engine and complete data persistence.
 
 ### Recent Bug Fixes (Nov 15, 2025)
+
+**Critical System Fixes - Emergency Response:**
+- **Quality Gate Bypass** (CRITICAL): Raised quality threshold from 3.5 to 6.0+ for ALL market regimes (choppy=6.0, sideways=6.2, trending=6.5, volatile=7.0). Added MIN_QUALITY_FLOOR=6.0 enforcement after AI consensus - NO trades below 6.0/10 allowed under any circumstances.
+- **Market Direction Filter** (CRITICAL): Added stage3_market_direction filter blocking LONG trades in bearish markets (price < EMA20 < EMA50) and SHORT trades in bullish markets. Prevents counter-trend disasters.
+- **Directional Bias** (CRITICAL): Updated AI prompts with explicit SHORT/LONG guidance based on EMA alignment. System now proposes SHORT trades in bearish markets, LONG in bullish markets, both in neutral.
+- **Regime Detection** (HIGH): Added bb_width_pct, ema20_slope, ema50_slope indicators to _fetch_real_indicators. Regime detection now accurate with complete technical data.
+
+**Previous Fixes:**
 - **Type Safety**: Fixed all 11 LSP errors with proper type annotations, import time checks, and None value guards in execution_bot.py
 - **Liquidity Check**: TOP 50 symbols now bypass liquidity checks (proven liquid), others validated with 100-level depth check
 - **Budget Validation**: Fixed GRID budget validation to use notional amount (budget × leverage) instead of raw budget
