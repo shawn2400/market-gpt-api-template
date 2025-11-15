@@ -550,7 +550,86 @@ class ExecutionBot:
                     except Exception as track_err:
                         self.log.warning(f"Failed to track order for timeout: {track_err}")
                 
-                return {"ok": True, "exchange": "binance_futures", "order": order}
+                # 🛡️ CRITICAL: Send SL/TP orders immediately after entry
+                sl_order = None
+                tp_order = None
+                try:
+                    # Get entry price from order
+                    entry_price_actual = float(order.get("avgPrice") or order.get("price") or ticket.get("price") or 0)
+                    if entry_price_actual <= 0:
+                        # For MARKET orders, get current price
+                        from utils.binance_client import get_price
+                        entry_price_actual = get_price(symbol) or 0
+                    
+                    if entry_price_actual > 0:
+                        # Calculate SL/TP using ATR-based logic
+                        from utils.sltp import calc_sl_tp_for_symbol
+                        from utils.trade_execution_core import _q_price, _q_qty
+                        
+                        atr = ticket.get("atr") or ticket.get("atr_value")
+                        atr_mult = float(os.getenv("SL_ATR_MULT", "1.5"))
+                        
+                        sl_price, tp_price = calc_sl_tp_for_symbol(
+                            symbol=symbol,
+                            entry=entry_price_actual,
+                            side=side,
+                            atr=atr,
+                            atr_mult=atr_mult
+                        )
+                        
+                        position_side = attempt_order.get("positionSide") or ("LONG" if side == "BUY" else "SHORT")
+                        close_side = "SELL" if side == "BUY" else "BUY"
+                        
+                        # Send STOP_MARKET (SL) order
+                        if sl_price and sl_price > 0:
+                            try:
+                                sl_kwargs = {
+                                    "symbol": symbol,
+                                    "side": close_side,
+                                    "type": "STOP_MARKET",
+                                    "quantity": qty,
+                                    "stopPrice": _q_price(symbol, sl_price),
+                                    "newClientOrderId": build_client_order_id(symbol, close_side, role="SL"),
+                                }
+                                if position_side:
+                                    sl_kwargs["positionSide"] = position_side
+                                
+                                sl_order = client.futures_create_order(**sl_kwargs)
+                                self.log.info(f"✅ SL order placed @ {sl_price:.6f} for {symbol}")
+                            except Exception as sl_err:
+                                self.log.error(f"❌ Failed to place SL order for {symbol}: {sl_err}")
+                        
+                        # Send TAKE_PROFIT_MARKET (TP) order
+                        if tp_price and tp_price > 0:
+                            try:
+                                tp_kwargs = {
+                                    "symbol": symbol,
+                                    "side": close_side,
+                                    "type": "TAKE_PROFIT_MARKET",
+                                    "quantity": qty,
+                                    "stopPrice": _q_price(symbol, tp_price),
+                                    "newClientOrderId": build_client_order_id(symbol, close_side, role="TP"),
+                                }
+                                if position_side:
+                                    tp_kwargs["positionSide"] = position_side
+                                
+                                tp_order = client.futures_create_order(**tp_kwargs)
+                                self.log.info(f"✅ TP order placed @ {tp_price:.6f} for {symbol}")
+                            except Exception as tp_err:
+                                self.log.error(f"❌ Failed to place TP order for {symbol}: {tp_err}")
+                    else:
+                        self.log.warning(f"⚠️ Could not determine entry price for {symbol}, skipping SL/TP")
+                except Exception as sltp_err:
+                    self.log.error(f"❌ Failed to set SL/TP for {symbol}: {sltp_err}")
+                
+                return {
+                    "ok": True,
+                    "exchange": "binance_futures",
+                    "order": order,
+                    "sl_order": sl_order,
+                    "tp_order": tp_order,
+                    "status": "opened"
+                }
             except Exception as e1:
                 if "code=-4061" not in str(e1) and "position side does not match" not in str(e1).lower():
                     self.log.error(f"futures_create_order failed: {e1}")
@@ -562,7 +641,62 @@ class ExecutionBot:
                         retry_kwargs = dict(base_kwargs)
                         retry_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
                     order = client.futures_create_order(**retry_kwargs)
-                    return {"ok": True, "exchange": "binance_futures", "order": order, "retry": True}
+                    
+                    # 🛡️ CRITICAL: Send SL/TP orders after retry entry
+                    sl_order = None
+                    tp_order = None
+                    try:
+                        entry_price_actual = float(order.get("avgPrice") or order.get("price") or ticket.get("price") or 0)
+                        if entry_price_actual <= 0:
+                            from utils.binance_client import get_price
+                            entry_price_actual = get_price(symbol) or 0
+                        
+                        if entry_price_actual > 0:
+                            from utils.sltp import calc_sl_tp_for_symbol
+                            from utils.trade_execution_core import _q_price
+                            
+                            atr = ticket.get("atr") or ticket.get("atr_value")
+                            atr_mult = float(os.getenv("SL_ATR_MULT", "1.5"))
+                            
+                            sl_price, tp_price = calc_sl_tp_for_symbol(
+                                symbol=symbol, entry=entry_price_actual, side=side,
+                                atr=atr, atr_mult=atr_mult
+                            )
+                            
+                            position_side = retry_kwargs.get("positionSide") or ("LONG" if side == "BUY" else "SHORT")
+                            close_side = "SELL" if side == "BUY" else "BUY"
+                            
+                            if sl_price and sl_price > 0:
+                                try:
+                                    sl_order = client.futures_create_order(
+                                        symbol=symbol, side=close_side, type="STOP_MARKET",
+                                        quantity=qty, stopPrice=_q_price(symbol, sl_price),
+                                        positionSide=position_side,
+                                        newClientOrderId=build_client_order_id(symbol, close_side, role="SL")
+                                    )
+                                    self.log.info(f"✅ SL order placed @ {sl_price:.6f} for {symbol} (retry)")
+                                except Exception as sl_err:
+                                    self.log.error(f"❌ Failed to place SL (retry): {sl_err}")
+                            
+                            if tp_price and tp_price > 0:
+                                try:
+                                    tp_order = client.futures_create_order(
+                                        symbol=symbol, side=close_side, type="TAKE_PROFIT_MARKET",
+                                        quantity=qty, stopPrice=_q_price(symbol, tp_price),
+                                        positionSide=position_side,
+                                        newClientOrderId=build_client_order_id(symbol, close_side, role="TP")
+                                    )
+                                    self.log.info(f"✅ TP order placed @ {tp_price:.6f} for {symbol} (retry)")
+                                except Exception as tp_err:
+                                    self.log.error(f"❌ Failed to place TP (retry): {tp_err}")
+                    except Exception as sltp_err:
+                        self.log.error(f"❌ Failed to set SL/TP after retry: {sltp_err}")
+                    
+                    return {
+                        "ok": True, "exchange": "binance_futures", "order": order,
+                        "sl_order": sl_order, "tp_order": tp_order,
+                        "retry": True, "status": "opened"
+                    }
                 except Exception as e2:
                     self.log.error(f"futures_create_order after 4061 retry failed: {e2}")
                     return {
