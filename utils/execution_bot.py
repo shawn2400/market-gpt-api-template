@@ -969,27 +969,31 @@ class ExecutionBot:
         from utils.budget import MIN_BUDGET
         MIN_NOTIONAL_USD = MIN_BUDGET  # Dynamic: $25 minimum (was $100 hardcoded)
         budget_per_level = budget_usd / grid_levels
+        notional_per_level = (budget_usd * leverage) / grid_levels
         
-        # CRITICAL: Check if total budget is sufficient for even 1 order
-        if budget_usd < MIN_NOTIONAL_USD:
+        # CRITICAL: Check if total NOTIONAL (after leverage) is sufficient for even 1 order
+        # Note: budget_usd is BEFORE leverage, but Binance minNotional check is AFTER leverage
+        total_notional = budget_usd * leverage
+        if total_notional < MIN_NOTIONAL_USD:
             return {
                 "ok": False,
                 "status": "error",
                 "error": "grid_budget_too_low",
-                "detail": f"Budget ${budget_usd:.2f} < ${MIN_NOTIONAL_USD} minNotional requirement. Need at least ${MIN_NOTIONAL_USD}.",
+                "detail": f"Total notional ${total_notional:.2f} (${budget_usd:.2f} × {leverage}x) < ${MIN_NOTIONAL_USD} minNotional requirement.",
             }
         
-        if budget_per_level < MIN_NOTIONAL_USD:
-            adjusted_levels = max(1, int(budget_usd / MIN_NOTIONAL_USD))
+        if notional_per_level < MIN_NOTIONAL_USD:
+            adjusted_levels = max(1, int(total_notional / MIN_NOTIONAL_USD))
             self.log.warning(
-                f"⚠️ GRID budget too low for {grid_levels} levels "
-                f"(${budget_per_level:.2f}/level < ${MIN_NOTIONAL_USD} minNotional). "
+                f"⚠️ GRID notional too low for {grid_levels} levels "
+                f"(${notional_per_level:.2f}/level < ${MIN_NOTIONAL_USD} minNotional). "
                 f"Reducing to {adjusted_levels} levels to meet Binance requirements."
             )
             grid_levels = adjusted_levels
             price_step = (grid_max - grid_min) / (grid_levels - 1) if grid_levels > 1 else 0
             prices = [grid_min + (i * price_step) for i in range(grid_levels)]
             budget_per_level = budget_usd / grid_levels
+            notional_per_level = (budget_usd * leverage) / grid_levels
         
         # Place LIMIT orders at each level
         grid_orders = []
