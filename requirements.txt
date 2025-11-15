@@ -71,3 +71,10 @@ matplotlib==3.9.2
 # =========================
 pytest==8.2.2
 jsonschema==4.23.0
+binance
+pandas
+psycopg2-binary
+scikit-learn
+ta
+torch
+xgboost
