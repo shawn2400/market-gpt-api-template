@@ -87,6 +87,26 @@ async def _fetch_real_indicators(symbol: str, interval: str = "15m", limit: int 
         # ATR as percentage of price
         atr_pct = (float(atr_val.iloc[-1]) / price * 100.0) if not atr_val.empty else 2.0
         
+        # 🎯 Calculate Bollinger Bands width percentage (critical for regime detection)
+        bb_upper_val = float(bb_upper.iloc[-1]) if not bb_upper.empty else price * 1.02
+        bb_mid_val = float(bb_mid.iloc[-1]) if not bb_mid.empty else price
+        bb_lower_val = float(bb_lower.iloc[-1]) if not bb_lower.empty else price * 0.98
+        
+        bb_width_pct = ((bb_upper_val - bb_lower_val) / bb_mid_val * 100.0) if bb_mid_val > 0 else 5.0
+        
+        # 🎯 Calculate EMA slope (% change over last 10 periods) for trend strength
+        ema20_slope = 0.0
+        ema50_slope = 0.0
+        if len(ema20) >= 10:
+            ema20_current = float(ema20.iloc[-1])
+            ema20_past = float(ema20.iloc[-10])
+            ema20_slope = ((ema20_current - ema20_past) / ema20_past * 100.0) if ema20_past > 0 else 0.0
+        
+        if len(ema50) >= 10:
+            ema50_current = float(ema50.iloc[-1])
+            ema50_past = float(ema50.iloc[-10])
+            ema50_slope = ((ema50_current - ema50_past) / ema50_past * 100.0) if ema50_past > 0 else 0.0
+        
         # 🎯 Calculate 24H high/low for AI Strategy Consensus
         candles_24h = 96 if interval == "15m" else (24 if interval == "1h" else 6)
         recent_klines = df.tail(min(len(df), candles_24h))
@@ -105,11 +125,14 @@ async def _fetch_real_indicators(symbol: str, interval: str = "15m", limit: int 
             "macd": round(float(macd_line.iloc[-1]), 6) if not macd_line.empty else 0.0,
             "macd_signal": round(float(macd_signal.iloc[-1]), 6) if not macd_signal.empty else 0.0,
             "macd_hist": round(float(macd_hist.iloc[-1]), 6) if not macd_hist.empty else 0.0,
-            "bb_upper": round(float(bb_upper.iloc[-1]), 6) if not bb_upper.empty else price * 1.02,
-            "bb_mid": round(float(bb_mid.iloc[-1]), 6) if not bb_mid.empty else price,
-            "bb_lower": round(float(bb_lower.iloc[-1]), 6) if not bb_lower.empty else price * 0.98,
+            "bb_upper": round(bb_upper_val, 6),
+            "bb_mid": round(bb_mid_val, 6),
+            "bb_lower": round(bb_lower_val, 6),
+            "bb_width_pct": round(bb_width_pct, 2),
             "ema_20": round(float(ema20.iloc[-1]), 6) if not ema20.empty else price,
             "ema_50": round(float(ema50.iloc[-1]), 6) if not ema50.empty else price,
+            "ema20_slope": round(ema20_slope, 3),
+            "ema50_slope": round(ema50_slope, 3),
             "volume": float(df["volume"].iloc[-1]),
             "volume_sma_20": round(float(volume_sma_20.iloc[-1]), 2) if not volume_sma_20.empty else 1000000
         }
