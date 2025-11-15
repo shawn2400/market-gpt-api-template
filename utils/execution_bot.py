@@ -1061,8 +1061,10 @@ class ExecutionBot:
                 grid_key = f"grid_active:{symbol}"
                 RED.setex(grid_key, 3600 * 24, json.dumps(grid_metadata))  # 24h TTL
                 self.log.info(f"✅ GRID metadata saved to Redis: {grid_key}")
+            else:
+                self.log.warning(f"⚠️ Redis unavailable - GRID metadata NOT saved (SL/TP protection will use fallback)")
         except Exception as e:
-            self.log.warning(f"⚠️ Failed to save GRID metadata to Redis: {e}")
+            self.log.warning(f"⚠️ Redis connection failed - GRID metadata NOT saved: {e} (SL/TP protection will use fallback)")
         
         return {
             "ok": True,

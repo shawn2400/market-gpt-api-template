@@ -229,57 +229,62 @@ def _tick_symbol(symbol: str):
             import json
             
             if RED:
-                grid_key = f"grid_active:{symbol}"
-                grid_metadata_json = RED.get(grid_key)
-                
-                if grid_metadata_json:
-                    # This is a GRID fill - add SL/TP protection
-                    if isinstance(grid_metadata_json, bytes):
-                        grid_metadata_json = grid_metadata_json.decode('utf-8')
-                    grid_metadata = json.loads(grid_metadata_json)
+                try:
+                    grid_key = f"grid_active:{symbol}"
+                    grid_metadata_json = RED.get(grid_key)
                     
-                    log.info(f"🛡️ GRID fill detected for {symbol} - adding SL/TP protection")
-                    
-                    # Calculate SL/TP using ATR-based logic
-                    atr_default = ep * 0.02  # Default 2% ATR if not available
-                    sl_price, tp_price = calc_sl_tp_for_symbol(
-                        symbol=symbol,
-                        entry=ep,
-                        side=side,
-                        atr=atr_default,
-                        atr_mult=1.5,  # 1.5x ATR for SL (RR=2.0 by default)
-                    )
-                    
-                    if sl_price and tp_price:
-                        # Place SL order
-                        try:
-                            sl_side = "SELL" if side == "LONG" else "BUY"
-                            sl_order = futures_create_order(
-                                symbol=symbol,
-                                side=sl_side,
-                                type="STOP_MARKET",
-                                stopPrice=str(sl_price),
-                                closePosition=True,
-                                newClientOrderId=build_client_order_id(symbol, sl_side, role="SL")
-                            )
-                            log.info(f"✅ GRID SL placed: {symbol} @ {sl_price}")
-                        except Exception as sl_err:
-                            log.error(f"❌ Failed to place GRID SL for {symbol}: {sl_err}")
+                    if grid_metadata_json:
+                        # This is a GRID fill - add SL/TP protection
+                        if isinstance(grid_metadata_json, bytes):
+                            grid_metadata_json = grid_metadata_json.decode('utf-8')
+                        grid_metadata = json.loads(grid_metadata_json)
                         
-                        # Place TP order
-                        try:
-                            tp_side = "SELL" if side == "LONG" else "BUY"
-                            tp_order = futures_create_order(
-                                symbol=symbol,
-                                side=tp_side,
-                                type="TAKE_PROFIT_MARKET",
-                                stopPrice=str(tp_price),
-                                closePosition=True,
-                                newClientOrderId=build_client_order_id(symbol, tp_side, role="TP")
-                            )
-                            log.info(f"✅ GRID TP placed: {symbol} @ {tp_price}")
-                        except Exception as tp_err:
-                            log.error(f"❌ Failed to place GRID TP for {symbol}: {tp_err}")
+                        log.info(f"🛡️ GRID fill detected for {symbol} - adding SL/TP protection")
+                        
+                        # Calculate SL/TP using ATR-based logic
+                        atr_default = ep * 0.02  # Default 2% ATR if not available
+                        sl_price, tp_price = calc_sl_tp_for_symbol(
+                            symbol=symbol,
+                            entry=ep,
+                            side=side,
+                            atr=atr_default,
+                            atr_mult=1.5,  # 1.5x ATR for SL (RR=2.0 by default)
+                        )
+                        
+                        if sl_price and tp_price:
+                            # Place SL order
+                            try:
+                                sl_side = "SELL" if side == "LONG" else "BUY"
+                                sl_order = futures_create_order(
+                                    symbol=symbol,
+                                    side=sl_side,
+                                    type="STOP_MARKET",
+                                    stopPrice=str(sl_price),
+                                    closePosition=True,
+                                    newClientOrderId=build_client_order_id(symbol, sl_side, role="SL")
+                                )
+                                log.info(f"✅ GRID SL placed: {symbol} @ {sl_price}")
+                            except Exception as sl_err:
+                                log.error(f"❌ Failed to place GRID SL for {symbol}: {sl_err}")
+                            
+                            # Place TP order
+                            try:
+                                tp_side = "SELL" if side == "LONG" else "BUY"
+                                tp_order = futures_create_order(
+                                    symbol=symbol,
+                                    side=tp_side,
+                                    type="TAKE_PROFIT_MARKET",
+                                    stopPrice=str(tp_price),
+                                    closePosition=True,
+                                    newClientOrderId=build_client_order_id(symbol, tp_side, role="TP")
+                                )
+                                log.info(f"✅ GRID TP placed: {symbol} @ {tp_price}")
+                            except Exception as tp_err:
+                                log.error(f"❌ Failed to place GRID TP for {symbol}: {tp_err}")
+                except Exception as redis_err:
+                    log.debug(f"Redis connection issue for {symbol}: {redis_err} (graceful degradation - using DB fallback)")
+            else:
+                log.debug(f"Redis unavailable for {symbol} - using DB fallback for SL/TP")
                     
         except Exception as grid_sltp_err:
             log.warning(f"⚠️ GRID SL/TP protection failed for {symbol}: {grid_sltp_err}")
