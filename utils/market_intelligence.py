@@ -10,6 +10,7 @@ Components:
 - Trend Strength Scoring
 - Liquidity Assessment
 - Multi-Timeframe Analysis (15M/1H/4H)
+- BTC Correlation Check (Altcoin alignment with BTC trend)
 
 Author: AlgoGPT Team
 Level: Hedge Fund Grade
@@ -21,6 +22,13 @@ from dataclasses import dataclass
 import numpy as np
 
 LOGGER = logging.getLogger("market_intelligence")
+
+# BTC Correlation imports
+try:
+    from utils.binance_client import futures_mark_price, get_klines_df
+except ImportError:
+    futures_mark_price = None
+    get_klines_df = None
 
 @dataclass
 class MarketCondition:
@@ -682,6 +690,106 @@ class MarketIntelligence:
         )
         
         return round(quality_score, 1)
+    
+    def check_btc_correlation(
+        self, 
+        symbol: str, 
+        proposed_side: str = "LONG"
+    ) -> Tuple[str, float]:
+        """
+        🪙 BTC Correlation Check - The Market Leader Factor
+        
+        Since most altcoins move with BTC, this checks if the proposed trade
+        aligns with BTC's current direction.
+        
+        Logic:
+        - BTC BULLISH + LONG altcoin → +0.5 bonus (aligned)
+        - BTC BEARISH + SHORT altcoin → +0.5 bonus (aligned)
+        - BTC BULLISH + SHORT altcoin → -1.0 penalty (counter-trend)
+        - BTC BEARISH + LONG altcoin → -1.0 penalty (counter-trend)
+        - BTC NEUTRAL → No adjustment
+        
+        Args:
+            symbol: Trading symbol (e.g., "ETHUSDT")
+            proposed_side: "LONG" or "SHORT"
+        
+        Returns:
+            (btc_direction, correlation_adjustment)
+        """
+        # Skip BTC correlation check for BTCUSDT itself
+        if symbol.upper() == "BTCUSDT":
+            return ("self", 0.0)
+        
+        # Skip if binance client not available
+        if not futures_mark_price or not get_klines_df:
+            self.logger.warning("⚠️ BTC correlation check skipped - binance client unavailable")
+            return ("unknown", 0.0)
+        
+        try:
+            # Get BTC klines for EMA calculation
+            btc_klines = get_klines_df("BTCUSDT", interval="15m", limit=50)
+            
+            if btc_klines is None or len(btc_klines) < 50:
+                self.logger.warning("⚠️ BTC correlation check failed - insufficient data")
+                return ("unknown", 0.0)
+            
+            # Calculate BTC EMAs using numpy for type safety
+            try:
+                close_data = btc_klines["close"]
+                if hasattr(close_data, "values"):
+                    btc_closes = np.array(close_data.values, dtype=float)
+                else:
+                    btc_closes = np.array(close_data, dtype=float)
+            except Exception as conv_err:
+                self.logger.warning(f"⚠️ BTC data conversion error: {conv_err}")
+                return ("error", 0.0)
+            
+            btc_price = float(btc_closes[-1])
+            btc_ema_20 = float(np.mean(btc_closes[-20:])) if len(btc_closes) >= 20 else btc_price
+            btc_ema_50 = float(np.mean(btc_closes[-50:])) if len(btc_closes) >= 50 else btc_price
+            
+            # Detect BTC direction
+            if btc_price > btc_ema_20 > btc_ema_50:
+                btc_direction = "BULLISH"
+            elif btc_price < btc_ema_20 < btc_ema_50:
+                btc_direction = "BEARISH"
+            else:
+                btc_direction = "NEUTRAL"
+            
+            # Calculate correlation adjustment
+            penalty = 0.0
+            
+            if btc_direction == "BULLISH":
+                if proposed_side == "LONG":
+                    penalty = +0.5
+                    self.logger.info(
+                        f"✅ BTC CORRELATION BONUS: BTC bullish + LONG {symbol} → +0.5"
+                    )
+                else:  # SHORT
+                    penalty = -1.0
+                    self.logger.warning(
+                        f"⚠️ BTC CORRELATION PENALTY: BTC bullish + SHORT {symbol} → -1.0"
+                    )
+            
+            elif btc_direction == "BEARISH":
+                if proposed_side == "SHORT":
+                    penalty = +0.5
+                    self.logger.info(
+                        f"✅ BTC CORRELATION BONUS: BTC bearish + SHORT {symbol} → +0.5"
+                    )
+                else:  # LONG
+                    penalty = -1.0
+                    self.logger.warning(
+                        f"⚠️ BTC CORRELATION PENALTY: BTC bearish + LONG {symbol} → -1.0"
+                    )
+            else:
+                self.logger.info(f"ℹ️ BTC NEUTRAL: No correlation adjustment for {symbol}")
+            
+            return (btc_direction, penalty)
+            
+        except Exception as e:
+            self.logger.warning(f"⚠️ BTC correlation check error: {e}")
+            return ("error", 0.0)
 
 
 # Global instance

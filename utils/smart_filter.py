@@ -259,14 +259,46 @@ def smart_pre_filter(symbol: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
             "quality_score": adjusted_quality
         }
     
+    # Stage 4: BTC Correlation Check (The Market Leader Factor)
+    try:
+        from utils.market_intelligence import get_market_intelligence
+        mi = get_market_intelligence()
+        btc_direction, btc_penalty = mi.check_btc_correlation(symbol, proposed_side)
+        
+        # Apply BTC correlation penalty
+        final_quality = adjusted_quality + btc_penalty
+        
+        if btc_penalty != 0:
+            logger.info(
+                f"🪙 BTC correlation: {btc_direction} → {btc_penalty:+.1f} | "
+                f"Final quality: {adjusted_quality:.1f} {btc_penalty:+.1f} = {final_quality:.1f}"
+            )
+        
+        # Final quality check after BTC correlation
+        if final_quality < QUALITY_SCORE_MIN:
+            logger.warning(
+                f"❌ Quality too low after BTC correlation: {final_quality:.1f} < {QUALITY_SCORE_MIN}"
+            )
+            return {
+                "passed": False,
+                "stage": 4,
+                "reason": f"btc_{btc_direction.lower()}_penalty_final_{final_quality:.1f}",
+                "quality_score": final_quality
+            }
+    except Exception as btc_err:
+        logger.debug(f"BTC correlation check failed: {btc_err}, continuing without it")
+        btc_direction = "unknown"
+        btc_penalty = 0.0
+        final_quality = adjusted_quality
+    
     # All stages passed → proceed to AI consensus
     logger.info(
-        f"🎯 {symbol}: Smart filter PASSED - Quality={adjusted_quality:.1f}/10 "
-        f"(base={quality_score:.1f} {direction_penalty:+.1f}), proceeding to AI consensus"
+        f"🎯 {symbol}: Smart filter PASSED - Final Quality={final_quality:.1f}/10 "
+        f"(technical={quality_score:.1f} {direction_penalty:+.1f} {btc_penalty:+.1f}), proceeding to AI consensus"
     )
     return {
         "passed": True,
-        "stage": 3,
-        "reason": f"{stage1_reason} + {stage2_reason} + {stage3_reason}",
-        "quality_score": adjusted_quality
+        "stage": 4,
+        "reason": f"{stage1_reason} + {stage2_reason} + {stage3_reason} + btc_{btc_direction}",
+        "quality_score": final_quality
     }

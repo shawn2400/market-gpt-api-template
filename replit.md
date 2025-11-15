@@ -5,11 +5,13 @@ AlgoGPT is an autonomous algorithmic trading platform designed for 24/7 Binance 
 
 ### Recent Bug Fixes (Nov 15, 2025)
 
-**Critical System Fixes - Emergency Response:**
-- **Quality Gate Bypass** (CRITICAL): Raised quality threshold from 3.5 to 6.0+ for ALL market regimes (choppy=6.0, sideways=6.2, trending=6.5, volatile=7.0). Added MIN_QUALITY_FLOOR=6.0 enforcement after AI consensus - NO trades below 6.0/10 allowed under any circumstances.
-- **Market Direction Filter** (CRITICAL): Added stage3_market_direction filter blocking LONG trades in bearish markets (price < EMA20 < EMA50) and SHORT trades in bullish markets. Prevents counter-trend disasters.
-- **Directional Bias** (CRITICAL): Updated AI prompts with explicit SHORT/LONG guidance based on EMA alignment. System now proposes SHORT trades in bearish markets, LONG in bullish markets, both in neutral.
-- **Regime Detection** (HIGH): Added bb_width_pct, ema20_slope, ema50_slope indicators to _fetch_real_indicators. Regime detection now accurate with complete technical data.
+**Critical System Enhancements - Dynamic Trading Intelligence (Nov 15, 2025):**
+- **Dynamic Penalty System** (MAJOR UPGRADE): Converted rigid blocking to intelligent penalty scoring. Counter-trend trades get -1.5 penalty, with-trend trades get +0.5 bonus. System now allows reversals but penalizes low-quality counter-trends, preventing 100% blocking while maintaining safety.
+- **BTC Correlation Check** (NEW FEATURE): Stage 4 filter checks if altcoin trades align with BTC market direction. BTC bullish + LONG altcoin = +0.5 bonus, BTC bearish + LONG altcoin = -1.0 penalty. Respects that most altcoins follow BTC's lead.
+- **Expanded Symbol Scanning** (OPTIMIZATION): Increased candidate pool from 120 to 160 symbols (100 previous TOP 100 + 60 random). Better coverage for finding high-quality trading opportunities.
+- **Quality Gate Hardening**: Raised quality threshold from 3.5 to 6.0+ for ALL market regimes (choppy=6.0, sideways=6.2, trending=6.5, volatile=7.0). Added MIN_QUALITY_FLOOR=6.0 enforcement after AI consensus.
+- **Directional Bias**: Updated AI prompts with explicit SHORT/LONG guidance based on EMA alignment. System now proposes SHORT trades in bearish markets, LONG in bullish markets, both in neutral.
+- **Regime Detection**: Added bb_width_pct, ema20_slope, ema50_slope indicators to _fetch_real_indicators. Regime detection now accurate with complete technical data.
 
 **Previous Fixes:**
 - **Type Safety**: Fixed all 11 LSP errors with proper type annotations, import time checks, and None value guards in execution_bot.py
