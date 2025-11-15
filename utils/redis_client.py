@@ -49,7 +49,7 @@ def _mask_url(url: str) -> str:
 def make_client(*, decode: bool = True) -> "redis.Redis":
     """
     יוצר לקוח Redis יציב המבוסס *אך ורק* על ה-URL.
-    אין שימוש בפרמטרים כמו ssl= או connection_class — הכול נגזר מה-URL (redis:// או rediss://).
+    תומך ב-SSL (rediss://) עם Redis Cloud.
     """
     url = get_redis_url()
     if not url:
@@ -61,6 +61,15 @@ def make_client(*, decode: bool = True) -> "redis.Redis":
 
     conn_to, sock_to = _timeouts()
 
+    # SSL configuration for Redis Cloud
+    ssl_params = {}
+    if scheme == "rediss":
+        import ssl
+        ssl_params = {
+            "ssl_cert_reqs": None,  # Disable certificate verification
+            "ssl_check_hostname": False,  # Disable hostname verification
+        }
+
     cli = redis.from_url(
         url,
         decode_responses=decode,
@@ -70,6 +79,7 @@ def make_client(*, decode: bool = True) -> "redis.Redis":
         client_name=CLIENT_NAME,
         max_connections=POOL_MAX_CONNECTIONS,
         socket_keepalive=True,
+        **ssl_params
     )
     return cli
 
