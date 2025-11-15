@@ -241,17 +241,16 @@ def _tick_symbol(symbol: str):
                     log.info(f"🛡️ GRID fill detected for {symbol} - adding SL/TP protection")
                     
                     # Calculate SL/TP using ATR-based logic
-                    atr_pct = 0.02  # Default 2% if no ATR available
-                    sl_prices, tp_prices = calc_sl_tp_for_symbol(
+                    atr_default = ep * 0.02  # Default 2% ATR if not available
+                    sl_price, tp_price = calc_sl_tp_for_symbol(
                         symbol=symbol,
+                        entry=ep,
                         side=side,
-                        entry_price=ep,
-                        atr_pct=atr_pct,
-                        sl_multiplier=1.5,  # 1.5x ATR for SL
-                        rr_ratio=2.0,  # 2:1 RR for GRID
+                        atr=atr_default,
+                        atr_mult=1.5,  # 1.5x ATR for SL (RR=2.0 by default)
                     )
                     
-                    if sl_prices and tp_prices:
+                    if sl_price and tp_price:
                         # Place SL order
                         try:
                             sl_side = "SELL" if side == "LONG" else "BUY"
@@ -259,11 +258,11 @@ def _tick_symbol(symbol: str):
                                 symbol=symbol,
                                 side=sl_side,
                                 type="STOP_MARKET",
-                                stopPrice=str(sl_prices[0]),
+                                stopPrice=str(sl_price),
                                 closePosition=True,
                                 newClientOrderId=build_client_order_id(symbol, sl_side, role="SL")
                             )
-                            log.info(f"✅ GRID SL placed: {symbol} @ {sl_prices[0]}")
+                            log.info(f"✅ GRID SL placed: {symbol} @ {sl_price}")
                         except Exception as sl_err:
                             log.error(f"❌ Failed to place GRID SL for {symbol}: {sl_err}")
                         
@@ -274,11 +273,11 @@ def _tick_symbol(symbol: str):
                                 symbol=symbol,
                                 side=tp_side,
                                 type="TAKE_PROFIT_MARKET",
-                                stopPrice=str(tp_prices[0]),
+                                stopPrice=str(tp_price),
                                 closePosition=True,
                                 newClientOrderId=build_client_order_id(symbol, tp_side, role="TP")
                             )
-                            log.info(f"✅ GRID TP placed: {symbol} @ {tp_prices[0]}")
+                            log.info(f"✅ GRID TP placed: {symbol} @ {tp_price}")
                         except Exception as tp_err:
                             log.error(f"❌ Failed to place GRID TP for {symbol}: {tp_err}")
                     
