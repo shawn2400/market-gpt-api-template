@@ -220,6 +220,71 @@ def _tick_symbol(symbol: str):
         
         log.info(f"💾 Position tracked for {symbol}: TP={tp_price_from_db}, SL={sl_price_from_db}, Leverage={final_leverage}")
         
+        # 🛡️ GRID SL/TP PROTECTION: Check if this is a GRID fill and add SL/TP
+        try:
+            from utils.redis_client import redis_client as RED
+            from utils.sltp import calc_sl_tp_for_symbol
+            from utils.binance_client import futures_create_order
+            from utils.order_ids import build_client_order_id
+            import json
+            
+            if RED:
+                grid_key = f"grid_active:{symbol}"
+                grid_metadata_json = RED.get(grid_key)
+                
+                if grid_metadata_json:
+                    # This is a GRID fill - add SL/TP protection
+                    if isinstance(grid_metadata_json, bytes):
+                        grid_metadata_json = grid_metadata_json.decode('utf-8')
+                    grid_metadata = json.loads(grid_metadata_json)
+                    
+                    log.info(f"🛡️ GRID fill detected for {symbol} - adding SL/TP protection")
+                    
+                    # Calculate SL/TP using ATR-based logic
+                    atr_pct = 0.02  # Default 2% if no ATR available
+                    sl_prices, tp_prices = calc_sl_tp_for_symbol(
+                        symbol=symbol,
+                        side=side,
+                        entry_price=ep,
+                        atr_pct=atr_pct,
+                        sl_multiplier=1.5,  # 1.5x ATR for SL
+                        rr_ratio=2.0,  # 2:1 RR for GRID
+                    )
+                    
+                    if sl_prices and tp_prices:
+                        # Place SL order
+                        try:
+                            sl_side = "SELL" if side == "LONG" else "BUY"
+                            sl_order = futures_create_order(
+                                symbol=symbol,
+                                side=sl_side,
+                                type="STOP_MARKET",
+                                stopPrice=str(sl_prices[0]),
+                                closePosition=True,
+                                newClientOrderId=build_client_order_id(symbol, sl_side, role="SL")
+                            )
+                            log.info(f"✅ GRID SL placed: {symbol} @ {sl_prices[0]}")
+                        except Exception as sl_err:
+                            log.error(f"❌ Failed to place GRID SL for {symbol}: {sl_err}")
+                        
+                        # Place TP order
+                        try:
+                            tp_side = "SELL" if side == "LONG" else "BUY"
+                            tp_order = futures_create_order(
+                                symbol=symbol,
+                                side=tp_side,
+                                type="TAKE_PROFIT_MARKET",
+                                stopPrice=str(tp_prices[0]),
+                                closePosition=True,
+                                newClientOrderId=build_client_order_id(symbol, tp_side, role="TP")
+                            )
+                            log.info(f"✅ GRID TP placed: {symbol} @ {tp_prices[0]}")
+                        except Exception as tp_err:
+                            log.error(f"❌ Failed to place GRID TP for {symbol}: {tp_err}")
+                    
+        except Exception as grid_sltp_err:
+            log.warning(f"⚠️ GRID SL/TP protection failed for {symbol}: {grid_sltp_err}")
+        
         # 🔔 IMMEDIATE Telegram Notification: Trade Opened (with FULL 5 AI Brains consensus + predictions!)
         try:
             # Try to get consensus data from Redis (stored by symbol)
