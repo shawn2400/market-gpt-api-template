@@ -2158,11 +2158,23 @@ async def process_cycle():
                 LOGGER.info(f"❌ REJECTED by AI consensus: {symbol} ({ttype})")
                 return
             
+            # 🛡️ CRITICAL SAFETY CHECK: Enforce MIN_QUALITY=6.0 floor ALWAYS
+            # This prevents low-confidence trades even if dynamic threshold is lower
+            MIN_QUALITY_FLOOR = 6.0
+            final_score = consensus_result["final_score"]
+            
+            if final_score < MIN_QUALITY_FLOOR:
+                LOGGER.warning(
+                    f"🚫 QUALITY FLOOR VIOLATION: {symbol} score={final_score:.1f} < {MIN_QUALITY_FLOOR:.1f} "
+                    f"(votes={consensus_result['approve_count']}/3) - REJECTED for safety"
+                )
+                return
+            
             # Update payload with consensus scores
             payload["consensus_score"] = consensus_result["final_score"]
             payload["consensus_votes"] = f"{consensus_result['approve_count']}/3"
             
-            LOGGER.info(f"✅ APPROVED by AI consensus: {symbol} ({ttype}) - {consensus_result['approve_count']}/3 votes")
+            LOGGER.info(f"✅ APPROVED by AI consensus: {symbol} ({ttype}) - {consensus_result['approve_count']}/3 votes, score={final_score:.1f}/10")
             
         except Exception as e:
             LOGGER.error(f"⚠️ AI Consensus failed for {symbol} ({ttype}): {e}")

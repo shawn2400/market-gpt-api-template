@@ -383,9 +383,9 @@ class MarketIntelligence:
         elif volatility == "low":
             base_rr -= 0.05  # Tighter stops possible
         
-        # 🚨 CRITICAL: Lower floor values to allow more trades
-        min_rr = max(1.05, base_rr)  # ✅ LOWERED from 1.2 to 1.05
-        quality = max(3.5, base_quality)  # ✅ LOWERED from 4.0 to 3.5
+        # 🛡️ SAFETY FIRST: Enforce minimum quality threshold to prevent dangerous trades
+        min_rr = max(1.1, base_rr)  # Raised from 1.05 to 1.1 for safety
+        quality = max(6.0, base_quality)  # 🚨 CRITICAL: RAISED from 3.5 to 6.0 - NO trades below 6.0!
         
         return (min_rr, quality)
     
