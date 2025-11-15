@@ -3,6 +3,13 @@
 ## Overview
 AlgoGPT is an autonomous algorithmic trading platform designed for 24/7 Binance Futures trading. It leverages AI, specifically DeepSeek Chat, to scan 534 symbols and make intelligent trade decisions. The platform integrates 7 trading strategies, dynamic capital management, and aims for 4-10 high-quality daily trades. Its MetaBrain v9.1 eliminates hardcoded logic, with all trade parameters determined by AI analysis. The system features intelligent brain management with auto-suspend/resume for failed providers and is built for scalability and autonomous operation with a self-adaptive engine and complete data persistence.
 
+### Recent Bug Fixes (Nov 15, 2025)
+- **Type Safety**: Fixed all 11 LSP errors with proper type annotations, import time checks, and None value guards in execution_bot.py
+- **Liquidity Check**: TOP 50 symbols now bypass liquidity checks (proven liquid), others validated with 100-level depth check
+- **Budget Validation**: Fixed GRID budget validation to use notional amount (budget × leverage) instead of raw budget
+- **Redis Cleanup**: Implemented proper blacklist cleanup preventing false positives from stale failure counters
+- **First Trade Success**: LTCUSDT GRID trade executed successfully with Telegram notification and Redis persistence
+
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
 
@@ -64,11 +71,11 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   Includes 3-Layer Safety Guards, Market Regime Detection, Symbol Tier System, Recovery Mode, Portfolio Protection, Dynamic Position Sizing, and Time-Based Protection.
 
 **Trading Policy Filters (System-Wide Protection):**
--   **Symbol Filter Engine**: Validates symbols based on volume, liquidity, Binance whitelist, and blacklist management.
+-   **Symbol Filter Engine**: Validates symbols based on volume, liquidity, Binance whitelist, and blacklist management. TOP 50 symbols bypass liquidity checks (proven liquid), others validated with 100-level order book depth.
 -   **Order Quality Monitor**: Tracks fill rate, slippage, and execution speed.
 -   **Position Limits Manager**: Sets max positions per symbol, total open orders, and correlation exposure limits.
 -   **Trading Gatekeeper**: Unified pre-trade validation integrating all filters and Dynamic Leverage.
--   **Zero Tolerance Filter**: Auto-cleanup for expired temp blacklist entries; requires 5 failures before 24h ban (less aggressive than previous 3-failure threshold).
+-   **Zero Tolerance Filter**: Auto-cleanup for expired temp blacklist entries; requires 5 failures before 24h ban (less aggressive than previous 3-failure threshold). Clean separation between TOP 50 validation and liquidity validation.
 
 **Dynamic TOP 50 Symbol Filter (Musical Chairs System):**
 -   Blocks trades for symbols outside the TOP 50.
