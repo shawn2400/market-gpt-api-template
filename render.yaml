@@ -1,0 +1,423 @@
+# AlgoGPT - Render.com Production Configuration
+# This file defines the entire 24/7 autonomous trading system
+# 
+# Architecture:
+# - 1 Web Service (FastAPI + Gunicorn)
+# - 10 Background Workers (autonomous trading operations)
+# - External PostgreSQL (Neon)
+# - External Redis (Redis Cloud)
+
+services:
+  # ═══════════════════════════════════════════════════════════════
+  # WEB SERVICE - FastAPI API Server
+  # ═══════════════════════════════════════════════════════════════
+  - type: web
+    name: algogpt-api
+    env: docker
+    region: frankfurt
+    plan: starter  # $7/month - upgrade to standard ($25) for production
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /readyz
+    envVars:
+      # Core
+      - key: PORT
+        value: 10000
+      - key: PYTHONUNBUFFERED
+        value: 1
+      - key: TZ
+        value: Asia/Jerusalem
+      
+      # API Keys (set these in Render Dashboard)
+      - key: BINANCE_API_KEY
+        sync: false  # Must set in dashboard
+      - key: BINANCE_API_SECRET
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: TELEGRAM_ADMIN_IDS
+        sync: false
+      
+      # Optional AI Keys
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      
+      # Database (set Neon URL in dashboard)
+      - key: DATABASE_URL
+        sync: false
+      - key: NEON_DATABASE_URL
+        sync: false
+      
+      # Redis (set Redis Cloud URL in dashboard)
+      - key: REDIS_URL
+        sync: false
+      
+      # Trading Configuration
+      - key: ENABLE_AUTO_TRADING
+        value: 1
+      - key: ALLOW_MANAGE_OPEN_TRADES
+        value: 1
+      - key: ENABLE_POSITION_MONITOR
+        value: 1
+      - key: ENABLE_INSURANCE_MONITOR
+        value: 1
+      
+      # Budget & Risk
+      - key: MIN_BUDGET_USD
+        value: 25
+      - key: MAX_BUDGET_USD
+        value: 150
+      - key: MIN_QUALITY_SCORE
+        value: 6.0
+      
+      # Intervals
+      - key: CLEANUP_INTERVAL_SEC
+        value: 21600  # 6 hours
+      - key: HEALTH_CHECK_INTERVAL
+        value: 30
+      - key: OPTIMIZATION_INTERVAL_HOURS
+        value: 4
+      - key: POSITION_REPORT_INTERVAL_SEC
+        value: 1800  # 30 minutes
+
+  # ═══════════════════════════════════════════════════════════════
+  # BACKGROUND WORKERS - Autonomous 24/7 Operation
+  # ═══════════════════════════════════════════════════════════════
+  
+  # Worker 1: Auto Cleanup
+  - type: worker
+    name: worker-auto-cleanup
+    env: docker
+    region: frankfurt
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python workers/auto_cleanup.py
+    envVars:
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: BINANCE_API_KEY
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: BINANCE_API_SECRET
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: DATABASE_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: REDIS_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: CLEANUP_INTERVAL_SEC
+  
+  # Worker 2: Auto Health Monitor
+  - type: worker
+    name: worker-health-monitor
+    env: docker
+    region: frankfurt
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python workers/auto_health_monitor.py
+    envVars:
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: DATABASE_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: REDIS_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_BOT_TOKEN
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_CHAT_ID
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: HEALTH_CHECK_INTERVAL
+  
+  # Worker 3: Auto Optimization
+  - type: worker
+    name: worker-optimization
+    env: docker
+    region: frankfurt
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python workers/auto_optimization_orchestrator.py
+    envVars:
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: DATABASE_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: REDIS_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_BOT_TOKEN
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_CHAT_ID
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: OPTIMIZATION_INTERVAL_HOURS
+  
+  # Worker 4: Auto Scanner (GRID Proposals)
+  - type: worker
+    name: worker-auto-scanner
+    env: docker
+    region: frankfurt
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python workers/gpt_auto_suggest.py
+    envVars:
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: BINANCE_API_KEY
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: BINANCE_API_SECRET
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: DEEPSEEK_API_KEY
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: DATABASE_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: REDIS_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_BOT_TOKEN
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_CHAT_ID
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: MIN_QUALITY_SCORE
+  
+  # Worker 5: Fills Watcher (Position Management)
+  - type: worker
+    name: worker-fills-watcher
+    env: docker
+    region: frankfurt
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python workers/fills_watcher.py
+    envVars:
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: BINANCE_API_KEY
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: BINANCE_API_SECRET
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: DATABASE_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: REDIS_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: ALLOW_MANAGE_OPEN_TRADES
+  
+  # Worker 6: Insurance Monitor
+  - type: worker
+    name: worker-insurance
+    env: docker
+    region: frankfurt
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python workers/insurance_monitor.py
+    envVars:
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: BINANCE_API_KEY
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: BINANCE_API_SECRET
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: DATABASE_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: REDIS_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_BOT_TOKEN
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_CHAT_ID
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: ENABLE_INSURANCE_MONITOR
+  
+  # Worker 7: Position Monitor
+  - type: worker
+    name: worker-position-monitor
+    env: docker
+    region: frankfurt
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python workers/position_monitor.py
+    envVars:
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: BINANCE_API_KEY
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: BINANCE_API_SECRET
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: DATABASE_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: REDIS_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_BOT_TOKEN
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_CHAT_ID
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: ENABLE_POSITION_MONITOR
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: POSITION_REPORT_INTERVAL_SEC
+  
+  # Worker 8: Quantum TOP 50
+  - type: worker
+    name: worker-quantum-top50
+    env: docker
+    region: frankfurt
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python workers/quantum_top50_worker.py
+    envVars:
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: BINANCE_API_KEY
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: BINANCE_API_SECRET
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: DATABASE_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: REDIS_URL
+  
+  # Worker 9: Sentinel Security
+  - type: worker
+    name: worker-sentinel
+    env: docker
+    region: frankfurt
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python workers/sentinel_security.py
+    envVars:
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: DATABASE_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: REDIS_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_BOT_TOKEN
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_CHAT_ID
+  
+  # Worker 10: Telegram Digest Reporter
+  - type: worker
+    name: worker-telegram-digest
+    env: docker
+    region: frankfurt
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python workers/telegram_digest_reporter.py
+    envVars:
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: DATABASE_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: REDIS_URL
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_BOT_TOKEN
+      - fromService:
+          type: web
+          name: algogpt-api
+          envVarKey: TELEGRAM_CHAT_ID
