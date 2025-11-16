@@ -46,7 +46,11 @@ def resume_endpoint(timeout_sec: int = 30) -> tuple[bool, str]:
             
     except urllib.error.HTTPError as e:
         error_body = e.read().decode("utf-8", "ignore") if hasattr(e, 'read') else str(e)
-        logger.error(f"Neon resume HTTP error {e.code}: {error_body}")
+        if e.code == 404:
+            logger.warning(f"⚠️ Neon auto-resume: HTTP 404: {error_body}")
+            logger.info("Database connection will proceed without auto-resume (endpoint may already be active)")
+        else:
+            logger.error(f"Neon resume HTTP error {e.code}: {error_body}")
         return False, f"HTTP {e.code}: {error_body}"
     except Exception as e:
         logger.exception(f"Neon resume failed: {e}")
