@@ -1975,6 +1975,38 @@ async def process_cycle():
     
     pool_syms = pool_syms_filtered
     
+    # 🎯 Filter 2: TOP 50 Pre-Filter (reduce wasted AI calls on symbols that will be blocked)
+    try:
+        from utils.redis_client import get_redis
+        redis_client = get_redis()
+        top50_filtered_count = 0
+        
+        if redis_client:
+            import json
+            top50_data = redis_client.get("top50:approved_list")
+            if top50_data:
+                top50_list = json.loads(top50_data)
+                if top50_list:
+                    pool_syms_top50 = []
+                    for sym in pool_syms:
+                        if sym.upper() in [s.upper() for s in top50_list]:
+                            pool_syms_top50.append(sym)
+                        else:
+                            top50_filtered_count += 1
+                    
+                    # Use TOP 50 filtered pool if we got at least 10 symbols, else fail-open
+                    if len(pool_syms_top50) >= 10:
+                        pool_syms = pool_syms_top50
+                        LOGGER.info(f"🎯 TOP 50 Pre-Filter: Kept {len(pool_syms)} symbols, removed {top50_filtered_count} off-list")
+                    else:
+                        LOGGER.warning(f"⚠️ TOP 50 Pre-Filter: Only {len(pool_syms_top50)} symbols match, keeping full pool (fail-open)")
+                else:
+                    LOGGER.warning("⚠️ TOP 50 list EMPTY - skipping pre-filter (fail-open)")
+            else:
+                LOGGER.warning("⚠️ TOP 50 list NOT FOUND in Redis - skipping pre-filter (fail-open)")
+    except Exception as e:
+        LOGGER.warning(f"TOP 50 Pre-Filter failed: {e} - proceeding with full pool (fail-open)")
+    
     # 🎯 Log dynamic filters for first symbol (for debugging)
     if pool_syms:
         sample_ctx = {"symbol": pool_syms[0], "filters": {}}
@@ -2197,8 +2229,8 @@ async def process_cycle():
                 LOGGER.info(f"❌ REJECTED by AI consensus: {symbol} ({ttype})")
                 return
             
-            # 🛡️ CRITICAL SAFETY CHECK: Enforce MIN_QUALITY floor (lowered from 6.0 to 3.5 for CHOPPY market)
-            MIN_QUALITY_FLOOR = 3.5
+            # 🛡️ CRITICAL SAFETY CHECK: Enforce MIN_QUALITY floor (regime-aware: 4.0 default)
+            MIN_QUALITY_FLOOR = 4.0
             final_score = consensus_result["final_score"]
             
             if final_score < MIN_QUALITY_FLOOR:
