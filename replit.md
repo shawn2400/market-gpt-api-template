@@ -3,38 +3,6 @@
 ## Overview
 AlgoGPT is an autonomous algorithmic trading platform designed for 24/7 Binance Futures trading. It leverages AI, specifically DeepSeek Chat, to scan 534 symbols and make intelligent trade decisions. The platform integrates 7 trading strategies, dynamic capital management, and aims for 4-10 high-quality daily trades. Its MetaBrain v9.1 eliminates hardcoded logic, with all trade parameters determined by AI analysis. The system features intelligent brain management with auto-suspend/resume for failed providers and is built for scalability and autonomous operation with a self-adaptive engine and complete data persistence.
 
-### Recent Bug Fixes (Nov 16, 2025)
-
-**Universal SL/TP Protection System v2.0 (Nov 16, 2025) - COMPLETE REWRITE:**
-- **100% SL/TP Coverage** (CRITICAL): Built Universal SL/TP Manager (`utils/universal_sltp_manager.py`) that works for ALL trade types (GRID, MARKET, HYBRID, Mean Reversion, Breakout, Dip Buying). Uses clientOrderId-based tracking for 100% reliability. Every order gets mandatory SL/TP protection immediately after fill detection.
-- **clientOrderId-based Metadata**: Orders save SL/TP metadata to Redis (`sltp:meta:*`) BEFORE placement using unique clientOrderId. Fills Watcher retrieves metadata via Binance fills API (not unreliable open_orders). Fixes critical bug where multi-level GRID fills received wrong SL/TP.
-- **Binance Fills API Integration**: Added `get_recent_fills()` to fetch real fills from Binance (lookback window: 300s). Replaces broken approach of scanning open_orders which disappears after fill.
-- **Automated Protection Attachment**: `attach_sltp_protection()` places STOP_MARKET + TAKE_PROFIT_MARKET orders automatically when fill detected. Cleanup metadata after successful protection to prevent stale data issues.
-- **Dedicated FillsWatcherThread** (NEW): Separate async thread with 15s polling interval, event loop management, and in-memory clientOrderId tracking to prevent duplicate SL/TP attachment. Replaces legacy grid_active:{symbol} system with universal metadata-based approach.
-- **Per-Level SL/TP Calculation** (CRITICAL FIX): ExecutionBot GRID now calculates SL/TP for EACH level using its specific entry price (not middle_price!). Prevents wrong-side protection that would trigger immediately. Includes LONG/SHORT sanity validation (LONG: SL < entry < TP, SHORT: SL > entry > TP).
-- **GRID Executor Enhancement**: Updated to generate clientOrderId BEFORE order placement, save metadata with per-level calculated SL/TP (8%/20% per user spec), and pass clientOrderId to Binance via `newClientOrderId` field for tracking.
-
-**System Optimization & Cost Reduction (Nov 16, 2025):**
-- **Dynamic GRID Side Selection**: Eliminated hardcoded LONG-only GRID trades. System selects LONG/SHORT dynamically based on EMA alignment + BTC correlation. Prevents losses in bearish markets.
-- **LIMIT Pricing Clamping** (NEW): Grid ranges now clamped to ±3-6% from market price (volatility-aware). Low vol: ±3%, Mid vol: ±4%, High vol: ±5%. Increases fill probability while maintaining profitability per user spec ("realistic 3-8% deviation").
-- **Real Indicators Fallback**: Auto Scanner uses _fetch_real_indicators when Context API unavailable. Ensures accurate EMA data for GRID side selection.
-- **TOP 50 Pre-Filter**: Auto Scanner filters symbols by TOP 50 before AI calls, reducing wasted resources.
-- **Old Orders Cleanup**: Canceled 7 unprotected GRID orders (DOGEUSDT, ADAUSDT, PEPE, FLOKI, SOL, SHIB) freeing $5.56 margin.
-
-**Previous Enhancements (Nov 15, 2025):**
-- **Dynamic Penalty System** (MAJOR UPGRADE): Converted rigid blocking to intelligent penalty scoring. Counter-trend trades get -1.5 penalty, with-trend trades get +0.5 bonus. System now allows reversals but penalizes low-quality counter-trends, preventing 100% blocking while maintaining safety.
-- **BTC Correlation Check** (NEW FEATURE): Stage 4 filter checks if altcoin trades align with BTC market direction. BTC bullish + LONG altcoin = +0.5 bonus, BTC bearish + LONG altcoin = -1.0 penalty. Respects that most altcoins follow BTC's lead.
-- **Expanded Symbol Scanning** (OPTIMIZATION): Increased candidate pool from 120 to 160 symbols (100 previous TOP 100 + 60 random). Better coverage for finding high-quality trading opportunities.
-- **Directional Bias**: Updated AI prompts with explicit SHORT/LONG guidance based on EMA alignment. System now proposes SHORT trades in bearish markets, LONG in bullish markets, both in neutral.
-- **Regime Detection**: Added bb_width_pct, ema20_slope, ema50_slope indicators to _fetch_real_indicators. Regime detection now accurate with complete technical data.
-
-**Previous Fixes:**
-- **Type Safety**: Fixed all 11 LSP errors with proper type annotations, import time checks, and None value guards in execution_bot.py
-- **Liquidity Check**: TOP 50 symbols now bypass liquidity checks (proven liquid), others validated with 100-level depth check
-- **Budget Validation**: Fixed GRID budget validation to use notional amount (budget × leverage) instead of raw budget
-- **Redis Cleanup**: Implemented proper blacklist cleanup preventing false positives from stale failure counters
-- **First Trade Success**: LTCUSDT GRID trade executed successfully with Telegram notification and Redis persistence
-
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
 
@@ -50,24 +18,24 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Automated Trading Modes**: Supports MARKET, HYBRID, and FULL AUTO execution.
 -   **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, and ATR-based trailing stops.
 -   **Market Scanner**: Autonomous multi-timeframe technical analysis across Binance Futures.
--   **AI-Powered Proposals**: Uses DeepSeek Chat for trade decisions with adaptive Risk/Reward, intelligent brain management, and dynamic quality threshold enforcement. **Dynamic Quality Scoring (Nov 2025)**: Quality scores (6-10 range) calculated in real-time from Market Intelligence multi-factor analysis (momentum, volatility, liquidity, technical patterns) - no hardcoded values.
--   **GRID Trading (Nov 2025)**: Integrated FUTURES GRID trading with dynamic symbol selection, tiered strategies, **Dynamic Sizing Engine** ($25-150 budget before leverage, 1-35x leverage), and **automatic SL/TP protection** for all GRID fills via Fills Watcher. ExecutionBot stores GRID metadata to Redis (24h TTL), Fills Watcher detects fills and adds ATR-based SL/TP immediately.
+-   **AI-Powered Proposals**: Uses DeepSeek Chat for trade decisions with adaptive Risk/Reward, intelligent brain management, and dynamic quality threshold enforcement. Quality scores (6-10 range) are calculated in real-time from Market Intelligence multi-factor analysis (momentum, volatility, liquidity, technical patterns).
+-   **GRID Trading**: Integrated FUTURES GRID trading with dynamic symbol selection, tiered strategies, dynamic sizing engine ($25-150 budget before leverage, 1-35x leverage), and automatic SL/TP protection for all GRID fills via Fills Watcher.
 -   **Risk Management**: Includes quality filters, dynamic filters, liquidity checks, cooldowns, daily trade caps, and a circuit breaker.
--   **Dynamic Budget System v2.0**: Real-time trade budget calculation ($25-$150 per trade) based on available wallet balance, trade quality, and volatility. Auto-adapts to available margin with ON DEMAND mode - fast polling (10s) when margin < $25, immediate resume when funds freed. Default: 50% of available balance per trade, scaled by quality score (5-9). Uses withdrawAvailable ($70) instead of availableBalance ($0.17) for accurate free cash reading.
+-   **Dynamic Budget System v2.0**: Real-time trade budget calculation ($25-$150 per trade) based on available wallet balance, trade quality, and volatility.
 -   **Dynamic SL/TP Calculation**: ATR-based Stop Loss and RR-based Take Profit.
 -   **Complete Data Persistence**: All critical data is saved to a PostgreSQL database.
 
 **MetaBrain v9.1 - AI-Driven Precision Trading:**
--   **1-Brain Lean Architecture**: DeepSeek Chat for autonomous trade decisions, with optional expansion brains (Qwen 2.5 Turbo, Gemini 2 Pro, Claude Sonnet, Grok) for multi-brain consensus.
+-   **1-Brain Lean Architecture**: DeepSeek Chat for autonomous trade decisions, with optional expansion brains for multi-brain consensus.
 -   **Intelligent Brain Management**: Auto-suspends/resumes failed AI providers, dynamic consensus thresholds, cost tracking, and token budgeting.
 -   **Precision Calculator v1.0**: Calculates exact leverage and investment based on trade quality, market volatility, regime, and balance.
--   **Deep Market Analyzer & Live Regime Detector**: Multi-layer technical analysis and real-time market classification (TRENDING, CHOPPY, VOLATILE, SIDEWAYS).
+-   **Deep Market Analyzer & Live Regime Detector**: Multi-layer technical analysis and real-time market classification.
 -   **Dynamic Protection Manager**: AI suggests regime-specific parameter sets with guardrails.
 
 **ExecutionBot - Unified Trade Execution Wrapper:**
 -   Centralized architecture for all trade execution logic.
 -   Source-aware approval gating and dual flow support (MARKET and HYBRID).
--   **100% SL/TP Protection (Nov 2025)**: ALL positions receive automatic Stop Loss and Take Profit orders **immediately** after entry. ATR-based SL with 2% fallback, RR-based TP with 3% fallback. If SL/TP placement fails, position is emergency-closed automatically - NO unprotected positions allowed.
+-   **100% SL/TP Protection**: ALL positions receive automatic Stop Loss and Take Profit orders immediately after entry. If SL/TP placement fails, position is emergency-closed automatically.
 
 **Auto-Optimization System (Self-Adaptive Trading):**
 -   **Intelligent Parameter Tuning**: Analyzes performance and adjusts `min_quality`, RR, and leverage based on win rate.
@@ -81,9 +49,9 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   Multi-layered protection including Drawdown Protection, Margin Ratio Defense, Cross/Isolated Balancer, and a Circuit Breaker.
 
 **Validation & Safety Infrastructure:**
--   Includes a Validation Pipeline, Fail-Closed Decision Gates, Monte Carlo simulations, Live Health Monitor, and a 3-Layer Emergency Protection System (pre-trade, post-entry, continuous monitoring).
--   Advanced Risk Manager with dynamic ATR-based SL, 60-second hold with 2% max loss cap, and breakeven acceleration.
--   Entry Timestamps Persistence: Redis for primary storage with PostgreSQL backup for disaster recovery.
+-   Includes a Validation Pipeline, Fail-Closed Decision Gates, Monte Carlo simulations, Live Health Monitor, and a 3-Layer Emergency Protection System.
+-   Advanced Risk Manager with dynamic ATR-based SL and breakeven acceleration.
+-   Entry Timestamps Persistence: Redis for primary storage with PostgreSQL backup.
 
 **Smart LIMIT+MARKET Order Router:**
 -   Decision matrix based on ATR%, spread, signal age, urgency, book depth, and breakout detection to route orders intelligently. Supports LIMIT, MARKET, and HYBRID modes.
@@ -96,11 +64,11 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   Includes 3-Layer Safety Guards, Market Regime Detection, Symbol Tier System, Recovery Mode, Portfolio Protection, Dynamic Position Sizing, and Time-Based Protection.
 
 **Trading Policy Filters (System-Wide Protection):**
--   **Symbol Filter Engine**: Validates symbols based on volume, liquidity, Binance whitelist, and blacklist management. TOP 50 symbols bypass liquidity checks (proven liquid), others validated with 100-level order book depth.
+-   **Symbol Filter Engine**: Validates symbols based on volume, liquidity, Binance whitelist, and blacklist management.
 -   **Order Quality Monitor**: Tracks fill rate, slippage, and execution speed.
 -   **Position Limits Manager**: Sets max positions per symbol, total open orders, and correlation exposure limits.
 -   **Trading Gatekeeper**: Unified pre-trade validation integrating all filters and Dynamic Leverage.
--   **Zero Tolerance Filter**: Auto-cleanup for expired temp blacklist entries; requires 5 failures before 24h ban (less aggressive than previous 3-failure threshold). Clean separation between TOP 50 validation and liquidity validation.
+-   **Zero Tolerance Filter**: Auto-cleanup for expired temp blacklist entries; requires 5 failures before 24h ban.
 
 **Dynamic TOP 50 Symbol Filter (Musical Chairs System):**
 -   Blocks trades for symbols outside the TOP 50.
@@ -128,4 +96,4 @@ The production environment runs on Render.com with 11 Background Workers and a N
 -   **Telegram Bot API**: Notifications, approval workflows, interactive callbacks.
 -   **N8N Workflow Automation**: External workflow integration, news ingestion.
 -   **Gunicorn**: Production-grade WSGI HTTP server.
--   **Redis Cloud**: High-performance caching and temporary data storage ($6/month paid subscription, 30MB storage, SSL disabled for compatibility).
+-   **Redis Cloud**: High-performance caching and temporary data storage.

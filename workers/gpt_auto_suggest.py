@@ -2118,21 +2118,53 @@ async def process_cycle():
         if not payload:
             return
         
-        # 📊 CALCULATE QUALITY SCORE FIRST (for GRID) - always run for telemetry even if margin insufficient
+        # 📊 CALCULATE ENHANCED QUALITY SCORE (MI + Position Score) - always run for telemetry
         symbol = payload.get("symbol", "")
         if ttype == "GRID":
             LOGGER.info(f"✅ Smart Filter BYPASSED for GRID trade {symbol} (range-based strategy)")
-            # 🔧 FIX: Calculate dynamic quality from Market Intelligence, NOT static watchlist
-            # ctx["filters"]["quality_score"] comes from watchlist (static 5-7), not dynamic analysis!
+            # 🔧 ENHANCED: Calculate quality from BOTH Market Intelligence AND Position Scoring
             try:
+                # Ensure ctx is not None (type guard for LSP)
+                if not ctx:
+                    ctx = {}
+                
                 from utils.market_intelligence import get_market_intelligence
+                from utils.position_scorer import get_position_scorer
+                
                 mi_engine = get_market_intelligence()
+                position_scorer = get_position_scorer()
+                
+                # Calculate MI quality (technical indicators)
                 mi_quality = mi_engine.calculate_quality_score(ctx, strategy="grid")
-                # 🛡️ PROTECTION: Clamp quality to 6.0-10.0 range for safety
-                payload["quality_score"] = max(6.0, min(mi_quality if mi_quality and mi_quality > 0 else 6.0, 10.0))
-                LOGGER.info(f"📊 GRID quality from MI: {payload['quality_score']:.1f}/10 (dynamic, clamped 6-10)")
+                mi_quality = max(6.0, min(mi_quality if mi_quality and mi_quality > 0 else 6.0, 10.0))
+                
+                # Calculate Position Score (multi-factor quality)
+                # Extract risk/reward from payload if available
+                entry = payload.get("entry_price", 0)
+                sl = payload.get("stop_loss", 0)
+                tp = payload.get("take_profit", 0)
+                rr_ratio = abs((tp - entry) / (entry - sl)) if entry and sl and tp and entry != sl else 2.0
+                
+                position_score = position_scorer.calculate_position_score(
+                    symbol=symbol,
+                    strategy="grid",
+                    context=ctx,
+                    risk_reward=rr_ratio
+                )
+                
+                # Weighted average: 60% MI + 40% Position Score
+                # This gives technical analysis slight edge while incorporating multi-factor quality
+                final_quality = (mi_quality * 0.60) + (position_score * 0.40)
+                
+                # Clamp to 6.0-10.0 range for safety
+                payload["quality_score"] = max(6.0, min(final_quality, 10.0))
+                
+                LOGGER.info(
+                    f"📊 GRID quality for {symbol}: {payload['quality_score']:.1f}/10 "
+                    f"(MI={mi_quality:.1f}, Position={position_score:.1f}, weighted avg)"
+                )
             except Exception as e:
-                LOGGER.warning(f"⚠️ Failed to calculate MI quality for GRID {symbol}: {e}, using default 6.0")
+                LOGGER.warning(f"⚠️ Failed to calculate enhanced quality for GRID {symbol}: {e}, using default 6.0")
                 payload["quality_score"] = 6.0  # Safe fallback
         
         # 💰 CHECK AVAILABLE MARGIN: Skip proposals if insufficient funds

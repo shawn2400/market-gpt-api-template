@@ -95,34 +95,82 @@ class AIBrain:
         raise NotImplementedError
     
     def _build_prompt(self, scout_data: Dict, market_data: Dict, wallet_state: Dict) -> str:
-        """Build decision prompt for AI brain."""
+        """Build enhanced decision prompt with position scoring and market context."""
         symbol = scout_data.get("symbol", "UNKNOWN")
         strategy = scout_data.get("strategy", "NONE")
         scanner_score = scout_data.get("market_scanner", {}).get("score", 0)
         analyst_score = scout_data.get("technical_analyst", {}).get("score", 0)
-        min_quality = scout_data.get("min_quality", 6.0)  # Dynamic quality threshold
+        min_quality = scout_data.get("min_quality", 6.0)
         min_rr = scout_data.get("min_rr", 2.0)
+        
+        # Extract market context
+        regime = market_data.get("regime", "CHOPPY")
+        mood = market_data.get("mood", "NEUTRAL")
+        volatility = market_data.get("volatility", "medium")
+        
+        # Extract technical indicators
+        adx = market_data.get("adx", 20.0)
+        rsi = market_data.get("rsi", 50.0)
+        atr_pct = market_data.get("atr_percent", 2.5)
+        volume_24h = market_data.get("volume_24h", 0.0)
+        
+        # Calculate Position Score
+        position_score = 5.0  # Default
+        try:
+            from utils.position_scorer import get_position_scorer
+            scorer = get_position_scorer()
+            position_score = scorer.calculate_position_score(
+                symbol=symbol,
+                strategy=strategy,
+                context=market_data,
+                risk_reward=scout_data.get("risk_reward", 2.0)
+            )
+        except Exception as e:
+            self.logger.debug(f"Failed to calculate position score: {e}")
         
         # Strategy context explanation
         strategy_context = ""
         if strategy == "wait":
             strategy_context = f"\n⚠️ WAIT Strategy = Ultra-conservative mode (still tradeable!):\n   Only approve exceptional setups with Quality≥{min_quality:.1f} and RR≥{min_rr:.1f}\n   Lower leverage (max 3x), higher quality threshold\n   This is NOT 'don't trade' - it's 'be very selective'\n"
         
-        return f"""Analyze this trade proposal:
+        # Volatility quality indicator
+        vol_quality = "GOOD" if 1.0 <= atr_pct <= 4.0 else "LOW" if atr_pct < 1.0 else "HIGH"
+        
+        # Volume quality (in millions)
+        vol_millions = volume_24h / 1_000_000
+        vol_quality_text = "Excellent" if vol_millions >= 100 else "Good" if vol_millions >= 50 else "Moderate"
+        
+        return f"""Analyze this trade proposal with enhanced market context:
 
-Symbol: {symbol}
-Strategy: {strategy}{strategy_context}
+🎯 Symbol: {symbol}
+📊 Strategy: {strategy}{strategy_context}
 
-Scout Scores:
+💯 Quality Scores:
 - Market Scanner: {scanner_score}/10
 - Technical Analyst: {analyst_score}/10
+- Position Score: {position_score:.1f}/10 (multi-factor quality)
 
-Wallet: ${wallet_state.get('available_balance', 0):.2f} available
+📈 Market Context:
+- Regime: {regime} | Mood: {mood}
+- Volatility: {volatility} (ATR: {atr_pct:.1f}% - {vol_quality})
+- Volume 24h: ${vol_millions:.0f}M ({vol_quality_text})
+
+🔬 Technical Indicators:
+- ADX: {adx:.1f} (trend strength)
+- RSI: {rsi:.1f} (momentum)
+- ATR: {atr_pct:.1f}% (volatility)
+
+💰 Wallet: ${wallet_state.get('available_balance', 0):.2f} available
+
+🎯 Decision Criteria:
+- Minimum Quality: {min_quality:.1f}/10
+- Minimum RR: {min_rr:.1f}
+- Position Score considers: regime alignment, volatility quality, technical strength, liquidity, RR ratio
 
 Decision required:
 1. APPROVE ✅ or REJECT ❌
-2. Score (0-10)
-3. Brief reasoning (2-3 sentences, mix Hebrew + English)
+2. Score (0-10) - weight Position Score heavily!
+3. Brief reasoning (2-3 sentences, Hebrew/English mix)
 
 Format: VOTE|SCORE|REASONING"""
     
