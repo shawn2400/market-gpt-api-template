@@ -1968,10 +1968,20 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
             f"Budget=${dynamic_budget:.2f}, Position=${notional:.2f}"
         )
         
-        # 🎯 MetaBrain v9.1: Multi-Target TP System
+        # 🎯 MetaBrain v9.1: Multi-Target TP System (100% Dynamic)
         multi_tp_engine = get_multi_target_tp()
         atr_pct = ctx.get("atr_percent", 0.02)  # ATR as percentage
         regime = market_condition.regime if market_condition else "choppy"
+        
+        # Get win rate from performance tracker (if available)
+        win_rate = None
+        try:
+            perf_tracker = get_performance_tracker()
+            symbol_stats = perf_tracker.get_symbol_stats(symbol)
+            if symbol_stats and symbol_stats.get("total_trades", 0) > 3:
+                win_rate = symbol_stats.get("win_rate", 0.0) / 100.0  # Convert % to 0.0-1.0
+        except Exception:
+            pass
         
         tp_config = multi_tp_engine.calculate_tp_levels(
             entry_price=float(levels["entry"]),
@@ -1979,15 +1989,39 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
             strategy="mean_reversion",
             volatility=float(atr_pct),
             regime=regime,
-            side=levels["side"]
+            side=levels["side"],
+            win_rate=win_rate  # ✅ DYNAMIC WIN RATE
         )
         
-        # Extract TP levels from config
+        # Extract TP levels and exit percentages from config
         tp1 = tp_config["targets"][0]["price"]
         tp2 = tp_config["targets"][1]["price"]
         tp3 = tp_config["targets"][2]["price"]
+        tp1_pct = tp_config["targets"][0]["exit_percent"]
+        tp2_pct = tp_config["targets"][1]["exit_percent"]
+        tp3_pct = tp_config["targets"][2]["exit_percent"]
         
-        LOGGER.info(f"📊 Multi-Target TP: {symbol} → TP1={tp1:.4f} (30%), TP2={tp2:.4f} (40%), TP3={tp3:.4f} (30%), Trailing@TP1")
+        # Log TP allocation with monitoring
+        from utils.tp_performance_monitor import get_tp_performance_monitor
+        tp_monitor = get_tp_performance_monitor()
+        trade_id = f"mr{int(time.time())}{random.randint(100,999)}"
+        tp_monitor.log_tp_allocation(
+            symbol=symbol,
+            strategy="mean_reversion",
+            regime=regime,
+            volatility=atr_pct,
+            tp1_percent=tp1_pct,
+            tp2_percent=tp2_pct,
+            tp3_percent=tp3_pct,
+            trade_id=trade_id
+        )
+        
+        LOGGER.info(
+            f"📊 Multi-Target TP: {symbol} → "
+            f"TP1={tp1:.4f} ({tp1_pct*100:.0f}%), "
+            f"TP2={tp2:.4f} ({tp2_pct*100:.0f}%), "
+            f"TP3={tp3:.4f} ({tp3_pct*100:.0f}%), Trailing@TP1"
+        )
         
         payload = {
             "trade_id": f"mr{int(time.time())}{random.randint(100,999)}",

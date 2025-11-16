@@ -33,7 +33,7 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Dynamic Protection Manager**: AI suggests regime-specific parameter sets with guardrails.
 -   **Balance-Tiered Risk Profiles**: Auto-adjusts trading parameters (position size, leverage, max positions, daily risk limit) based on 5 account tiers: MICRO (<$500), CONSERVATIVE ($500-1K), BALANCED ($1K-5K), GROWTH ($5K-10K), AGGRESSIVE ($10K+). Dynamic scaling as balance grows/shrinks.
 -   **Auto-Strategy Selection Engine**: Automatically chooses optimal strategy (GRID, Mean Reversion, Dip Buying, Breakout, Trend Following) based on price proximity to support/resistance levels, market regime, ADX, RSI, and volatility.
--   **Multi-Target TP System**: 3-level take profit with dynamic exit percentages (TP1: 50% RR @ 30% exit, TP2: 100% RR @ 40% exit, TP3: 150% RR @ 30% exit). Volatility-adjusted RR ratios, regime-aware placement, and trailing stop activation at TP1 (2-5% trail based on volatility).
+-   **Multi-Target TP System v2.0 (100% Dynamic)**: 3-level take profit with FULLY DYNAMIC exit percentages that adapt to market conditions. Exit allocations automatically adjust based on volatility, regime, strategy type, and win rate history. Front-loaded profiles (40/35/25) for high volatility/bear markets, back-loaded profiles (25/35/40) for low volatility/bull markets, balanced (30/40/30) for neutral conditions. Volatility-adjusted RR ratios, regime-aware placement, trailing stop activation at TP1 (2-5% trail). Performance monitoring system tracks effectiveness across all profiles.
 
 **ExecutionBot - Unified Trade Execution Wrapper:**
 -   Centralized architecture for all trade execution logic.

@@ -31,16 +31,17 @@ class MultiTargetTP:
         strategy: str,
         volatility: float,
         regime: str,
-        side: str = "LONG"
+        side: str = "LONG",
+        win_rate: Optional[float] = None
     ) -> Dict[str, Any]:
         """
-        Calculate 3-level take profit targets with trailing stop.
+        Calculate 3-level take profit targets with DYNAMIC exit percentages.
         
-        Like AdvancedTradingSystem.calculate_optimal_take_profit():
-        - TP1: 50% of RR (30% position exit)
-        - TP2: 100% of RR (40% position exit)
-        - TP3: 150% of RR (30% position exit)
-        - Trailing stop activates at TP1
+        Exit percentages adapt to:
+        - Volatility: High volatility = aggressive early exits
+        - Strategy: Grid balanced, breakout back-loaded, mean-reversion front-loaded
+        - Regime: Bull = hold longer (back-loaded), Bear = take profits faster (front-loaded)
+        - Win rate: High win rate = hold longer for bigger targets
         
         Args:
             entry_price: Entry price
@@ -49,9 +50,10 @@ class MultiTargetTP:
             volatility: ATR percentage (0.0-1.0)
             regime: Market regime (bull/bear/choppy/volatile)
             side: LONG or SHORT
+            win_rate: Historical win rate (0.0-1.0), if available
             
         Returns:
-            Dict with TP levels, percentages, trailing stop config
+            Dict with TP levels, DYNAMIC percentages, trailing stop config
         """
         # Calculate risk amount
         if side == "LONG":
@@ -88,24 +90,32 @@ class MultiTargetTP:
         # Calculate trailing stop percentage (3-5% based on volatility)
         trailing_percent = self._calculate_trailing_percent(volatility)
         
+        # 🎯 DYNAMIC EXIT PERCENTAGES (not hardcoded!)
+        exit_percentages = self._calculate_dynamic_exit_percentages(
+            volatility=volatility,
+            regime=regime,
+            strategy=strategy,
+            win_rate=win_rate
+        )
+        
         return {
             "targets": [
                 {
                     "level": 1,
                     "price": tp1_price,
-                    "exit_percent": 0.30,  # 30% of position
+                    "exit_percent": exit_percentages[0],  # DYNAMIC!
                     "description": f"TP1: {rrr*0.5:.1f}R ({(abs(tp1_price-entry_price)/entry_price*100):.1f}%)"
                 },
                 {
                     "level": 2,
                     "price": tp2_price,
-                    "exit_percent": 0.40,  # 40% of position
+                    "exit_percent": exit_percentages[1],  # DYNAMIC!
                     "description": f"TP2: {rrr:.1f}R ({(abs(tp2_price-entry_price)/entry_price*100):.1f}%)"
                 },
                 {
                     "level": 3,
                     "price": tp3_price,
-                    "exit_percent": 0.30,  # 30% of position
+                    "exit_percent": exit_percentages[2],  # DYNAMIC!
                     "description": f"TP3: {rrr*1.5:.1f}R ({(abs(tp3_price-entry_price)/entry_price*100):.1f}%)"
                 }
             ],
@@ -159,6 +169,108 @@ class MultiTargetTP:
             return 0.03  # 3% trailing for medium
         else:
             return 0.02  # 2% trailing for low volatility
+    
+    def _calculate_dynamic_exit_percentages(
+        self,
+        volatility: float,
+        regime: str,
+        strategy: str,
+        win_rate: Optional[float]
+    ) -> List[float]:
+        """
+        Calculate DYNAMIC exit percentages for 3 TP levels.
+        
+        Base profiles:
+        - Balanced: [0.30, 0.40, 0.30] - balanced exits
+        - Front-loaded: [0.40, 0.35, 0.25] - take profits early (high volatility, bear market, mean-reversion)
+        - Back-loaded: [0.25, 0.35, 0.40] - hold for bigger targets (low volatility, bull market, breakout)
+        
+        Args:
+            volatility: ATR percentage (0.0-1.0)
+            regime: Market regime (bull/bear/choppy/volatile)
+            strategy: Trading strategy type
+            win_rate: Historical win rate (0.0-1.0), if available
+            
+        Returns:
+            List of 3 exit percentages that sum to 1.0
+        """
+        # Start with balanced profile
+        tp1_pct = 0.30
+        tp2_pct = 0.40
+        tp3_pct = 0.30
+        
+        # Adjust based on volatility
+        if volatility > 0.10:  # High volatility (>10%)
+            # Front-load: Take profits faster before reversal
+            tp1_pct += 0.10  # 40%
+            tp3_pct -= 0.10  # 20%
+        elif volatility < 0.03:  # Very low volatility (<3%)
+            # Back-load: Hold longer for bigger moves
+            tp1_pct -= 0.05  # 25%
+            tp3_pct += 0.05  # 35%
+        
+        # Adjust based on regime
+        regime_upper = regime.upper() if regime else "CHOPPY"
+        if "BULL" in regime_upper or "TRENDING" in regime_upper:
+            # Back-load: Ride the trend
+            tp1_pct -= 0.05
+            tp3_pct += 0.05
+        elif "BEAR" in regime_upper or "VOLATILE" in regime_upper:
+            # Front-load: Take profits before reversal
+            tp1_pct += 0.05
+            tp3_pct -= 0.05
+        
+        # Adjust based on strategy
+        strategy_lower = strategy.lower() if strategy else ""
+        if "mean_reversion" in strategy_lower or "grid" in strategy_lower:
+            # Front-load: These strategies profit from quick reversals
+            tp1_pct += 0.05
+            tp3_pct -= 0.05
+        elif "breakout" in strategy_lower or "trend" in strategy_lower:
+            # Back-load: These strategies profit from continuation
+            tp1_pct -= 0.05
+            tp3_pct += 0.05
+        
+        # Adjust based on win rate (if available)
+        if win_rate is not None:
+            if win_rate > 0.65:  # High win rate (>65%)
+                # Back-load: Trust the setup, hold for bigger targets
+                tp1_pct -= 0.03
+                tp3_pct += 0.03
+            elif win_rate < 0.45:  # Low win rate (<45%)
+                # Front-load: Take what you can get
+                tp1_pct += 0.03
+                tp3_pct -= 0.03
+        
+        # Ensure percentages are within reasonable bounds
+        tp1_pct = max(0.20, min(0.50, tp1_pct))  # 20-50%
+        tp3_pct = max(0.15, min(0.45, tp3_pct))  # 15-45%
+        tp2_pct = 1.0 - tp1_pct - tp3_pct  # Middle level gets remainder
+        
+        # Ensure tp2 is at least 25%
+        if tp2_pct < 0.25:
+            deficit = 0.25 - tp2_pct
+            tp2_pct = 0.25
+            # Take from largest level
+            if tp1_pct > tp3_pct:
+                tp1_pct -= deficit
+            else:
+                tp3_pct -= deficit
+        
+        # Final validation: must sum to 1.0
+        total = tp1_pct + tp2_pct + tp3_pct
+        if abs(total - 1.0) > 0.001:
+            # Normalize to ensure exactly 1.0
+            tp1_pct /= total
+            tp2_pct /= total
+            tp3_pct /= total
+        
+        self.logger.debug(
+            f"Dynamic TP splits: TP1={tp1_pct*100:.0f}%, TP2={tp2_pct*100:.0f}%, TP3={tp3_pct*100:.0f}% "
+            f"(vol={volatility*100:.1f}%, regime={regime}, strategy={strategy}, wr={win_rate*100 if win_rate else 'N/A'})"
+        )
+        
+        return [tp1_pct, tp2_pct, tp3_pct]
     
     def create_tp_orders(
         self,
