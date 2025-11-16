@@ -17,9 +17,11 @@ from typing import Dict, Any, Optional, Tuple
 logger = logging.getLogger("algogpt.smart_filter")
 
 # Configurable thresholds
-VOLUME_SPIKE_MIN = float(os.getenv("VOLUME_SPIKE_MIN", "1.5"))  # 150% of average
+# NOTE: Reduced from 1.5x to 0.8x to allow trading in quiet/CHOPPY markets
+# GRID trades bypass this filter entirely (line 2124 in gpt_auto_suggest.py)
+VOLUME_SPIKE_MIN = float(os.getenv("VOLUME_SPIKE_MIN", "0.8"))  # 80% of average (was 1.5x)
 PRICE_CHANGE_MIN = float(os.getenv("PRICE_CHANGE_MIN", "2.0"))  # 2% move
-QUALITY_SCORE_MIN = float(os.getenv("QUALITY_SCORE_MIN", "6.0"))  # 6/10 minimum
+QUALITY_SCORE_MIN = float(os.getenv("QUALITY_SCORE_MIN", "5.0"))  # 5/10 minimum (was 6.0)
 
 def stage1_volume_spike(ctx: Dict[str, Any]) -> Tuple[bool, str]:
     """

@@ -2209,8 +2209,8 @@ async def process_cycle():
             return
         
         # 🎯 SMART 3-STAGE FILTER: Check quality BEFORE expensive AI calls (95% cost reduction)
-        # ⚠️ BYPASS for GRID: Quality score already calculated above (before margin check)
-        if ttype != "GRID":
+        # ⚠️ BYPASS for GRID + MEAN_REVERSION: Quality score already calculated/approved by Market Intelligence
+        if ttype not in ["GRID", "MEAN_REVERSION"]:
             try:
                 from utils.smart_filter import smart_pre_filter
                 
