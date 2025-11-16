@@ -52,39 +52,42 @@ def validate_env(strict: bool = False) -> None:
     else:
         logger.info("✅ Neon auto-resume credentials present")
     
-    # Check AI providers
+    # Check AI providers (core providers only - Gemini/DeepSeek are optional)
     ai_providers = {
         "OpenAI (GPT-5)": "OPENAI_API_KEY",
         "Anthropic (Claude)": "ANTHROPIC_API_KEY",
-        "Gemini": "GEMINI_API_KEY",
-        "DeepSeek": "DEEPSEEK_API_KEY",
         "XAI (Grok)": "XAI_API_KEY",
     }
     
+    # Optional AI providers (won't trigger warnings)
+    optional_providers = {
+        "Gemini": "GEMINI_API_KEY",
+        "DeepSeek": "DEEPSEEK_API_KEY",
+    }
+    
     ai_active = []
-    ai_missing = []
+    optional_active = []
     
     for name, key in ai_providers.items():
         if os.getenv(key):
             ai_active.append(name)
-        else:
-            ai_missing.append(name)
     
-    if ai_active:
-        logger.info(f"✅ AI Providers active ({len(ai_active)}/5): {', '.join(ai_active)}")
+    for name, key in optional_providers.items():
+        if os.getenv(key):
+            optional_active.append(name)
     
-    if ai_missing:
-        logger.warning(f"⚠️ AI Providers missing ({len(ai_missing)}/5): {', '.join(ai_missing)}")
-        logger.warning("Post-Trade AI Review will use fewer brains")
+    all_active = ai_active + optional_active
+    if all_active:
+        logger.info(f"✅ AI Providers active ({len(all_active)}): {', '.join(all_active)}")
     
-    # Check GitHub auto-commit
-    github_vars = ["GITHUB_TOKEN", "GITHUB_REPO"]
-    github_missing = [k for k in github_vars if not os.getenv(k)]
+    # Check GitHub auto-commit (optional feature)
+    github_token = os.getenv("GITHUB_TOKEN")
+    github_repo = os.getenv("GITHUB_REPO")
     
-    if github_missing:
-        logger.warning(f"GitHub auto-commit disabled - missing: {', '.join(github_missing)}")
+    if github_token and github_repo:
+        logger.info("✅ GitHub auto-commit enabled")
     else:
-        logger.info("✅ GitHub auto-commit credentials present")
+        logger.info("ℹ️  GitHub auto-commit disabled (optional feature)")
     
     # Check Binance
     binance_vars = ["BINANCE_API_KEY", "BINANCE_API_SECRET"]
