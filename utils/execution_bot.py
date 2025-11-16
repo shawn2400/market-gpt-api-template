@@ -999,6 +999,13 @@ class ExecutionBot:
             budget_per_level = budget_usd / grid_levels
             notional_per_level = (budget_usd * leverage) / grid_levels
         
+        # 🛡️ Prepare SL/TP calculation parameters (will calculate per-level)
+        from utils.sltp import calc_sl_tp_for_symbol
+        from utils.universal_sltp_manager import save_order_metadata
+        
+        position_side = "LONG" if side == "BUY" else "SHORT"
+        atr = ticket.get("atr")
+        
         # Place LIMIT orders at each level
         grid_orders = []
         errors = []
@@ -1010,6 +1017,55 @@ class ExecutionBot:
                 qty_str = _q_qty(symbol, qty_raw)
                 price_str = _q_price(symbol, price)
                 
+                # 🎯 Generate unique clientOrderId BEFORE order placement
+                client_order_id = build_client_order_id(symbol, side, role=f"GRID{i}")
+                
+                # 🛡️ Calculate SL/TP for THIS SPECIFIC LEVEL (not middle price!)
+                level_sl_price, level_tp_price = calc_sl_tp_for_symbol(
+                    symbol=symbol,
+                    entry=price,  # ✅ Use THIS level's price
+                    side=position_side,
+                    atr=atr,
+                    atr_mult=1.5
+                )
+                
+                # Fallback if ATR missing - use 8% SL, 20% TP (per user spec)
+                if not level_sl_price or level_sl_price <= 0:
+                    sl_pct = 0.08  # 8% stop loss
+                    level_sl_price = price * (1 - sl_pct) if position_side == "LONG" else price * (1 + sl_pct)
+                
+                if not level_tp_price or level_tp_price <= 0:
+                    tp_pct = 0.20  # 20% take profit
+                    level_tp_price = price * (1 + tp_pct) if position_side == "LONG" else price * (1 - tp_pct)
+                
+                # ✅ Sanity check: Ensure SL/TP are on correct side of entry
+                if position_side == "LONG":
+                    if level_sl_price >= price or level_tp_price <= price:
+                        self.log.error(f"❌ Invalid SL/TP for LONG @ {price}: SL={level_sl_price}, TP={level_tp_price} - SKIPPING LEVEL {i}")
+                        continue
+                else:  # SHORT
+                    if level_sl_price <= price or level_tp_price >= price:
+                        self.log.error(f"❌ Invalid SL/TP for SHORT @ {price}: SL={level_sl_price}, TP={level_tp_price} - SKIPPING LEVEL {i}")
+                        continue
+                
+                # 💾 Save metadata BEFORE order placement (Universal SL/TP Manager)
+                metadata_saved = save_order_metadata(
+                    client_order_id=client_order_id,
+                    symbol=symbol,
+                    side=position_side,
+                    entry_price=price,  # ✅ THIS level's price
+                    sl_price=level_sl_price,  # ✅ THIS level's SL
+                    tp_price=level_tp_price,  # ✅ THIS level's TP
+                    quantity=qty_raw,
+                    leverage=leverage,
+                    trade_type="GRID"
+                )
+                
+                if metadata_saved:
+                    self.log.debug(f"✅ Metadata saved for {client_order_id}: Entry={price:.6f}, SL={level_sl_price:.6f}, TP={level_tp_price:.6f}")
+                else:
+                    self.log.warning(f"⚠️ Failed to save metadata for {client_order_id} - proceeding anyway")
+                
                 order_kwargs = {
                     "symbol": symbol,
                     "side": side,
@@ -1017,21 +1073,22 @@ class ExecutionBot:
                     "timeInForce": "GTC",
                     "quantity": qty_str,
                     "price": price_str,
-                    "newClientOrderId": build_client_order_id(symbol, side, role=f"GRID{i}"),
+                    "newClientOrderId": client_order_id,  # 🎯 Use our clientOrderId
                 }
                 
                 # Add position side if hedge mode
                 if os.getenv("POSITION_MODE_OVERRIDE", "").lower() in ("hedge", "hedged"):
-                    order_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
+                    order_kwargs["positionSide"] = position_side
                 
-                self.log.info(f"  Level {i}/{grid_levels}: LIMIT {side} @ {price_str} qty={qty_str}")
+                self.log.info(f"  Level {i}/{grid_levels}: LIMIT {side} @ {price_str} qty={qty_str} | clientOrderId={client_order_id}")
                 
                 order_result = futures_create_order(**order_kwargs)
                 grid_orders.append({
                     "level": i,
                     "price": price,
                     "qty": qty_str,
-                    "order": order_result
+                    "order": order_result,
+                    "client_order_id": client_order_id
                 })
                 
             except Exception as e:

@@ -220,69 +220,8 @@ def _tick_symbol(symbol: str):
         
         log.info(f"💾 Position tracked for {symbol}: TP={tp_price_from_db}, SL={sl_price_from_db}, Leverage={final_leverage}")
         
-        # 🛡️ UNIVERSAL SL/TP PROTECTION: Check for ANY trade type and add SL/TP
-        try:
-            from utils.binance_client import get_recent_fills
-            from utils.universal_sltp_manager import get_order_metadata, attach_sltp_protection, delete_order_metadata
-            
-            log.info(f"🔍 Checking for recent fills on {symbol}...")
-            
-            # Get recent fills (last 5 minutes)
-            recent_fills = get_recent_fills(symbol, limit=10, lookback_seconds=300)
-            
-            if recent_fills:
-                log.info(f"📊 Found {len(recent_fills)} recent fills for {symbol}")
-                
-                # Check each fill for metadata
-                for fill in recent_fills:
-                    # Binance returns fills with clientOrderId - this is our key!
-                    client_order_id = fill.get("clientOrderId") or fill.get("origClientOrderId")
-                    
-                    if not client_order_id:
-                        log.debug(f"⚠️ Fill missing clientOrderId: {fill}")
-                        continue
-                    
-                    # Retrieve metadata by clientOrderId
-                    metadata = get_order_metadata(client_order_id)
-                    
-                    if not metadata:
-                        log.debug(f"📭 No metadata found for clientOrderId={client_order_id}")
-                        continue
-                    
-                    # Found metadata! This fill needs SL/TP protection
-                    trade_type = metadata.get("trade_type", "UNKNOWN")
-                    sl_price = metadata.get("sl_price")
-                    tp_price = metadata.get("tp_price")
-                    fill_side = metadata.get("side")  # LONG/SHORT
-                    
-                    log.info(f"🛡️ {trade_type} fill detected for {symbol} | clientOrderId={client_order_id}")
-                    log.info(f"📈 Metadata: SL={sl_price}, TP={tp_price}, Side={fill_side}")
-                    
-                    if sl_price and tp_price:
-                        # Attach SL/TP protection using universal manager
-                        import asyncio
-                        protection_result = asyncio.run(attach_sltp_protection(
-                            symbol=symbol,
-                            side=fill_side,
-                            sl_price=sl_price,
-                            tp_price=tp_price
-                        ))
-                        
-                        if protection_result["ok"]:
-                            log.info(f"✅ {trade_type} SL/TP protection complete for {symbol}")
-                            
-                            # Delete metadata after successful protection (cleanup)
-                            delete_order_metadata(client_order_id)
-                            log.debug(f"🗑️ Cleaned up metadata for {client_order_id}")
-                        else:
-                            log.error(f"❌ {trade_type} SL/TP protection FAILED for {symbol}: {protection_result['errors']}")
-                    else:
-                        log.warning(f"⚠️ Invalid SL/TP in metadata for {symbol}: SL={sl_price}, TP={tp_price}")
-            else:
-                log.debug(f"📭 No recent fills found for {symbol} in last 5 minutes")
-                    
-        except Exception as grid_sltp_err:
-            log.error(f"❌ GRID SL/TP protection failed for {symbol}: {grid_sltp_err}", exc_info=True)
+        # NOTE: Universal SL/TP protection is handled by FillsWatcherThread (_watch_fills_once)
+        # No need to duplicate logic here - the dedicated thread will detect fills and attach protection
         
         # 🔔 IMMEDIATE Telegram Notification: Trade Opened (with FULL 5 AI Brains consensus + predictions!)
         try:
@@ -738,6 +677,180 @@ def _on_trade_completion(symbol: str, exit_time: float):
         log.error(f"Error processing trade completion for {symbol}: {e}")
 
 
+class _FillsWatcherThread(threading.Thread):
+    """🛡️ Dedicated thread for detecting fills and applying SL/TP protection - runs every 15s"""
+    daemon = True
+    
+    def __init__(self):
+        super().__init__()
+        self.processed_client_order_ids = set()  # Track processed clientOrderIds to prevent duplicates
+        self.last_cleanup = time.time()
+    
+    def run(self):
+        print("🛡️ [FillsWatcherThread] Started - will watch for fills every 15s")
+        log.info("[FillsWatcherThread] Started - will watch for fills every 15s")
+        
+        # Create long-lived asyncio loop for this thread
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        try:
+            while True:
+                try:
+                    loop.run_until_complete(self._watch_fills_once())
+                    
+                    # Cleanup processed IDs every hour to prevent memory bloat
+                    if time.time() - self.last_cleanup > 3600:
+                        self.processed_client_order_ids.clear()
+                        self.last_cleanup = time.time()
+                        log.debug("[FillsWatcherThread] Cleared processed clientOrderIds cache")
+                        
+                except Exception as e:
+                    print(f"❌ [FillsWatcherThread] watch_fills failed: {e}")
+                    log.error("[FillsWatcherThread] watch_fills failed: %s", e, exc_info=True)
+                
+                time.sleep(15)  # Run every 15 seconds
+        finally:
+            # Clean shutdown
+            pending = asyncio.all_tasks(loop)
+            if pending:
+                loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+            loop.close()
+    
+    async def _watch_fills_once(self):
+        """
+        🔍 Check for recent fills across ALL symbols and attach SL/TP protection.
+        
+        This is the CORE of the Universal SL/TP Protection System!
+        """
+        try:
+            from utils.binance_client import get_recent_fills, futures_get_open_orders
+            from utils.universal_sltp_manager import get_order_metadata, attach_sltp_protection, delete_order_metadata
+            from utils.redis_client import redis_client
+            
+            # Get list of symbols with metadata (these are orders we've placed that need protection)
+            symbols_with_metadata = set()
+            
+            try:
+                if redis_client:
+                    # Scan Redis for all metadata keys (sltp:meta:*)
+                    cursor = 0
+                    while True:
+                        cursor, keys = redis_client.scan(cursor, match="sltp:meta:*", count=100)
+                        for key in keys:
+                            # Extract symbol from metadata
+                            try:
+                                metadata_json = redis_client.get(key)
+                                if metadata_json:
+                                    if isinstance(metadata_json, bytes):
+                                        metadata_json = metadata_json.decode('utf-8')
+                                    import json
+                                    metadata = json.loads(metadata_json)
+                                    symbol = metadata.get("symbol")
+                                    if symbol:
+                                        symbols_with_metadata.add(symbol)
+                            except Exception as parse_err:
+                                log.debug(f"Failed to parse metadata key {key}: {parse_err}")
+                        
+                        if cursor == 0:
+                            break
+            except Exception as redis_err:
+                log.debug(f"Redis scan failed: {redis_err}")
+            
+            # Also get symbols with open orders (backup method)
+            try:
+                all_open_orders = futures_get_open_orders() or []
+                for order in all_open_orders:
+                    symbol = order.get("symbol")
+                    if symbol:
+                        symbols_with_metadata.add(symbol)
+            except Exception as orders_err:
+                log.debug(f"Failed to get open orders: {orders_err}")
+            
+            if not symbols_with_metadata:
+                log.debug("[FillsWatcherThread] No symbols with pending metadata or open orders")
+                return
+            
+            log.info(f"🔍 [FillsWatcherThread] Checking {len(symbols_with_metadata)} symbols for recent fills...")
+            
+            fills_checked = 0
+            fills_protected = 0
+            
+            # Check each symbol for recent fills
+            for symbol in symbols_with_metadata:
+                try:
+                    # Get recent fills (last 5 minutes)
+                    recent_fills = get_recent_fills(symbol, limit=20, lookback_seconds=300)
+                    
+                    if not recent_fills:
+                        continue
+                    
+                    fills_checked += len(recent_fills)
+                    
+                    # Process each fill
+                    for fill in recent_fills:
+                        client_order_id = fill.get("clientOrderId") or fill.get("origClientOrderId")
+                        
+                        if not client_order_id:
+                            continue
+                        
+                        # Skip if already processed
+                        if client_order_id in self.processed_client_order_ids:
+                            continue
+                        
+                        # Retrieve metadata
+                        metadata = get_order_metadata(client_order_id)
+                        
+                        if not metadata:
+                            # No metadata = not our order (or already cleaned up)
+                            continue
+                        
+                        # Found metadata! This fill needs protection
+                        trade_type = metadata.get("trade_type", "UNKNOWN")
+                        sl_price = metadata.get("sl_price")
+                        tp_price = metadata.get("tp_price")
+                        fill_side = metadata.get("side")  # LONG/SHORT
+                        
+                        if not (sl_price and tp_price and fill_side):
+                            log.warning(f"⚠️ Incomplete metadata for {client_order_id}: SL={sl_price}, TP={tp_price}, Side={fill_side}")
+                            continue
+                        
+                        log.info(f"🛡️ [{trade_type}] Fill detected: {symbol} | clientOrderId={client_order_id}")
+                        log.info(f"📈 Protection: SL={sl_price:.6f}, TP={tp_price:.6f}, Side={fill_side}")
+                        
+                        # Attach SL/TP protection
+                        protection_result = await attach_sltp_protection(
+                            symbol=symbol,
+                            side=fill_side,
+                            sl_price=sl_price,
+                            tp_price=tp_price
+                        )
+                        
+                        if protection_result["ok"]:
+                            log.info(f"✅ [{trade_type}] SL/TP protection applied: {symbol}")
+                            fills_protected += 1
+                            
+                            # Mark as processed
+                            self.processed_client_order_ids.add(client_order_id)
+                            
+                            # Cleanup metadata (TTL will handle it, but we can clean early)
+                            delete_order_metadata(client_order_id)
+                        else:
+                            errors = protection_result.get("errors", [])
+                            log.error(f"❌ [{trade_type}] SL/TP protection FAILED: {symbol} - {errors}")
+                        
+                except Exception as symbol_err:
+                    log.error(f"Failed to process fills for {symbol}: {symbol_err}", exc_info=True)
+            
+            if fills_protected > 0:
+                log.info(f"✅ [FillsWatcherThread] Protected {fills_protected}/{fills_checked} fills across {len(symbols_with_metadata)} symbols")
+            else:
+                log.debug(f"[FillsWatcherThread] Checked {fills_checked} fills across {len(symbols_with_metadata)} symbols - none needed protection")
+                
+        except Exception as e:
+            log.error(f"[FillsWatcherThread] Critical error in watch_fills: {e}", exc_info=True)
+
+
 class _TradeManagerThread(threading.Thread):
     """Dedicated thread for dynamic SL/TP/BE/Trailing management - runs every 60s"""
     daemon = True
@@ -771,11 +884,17 @@ class _TradeManagerThread(threading.Thread):
 class _Worker(threading.Thread):
     daemon = True
     def run(self):
+        # Start dedicated fills watcher thread (CRITICAL for SL/TP protection!)
+        fills_thread = _FillsWatcherThread()
+        fills_thread.start()
+        print("✅ [fills_watcher] Fills watcher thread started (15s interval)")
+        log.info("[fills_watcher] Fills watcher thread started (15s interval)")
+        
         # Start dedicated trade manager thread (independent of WATCHLIST)
         mgmt = _TradeManagerThread()
         mgmt.start()
-        print("✅ [fills_watcher] Trade manager thread started")
-        log.info("[fills_watcher] Trade manager thread started")
+        print("✅ [fills_watcher] Trade manager thread started (60s interval)")
+        log.info("[fills_watcher] Trade manager thread started (60s interval)")
 
         if not WATCHLIST:
             log.info("[fills_watcher] WATCHLIST empty (optional) - TradeManager runs independently on all open positions")
