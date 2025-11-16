@@ -18,6 +18,8 @@ from utils.adaptive_prompts import get_adaptive_prompt_engine  # ← Adaptive AI
 from utils.portfolio_intelligence import get_portfolio_intelligence  # ← Portfolio Intelligence
 from utils.performance_tracker import get_performance_tracker  # ← Performance Tracker
 from utils.dynamic_sizing import get_dynamic_sizing_engine  # ← Dynamic Leverage & Position Sizing
+from utils.risk_profile_manager import get_risk_profile_manager  # ← Balance-Tiered Risk Profiles (MetaBrain v9.1)
+from utils.multi_target_tp import get_multi_target_tp  # ← Multi-Target TP System (MetaBrain v9.1)
 from utils.flip_intelligence import get_flip_intelligence  # ← Position Flip Intelligence
 from utils.resource_manager import get_resource_manager  # ← Smart Resource Management
 from utils.multi_tf_manager import MultiTFContextManager  # ← Multi-Timeframe Context Manager
@@ -1933,6 +1935,11 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
         volatility = (ctx.get("filters") or {}).get("vol_regime", "medium") or "medium"
         market_condition = ctx.get("_market_condition")
         
+        # 🎯 MetaBrain v9.1: Balance-Tiered Risk Profiles
+        risk_profile_mgr = get_risk_profile_manager()
+        risk_profile = risk_profile_mgr.get_profile(account_equity)
+        max_leverage_by_balance = risk_profile.max_leverage
+        
         dynamic_sizing_engine = get_dynamic_sizing_engine()
         sizing = dynamic_sizing_engine.calculate_position(
             quality_score=quality_score,
@@ -1944,7 +1951,8 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
             market_mood=market_condition.mood if market_condition else "neutral"
         )
         
-        leverage = sizing.leverage
+        # 🛡️ Apply risk profile leverage cap
+        leverage = min(sizing.leverage, max_leverage_by_balance)
         dynamic_budget = sizing.size_usd / leverage
         notional = sizing.size_usd
         
@@ -1956,8 +1964,30 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
         )
         LOGGER.info(
             f"💰 Dynamic Sizing: {symbol} {levels['side']} → "
-            f"Leverage={leverage}x, Budget=${dynamic_budget:.2f}, Position=${notional:.2f}"
+            f"Leverage={leverage}x (cap={max_leverage_by_balance}x by {risk_profile.name}), "
+            f"Budget=${dynamic_budget:.2f}, Position=${notional:.2f}"
         )
+        
+        # 🎯 MetaBrain v9.1: Multi-Target TP System
+        multi_tp_engine = get_multi_target_tp()
+        atr_pct = ctx.get("atr_percent", 0.02)  # ATR as percentage
+        regime = market_condition.regime if market_condition else "choppy"
+        
+        tp_config = multi_tp_engine.calculate_tp_levels(
+            entry_price=float(levels["entry"]),
+            stop_loss=float(levels["sl"]),
+            strategy="mean_reversion",
+            volatility=float(atr_pct),
+            regime=regime,
+            side=levels["side"]
+        )
+        
+        # Extract TP levels from config
+        tp1 = tp_config["targets"][0]["price"]
+        tp2 = tp_config["targets"][1]["price"]
+        tp3 = tp_config["targets"][2]["price"]
+        
+        LOGGER.info(f"📊 Multi-Target TP: {symbol} → TP1={tp1:.4f} (30%), TP2={tp2:.4f} (40%), TP3={tp3:.4f} (30%), Trailing@TP1")
         
         payload = {
             "trade_id": f"mr{int(time.time())}{random.randint(100,999)}",
@@ -1968,9 +1998,9 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
             "current_price": float(price),
             "entry": float(levels["entry"]),
             "sl": float(levels["sl"]),
-            "tp1": float(levels["tp1"]),
-            "tp2": float(levels["tp2"]),
-            "tp3": None,
+            "tp1": float(tp1),
+            "tp2": float(tp2),
+            "tp3": float(tp3),
             "rr": float(levels["rr"]),
             "success_pct": float(levels.get("win_rate_expected", 70.0)),
             "reason": levels.get("reason", "Mean-Reversion VWAP Strategy"),
