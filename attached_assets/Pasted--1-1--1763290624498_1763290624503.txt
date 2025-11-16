@@ -1,0 +1,350 @@
+ברור.
+אני נותן לך עכשיו **פקודה אחת**, מלאה, סופר־מקצועית, מושלמת, שאפשר להדביק 1:1 לסוכן — והיא תקים **את כל מערכת AlgoGPT Enterprise** + כל הרכיבים המורחבים (SOPRET + OMEGA + Fusion + Dashboard + Backtest + 19 AI Brains + DevOps מלא + שרת 32GB + GitHub + Replit).
+
+זוהי **פקודה אחת — ללא חלוקה — בדיוק כמו שביקשת.**
+כוללת **הכול**, מההתחלה עד הסוף.
+Production, Enterprise, Self-Healing, Zero-Toxicity, Multi-AI, הכל.
+
+---
+
+# 🚀🚀🚀 **הפקודה הסופית — ALL-IN-ONE SYSTEM COMMAND**
+
+### (העתק/הדבק לסוכן. לא לשנות כלום)
+
+```
+TASK_NAME: Deploy FULL AlgoGPT Enterprise System (A–Z) on Hetzner 32GB + GitHub + Replit
+
+OBJECTIVE:
+Install, configure, deploy and optimize the complete AlgoGPT Enterprise ecosystem:
+Core Engine, SOPRET Expert, OMEGA Evolution, External-Fusion Layer, Backtests,
+19-Brains AI Stack, Redis 30d Memory, Enterprise Dashboard, DevOps Suite (Docker, Nginx, SSL),
+systemd workers, CI/CD (GitHub), Replit as full IDE, zero-downtime pipelines, and
+integration with Binance/Bybit/OKX + external bot ingestion.
+
+====================================================================
+A. SERVER SPEC (TARGET)
+====================================================================
+Provider: Hetzner
+Model: CPX41 / AX52 equivalent
+RAM: 32GB
+CPU: 8 cores
+Disk: NVMe SSD
+OS: Ubuntu 22.04 LTS LTS
+
+====================================================================
+B. SERVER BASE SETUP
+====================================================================
+1. Update + install runtime:
+   apt update && apt upgrade -y
+   apt install -y docker.io docker-compose nginx ufw git python3-certbot-nginx certbot
+
+2. Firewall:
+   ufw allow 22 && ufw allow 80 && ufw allow 443 && ufw --force enable
+
+3. Prepare system folder:
+   mkdir -p /opt/algogpt && cd /opt/algogpt
+
+====================================================================
+C. GITHUB INTEGRATION (PRODUCTION PIPELINE)
+====================================================================
+1. Clone production repo:
+   git clone <GITHUB_REPO_URL> /opt/algogpt
+
+2. Create GitHub Actions:
+   - .github/workflows/build.yml
+   - .github/workflows/deploy.yml
+   - .github/workflows/tests.yml
+   Requirements:
+   • Lint + tests
+   • Docker build
+   • Artifact push
+   • Auto deploy to Hetzner over SSH
+
+3. Protect main branch:
+   • require PR approval
+   • require CI success before merge
+
+4. Add GitHub Secrets:
+   PROD_SSH_KEY
+   PROD_HOST
+   PROD_PORT=22
+   PROD_USER=root
+   POSTGRES_URL
+   REDIS_URL
+   OPENAI_KEY
+   TELEGRAM_TOKEN
+   BINANCE_KEYS
+   BYBIT_KEYS
+   FUSION_KEYS
+   OMEGA_CONFIG
+
+====================================================================
+D. REPLIT INTEGRATION (DEVELOPMENT IDE)
+====================================================================
+1. Connect Replit ↔ GitHub (auto sync).
+2. Enable auto-pull on open + auto-push on commit.
+3. Use .env.replit synced from GitHub Secrets.
+4. Dev server: uvicorn main:app --reload
+
+====================================================================
+E. DOCKER-BASED PRODUCTION DEPLOYMENT
+====================================================================
+Create docker-compose.yml with services:
+- api  (FastAPI)
+- workers (Auto Executor)
+- sopret (Self-Healing Engine)
+- omega (Evolution Engine)
+- fusion (External Bot Integration)
+- dashboard (Enterprise UI)
+- nginx (reverse proxy)
+- certbot
+Set restart: always on all microservices.
+
+====================================================================
+F. NGINX + SSL
+====================================================================
+1. Create /etc/nginx/sites-available/algogpt.conf
+2. Reverse-proxy API → 127.0.0.1:8000
+3. Reverse-proxy Dashboard → 127.0.0.1:8050
+4. Enable SSL:
+   certbot --nginx -d <DOMAIN_NAME>
+5. Enable auto-renew (systemd timer)
+
+====================================================================
+G. CORE SYSTEM MODULES TO DEPLOY
+====================================================================
+
+=============================
+1. SOPRET EXPERT ENGINE
+=============================
+Create file:
+utils/sopret_expert_engine.py
+
+Capabilities:
+- ML weight optimizer (RandomForest)
+- Predictive Health Analytics
+- Toxicity detection (cross-exchange)
+- 30-day Redis memory
+- Purge engine (signals / strategies / weights)
+- Self-healing auto-corrections
+- Pattern poisoning defense
+- Decision toxicity scoring
+- System health scoring
+
+Register in:
+main.py → /sopret/*
+auto_executor.py → pre-trade gate
+trade_manager.py → toxicity adjustments
+
+=============================
+2. OMEGA EVOLUTION ENGINE
+=============================
+Create:
+evolution/strategy_evolver.py
+
+Capabilities:
+- Genetic mutation (parameters)
+- Weight crossover
+- Regime adaptation
+- Strategy decay detection
+- Performance-based evolution
+- Top-K model retention
+
+Integrate with:
+meta_learning.py
+risk_manager.py
+trade_manager.py
+
+=============================
+3. EXTERNAL FUSION LAYER
+=============================
+Create:
+integration/cryptohopper_fusion.py
+
+Capabilities:
+- Connect to Cryptohopper/Hero bot API
+- External signals ingestion
+- Performance evaluation
+- Weighted Fusion (default 25% external)
+- Pattern-quality scoring
+- SOPRET toxicity filter on external input
+
+=============================
+4. MULTI-AI 19-BRAINS STACK
+=============================
+Directory:
+agents/
+
+Brains included:
+- DeepSeek-R1
+- Claude 3.5
+- Gemini 1.5 Pro
+- Qwen2.5-72B
+- Pattern AI
+- Regime Detection AI
+- Risk AI
+- Momentum AI
+- News AI
+- Price Action AI
+- Market State AI
+- Volatility AI
+- Trend AI
+- Breakout AI
+- Reversal AI
+- Grid Decision AI
+- Fusion AI
+- SOPRET AI
+- Omega Evolution AI
+
+Orchestrator:
+agents/orchestrator.py
+
+=============================
+5. BACKTEST ENTERPRISE ENGINE
+=============================
+Create:
+backtesting/enterprise_backtest.py
+
+Features:
+- Multi-year analysis
+- Regime segmentation
+- Strategy validation
+- Cross-symbol testing
+- Parameter optimization
+- Auto PDF/CSV reports
+
+=============================
+6. ENTERPRISE DASHBOARD
+=============================
+Create:
+dashboard/enterprise_dashboard.py
+
+Using:
+- Plotly Dash / FastAPI mount
+- Live SL/TP analytics
+- System health monitor
+- SOPRET toxicity graph
+- Fusion performance
+- Worker load graph
+- Real-time trades table
+- Evolution Explorer
+
+Expose under:
+https://<DOMAIN>/dashboard
+
+=============================
+7. ADVANCED REDIS MEMORY
+=============================
+Implement:
+utils/redis_memory.py
+
+Features:
+- 30-day rolling memory
+- Pattern probability tracking
+- Model weights storage
+- Cross-exchange correlations
+- ML training snapshots
+
+====================================================================
+H. INTEGRATE ENTERPRISE LOGIC INTO EXISTING SYSTEM
+====================================================================
+
+Update the following files:
+
+main.py:
+- add routes for sopret, fusion, evolution, dashboard
+- register all enterprise modules
+
+auto_executor.py:
+- add pre-trade sopret validation
+- fused confidence scoring
+- Omega sizing logic
+
+trade_manager.py:
+- toxicity gates
+- adaptive SL/TP engine based on ML
+- external signal fusion scoring
+
+ai_analysis.py:
+- 19 Brain orchestrator integration
+- meta scoring
+- SOPRET scoring
+- Fusion scoring
+
+utils/binance_client.py:
+- add exchange fallback logic
+- detect cross-exchange anomalies for SOPRET
+
+====================================================================
+I. SYSTEMD SERVICES (RUN IN BACKGROUND)
+====================================================================
+
+Create:
+
+/etc/systemd/system/algogpt_api.service  
+/etc/systemd/system/algogpt_workers.service  
+/etc/systemd/system/algogpt_sopret.service  
+/etc/systemd/system/algogpt_omega.service  
+/etc/systemd/system/algogpt_fusion.service  
+/etc/systemd/system/algogpt_dashboard.service  
+
+Commands:
+systemctl daemon-reload
+systemctl enable algogpt_api algogpt_workers algogpt_sopret algogpt_omega algogpt_fusion algogpt_dashboard
+systemctl start algogpt_api algogpt_workers algogpt_sopret algogpt_omega algogpt_fusion algogpt_dashboard
+
+====================================================================
+J. AUTO SMOKE TESTS (AFTER DEPLOY)
+====================================================================
+Call endpoints:
+- /readyz
+- /status
+- /metrics
+- /ai/analysis?symbol=BTCUSDT
+- /sopret/health
+- /fusion/status
+- /omega/status
+- /dashboard/test
+- /trade/execute (DRY-RUN)
+- /telegram/test-ping
+
+====================================================================
+K. PERFORMANCE OPTIMIZATIONS FOR 32GB
+====================================================================
+- Limit workers to 6
+- Async batching for AI calls
+- Redis pipelining enabled
+- ML models stored in RAM (5GB)
+- Zero blocking API paths
+- Dashboard throttled to 500ms refresh
+- Websocket compression enabled
+- Tick-level caching for heavy symbols
+
+====================================================================
+L. FINAL OUTPUT REQUIRED
+====================================================================
+1. Fully working production server (Hetzner 32GB)
+2. All enterprise engines running:
+   - SOPRET Expert
+   - OMEGA Evolution
+   - External Fusion
+   - 19-Brain AI Stack
+   - Backtest Engine
+   - Dashboard
+   - Redis 30d Memory
+3. GitHub CI/CD working
+4. Replit development IDE synced
+5. Full health report
+6. Smoke tests all green
+
+END_TASK
+```
+
+---
+
+# ✅ זהו.
+
+זאת **הפקודה הכי מלאה, הכי מתקדמת, הכי מקיפה** שניתן לבנות היום — ברמה של Enterprise Trading System.
+
+רוצה שאפיק לך **גרסת PDF** שתשלח לסוכן?
+רוצה שאוסיף תרשים צבעוני?
