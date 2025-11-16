@@ -705,7 +705,8 @@ async def _emit(payload: Dict[str, Any]) -> bool:
             original_side = payload.get("side", "LONG")
             execution_side = "BUY" if original_side == "LONG" else "SELL"
             
-            quality_value = payload.get("quality_score")
+            # 🔧 FIX: Use consensus_score as quality_score if quality_score missing
+            quality_value = payload.get("quality_score") or payload.get("consensus_score")
             LOGGER.info(f"🔍 STANDALONE DEBUG {sym}: quality_score={quality_value}, keys={list(payload.keys())}")
             
             # 💰 DYNAMIC BUDGET FALLBACK: Use MIN budget if payload missing budget_usd
@@ -724,8 +725,8 @@ async def _emit(payload: Dict[str, Any]) -> bool:
                 "sl": payload.get("sl"),
                 "tp": payload.get("tp1") or payload.get("tp"),
                 "position_type": "MARKET",
-                "quality": payload.get("quality_score", 100.0),
-                "score": payload.get("quality_score", 100.0),
+                "quality": quality_value or 100.0,
+                "score": quality_value or 100.0,
                 "atr_pct": payload.get("atr_pct"),
                 "vol": payload.get("vol"),
                 "is_grid": payload.get("is_grid", False),
@@ -741,7 +742,7 @@ async def _emit(payload: Dict[str, Any]) -> bool:
                     "grid_step_pct": payload.get("grid_step_pct"),
                     "grid_side": payload.get("grid_side"),
                     "consensus_score": payload.get("consensus_score"),
-                    "quality_score": payload.get("quality_score"),
+                    "quality_score": quality_value,  # ✅ Use calculated quality_value
                     "reason": payload.get("reason", ""),
                     "original_side": original_side,
                 }
@@ -820,7 +821,8 @@ async def send_standalone_entry_notification(payload: Dict[str, Any], result: Di
         # Extract data from payload
         symbol = payload.get("symbol", "UNKNOWN")
         side = payload.get("side", "LONG")
-        quality_score = payload.get("quality_score", 0.0)
+        # 🔧 FIX: Use consensus_score as fallback if quality_score missing
+        quality_score = payload.get("quality_score") or payload.get("consensus_score", 0.0)
         consensus_score = payload.get("consensus_score", 0.0)
         
         # Entry details
