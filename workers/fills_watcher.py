@@ -260,12 +260,13 @@ def _tick_symbol(symbol: str):
                     
                     if sl_price and tp_price:
                         # Attach SL/TP protection using universal manager
-                        protection_result = attach_sltp_protection(
+                        import asyncio
+                        protection_result = asyncio.run(attach_sltp_protection(
                             symbol=symbol,
                             side=fill_side,
                             sl_price=sl_price,
                             tp_price=tp_price
-                        )
+                        ))
                         
                         if protection_result["ok"]:
                             log.info(f"✅ {trade_type} SL/TP protection complete for {symbol}")

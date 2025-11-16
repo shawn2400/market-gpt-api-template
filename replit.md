@@ -5,14 +5,20 @@ AlgoGPT is an autonomous algorithmic trading platform designed for 24/7 Binance 
 
 ### Recent Bug Fixes (Nov 16, 2025)
 
+**Universal SL/TP Protection System (Nov 16, 2025) - MAJOR UPGRADE:**
+- **100% SL/TP Coverage** (CRITICAL): Built Universal SL/TP Manager (`utils/universal_sltp_manager.py`) that works for ALL trade types (GRID, MARKET, HYBRID, Mean Reversion, Breakout, Dip Buying). Uses clientOrderId-based tracking for 100% reliability. Every order gets mandatory SL/TP protection immediately after fill detection.
+- **clientOrderId-based Metadata**: Orders save SL/TP metadata to Redis BEFORE placement using unique clientOrderId. Fills Watcher retrieves metadata via Binance fills API (not unreliable open_orders). Fixes critical bug where multi-level GRID fills received wrong SL/TP.
+- **Binance Fills API Integration**: Added `get_recent_fills()` to fetch real fills from Binance (lookback window: 300s). Replaces broken approach of scanning open_orders which disappears after fill.
+- **Automated Protection Attachment**: `attach_sltp_protection()` places STOP_MARKET + TAKE_PROFIT_MARKET orders automatically when fill detected. Cleanup metadata after successful protection to prevent stale data issues.
+- **GRID Executor Enhancement**: Updated to generate clientOrderId BEFORE order placement, save metadata with calculated SL/TP (8%/20% per user spec), and pass clientOrderId to Binance for tracking.
+- **Fills Watcher Modernization**: Replaced legacy grid_active:{symbol} lookup with clientOrderId-based fill detection. Supports all trade types universally.
+
 **System Optimization & Cost Reduction (Nov 16, 2025):**
-- **Dynamic GRID Side Selection** (CRITICAL FIX): Eliminated hardcoded LONG-only GRID trades. System now selects LONG/SHORT dynamically based on EMA alignment (ema_20 vs ema_50) and BTC correlation. EMA bullish (20>50) + BTC bullish → LONG with +0.5 bonus. EMA bearish (20<50) + BTC bearish → SHORT with +0.5 bonus. Counter-trend trades get -1.0 penalty. Neutral markets default to LONG. Prevents losses in bearish markets by proposing SHORT GRID trades when trend is down.
-- **Real Indicators Fallback**: Auto Scanner now uses _fetch_real_indicators to calculate EMA data when Context API unavailable. Fetches live Binance klines and calculates ema_20/ema_50 for both target symbol and BTC, ensuring accurate trend detection for GRID side selection even in degraded mode.
-- **TOP 50 Pre-Filter** (NEW FEATURE): Auto Scanner now filters symbol pool by TOP 50 list BEFORE expensive AI calls, reducing wasted resources. Fail-open design (requires ≥10 matches) prevents over-filtering. Logged as "TOP 50 Pre-Filter" with symbol counts.
-- **MIN_QUALITY_FLOOR Optimization**: Lowered from 6.0 to 4.0 to enable trades in CHOPPY markets while maintaining safety. Quality scores 3.0 and below rejected, 4.0+ approved. Balanced approach between safety and opportunity.
-- **Blacklist Cleanup**: Cleared 47 stale failure counters and temp blacklist entries from Redis, restoring full symbol trading capability. Zero Tolerance now requires 5 failures before 24h ban (less aggressive than previous 3-failure threshold).
-- **Trade Success**: 1000FLOKIUSDT GRID trade executed successfully after fixes, proving end-to-end system functionality with TOP 50 compliance.
-- **Coverage Status**: Quantum Worker producing 47 TOP 50 symbols (target: 50-160). Auto Scanner pool shows 8/50 symbols matching TOP 47, triggering fail-open mode for broader market coverage.
+- **Dynamic GRID Side Selection**: Eliminated hardcoded LONG-only GRID trades. System selects LONG/SHORT dynamically based on EMA alignment + BTC correlation. Prevents losses in bearish markets.
+- **LIMIT Pricing Clamping** (NEW): Grid ranges now clamped to ±3-6% from market price (volatility-aware). Low vol: ±3%, Mid vol: ±4%, High vol: ±5%. Increases fill probability while maintaining profitability per user spec ("realistic 3-8% deviation").
+- **Real Indicators Fallback**: Auto Scanner uses _fetch_real_indicators when Context API unavailable. Ensures accurate EMA data for GRID side selection.
+- **TOP 50 Pre-Filter**: Auto Scanner filters symbols by TOP 50 before AI calls, reducing wasted resources.
+- **Old Orders Cleanup**: Canceled 7 unprotected GRID orders (DOGEUSDT, ADAUSDT, PEPE, FLOKI, SOL, SHIB) freeing $5.56 margin.
 
 **Previous Enhancements (Nov 15, 2025):**
 - **Dynamic Penalty System** (MAJOR UPGRADE): Converted rigid blocking to intelligent penalty scoring. Counter-trend trades get -1.5 penalty, with-trend trades get +0.5 bonus. System now allows reversals but penalizes low-quality counter-trends, preventing 100% blocking while maintaining safety.

@@ -11,7 +11,7 @@ Architecture:
 
 Key Innovation: clientOrderId-based tracking = 100% reliable!
 """
-from __init__ import annotations
+from __future__ import annotations
 import json
 import logging
 import time
@@ -58,8 +58,8 @@ def save_order_metadata(
     """
     try:
         if redis_conn is None:
-            from utils.redis_manager import get_redis
-            redis_conn = get_redis()
+            from utils.redis_client import redis_client
+            redis_conn = redis_client
         
         if not redis_conn:
             logger.warning(f"⚠️ Redis unavailable - cannot save metadata for {client_order_id}")
@@ -102,8 +102,8 @@ def get_order_metadata(client_order_id: str, redis_conn=None) -> Optional[Dict[s
     """
     try:
         if redis_conn is None:
-            from utils.redis_manager import get_redis
-            redis_conn = get_redis()
+            from utils.redis_client import redis_client
+            redis_conn = redis_client
         
         if not redis_conn:
             return None
@@ -134,8 +134,8 @@ def delete_order_metadata(client_order_id: str, redis_conn=None) -> bool:
     """
     try:
         if redis_conn is None:
-            from utils.redis_manager import get_redis
-            redis_conn = get_redis()
+            from utils.redis_client import redis_client
+            redis_conn = redis_client
         
         if not redis_conn:
             return False
@@ -152,7 +152,7 @@ def delete_order_metadata(client_order_id: str, redis_conn=None) -> bool:
         return False
 
 
-def attach_sltp_protection(
+async def attach_sltp_protection(
     *,
     symbol: str,
     side: str,  # LONG/SHORT
@@ -177,7 +177,7 @@ def attach_sltp_protection(
     }
     
     try:
-        from utils.binance_client import futures_create_order
+        from utils.binance_client import client
         from utils.order_ids import build_client_order_id
         
         # Determine order sides
@@ -188,7 +188,7 @@ def attach_sltp_protection(
         try:
             logger.info(f"📤 Placing SL: {symbol} {sl_side} @ {sl_price:.6f} (STOP_MARKET)")
             
-            sl_order = futures_create_order(
+            sl_order = client.futures_create_order(
                 symbol=symbol,
                 side=sl_side,
                 type="STOP_MARKET",
@@ -208,7 +208,7 @@ def attach_sltp_protection(
         try:
             logger.info(f"📤 Placing TP: {symbol} {tp_side} @ {tp_price:.6f} (TAKE_PROFIT_MARKET)")
             
-            tp_order = futures_create_order(
+            tp_order = client.futures_create_order(
                 symbol=symbol,
                 side=tp_side,
                 type="TAKE_PROFIT_MARKET",

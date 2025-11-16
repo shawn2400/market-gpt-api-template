@@ -1,0 +1,249 @@
+AlgoGPT_AlertsBot, [16/11/2025 00:48]
+🟢 New LONG Position Opened ✅
+
+━━━━━━━━━━━━━━━━━━━━
+📍 SOLUSDT
+🎯 GRID | 🧠 Quality: 7.5/10
+
+💰 Entry Details:
+• Entry: 133.631420
+• Stop Loss: 0.000000 (-100.00%)
+• Leverage: x4.95
+• Budget: $10.00 ($10.00 position)
+
+🎯 Profit Targets:
+• Not set
+
+📊 Market Analysis:
+• Regime: UNKNOWN
+• Consensus: 5.0/10
+• Reason: grid by vol=mid, levels=6, step=0.80%, chop=False, range=8.4%...
+
+⏰ Entry Time: 2025-11-15 22:48:24 UTC
+━━━━━━━━━━━━━━━━━━━━
+🤖 Standalone Auto Scanner
+
+AlgoGPT_AlertsBot, [16/11/2025 00:49]
+🟢 New LONG Position Opened ✅
+
+━━━━━━━━━━━━━━━━━━━━
+📍 XRPUSDT
+🎯 GRID | 🧠 Quality: 7.5/10
+
+💰 Entry Details:
+• Entry: 2.143908
+• Stop Loss: 0.000000 (-100.00%)
+• Leverage: x4.95
+• Budget: $10.00 ($10.00 position)
+
+🎯 Profit Targets:
+• Not set
+
+📊 Market Analysis:
+• Regime: UNKNOWN
+• Consensus: 4.0/10
+• Reason: grid by vol=mid, levels=6, step=0.80%, chop=False, range=8.4%...
+
+⏰ Entry Time: 2025-11-15 22:48:55 UTC
+━━━━━━━━━━━━━━━━━━━━
+🤖 Standalone Auto Scanner
+
+AlgoGPT_AlertsBot, [16/11/2025 00:49]
+🟢 New LONG Position Opened ✅
+
+━━━━━━━━━━━━━━━━━━━━
+📍 LTCUSDT
+🎯 GRID | 🧠 Quality: 7.5/10
+
+💰 Entry Details:
+• Entry: 97.869280
+• Stop Loss: 0.000000 (-100.00%)
+• Leverage: x4.95
+• Budget: $10.00 ($10.00 position)
+
+🎯 Profit Targets:
+• Not set
+
+📊 Market Analysis:
+• Regime: UNKNOWN
+• Consensus: 4.0/10
+• Reason: grid by vol=mid, levels=6, step=0.80%, chop=False, range=8.4%...
+
+⏰ Entry Time: 2025-11-15 22:49:14 UTC
+━━━━━━━━━━━━━━━━━━━━
+🤖 Standalone Auto Scanner
+
+AlgoGPT_AlertsBot, [16/11/2025 00:49]
+🟢 New LONG Position Opened ✅
+
+━━━━━━━━━━━━━━━━━━━━
+📍 DOGEUSDT
+🎯 GRID | 🧠 Quality: 7.5/10
+
+💰 Entry Details:
+• Entry: 0.156518
+• Stop Loss: 0.000000 (-100.00%)
+• Leverage: x4.95
+• Budget: $10.00 ($10.00 position)
+
+🎯 Profit Targets:
+• Not set
+
+📊 Market Analysis:
+• Regime: UNKNOWN
+• Consensus: 6.0/10
+• Reason: grid by vol=mid, levels=6, step=0.80%, chop=False, range=8.4%...
+
+⏰ Entry Time: 2025-11-15 22:49:40 UTC
+━━━━━━━━━━━━━━━━━━━━
+🤖 Standalone Auto Scanner
+
+AlgoGPT_AlertsBot, [16/11/2025 02:41]
+🟢 New LONG Position Opened ✅
+
+━━━━━━━━━━━━━━━━━━━━
+📍 1000PEPEUSDT
+🎯 GRID | 🧠 Quality: 7.5/10
+
+💰 Entry Details:
+• Entry: 0.004738
+• Stop Loss: 0.000000 (-100.00%)
+• Leverage: x4.7
+• Budget: $25.00 ($25.00 position)
+
+🎯 Profit Targets:
+• Not set
+
+📊 Market Analysis:
+• Regime: UNKNOWN
+• Consensus: 4.0/10
+• Reason: grid by vol=mid, levels=6, step=0.80%, chop=False, range=8.4%...
+
+⏰ Entry Time: 2025-11-16 00:41:27 UTC
+━━━━━━━━━━━━━━━━━━━━
+🤖 Standalone Auto Scanner
+
+AlgoGPT_AlertsBot, [16/11/2025 02:41]
+🟢 New LONG Position Opened ✅
+
+━━━━━━━━━━━━━━━━━━━━
+📍 1000BONKUSDT
+🎯 GRID | 🧠 Quality: 7.5/10
+
+💰 Entry Details:
+• Entry: 0.010535
+• Stop Loss: 0.000000 (-100.00%)
+• Leverage: x4.7
+• Budget: $25.00 ($25.00 position)
+
+🎯 Profit Targets:
+• Not set
+
+📊 Market Analysis:
+• Regime: UNKNOWN
+• Consensus: 4.0/10
+• Reason: grid by vol=mid, levels=6, step=0.80%, chop=False, range=8.4%...
+
+⏰ Entry Time: 2025-11-16 00:41:48 UTC
+━━━━━━━━━━━━━━━━━━━━
+🤖 Standalone Auto Scanner
+
+AlgoGPT_AlertsBot, [16/11/2025 09:18]
+🟢 New LONG Position Opened ✅
+
+━━━━━━━━━━━━━━━━━━━━
+📍 1000FLOKIUSDT
+🎯 GRID | 🧠 Quality: 6.0/10
+
+💰 Entry Details:
+• Entry: 0.053773
+• Stop Loss: 0.000000 (-100.00%)
+• Leverage: x4.7
+• Budget: $25.00 ($25.00 position)
+
+🎯 Profit Targets:
+• Not set
+
+📊 Market Analysis:
+• Regime: UNKNOWN
+• Consensus: 4.0/10
+• Reason: grid LONG by vol=mid, levels=6, step=0.80%, chop=False, range=8.4%...
+
+⏰ Entry Time: 2025-11-16 07:18:34 UTC
+━━━━━━━━━━━━━━━━━━━━
+🤖 Standalone Auto Scanner
+
+AlgoGPT_AlertsBot, [16/11/2025 09:18]
+🟢 New LONG Position Opened ✅
+
+━━━━━━━━━━━━━━━━━━━━
+📍 SOLUSDT
+🎯 GRID | 🧠 Quality: 6.0/10
+
+💰 Entry Details:
+• Entry: 135.499520
+• Stop Loss: 0.000000 (-100.00%)
+• Leverage: x4.95
+• Budget: $25.00 ($25.00 position)
+
+🎯 Profit Targets:
+• Not set
+
+📊 Market Analysis:
+• Regime: UNKNOWN
+• Consensus: 5.0/10
+• Reason: grid LONG by vol=mid, levels=6, step=0.80%, chop=False, range=8.4%...
+
+⏰ Entry Time: 2025-11-16 07:18:46 UTC
+━━━━━━━━━━━━━━━━━━━━
+🤖 Standalone Auto Scanner
+
+AlgoGPT_AlertsBot, [16/11/2025 09:19]
+🟢 New LONG Position Opened ✅
+
+━━━━━━━━━━━━━━━━━━━━
+📍 TONUSDT
+🎯 GRID | 🧠 Quality: 6.0/10
+
+💰 Entry Details:
+• Entry: 1.776419
+• Stop Loss: 0.000000 (-100.00%)
+• Leverage: x4.95
+• Budget: $25.00 ($25.00 position)
+
+🎯 Profit Targets:
+• Not set
+
+📊 Market Analysis:
+• Regime: UNKNOWN
+• Consensus: 4.0/10
+• Reason: grid LONG by vol=mid, levels=6, step=0.80%, chop=False, range=8.4%...
+
+⏰ Entry Time: 2025-11-16 07:19:14 UTC
+━━━━━━━━━━━━━━━━━━━━
+🤖 Standalone Auto Scanner
+
+AlgoGPT_AlertsBot, [16/11/2025 09:19]
+🟢 New LONG Position Opened ✅
+
+━━━━━━━━━━━━━━━━━━━━
+📍 XRPUSDT
+🎯 GRID | 🧠 Quality: 6.0/10
+
+💰 Entry Details:
+• Entry: 2.169104
+• Stop Loss: 0.000000 (-100.00%)
+• Leverage: x4.95
+• Budget: $25.00 ($25.00 position)
+
+🎯 Profit Targets:
+• Not set
+
+📊 Market Analysis:
+• Regime: UNKNOWN
+• Consensus: 4.5/10
+• Reason: grid LONG by vol=mid, levels=6, step=0.80%, chop=False, range=8.4%...
+
+⏰ Entry Time: 2025-11-16 07:19:11 UTC
+━━━━━━━━━━━━━━━━━━━━
+🤖 Standalone Auto Scanner
