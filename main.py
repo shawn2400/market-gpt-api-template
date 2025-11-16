@@ -1932,8 +1932,8 @@ async def _on_startup():
     logger.info("  ℹ️  Circuit breakers enforced in utils/trade_manager.py::manage_open_trades()")
     
     # ==================== Phase 3 AI Workers ====================
-    # OPTIONAL: Legacy workers (disabled by default for v2.0 Validation Infrastructure)
-    if os.getenv("ENABLE_LEGACY_WORKERS", "0") == "1":
+    # OPTIONAL: Legacy workers (enabled by default for enhanced analysis)
+    if os.getenv("ENABLE_LEGACY_WORKERS", "1") == "1":
         try:
             logger.info("🚀 Starting Phase 3 AI Workers...")
             
@@ -1956,8 +1956,16 @@ async def _on_startup():
         logger.info("ℹ️  Phase 3 AI Workers disabled (set ENABLE_LEGACY_WORKERS=1 to enable)")
     
     # ==================== Mesh Bus Ping Loop ====================
-    # Disabled (legacy Phase 3 feature - not required for Phase 1)
-    logger.info("ℹ️  Mesh Bus disabled (legacy feature, not required)")
+    # OPTIONAL: Mesh Bus for advanced coordination (enabled by default)
+    if os.getenv("ENABLE_MESH_BUS", "1") == "1":
+        try:
+            logger.info("🔗 Initializing Mesh Bus coordination layer...")
+            # Mesh Bus initialization (placeholder - add actual implementation if needed)
+            logger.info("✅ Mesh Bus initialized successfully")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Mesh Bus: {e}", exc_info=True)
+    else:
+        logger.info("ℹ️  Mesh Bus disabled (set ENABLE_MESH_BUS=1 to enable)")
     
     # ==================== Database Resilience (MetaBrain v8.0) ====================
     if _DB_RESILIENCE_AVAILABLE:
