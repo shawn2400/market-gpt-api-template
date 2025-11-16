@@ -2197,8 +2197,8 @@ async def process_cycle():
                 LOGGER.info(f"❌ REJECTED by AI consensus: {symbol} ({ttype})")
                 return
             
-            # 🛡️ CRITICAL SAFETY CHECK: Enforce MIN_QUALITY floor
-            MIN_QUALITY_FLOOR = 6.0
+            # 🛡️ CRITICAL SAFETY CHECK: Enforce MIN_QUALITY floor (lowered from 6.0 to 3.5 for CHOPPY market)
+            MIN_QUALITY_FLOOR = 3.5
             final_score = consensus_result["final_score"]
             
             if final_score < MIN_QUALITY_FLOOR:
