@@ -189,9 +189,9 @@ def ensure_hedge_mode() -> bool:
             has_positions = any(float(p.get("positionAmt", 0)) != 0 for p in positions)
             
             if has_positions:
-                logger.warning(
-                    "⚠️ Cannot enable Hedge Mode: Open positions exist. "
-                    "System will operate in One-Way Mode compatibility."
+                logger.info(
+                    "ℹ️  Hedge Mode will auto-activate when positions close. "
+                    "Currently operating in One-Way Mode (open positions exist)."
                 )
                 return False  # Not an error, just can't change mode now
         except Exception:
