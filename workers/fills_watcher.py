@@ -220,100 +220,65 @@ def _tick_symbol(symbol: str):
         
         log.info(f"💾 Position tracked for {symbol}: TP={tp_price_from_db}, SL={sl_price_from_db}, Leverage={final_leverage}")
         
-        # 🛡️ GRID SL/TP PROTECTION: Check if this is a GRID fill and add SL/TP
+        # 🛡️ UNIVERSAL SL/TP PROTECTION: Check for ANY trade type and add SL/TP
         try:
-            from utils.redis_client import redis_client as RED
-            from utils.sltp import calc_sl_tp_for_symbol
-            from utils.binance_client import futures_create_order, get_open_orders
-            from utils.order_ids import build_client_order_id
-            import json
+            from utils.binance_client import get_recent_fills
+            from utils.universal_sltp_manager import get_order_metadata, attach_sltp_protection, delete_order_metadata
             
-            log.info(f"🔍 Checking GRID metadata for {symbol}...")
+            log.info(f"🔍 Checking for recent fills on {symbol}...")
             
-            if RED:
-                try:
-                    # 🎯 NEW APPROACH: Search for grid:sltp:{symbol}:{order_id} keys
-                    # First, get all open orders to find matching order IDs
-                    open_orders = get_open_orders(symbol) or []
-                    filled_order_id = None
+            # Get recent fills (last 5 minutes)
+            recent_fills = get_recent_fills(symbol, limit=10, lookback_seconds=300)
+            
+            if recent_fills:
+                log.info(f"📊 Found {len(recent_fills)} recent fills for {symbol}")
+                
+                # Check each fill for metadata
+                for fill in recent_fills:
+                    # Binance returns fills with clientOrderId - this is our key!
+                    client_order_id = fill.get("clientOrderId") or fill.get("origClientOrderId")
                     
-                    # Check if any recent orders were filled (triggering this position)
-                    # We look for the order that just filled by checking Redis metadata
-                    grid_metadata = None
-                    for order in open_orders:
-                        order_id = order.get("orderId")
-                        if order_id:
-                            grid_key = f"grid:sltp:{symbol}:{order_id}"
-                            metadata_json = RED.get(grid_key)
-                            if metadata_json:
-                                if isinstance(metadata_json, bytes):
-                                    metadata_json = metadata_json.decode('utf-8')
-                                grid_metadata = json.loads(metadata_json)
-                                filled_order_id = order_id
-                                break
+                    if not client_order_id:
+                        log.debug(f"⚠️ Fill missing clientOrderId: {fill}")
+                        continue
                     
-                    # Also check legacy key format for backward compatibility
-                    if not grid_metadata:
-                        legacy_key = f"grid_active:{symbol}"
-                        legacy_metadata_json = RED.get(legacy_key)
-                        if legacy_metadata_json:
-                            if isinstance(legacy_metadata_json, bytes):
-                                legacy_metadata_json = legacy_metadata_json.decode('utf-8')
-                            grid_metadata = json.loads(legacy_metadata_json)
+                    # Retrieve metadata by clientOrderId
+                    metadata = get_order_metadata(client_order_id)
                     
-                    if grid_metadata:
-                        # This is a GRID fill - use stored SL/TP values from metadata
-                        log.info(f"🛡️ GRID fill detected for {symbol} - Grid metadata: {grid_metadata}")
-                        log.info(f"🛡️ Adding SL/TP protection for GRID position...")
+                    if not metadata:
+                        log.debug(f"📭 No metadata found for clientOrderId={client_order_id}")
+                        continue
+                    
+                    # Found metadata! This fill needs SL/TP protection
+                    trade_type = metadata.get("trade_type", "UNKNOWN")
+                    sl_price = metadata.get("sl_price")
+                    tp_price = metadata.get("tp_price")
+                    fill_side = metadata.get("side")  # LONG/SHORT
+                    
+                    log.info(f"🛡️ {trade_type} fill detected for {symbol} | clientOrderId={client_order_id}")
+                    log.info(f"📈 Metadata: SL={sl_price}, TP={tp_price}, Side={fill_side}")
+                    
+                    if sl_price and tp_price:
+                        # Attach SL/TP protection using universal manager
+                        protection_result = attach_sltp_protection(
+                            symbol=symbol,
+                            side=fill_side,
+                            sl_price=sl_price,
+                            tp_price=tp_price
+                        )
                         
-                        # Extract SL/TP from metadata (already calculated by grid_executor)
-                        sl_price = grid_metadata.get("sl_price")
-                        tp_price = grid_metadata.get("tp_price")
-                        
-                        log.info(f"📈 Using pre-calculated SL/TP from metadata: SL={sl_price}, TP={tp_price}")
-                        
-                        if sl_price and tp_price:
-                            # Place SL order
-                            try:
-                                sl_side = "SELL" if side == "LONG" else "BUY"
-                                log.info(f"📤 Placing SL order: {symbol} {sl_side} @ {sl_price} (STOP_MARKET)")
-                                
-                                sl_order = futures_create_order(
-                                    symbol=symbol,
-                                    side=sl_side,
-                                    type="STOP_MARKET",
-                                    stopPrice=str(sl_price),
-                                    closePosition=True,
-                                    newClientOrderId=build_client_order_id(symbol, sl_side, role="SL")
-                                )
-                                log.info(f"✅ GRID SL placed successfully: {symbol} @ {sl_price} | Order: {sl_order}")
-                            except Exception as sl_err:
-                                log.error(f"❌ Failed to place GRID SL for {symbol}: {sl_err}", exc_info=True)
+                        if protection_result["ok"]:
+                            log.info(f"✅ {trade_type} SL/TP protection complete for {symbol}")
                             
-                            # Place TP order
-                            try:
-                                tp_side = "SELL" if side == "LONG" else "BUY"
-                                log.info(f"📤 Placing TP order: {symbol} {tp_side} @ {tp_price} (TAKE_PROFIT_MARKET)")
-                                
-                                tp_order = futures_create_order(
-                                    symbol=symbol,
-                                    side=tp_side,
-                                    type="TAKE_PROFIT_MARKET",
-                                    stopPrice=str(tp_price),
-                                    closePosition=True,
-                                    newClientOrderId=build_client_order_id(symbol, tp_side, role="TP")
-                                )
-                                log.info(f"✅ GRID TP placed successfully: {symbol} @ {tp_price} | Order: {tp_order}")
-                            except Exception as tp_err:
-                                log.error(f"❌ Failed to place GRID TP for {symbol}: {tp_err}", exc_info=True)
+                            # Delete metadata after successful protection (cleanup)
+                            delete_order_metadata(client_order_id)
+                            log.debug(f"🗑️ Cleaned up metadata for {client_order_id}")
                         else:
-                            log.warning(f"⚠️ SL/TP calculation returned None for {symbol}")
+                            log.error(f"❌ {trade_type} SL/TP protection FAILED for {symbol}: {protection_result['errors']}")
                     else:
-                        log.debug(f"ℹ️ No GRID metadata found for {symbol} - not a GRID position")
-                except Exception as redis_err:
-                    log.warning(f"⚠️ Redis connection issue for {symbol}: {redis_err} (graceful degradation - using DB fallback)")
+                        log.warning(f"⚠️ Invalid SL/TP in metadata for {symbol}: SL={sl_price}, TP={tp_price}")
             else:
-                log.debug(f"ℹ️ Redis unavailable for {symbol} - using DB fallback for SL/TP")
+                log.debug(f"📭 No recent fills found for {symbol} in last 5 minutes")
                     
         except Exception as grid_sltp_err:
             log.error(f"❌ GRID SL/TP protection failed for {symbol}: {grid_sltp_err}", exc_info=True)

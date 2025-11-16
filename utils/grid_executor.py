@@ -11,7 +11,8 @@ from utils.grid_tracker import add_grid
 from utils.grid_manager import start_grid_for_position  # להצמדת SL/TP אחרי כניסה
 from utils.order_router import get_order_router
 from utils.sltp import calc_sl_tp_for_symbol  # 🎯 SL/TP calculator
-from utils.redis_manager import get_redis  # For storing SL/TP metadata
+from utils.order_ids import build_client_order_id  # 🎯 Unique client order IDs
+from utils.universal_sltp_manager import save_order_metadata  # 🎯 Universal metadata storage
 
 logger = logging.getLogger("algogpt.grid.executor")
 
@@ -102,7 +103,6 @@ async def execute_grid_trade(
     
     placed_orders: List[Dict[str, Any]] = []
     router = get_order_router()
-    redis_conn = get_redis()
     
     for idx, (lvl, alloc) in enumerate(zip(lines, allocations)):
         if alloc <= 0:
@@ -128,6 +128,26 @@ async def execute_grid_trade(
             logger.error(f"[GRID] ❌ SL/TP calculation failed for {s} at {px_aligned} - ABORTING ORDER (no unprotected positions allowed)")
             continue
         
+        # 🎯 Generate clientOrderId BEFORE placing order (this is the key!)
+        order_side = "BUY" if side_u == "LONG" else "SELL"
+        client_order_id = build_client_order_id(s, order_side, role="GRID", extra=f"L{idx}")
+        
+        # 💾 Save metadata BEFORE order placement (using clientOrderId)
+        metadata_saved = save_order_metadata(
+            client_order_id=client_order_id,
+            symbol=s,
+            side=side_u,
+            entry_price=px_aligned,
+            sl_price=sl_price,
+            tp_price=tp_price,
+            quantity=qty,
+            leverage=leverage,
+            trade_type="GRID"
+        )
+        
+        if not metadata_saved:
+            logger.warning(f"[GRID] ⚠️ Metadata save failed for {s} level {idx} - order will NOT have SL/TP protection!")
+        
         # 📍 Smart Router Decision
         decision = router.route_order(
             atr_pct=atr_pct,
@@ -142,47 +162,25 @@ async def execute_grid_trade(
                 # Use LIMIT with post-only for sniper precision
                 order = place_limit_order(
                     symbol=s,
-                    side="BUY" if side_u == "LONG" else "SELL",
+                    side=order_side,
                     quantity=qty,
                     price=px_aligned,
                     time_in_force="GTC",
                     post_only=True,
                     reduce_only=False,
+                    newClientOrderId=client_order_id  # 🎯 Critical: use our clientOrderId
                 )
             else:  # MARKET (rare for GRID, but possible in high volatility)
                 order = futures_create_order(
                     symbol=s,
-                    side="BUY" if side_u == "LONG" else "SELL",
+                    side=order_side,
                     type="MARKET",
                     quantity=qty,
-                    reduceOnly=False
+                    reduceOnly=False,
+                    newClientOrderId=client_order_id  # 🎯 Critical: use our clientOrderId
                 )
             
-            order_id = order.get("orderId")
-            if order_id:
-                # 🛡️ Store SL/TP metadata in Redis for Fills Watcher (24h TTL)
-                import json
-                metadata = {
-                    "symbol": s,
-                    "side": side_u,
-                    "entry_price": px_aligned,
-                    "sl_price": sl_price,
-                    "tp_price": tp_price,
-                    "quantity": qty,
-                    "leverage": leverage,
-                    "source": "GRID",
-                    "order_type": order_type
-                }
-                # Store with order_id for detailed tracking
-                redis_key = f"grid:sltp:{s}:{order_id}"
-                redis_conn.setex(redis_key, 86400, json.dumps(metadata))  # 24h TTL
-                
-                # Also store at symbol level for easier lookup (Fills Watcher checks this)
-                symbol_key = f"grid_active:{s}"
-                redis_conn.setex(symbol_key, 86400, json.dumps(metadata))  # 24h TTL
-                
-                logger.info(f"[GRID] ✅ {order_type} order placed at {px_aligned} | SL={sl_price:.6f} TP={tp_price:.6f} | Metadata: {redis_key}, {symbol_key}")
-            
+            logger.info(f"[GRID] ✅ {order_type} order placed at {px_aligned} | SL={sl_price:.6f} TP={tp_price:.6f} | clientOrderId={client_order_id}")
             placed_orders.append(order)
         except Exception as e:
             logger.error(f"[GRID] Failed to place {order_type} order at {lvl}: {e}")

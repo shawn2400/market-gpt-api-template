@@ -262,6 +262,45 @@ def _cache_get(cache: Dict[str, Tuple[float, float]], symbol: str) -> Optional[f
 def _cache_put(cache: Dict[str, Tuple[float, float]], symbol: str, value: float) -> None:
     cache[symbol.upper()] = (_ms(), float(value))
 
+@observe_http(name="binance_recent_fills")
+def get_recent_fills(symbol: str, limit: int = 50, lookback_seconds: int = 300) -> List[Dict[str, Any]]:
+    """
+    🎯 Get recent fills (trades) for a symbol from Binance Futures API.
+    This is critical for detecting fills and attaching SL/TP protection.
+    
+    Args:
+        symbol: Trading pair (e.g., BTCUSDT)
+        limit: Max number of trades to fetch (default 50, max 1000)
+        lookback_seconds: Only return fills within this time window (default 300s = 5min)
+    
+    Returns:
+        List of fill dicts with keys: id, orderId, symbol, price, qty, commission, 
+        commissionAsset, time, side, positionSide, buyer, maker, realizedPnl
+    """
+    try:
+        # Binance API: futures_account_trades
+        # https://binance-docs.github.io/apidocs/futures/en/#account-trade-list-user_data
+        fills = client.futures_account_trades(symbol=symbol.upper(), limit=min(limit, 1000))
+        
+        if not fills:
+            return []
+        
+        # Filter by time window
+        now_ms = _ms()
+        cutoff_ms = now_ms - (lookback_seconds * 1000)
+        
+        recent_fills = [
+            f for f in fills 
+            if int(f.get("time", 0)) >= cutoff_ms
+        ]
+        
+        logger.debug(f"📊 get_recent_fills({symbol}): {len(recent_fills)}/{len(fills)} fills in last {lookback_seconds}s")
+        return recent_fills
+        
+    except Exception as e:
+        logger.error(f"❌ get_recent_fills({symbol}) failed: {e}")
+        return []
+
 @observe_http(name="binance_mark_price", include_labels=["symbol"])
 def futures_mark_price(symbol: str) -> Optional[float]:
     sym = symbol.upper()
