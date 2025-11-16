@@ -83,12 +83,23 @@ def get_market_volatility_level() -> str:
 def save_top50_to_redis(symbols: list, redis_client):
     try:
         import json
+        
+        # Save as JSON (backward compatibility)
         redis_client.setex(
             "top50:approved_list",
             3600,
             json.dumps(symbols)
         )
-        logger.info(f"✅ Saved TOP 50 to Redis (expires in 1h)")
+        
+        # 🔧 FIX: Save as SET for Zero Tolerance Filter (atomic update with pipeline)
+        pipe = redis_client.pipeline()
+        pipe.delete("top50:symbols")  # Clear old data
+        if symbols:
+            pipe.sadd("top50:symbols", *symbols)  # Add all symbols to SET
+        pipe.expire("top50:symbols", 3600)  # Expire in 1h
+        pipe.execute()
+        
+        logger.info(f"✅ Saved TOP 50 to Redis (JSON + SET, {len(symbols)} symbols, expires in 1h)")
     except Exception as e:
         logger.error(f"Failed to save TOP 50 to Redis: {e}")
 

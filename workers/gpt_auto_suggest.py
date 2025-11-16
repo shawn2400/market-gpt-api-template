@@ -2198,8 +2198,8 @@ async def process_cycle():
                 return
             
             # 🛡️ CRITICAL SAFETY CHECK: Enforce MIN_QUALITY floor
-            # TEMPORARY: Lowered to 4.5 for testing SL/TP system (will restore to 6.0 after verification)
-            MIN_QUALITY_FLOOR = 4.5
+            # TEMPORARY: Lowered to 4.0 for testing SL/TP system (will restore to 6.0 after verification)
+            MIN_QUALITY_FLOOR = 4.0
             final_score = consensus_result["final_score"]
             
             if final_score < MIN_QUALITY_FLOOR:
