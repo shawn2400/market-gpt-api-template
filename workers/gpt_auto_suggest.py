@@ -1400,6 +1400,25 @@ def _calc_dynamic_budget(symbol: str, ctx: Dict[str, Any]) -> float:
         LOGGER.debug("dynamic budget failed, fallback to ENV: %s", e)
     return float(BUDGET_USD_FALLBK)
 
+def _calc_grid_budget(symbol: str, ctx: Dict[str, Any]) -> float:
+    """
+    🎯 GRID-specific budget calculator with $150 minimum floor.
+    
+    Uses get_grid_budget_usdt to ensure sufficient budget for multi-level GRID trades.
+    Each level needs ~$25 budget → $125 notional per level ≥ $100 Binance minimum.
+    """
+    price = _maybe_float(ctx, "price") or _maybe_float(ctx.get("filters", {}), "price") or None
+    atr   = _maybe_float(ctx, "atr", "atr14", "atr_abs") or _maybe_float(ctx.get("filters", {}), "atr", "atr14") or None
+    quality = _quality_from_ctx(ctx)
+    try:
+        from utils.budget import get_grid_budget_usdt
+        b = float(get_grid_budget_usdt(symbol=symbol, quality=quality, atr=atr, price=price))
+        if b > 0:
+            return b
+    except Exception as e:
+        LOGGER.debug("grid budget failed, fallback to $150: %s", e)
+    return 150.0  # GRID minimum budget
+
 async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float) -> Optional[Dict[str, Any]]:
     prop = await _gpt_suggest(symbol, ctx, for_spot=False)
     if not prop:
@@ -1718,7 +1737,7 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
         except Exception as e:
             LOGGER.debug(f"Failed to fetch BTC correlation data: {e}")
     
-    plan = build_grid_plan(symbol=symbol, price=price, flags=flags, budget_usd=_calc_dynamic_budget(symbol, ctx))
+    plan = build_grid_plan(symbol=symbol, price=price, flags=flags, budget_usd=_calc_grid_budget(symbol, ctx))
     if not plan:
         LOGGER.info(f"propose_grid REJECTED {symbol}: build_grid_plan returned None (no range)")
         return None

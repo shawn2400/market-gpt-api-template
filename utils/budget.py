@@ -15,11 +15,17 @@ __all__ = [
     "get_trade_budget_usdt",
     "get_dynamic_budget_for",
     "get_budget_usdt",
-    "MIN_BUDGET",  # Export for execution_bot.py GRID validation
+    "get_grid_budget_usdt",  # GRID-specific budget with $150 minimum
+    "MIN_BUDGET",  # Export for MARKET/HYBRID validation
+    "GRID_MIN_BUDGET",  # Export for GRID validation
 ]
 
-# 💰 GRID trading minimum budget per order ($25 USDT before leverage)
+# 💰 MARKET/HYBRID minimum budget per trade ($25 USDT before leverage)
 MIN_BUDGET = 25.0
+
+# 💰 GRID trading minimum budget ($150 USDT before leverage)
+# Ensures 6 levels × 5x leverage = $125 per level ≥ $100 Binance minNotional
+GRID_MIN_BUDGET = 150.0
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV helpers
@@ -281,5 +287,35 @@ def get_budget_usdt(
     if _b("DYNAMIC_BUDGET_ENABLE", True):  # Changed default from False to True
         return get_trade_budget_usdt(symbol=symbol, quality=quality, atr=atr, price=price)
     return _f("MAX_TRADE_BUDGET", 100.0)
+
+def get_grid_budget_usdt(
+    symbol: Optional[str] = None,
+    *,
+    quality: Optional[float] = None,
+    atr: Optional[float] = None,
+    price: Optional[float] = None,
+) -> float:
+    """
+    🎯 GRID-specific budget calculator with $150 minimum floor.
+    
+    Ensures sufficient budget for multi-level GRID trades:
+    - Min budget: $150 (supports 6 levels × 5x leverage = $125/level ≥ $100 Binance minNotional)
+    - Max budget: $150 (per user spec)
+    - Quality scaling: Applied within $150-$150 range (no scaling needed since min=max)
+    
+    Returns: Budget in USDT (before leverage)
+    """
+    # Get base dynamic budget
+    base_budget = get_trade_budget_usdt(symbol=symbol, quality=quality, atr=atr, price=price)
+    
+    # GRID requires minimum $150 to support 6 levels with 5x leverage
+    # Each level needs ~$25 budget → $125 notional per level ≥ $100 Binance minimum
+    grid_floor = GRID_MIN_BUDGET  # $150
+    grid_ceil = _f("BUDGET_MAX_USDT", 150.0)  # $150 (same as floor for now)
+    
+    # Clamp to GRID range
+    grid_budget = max(grid_floor, min(base_budget, grid_ceil))
+    
+    return float(grid_budget)
 
 
