@@ -95,6 +95,19 @@ def build_grid_plan(
     levels, step_pct = _pick_by_vol(vol)
     # חישוב טווח סימטרי סביב המחיר
     half_range_pct = (step_pct * (levels - 1)) / 100.0 * RANGE_MULT
+    
+    # 🎯 CLAMP RANGE TO ±3-6% (volatility-aware, per user spec: "realistic 3-8% deviation")
+    # - Low vol: max 3% each side (6% total)
+    # - Mid vol: max 4% each side (8% total)
+    # - High vol: max 5% each side (10% total, but we cap at 6% per architect)
+    max_half_range_map = {
+        "low": 0.03,   # 3% each side = 6% total
+        "mid": 0.04,   # 4% each side = 8% total  
+        "high": 0.05,  # 5% each side = 10% total
+    }
+    max_half_range = max_half_range_map.get(vol, 0.04)  # Default: 4%
+    half_range_pct = min(half_range_pct, max_half_range)
+    
     gmin = price * (1.0 - half_range_pct)
     gmax = price * (1.0 + half_range_pct)
     
