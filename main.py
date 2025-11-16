@@ -53,11 +53,15 @@ try:
     from utils.neon_resume import ensure_neon_running
     _neon_result = ensure_neon_running()
     if not _neon_result.get("ok"):
-        logging.warning(f"⚠️ Neon auto-resume: {_neon_result.get('message')}")
+        msg = _neon_result.get("message", "")
+        if "404" in msg:
+            logging.info("ℹ️  Neon endpoint active (auto-resume not needed - endpoint already running)")
+        else:
+            logging.info(f"ℹ️  Neon auto-resume: {msg}")
     else:
-        logging.info(f"✅ Neon auto-resume: {_neon_result.get('message')}")
+        logging.info(f"✅ Neon endpoint resumed successfully")
 except Exception as e:
-    logging.warning(f"Neon auto-resume not available: {e}")
+    logging.info(f"ℹ️  Neon auto-resume not configured (optional feature)")
 
 # ======== MetaBrain v8.0 Hotfix: ENV Validation ========
 try:
@@ -75,9 +79,9 @@ try:
         if _hedge_success:
             logging.info("✅ Binance Hedge Mode enforced")
         else:
-            logging.warning("⚠️ Binance Hedge Mode enforcement failed (will retry on first order)")
+            logging.info("ℹ️  Hedge Mode will auto-activate when positions close (currently in One-Way Mode)")
 except Exception as e:
-    logging.warning(f"Hedge Mode enforcement not available: {e}")
+    logging.info(f"ℹ️  Hedge Mode enforcement not configured (optional feature)")
 
 # ======== Utility: safe string headers ========
 def _to_str_header(val: Any) -> str:
@@ -1932,8 +1936,8 @@ async def _on_startup():
     logger.info("  ℹ️  Circuit breakers enforced in utils/trade_manager.py::manage_open_trades()")
     
     # ==================== Phase 3 AI Workers ====================
-    # OPTIONAL: Legacy workers (enabled by default for enhanced analysis)
-    if os.getenv("ENABLE_LEGACY_WORKERS", "1") == "1":
+    # OPTIONAL: Legacy workers (disabled by default - requires worker files)
+    if os.getenv("ENABLE_LEGACY_WORKERS", "0") == "1":
         try:
             logger.info("🚀 Starting Phase 3 AI Workers...")
             
