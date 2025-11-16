@@ -1780,9 +1780,11 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
         market_mood=market_condition.mood if market_condition else "neutral"
     )
     
+    # 🎯 FIX: Use GRID-specific budget from plan (calculated by _calc_grid_budget with $50 minimum)
+    # Don't use sizing.size_usd which comes from generic Dynamic Sizing Engine
     leverage = sizing.leverage
-    budget = sizing.size_usd / leverage  # Budget BEFORE leverage
-    notional = sizing.size_usd  # Position size AFTER leverage
+    budget = plan["budget_usd"]  # ← Budget from _calc_grid_budget ($50-150)
+    notional = budget * leverage  # ← Recalculate notional from GRID budget
     
     LOGGER.info(
         f"💰 GRID Dynamic Sizing: {symbol} → "

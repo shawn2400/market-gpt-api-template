@@ -4,7 +4,8 @@ from typing import Dict, Any, Optional, Tuple
 import os
 
 # פרמטרי גריד לפי משטר תנודתיות (ניתנים לשינוי ב־ENV)
-GRID_LEVELS_LOW  = int(os.getenv("GRID_LEVELS_LOW",  "8"))
+# 🎯 Dynamic levels based on budget: $150+ → 6 levels, $75-150 → 3 levels, $50-75 → 2 levels
+GRID_LEVELS_LOW  = int(os.getenv("GRID_LEVELS_LOW",  "6"))  # Reduced from 8 to 6
 GRID_LEVELS_MID  = int(os.getenv("GRID_LEVELS_MID",  "6"))
 GRID_LEVELS_HIGH = int(os.getenv("GRID_LEVELS_HIGH", "4"))
 
@@ -15,13 +16,46 @@ STEP_PCT_HIGH = float(os.getenv("GRID_STEP_PCT_HIGH", "1.20"))
 TP_PER_FILL_PCT = float(os.getenv("GRID_TP_PER_FILL_PCT", "0.35"))  # יעד חלקי לכל מילוי
 RANGE_MULT      = float(os.getenv("GRID_RANGE_MULT",       "1.05"))  # כדי להרחיב מעט את הטווח מדדית
 
-def _pick_by_vol(vol_regime: str) -> Tuple[int, float]:
+def _pick_by_vol(vol_regime: str, budget_usd: float = 150.0) -> Tuple[int, float]:
+    """
+    🎯 Dynamic GRID levels based on volatility AND budget.
+    
+    Budget-based levels:
+    - $150+: 6 levels (ideal)
+    - $75-150: 3 levels (acceptable)
+    - $50-75: 2 levels (minimum)
+    - <$50: 1 level (fallback, not recommended)
+    
+    Then apply volatility adjustment.
+    """
     v = (vol_regime or "mid").lower()
+    
+    # Base levels from volatility regime
     if v.startswith("low"):
-        return GRID_LEVELS_LOW, STEP_PCT_LOW
-    if v.startswith("high"):
-        return GRID_LEVELS_HIGH, STEP_PCT_HIGH
-    return GRID_LEVELS_MID, STEP_PCT_MID
+        base_levels = GRID_LEVELS_LOW
+        step_pct = STEP_PCT_LOW
+    elif v.startswith("high"):
+        base_levels = GRID_LEVELS_HIGH
+        step_pct = STEP_PCT_HIGH
+    else:
+        base_levels = GRID_LEVELS_MID
+        step_pct = STEP_PCT_MID
+    
+    # 🎯 Adjust levels based on budget (ensure each level meets $100 notional with 5x leverage)
+    # Each level needs ~$20 budget minimum → $100 notional per level (5x leverage)
+    if budget_usd >= 150:
+        max_levels = 6  # Ideal: $150 / 6 = $25/level → $125 notional
+    elif budget_usd >= 75:
+        max_levels = 3  # Acceptable: $75 / 3 = $25/level → $125 notional
+    elif budget_usd >= 50:
+        max_levels = 2  # Minimum: $50 / 2 = $25/level → $125 notional
+    else:
+        max_levels = 1  # Fallback: Single order
+    
+    # Use minimum of volatility-based and budget-based levels
+    final_levels = min(base_levels, max_levels)
+    
+    return final_levels, step_pct
 
 def _determine_grid_side(symbol: str, flags: Dict[str, Any]) -> str:
     """
@@ -92,7 +126,7 @@ def build_grid_plan(
     # 🎯 Dynamic GRID Side Selection (LONG/SHORT based on market direction)
     grid_side = _determine_grid_side(symbol, flags)
 
-    levels, step_pct = _pick_by_vol(vol)
+    levels, step_pct = _pick_by_vol(vol, budget_usd)
     # חישוב טווח סימטרי סביב המחיר
     half_range_pct = (step_pct * (levels - 1)) / 100.0 * RANGE_MULT
     

@@ -27,7 +27,7 @@ logger = logging.getLogger("algogpt.symbol_filter")
 # Configuration
 SYMBOL_FILTER_ENABLED = os.getenv("SYMBOL_FILTER_ENABLED", "1") == "1"
 FILTER_MIN_24H_VOLUME = float(os.getenv("FILTER_MIN_24H_VOLUME", "10000000"))  # $10M
-FILTER_MIN_LIQUIDITY_DEPTH = float(os.getenv("FILTER_MIN_LIQUIDITY_DEPTH", "50000"))  # $50k
+FILTER_MIN_LIQUIDITY_DEPTH = float(os.getenv("FILTER_MIN_LIQUIDITY_DEPTH", "30000"))  # $30k (reduced from $50k to allow more quality symbols)
 FILTER_ENABLE_WHITELIST = os.getenv("FILTER_ENABLE_WHITELIST", "0") == "1"  # ✅ DISABLED by default - rely on volume/liquidity instead
 FILTER_BLOCK_LOW_VOLUME = os.getenv("FILTER_BLOCK_LOW_VOLUME", "1") == "1"
 

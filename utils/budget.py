@@ -23,9 +23,9 @@ __all__ = [
 # 💰 MARKET/HYBRID minimum budget per trade ($25 USDT before leverage)
 MIN_BUDGET = 25.0
 
-# 💰 GRID trading minimum budget ($150 USDT before leverage)
-# Ensures 6 levels × 5x leverage = $125 per level ≥ $100 Binance minNotional
-GRID_MIN_BUDGET = 150.0
+# 💰 GRID trading minimum budget ($50 USDT before leverage)
+# Dynamic levels: $150+ → 6 levels, $75-150 → 3 levels, $50-75 → 2 levels
+GRID_MIN_BUDGET = 50.0
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV helpers
@@ -204,9 +204,10 @@ def get_trade_budget_usdt(
     # בסיס: אחוז מההון הזמין/כולל
     use_avail = _b("BUDGET_USE_AVAILABLE_BALANCE", True)
     equity = _get_equity_usdt(use_available=use_avail)
-    # 💡 Changed default from 1% to 50% for better capital utilization with small balances
-    # Example: $70 available → 50% = $35 per trade (within $25-$150 range)
-    base_pct = _f("BUDGET_PCT_OF_EQUITY", 50.0)  # אחוז (was 1.0)
+    # 💡 Changed from 50% to 20% to allow 3-5 concurrent trades without margin conflicts
+    # Example: $180 available → 20% = $36 per trade → allows 5 concurrent trades
+    # Previous 50% caused "Margin insufficient" when Auto Scanner created multiple GRIDs
+    base_pct = _f("BUDGET_PCT_OF_EQUITY", 20.0)  # אחוז (was 50.0, before that 1.0)
     base = float(equity) * (float(base_pct) / 100.0)
 
     # מכפלה לפי איכות (אם יש ציון)
@@ -296,25 +297,83 @@ def get_grid_budget_usdt(
     price: Optional[float] = None,
 ) -> float:
     """
-    🎯 GRID-specific budget calculator with $150 minimum floor.
+    🎯 GRID-specific budget calculator with REAL-TIME margin availability check.
     
-    Ensures sufficient budget for multi-level GRID trades:
-    - Min budget: $150 (supports 6 levels × 5x leverage = $125/level ≥ $100 Binance minNotional)
-    - Max budget: $150 (per user spec)
-    - Quality scaling: Applied within $150-$150 range (no scaling needed since min=max)
+    Prevents "Margin insufficient" errors by checking actual available margin BEFORE sizing:
+    - Fetches live withdrawable equity from Binance
+    - Reserves 30% buffer for existing positions and new trades
+    - Returns $50-150 budget based on REAL available margin (not theoretical equity)
+    - Returns 0 if insufficient margin (< $50) - triggers ON DEMAND mode
     
-    Returns: Budget in USDT (before leverage)
+    Budget tiers:
+    - $150+ available: Budget $150 (6 levels × 5x = $125/level ≥ $100 Binance min)
+    - $75-150 available: Budget $75 (3 levels × 5x = $125/level ≥ $100 Binance min)
+    - $50-75 available: Budget $50 (2 levels × 5x = $125/level ≥ $100 Binance min)
+    - < $50 available: Returns 0 (ON DEMAND mode - wait for margin recovery)
+    
+    Returns: Budget in USDT (before leverage), 0 if insufficient margin
     """
-    # Get base dynamic budget
-    base_budget = get_trade_budget_usdt(symbol=symbol, quality=quality, atr=atr, price=price)
+    # 🔧 FIX: Check REAL-TIME available margin to prevent oversubscription
+    # This prevents multiple concurrent GRID trades from competing for same margin
     
-    # GRID requires minimum $150 to support 6 levels with 5x leverage
-    # Each level needs ~$25 budget → $125 notional per level ≥ $100 Binance minimum
-    grid_floor = GRID_MIN_BUDGET  # $150
-    grid_ceil = _f("BUDGET_MAX_USDT", 150.0)  # $150 (same as floor for now)
+    # Initialize variables for logging (prevent UnboundLocalError if API fails)
+    available_margin = 0.0
+    usable_margin = 0.0
+    fallback_used = False
+    
+    try:
+        # Get actual available margin RIGHT NOW (not cached equity)
+        available_margin = _get_equity_usdt(use_available=True)
+        
+        # Reserve 30% buffer for existing positions and additional trades
+        # Example: $180 available → $126 usable → allows 2-3 concurrent $50-75 GRIDs
+        safety_buffer = _f("GRID_MARGIN_BUFFER_PCT", 30.0)  # 30% buffer default
+        usable_margin = available_margin * ((100.0 - safety_buffer) / 100.0)
+        
+        # If usable margin < GRID minimum, return 0 (ON DEMAND mode)
+        if usable_margin < GRID_MIN_BUDGET:
+            logger.debug(
+                f"Insufficient margin for GRID: available={available_margin:.2f}, "
+                f"usable={usable_margin:.2f} (after {safety_buffer:.0f}% buffer) < "
+                f"min={GRID_MIN_BUDGET:.2f}"
+            )
+            return 0.0
+        
+        # Calculate budget from usable margin (not theoretical equity)
+        # This prevents double-counting when multiple GRIDs are proposed concurrently
+        base_budget = usable_margin * 0.4  # Use 40% of usable margin per trade
+        
+    except Exception as e:
+        logger.warning(f"Failed to fetch real-time margin for GRID budget: {e}")
+        # Fallback to standard dynamic budget if Binance API fails
+        base_budget = get_trade_budget_usdt(symbol=symbol, quality=quality, atr=atr, price=price)
+        fallback_used = True
+    
+    # Apply quality multiplier if provided
+    if quality is not None:
+        q_mult = _quality_multiplier(quality)
+        base_budget = base_budget * q_mult
+    
+    # Dynamic GRID budget based on available balance
+    # This ensures we can always create multi-level GRID with proper notional
+    grid_floor = GRID_MIN_BUDGET  # $50 (minimum for 2 levels)
+    grid_ceil = _f("BUDGET_MAX_USDT", 150.0)  # $150 (optimal for 6 levels)
     
     # Clamp to GRID range
     grid_budget = max(grid_floor, min(base_budget, grid_ceil))
+    
+    # Log budget calculation (only if real-time margin check succeeded)
+    if not fallback_used:
+        logger.debug(
+            f"GRID budget calculated: available={available_margin:.2f}, "
+            f"usable={usable_margin:.2f}, base={base_budget:.2f}, "
+            f"final={grid_budget:.2f} (range: ${grid_floor:.0f}-${grid_ceil:.0f})"
+        )
+    else:
+        logger.debug(
+            f"GRID budget calculated (fallback): base={base_budget:.2f}, "
+            f"final={grid_budget:.2f} (range: ${grid_floor:.0f}-${grid_ceil:.0f})"
+        )
     
     return float(grid_budget)
 
