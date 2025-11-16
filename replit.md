@@ -5,13 +5,14 @@ AlgoGPT is an autonomous algorithmic trading platform designed for 24/7 Binance 
 
 ### Recent Bug Fixes (Nov 16, 2025)
 
-**Universal SL/TP Protection System (Nov 16, 2025) - MAJOR UPGRADE:**
+**Universal SL/TP Protection System v2.0 (Nov 16, 2025) - COMPLETE REWRITE:**
 - **100% SL/TP Coverage** (CRITICAL): Built Universal SL/TP Manager (`utils/universal_sltp_manager.py`) that works for ALL trade types (GRID, MARKET, HYBRID, Mean Reversion, Breakout, Dip Buying). Uses clientOrderId-based tracking for 100% reliability. Every order gets mandatory SL/TP protection immediately after fill detection.
-- **clientOrderId-based Metadata**: Orders save SL/TP metadata to Redis BEFORE placement using unique clientOrderId. Fills Watcher retrieves metadata via Binance fills API (not unreliable open_orders). Fixes critical bug where multi-level GRID fills received wrong SL/TP.
+- **clientOrderId-based Metadata**: Orders save SL/TP metadata to Redis (`sltp:meta:*`) BEFORE placement using unique clientOrderId. Fills Watcher retrieves metadata via Binance fills API (not unreliable open_orders). Fixes critical bug where multi-level GRID fills received wrong SL/TP.
 - **Binance Fills API Integration**: Added `get_recent_fills()` to fetch real fills from Binance (lookback window: 300s). Replaces broken approach of scanning open_orders which disappears after fill.
 - **Automated Protection Attachment**: `attach_sltp_protection()` places STOP_MARKET + TAKE_PROFIT_MARKET orders automatically when fill detected. Cleanup metadata after successful protection to prevent stale data issues.
-- **GRID Executor Enhancement**: Updated to generate clientOrderId BEFORE order placement, save metadata with calculated SL/TP (8%/20% per user spec), and pass clientOrderId to Binance for tracking.
-- **Fills Watcher Modernization**: Replaced legacy grid_active:{symbol} lookup with clientOrderId-based fill detection. Supports all trade types universally.
+- **Dedicated FillsWatcherThread** (NEW): Separate async thread with 15s polling interval, event loop management, and in-memory clientOrderId tracking to prevent duplicate SL/TP attachment. Replaces legacy grid_active:{symbol} system with universal metadata-based approach.
+- **Per-Level SL/TP Calculation** (CRITICAL FIX): ExecutionBot GRID now calculates SL/TP for EACH level using its specific entry price (not middle_price!). Prevents wrong-side protection that would trigger immediately. Includes LONG/SHORT sanity validation (LONG: SL < entry < TP, SHORT: SL > entry > TP).
+- **GRID Executor Enhancement**: Updated to generate clientOrderId BEFORE order placement, save metadata with per-level calculated SL/TP (8%/20% per user spec), and pass clientOrderId to Binance via `newClientOrderId` field for tracking.
 
 **System Optimization & Cost Reduction (Nov 16, 2025):**
 - **Dynamic GRID Side Selection**: Eliminated hardcoded LONG-only GRID trades. System selects LONG/SHORT dynamically based on EMA alignment + BTC correlation. Prevents losses in bearish markets.
