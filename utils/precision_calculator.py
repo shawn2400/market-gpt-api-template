@@ -286,6 +286,8 @@ class PrecisionCalculator:
         
         Returns precision values like: $87.23, $487.65, $973.12
         """
+        import os
+        
         # Base percentage from confidence (continuous curve)
         # confidence=0 → 5%, confidence=0.5 → 35%, confidence=1.0 → 90%
         base_pct = 5.0 + (confidence ** 1.3) * 85.0
@@ -321,8 +323,9 @@ class PrecisionCalculator:
         # Calculate exact USD amount
         investment = (balance * base_pct / 100.0)
         
-        # Ensure minimum
-        investment = max(self.MIN_INVESTMENT_USD, investment)
+        # Ensure minimum - use ENV override to bypass singleton cache
+        min_investment_override = float(os.getenv("MIN_INVESTMENT_USD", "25.0"))
+        investment = max(min_investment_override, investment)
         
         # Round to 2 decimals
         return round(investment, 2)
