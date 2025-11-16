@@ -6,6 +6,8 @@ AlgoGPT is an autonomous algorithmic trading platform designed for 24/7 Binance 
 ### Recent Bug Fixes (Nov 16, 2025)
 
 **System Optimization & Cost Reduction (Nov 16, 2025):**
+- **Dynamic GRID Side Selection** (CRITICAL FIX): Eliminated hardcoded LONG-only GRID trades. System now selects LONG/SHORT dynamically based on EMA alignment (ema_20 vs ema_50) and BTC correlation. EMA bullish (20>50) + BTC bullish → LONG with +0.5 bonus. EMA bearish (20<50) + BTC bearish → SHORT with +0.5 bonus. Counter-trend trades get -1.0 penalty. Neutral markets default to LONG. Prevents losses in bearish markets by proposing SHORT GRID trades when trend is down.
+- **Real Indicators Fallback**: Auto Scanner now uses _fetch_real_indicators to calculate EMA data when Context API unavailable. Fetches live Binance klines and calculates ema_20/ema_50 for both target symbol and BTC, ensuring accurate trend detection for GRID side selection even in degraded mode.
 - **TOP 50 Pre-Filter** (NEW FEATURE): Auto Scanner now filters symbol pool by TOP 50 list BEFORE expensive AI calls, reducing wasted resources. Fail-open design (requires ≥10 matches) prevents over-filtering. Logged as "TOP 50 Pre-Filter" with symbol counts.
 - **MIN_QUALITY_FLOOR Optimization**: Lowered from 6.0 to 4.0 to enable trades in CHOPPY markets while maintaining safety. Quality scores 3.0 and below rejected, 4.0+ approved. Balanced approach between safety and opportunity.
 - **Blacklist Cleanup**: Cleared 47 stale failure counters and temp blacklist entries from Redis, restoring full symbol trading capability. Zero Tolerance now requires 5 failures before 24h ban (less aggressive than previous 3-failure threshold).
