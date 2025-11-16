@@ -33,6 +33,19 @@ logging.basicConfig(
 )
 logger = logging.getLogger("position_monitor")
 
+# 🔄 HEDGE MODE AUTO-ACTIVATION
+try:
+    from utils.position_mode import ensure_hedge_mode, get_dual_position_mode
+    HEDGE_MODE_AUTO_CHECK = True
+    _ensure_hedge_mode = ensure_hedge_mode
+    _get_dual_position_mode = get_dual_position_mode
+    logger.info("✅ Hedge Mode auto-activation loaded")
+except Exception as e:
+    HEDGE_MODE_AUTO_CHECK = False
+    _ensure_hedge_mode = None  # type: ignore
+    _get_dual_position_mode = None  # type: ignore
+    logger.warning(f"⚠️ Hedge Mode auto-activation unavailable: {e}")
+
 # Global state variables for change detection
 _previous_positions: Dict[str, Any] = {}
 _last_position_count = 0
@@ -669,6 +682,50 @@ async def send_position_report():
     except Exception as e:
         logger.error(f"Failed to queue position report: {e}")
 
+async def auto_activate_hedge_mode() -> None:
+    """
+    Automatically activate Hedge Mode when positions = 0
+    Called periodically by Position Monitor
+    """
+    if not HEDGE_MODE_AUTO_CHECK or not _get_dual_position_mode or not _ensure_hedge_mode:
+        return
+    
+    try:
+        # Check current mode
+        current_mode = _get_dual_position_mode()
+        if current_mode:
+            # Already in Hedge Mode
+            return
+        
+        # Get positions
+        client = get_client()
+        if not client:
+            logger.debug("Binance client not available for Hedge Mode check")
+            return
+            
+        account_info = await client.futures_account()
+        positions = account_info.get("positions", [])
+        
+        # Check if any positions are open
+        has_positions = any(float(p.get("positionAmt", 0)) != 0 for p in positions)
+        
+        if not has_positions:
+            # No positions - safe to activate Hedge Mode
+            logger.info("🔄 No open positions detected - attempting Hedge Mode activation...")
+            success = _ensure_hedge_mode()
+            if success:
+                logger.info("✅ Hedge Mode auto-activated successfully!")
+                await send_telegram_message(
+                    "🔄 <b>Hedge Mode Auto-Activated</b>\n\n"
+                    "✅ All positions closed\n"
+                    "✅ Switched to Hedge Mode automatically\n"
+                    "📊 Ready for dual-sided positions"
+                )
+            else:
+                logger.debug("ℹ️  Hedge Mode activation deferred (will retry later)")
+    except Exception as e:
+        logger.debug(f"Hedge Mode auto-check error: {e}")
+
 async def monitor_loop():
     """Main monitoring loop - dual frequency for reports and protection"""
     logger.info(
@@ -676,16 +733,30 @@ async def monitor_loop():
         f"Reports: {REPORT_INTERVAL_SEC}s | "
         f"Auto-Protect: {AUTO_PROTECT_INTERVAL_SEC}s | "
         f"Trailing TP: {'ON' if ENABLE_TRAILING_TP else 'OFF'} | "
-        f"Protection: {'ON' if ENABLE_AUTO_PROTECT else 'OFF'}"
+        f"Protection: {'ON' if ENABLE_AUTO_PROTECT else 'OFF'} | "
+        f"Hedge Auto: {'ON' if HEDGE_MODE_AUTO_CHECK else 'OFF'}"
     )
     
     if ENABLE_TRAILING_TP:
         logger.info("🎯 Trailing TP enabled (config in utils/trailing_tp.py)")
     
+    if HEDGE_MODE_AUTO_CHECK:
+        logger.info("🔄 Hedge Mode auto-activation enabled (checks every 5 min when positions = 0)")
+    
     last_report_time = 0
+    last_hedge_check_time = 0
+    HEDGE_CHECK_INTERVAL = 300  # 5 minutes
     
     while True:
         current_time = time.time()
+        
+        # 🔄 HEDGE MODE AUTO-ACTIVATION (every 5 minutes)
+        if HEDGE_MODE_AUTO_CHECK and (current_time - last_hedge_check_time >= HEDGE_CHECK_INTERVAL):
+            try:
+                await auto_activate_hedge_mode()
+                last_hedge_check_time = current_time
+            except Exception as e:
+                logger.error(f"Error in Hedge Mode auto-check: {e}")
         
         # 🎯 TRAILING TP - Managed within ensure_positions_protected (every 30s)
         
