@@ -35,8 +35,8 @@ class SmartTop50Scanner:
         self.redis = get_redis() if get_redis else None
         self.candidate_pool_size = 160  # Expanded from 120 to 160
         self.previous_top_100_key = "top50:previous_top_100"
-        self.min_volume_24h = 20_000_000
-        self.min_liquidity = 100_000
+        self.min_volume_24h = 10_000_000  # Lowered from $20M to $10M to allow more symbols
+        self.min_liquidity = 50_000  # Lowered from $100k to $50k to allow more symbols
         
         logger.info("SmartTop50Scanner initialized - scanning 160 candidates instead of 538")
     
