@@ -10,6 +10,8 @@ from utils.grid_planner import plan_grid
 from utils.grid_tracker import add_grid
 from utils.grid_manager import start_grid_for_position  # להצמדת SL/TP אחרי כניסה
 from utils.order_router import get_order_router
+from utils.sltp import calc_sl_tp_for_symbol  # 🎯 SL/TP calculator
+from utils.redis_manager import get_redis  # For storing SL/TP metadata
 
 logger = logging.getLogger("algogpt.grid.executor")
 
@@ -100,6 +102,7 @@ async def execute_grid_trade(
     
     placed_orders: List[Dict[str, Any]] = []
     router = get_order_router()
+    redis_conn = get_redis()
     
     for idx, (lvl, alloc) in enumerate(zip(lines, allocations)):
         if alloc <= 0:
@@ -110,6 +113,20 @@ async def execute_grid_trade(
             continue
         qty = float(qty_info["qty"])
         px_aligned, _ = apply_price_tick_side(lvl, s, "BUY" if side_u == "LONG" else "SELL")
+        
+        # 🎯 MANDATORY SL/TP Calculation (per user spec: 5-10% SL, 15-25% TP)
+        sl_price, tp_price = calc_sl_tp_for_symbol(
+            symbol=s,
+            entry=px_aligned,
+            side=side_u,
+            sl=0.08,  # 8% Stop Loss (middle of 5-10% range)
+            tp=0.20,  # 20% Take Profit (middle of 15-25% range)
+            atr=None  # Using percentage-based SL/TP as per spec
+        )
+        
+        if not sl_price or not tp_price:
+            logger.error(f"[GRID] ❌ SL/TP calculation failed for {s} at {px_aligned} - ABORTING ORDER (no unprotected positions allowed)")
+            continue
         
         # 📍 Smart Router Decision
         decision = router.route_order(
@@ -141,8 +158,32 @@ async def execute_grid_trade(
                     reduceOnly=False
                 )
             
+            order_id = order.get("orderId")
+            if order_id:
+                # 🛡️ Store SL/TP metadata in Redis for Fills Watcher (24h TTL)
+                import json
+                metadata = {
+                    "symbol": s,
+                    "side": side_u,
+                    "entry_price": px_aligned,
+                    "sl_price": sl_price,
+                    "tp_price": tp_price,
+                    "quantity": qty,
+                    "leverage": leverage,
+                    "source": "GRID",
+                    "order_type": order_type
+                }
+                # Store with order_id for detailed tracking
+                redis_key = f"grid:sltp:{s}:{order_id}"
+                redis_conn.setex(redis_key, 86400, json.dumps(metadata))  # 24h TTL
+                
+                # Also store at symbol level for easier lookup (Fills Watcher checks this)
+                symbol_key = f"grid_active:{s}"
+                redis_conn.setex(symbol_key, 86400, json.dumps(metadata))  # 24h TTL
+                
+                logger.info(f"[GRID] ✅ {order_type} order placed at {px_aligned} | SL={sl_price:.6f} TP={tp_price:.6f} | Metadata: {redis_key}, {symbol_key}")
+            
             placed_orders.append(order)
-            logger.info(f"[GRID] {order_type} order placed at {lvl} | {decision['reason']}")
         except Exception as e:
             logger.error(f"[GRID] Failed to place {order_type} order at {lvl}: {e}")
 

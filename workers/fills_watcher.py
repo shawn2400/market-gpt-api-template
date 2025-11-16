@@ -224,7 +224,7 @@ def _tick_symbol(symbol: str):
         try:
             from utils.redis_client import redis_client as RED
             from utils.sltp import calc_sl_tp_for_symbol
-            from utils.binance_client import futures_create_order
+            from utils.binance_client import futures_create_order, get_open_orders
             from utils.order_ids import build_client_order_id
             import json
             
@@ -232,31 +232,45 @@ def _tick_symbol(symbol: str):
             
             if RED:
                 try:
-                    grid_key = f"grid_active:{symbol}"
-                    grid_metadata_json = RED.get(grid_key)
+                    # 🎯 NEW APPROACH: Search for grid:sltp:{symbol}:{order_id} keys
+                    # First, get all open orders to find matching order IDs
+                    open_orders = get_open_orders(symbol) or []
+                    filled_order_id = None
                     
-                    if grid_metadata_json:
-                        # This is a GRID fill - add SL/TP protection
-                        if isinstance(grid_metadata_json, bytes):
-                            grid_metadata_json = grid_metadata_json.decode('utf-8')
-                        grid_metadata = json.loads(grid_metadata_json)
-                        
+                    # Check if any recent orders were filled (triggering this position)
+                    # We look for the order that just filled by checking Redis metadata
+                    grid_metadata = None
+                    for order in open_orders:
+                        order_id = order.get("orderId")
+                        if order_id:
+                            grid_key = f"grid:sltp:{symbol}:{order_id}"
+                            metadata_json = RED.get(grid_key)
+                            if metadata_json:
+                                if isinstance(metadata_json, bytes):
+                                    metadata_json = metadata_json.decode('utf-8')
+                                grid_metadata = json.loads(metadata_json)
+                                filled_order_id = order_id
+                                break
+                    
+                    # Also check legacy key format for backward compatibility
+                    if not grid_metadata:
+                        legacy_key = f"grid_active:{symbol}"
+                        legacy_metadata_json = RED.get(legacy_key)
+                        if legacy_metadata_json:
+                            if isinstance(legacy_metadata_json, bytes):
+                                legacy_metadata_json = legacy_metadata_json.decode('utf-8')
+                            grid_metadata = json.loads(legacy_metadata_json)
+                    
+                    if grid_metadata:
+                        # This is a GRID fill - use stored SL/TP values from metadata
                         log.info(f"🛡️ GRID fill detected for {symbol} - Grid metadata: {grid_metadata}")
                         log.info(f"🛡️ Adding SL/TP protection for GRID position...")
                         
-                        # Calculate SL/TP using ATR-based logic
-                        atr_default = ep * 0.02  # Default 2% ATR if not available
-                        log.info(f"📊 Calculating SL/TP: entry={ep}, side={side}, atr={atr_default}")
+                        # Extract SL/TP from metadata (already calculated by grid_executor)
+                        sl_price = grid_metadata.get("sl_price")
+                        tp_price = grid_metadata.get("tp_price")
                         
-                        sl_price, tp_price = calc_sl_tp_for_symbol(
-                            symbol=symbol,
-                            entry=ep,
-                            side=side,
-                            atr=atr_default,
-                            atr_mult=1.5,  # 1.5x ATR for SL (RR=2.0 by default)
-                        )
-                        
-                        log.info(f"📈 Calculated SL/TP: SL={sl_price}, TP={tp_price}")
+                        log.info(f"📈 Using pre-calculated SL/TP from metadata: SL={sl_price}, TP={tp_price}")
                         
                         if sl_price and tp_price:
                             # Place SL order
