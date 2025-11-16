@@ -486,12 +486,35 @@ class ExecutionBot:
 
             symbol = str(ticket.get("symbol", "")).upper()
             side = str(ticket.get("side", "")).upper()
-            qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
             leverage = int(ticket.get("leverage") or 0)
             entry_price = ticket.get("entry") or ticket.get("entry_price") or ticket.get("limit_price")
             
+            # 💰 Calculate qty from budget_usd if not provided directly
+            qty = float(ticket.get("qty") or ticket.get("quantity") or 0)
+            if qty <= 0:
+                budget_usd = float(ticket.get("budget_usd") or ticket.get("budget") or 0)
+                if budget_usd > 0 and leverage > 0:
+                    # Get current price
+                    try:
+                        ticker = client.futures_symbol_ticker(symbol=symbol)
+                        current_price = float(ticker["price"])
+                        # Calculate qty: (budget * leverage) / price
+                        qty = (budget_usd * leverage) / current_price
+                        self.log.info(f"💰 Calculated qty for {symbol}: {qty:.6f} (${budget_usd} × {leverage}x / ${current_price})")
+                    except Exception as price_err:
+                        self.log.error(f"❌ Failed to get price for {symbol}: {price_err}")
+                        return {"ok": False, "error": "price_unavailable", "detail": str(price_err)}
+            
             if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
-                return {"ok": False, "error": "bad_ticket_params"}
+                missing = []
+                if not symbol: missing.append("symbol")
+                if side not in ("BUY", "SELL"): missing.append(f"side={side}")
+                if not qty or qty <= 0: missing.append(f"qty={qty}")
+                if not leverage or leverage <= 0: missing.append(f"leverage={leverage}")
+                
+                self.log.error(f"❌ INVALID TICKET PARAMS for {symbol or 'UNKNOWN'}: {', '.join(missing)}")
+                self.log.error(f"💡 HINT: Check that all required fields are present and valid")
+                return {"ok": False, "error": "bad_ticket_params", "detail": f"Missing/invalid: {', '.join(missing)}"}
 
             try:
                 client.futures_change_leverage(symbol=symbol, leverage=leverage)
@@ -574,6 +597,9 @@ class ExecutionBot:
                     client_order_id=client_order_id,
                     symbol=symbol,
                     side=position_side,
+                    entry_price=float(entry_price) if entry_price else current_price,
+                    quantity=qty,
+                    leverage=leverage,
                     sl_price=sl_price,
                     tp_price=tp_price,
                     trade_type="MARKET" if order_type == "MARKET" else "LIMIT"
@@ -587,6 +613,38 @@ class ExecutionBot:
             except Exception as pre_err:
                 self.log.error(f"🚨 Pre-order validation failed for {symbol}: {pre_err}")
                 return {"ok": False, "error": f"pre_order_failed: {pre_err}"}
+            
+            # 🛡️ VALIDATE ORDER with Binance Symbol Validator (precision, min quantity, notional)
+            try:
+                from utils.binance_symbol_validator import get_symbol_validator
+                validator = get_symbol_validator()
+                
+                # Validate and get corrected params
+                is_valid, error_msg, corrected = validator.validate_order(
+                    symbol=symbol,
+                    side=side,
+                    quantity=qty,
+                    price=entry_price if order_type == "LIMIT" else None,
+                    is_market=(order_type == "MARKET")
+                )
+                
+                if not is_valid:
+                    self.log.error(f"🚫 Order validation FAILED for {symbol}: {error_msg}")
+                    return {"ok": False, "error": "bad_ticket_params", "detail": error_msg}
+                
+                # Apply corrected precision
+                if corrected.get("quantity"):
+                    qty = corrected["quantity"]
+                    attempt_order["quantity"] = qty
+                    self.log.info(f"✅ Corrected quantity for {symbol}: {qty}")
+                
+                if corrected.get("price") and order_type == "LIMIT":
+                    entry_price = corrected["price"]
+                    attempt_order["price"] = entry_price
+                    self.log.info(f"✅ Corrected price for {symbol}: {entry_price}")
+                    
+            except Exception as val_err:
+                self.log.warning(f"⚠️ Symbol validation failed (proceeding anyway): {val_err}")
             
             try:
                 order = client.futures_create_order(**attempt_order)
@@ -683,9 +741,44 @@ class ExecutionBot:
                     "status": "opened"
                 }
             except Exception as e1:
-                if "code=-4061" not in str(e1) and "position side does not match" not in str(e1).lower():
-                    self.log.error(f"futures_create_order failed: {e1}")
-                    return {"ok": False, "error": "order_failed", "detail": str(e1)}
+                # 🔍 IMPROVED ERROR LOGGING - Parse Binance error for actionable insights
+                error_str = str(e1).lower()
+                error_code = None
+                error_msg = str(e1)
+                
+                # Extract Binance error code
+                if "code=" in error_str:
+                    try:
+                        error_code = error_str.split("code=")[1].split()[0].strip(",')")
+                    except:
+                        pass
+                
+                # Provide actionable error messages
+                if "bad_ticket_params" in error_str or "-1111" in error_str:
+                    self.log.error(f"❌ PRECISION ERROR for {symbol}: {error_msg}")
+                    self.log.error(f"💡 HINT: Quantity/price precision mismatch. Validator should have caught this!")
+                    return {"ok": False, "error": "bad_ticket_params", "detail": f"Precision error: {error_msg}"}
+                
+                elif "notional" in error_str or "-4164" in error_str or "min notional" in error_str:
+                    self.log.error(f"❌ MIN NOTIONAL ERROR for {symbol}: Order value too small")
+                    self.log.error(f"💡 HINT: Increase position size. Min notional is typically $5-10 USD")
+                    return {"ok": False, "error": "min_notional", "detail": f"Order too small: {error_msg}"}
+                
+                elif "insufficient balance" in error_str or "-2019" in error_str:
+                    self.log.error(f"❌ INSUFFICIENT BALANCE for {symbol}")
+                    self.log.error(f"💡 HINT: Not enough USDT in futures wallet")
+                    return {"ok": False, "error": "insufficient_balance", "detail": "Wallet balance too low"}
+                
+                elif "api-key" in error_str or "signature" in error_str or "-2015" in error_str:
+                    self.log.error(f"❌ AUTH ERROR: Invalid API key or signature")
+                    self.log.error(f"💡 HINT: Check BINANCE_API_KEY and BINANCE_API_SECRET environment variables")
+                    return {"ok": False, "error": "auth_failed", "detail": "API authentication failed"}
+                
+                # -4061 is position side mismatch (handled by retry below)
+                if "code=-4061" not in str(e1) and "position side does not match" not in error_str:
+                    self.log.error(f"❌ ORDER FAILED for {symbol} [Code: {error_code}]: {error_msg}")
+                    self.log.error(f"💡 Full error details: {e1}")
+                    return {"ok": False, "error": "order_failed", "detail": error_msg}
                 try:
                     if "positionSide" in attempt_order:
                         retry_kwargs = dict(base_kwargs)
@@ -849,11 +942,13 @@ class ExecutionBot:
 
         symbol = str(ticket.get("symbol", "")).upper()
         side = str(ticket.get("side", "")).upper()
-        qty = ticket.get("qty") or ticket.get("quantity")
         leverage = int(ticket.get("leverage") or ticket.get("lev") or 0)
         pos_side = str(
             ticket.get("position_side") or ticket.get("positionSide") or ("LONG" if side == "BUY" else "SHORT")
         ).upper()
+        
+        # 💰 Get qty - will be calculated by execute_trade_live if not provided
+        qty = ticket.get("qty") or ticket.get("quantity")
 
         tps_raw = [ticket.get("tp1"), ticket.get("tp2"), ticket.get("tp3")]
         tp_targets = [float(x) for x in tps_raw if x is not None and str(x) not in ("0", "0.0") and float(x) > 0]

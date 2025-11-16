@@ -38,7 +38,7 @@ class ZeroToleranceGatekeeper:
         
         logger.info(
             "ZeroToleranceGatekeeper initialized - "
-            "blocking non-TOP 50 trades, max failures: 5"
+            "blocking non-TOP 100 trades, max failures: 5"
         )
     
     def check_symbol_allowed(
@@ -77,12 +77,12 @@ class ZeroToleranceGatekeeper:
                     trade_type=trade_type
                 )
         else:
-            top_50_approved = self._is_in_top_50(symbol)
-            if not top_50_approved:
-                self._record_failure(symbol, f"{trade_type} not in TOP 50")
+            top_100_approved = self._is_in_top_100(symbol)
+            if not top_100_approved:
+                self._record_failure(symbol, f"{trade_type} not in TOP 100")
                 return BlockReason(
                     blocked=True,
-                    reason=f"NOT IN TOP 50 - symbol excluded from musical chairs",
+                    reason=f"NOT IN TOP 100 - symbol excluded from musical chairs",
                     symbol=symbol,
                     trade_type=trade_type
                 )
@@ -94,26 +94,26 @@ class ZeroToleranceGatekeeper:
             trade_type=trade_type
         )
     
-    def _is_in_top_50(self, symbol: str) -> bool:
+    def _is_in_top_100(self, symbol: str) -> bool:
         if not self.redis:
             logger.warning("Redis not available, allowing trade (fail-open)")
             return True
         
         try:
             import json
-            data = self.redis.get(self.top_50_key)
+            data = self.redis.get(self.top_50_key)  # Key name stays the same for backward compatibility
             if data:
-                top_50_list = json.loads(data)
+                top_100_list = json.loads(data)
                 # CRITICAL: Fail-open if list is empty (expired or not yet populated)
-                if not top_50_list:
-                    logger.warning(f"TOP 50 list EMPTY in Redis - FAIL-OPEN (expired or cold start?), allowing {symbol}")
+                if not top_100_list:
+                    logger.warning(f"TOP 100 list EMPTY in Redis - FAIL-OPEN (expired or cold start?), allowing {symbol}")
                     return True
-                return symbol.upper() in [s.upper() for s in top_50_list]
+                return symbol.upper() in [s.upper() for s in top_100_list]
             else:
-                logger.warning(f"TOP 50 list not found in Redis - FAIL-OPEN (cold start?), allowing {symbol}")
+                logger.warning(f"TOP 100 list not found in Redis - FAIL-OPEN (cold start?), allowing {symbol}")
                 return True
         except Exception as e:
-            logger.warning(f"Failed to check TOP 50: {e}, allowing trade (fail-open)")
+            logger.warning(f"Failed to check TOP 100: {e}, allowing trade (fail-open)")
             return True
     
     def _is_grid_approved(self, symbol: str) -> bool:
@@ -299,7 +299,7 @@ class ZeroToleranceGatekeeper:
         except Exception as e:
             logger.error(f"Failed to add {symbol} to permanent blacklist: {e}")
     
-    def get_top_50_list(self) -> List[str]:
+    def get_top_100_list(self) -> List[str]:
         if not self.redis:
             return []
         
@@ -309,7 +309,7 @@ class ZeroToleranceGatekeeper:
             if data:
                 return json.loads(data)
         except Exception as e:
-            logger.warning(f"Failed to get TOP 50 list: {e}")
+            logger.warning(f"Failed to get TOP 100 list: {e}")
         
         return []
     

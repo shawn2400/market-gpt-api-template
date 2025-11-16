@@ -127,17 +127,18 @@ class SmartTop50Scanner:
         
         scored_symbols.sort(key=lambda x: x.total_score, reverse=True)
         
-        top_50 = [s.symbol for s in scored_symbols[:50]]
+        # 🚀 EXPANDED: TOP 100 instead of TOP 50 for more trading opportunities
+        top_100 = [s.symbol for s in scored_symbols[:100]]
         top_100_for_next = [s.symbol for s in scored_symbols[:100]]
         
         self._save_top_100(top_100_for_next)
         
         logger.info(
-            f"Calculated TOP 50 from {len(candidate_pool)} candidates | "
+            f"Calculated TOP 100 from {len(candidate_pool)} candidates | "
             f"Best score: {scored_symbols[0].total_score if scored_symbols else 0:.2f}"
         )
         
-        return top_50
+        return top_100
     
     def calculate_symbol_score(self, symbol: str) -> Optional[SymbolScore]:
         symbol_data = self.get_symbol_data(symbol)
