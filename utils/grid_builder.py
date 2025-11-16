@@ -23,6 +23,48 @@ def _pick_by_vol(vol_regime: str) -> Tuple[int, float]:
         return GRID_LEVELS_HIGH, STEP_PCT_HIGH
     return GRID_LEVELS_MID, STEP_PCT_MID
 
+def _determine_grid_side(symbol: str, flags: Dict[str, Any]) -> str:
+    """
+    🎯 Dynamic GRID Side Selection based on market direction.
+    
+    Rules:
+    1. EMA Alignment: bearish (EMA20 < EMA50) → SHORT, bullish → LONG
+    2. BTC Correlation: If symbol != BTC, check BTC direction and align
+    3. Default: LONG (conservative bias for altcoins in uncertain conditions)
+    
+    Returns: "LONG" or "SHORT"
+    """
+    # Get EMA alignment from flags
+    ema_bullish = flags.get("ema_bullish", False)
+    ema_bearish = flags.get("ema_bearish", False)
+    
+    # Get BTC direction if available (for altcoin correlation)
+    btc_bullish = flags.get("btc_bullish", None)
+    btc_bearish = flags.get("btc_bearish", None)
+    
+    # Decision Logic:
+    # 1. If symbol shows clear bearish EMA → SHORT
+    if ema_bearish:
+        # Double-check with BTC for altcoins (most altcoins follow BTC)
+        if symbol != "BTCUSDT" and btc_bullish:
+            # Altcoin bearish but BTC bullish → risky, prefer LONG
+            return "LONG"
+        return "SHORT"
+    
+    # 2. If symbol shows clear bullish EMA → LONG
+    if ema_bullish:
+        return "LONG"
+    
+    # 3. Neutral/uncertain → check BTC direction for altcoins
+    if symbol != "BTCUSDT":
+        if btc_bearish:
+            return "SHORT"
+        if btc_bullish:
+            return "LONG"
+    
+    # 4. Default: LONG (conservative)
+    return "LONG"
+
 def build_grid_plan(
     *,
     symbol: str,
@@ -31,9 +73,9 @@ def build_grid_plan(
     budget_usd: float
 ) -> Optional[Dict[str, Any]]:
     """
-    בונה תוכנית גריד בסיסית סביב המחיר:
+    בונה תוכנית גריד דינמית סביב המחיר:
       - מתאים יותר כשאין טרנד ברור / chop (לא יפתח בטרנד חזק).
-      - צד ברירת מחדל: LONG (קנייה נמוך/מכירה גבוה).
+      - 🎯 Dynamic Side Selection: LONG/SHORT לפי כיוון השוק (BTC correlation + EMA)
     """
     if not price or price <= 0:
         return None
@@ -46,6 +88,9 @@ def build_grid_plan(
     # אם יש טרנד חזק — לא נקים גריד (נמנע ממלכודות)
     if trending_up or trending_dn:
         return None
+    
+    # 🎯 Dynamic GRID Side Selection (LONG/SHORT based on market direction)
+    grid_side = _determine_grid_side(symbol, flags)
 
     levels, step_pct = _pick_by_vol(vol)
     # חישוב טווח סימטרי סביב המחיר
@@ -68,8 +113,8 @@ def build_grid_plan(
         "grid_levels": int(levels),
         "grid_step_pct": float(step_pct),
         "grid_take_profit_pct": float(TP_PER_FILL_PCT),
-        "grid_side": "LONG",
-        "reason": f"grid by vol={vol}, levels={levels}, step={step_pct:.2f}%, chop={chop}, range={range_width_pct:.1f}%",
+        "grid_side": grid_side,  # 🎯 Dynamic LONG/SHORT
+        "reason": f"grid {grid_side} by vol={vol}, levels={levels}, step={step_pct:.2f}%, chop={chop}, range={range_width_pct:.1f}%",
         "budget_usd": float(budget_usd),
     }
 

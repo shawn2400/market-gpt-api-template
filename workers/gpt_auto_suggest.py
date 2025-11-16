@@ -1671,10 +1671,66 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
         return None
     price = ctx.get("price") if ctx else None
     flags = (ctx.get("filters") or {}) if ctx else {}
+    
+    # 🎯 Add EMA alignment and BTC correlation to flags for dynamic GRID side selection
+    flags = dict(flags)  # Make copy to avoid mutating original
+    
+    # Calculate EMA alignment from context indicators
+    ema_20 = ctx.get("ema_20") or ctx.get("ema21")
+    ema_50 = ctx.get("ema_50") or ctx.get("ema50")
+    
+    # If EMA data missing, fetch real indicators (fallback when Context API unavailable)
+    if not (ema_20 and ema_50):
+        try:
+            indicators = await _fetch_real_indicators(symbol, interval=DEFAULT_INTERVAL)
+            ema_20 = indicators.get("ema_20")
+            ema_50 = indicators.get("ema_50")
+            # Update context with fetched indicators for other uses
+            ctx.update(indicators)
+        except Exception as e:
+            LOGGER.debug(f"Failed to fetch real indicators for {symbol}: {e}")
+    
+    if ema_20 and ema_50:
+        flags["ema_bullish"] = ema_20 > ema_50
+        flags["ema_bearish"] = ema_20 < ema_50
+    
+    # Get BTC correlation for altcoins (from BTC context if available)
+    if symbol != "BTCUSDT":
+        # Try to get BTC EMA data
+        try:
+            btc_ctx = await _fetch_context_batch(["BTCUSDT"], interval=DEFAULT_INTERVAL)
+            btc_data = btc_ctx.get("BTCUSDT", {})
+            btc_ema_20 = btc_data.get("ema_20") or btc_data.get("ema21")
+            btc_ema_50 = btc_data.get("ema_50") or btc_data.get("ema50")
+            
+            # If BTC EMA missing, fetch real indicators
+            if not (btc_ema_20 and btc_ema_50):
+                try:
+                    btc_indicators = await _fetch_real_indicators("BTCUSDT", interval=DEFAULT_INTERVAL)
+                    btc_ema_20 = btc_indicators.get("ema_20")
+                    btc_ema_50 = btc_indicators.get("ema_50")
+                except Exception as e2:
+                    LOGGER.debug(f"Failed to fetch BTC real indicators: {e2}")
+            
+            if btc_ema_20 and btc_ema_50:
+                flags["btc_bullish"] = btc_ema_20 > btc_ema_50
+                flags["btc_bearish"] = btc_ema_20 < btc_ema_50
+        except Exception as e:
+            LOGGER.debug(f"Failed to fetch BTC correlation data: {e}")
+    
     plan = build_grid_plan(symbol=symbol, price=price, flags=flags, budget_usd=_calc_dynamic_budget(symbol, ctx))
     if not plan:
         LOGGER.info(f"propose_grid REJECTED {symbol}: build_grid_plan returned None (no range)")
         return None
+    
+    # Log dynamic GRID side selection
+    grid_side = plan.get("grid_side", "LONG")
+    ema_status = "bullish" if flags.get("ema_bullish") else ("bearish" if flags.get("ema_bearish") else "neutral")
+    btc_status = "bullish" if flags.get("btc_bullish") else ("bearish" if flags.get("btc_bearish") else "neutral")
+    LOGGER.info(
+        f"🎯 GRID Side Selection: {symbol} → {grid_side} "
+        f"(EMA: {ema_status}, BTC: {btc_status})"
+    )
 
     # 💰 DYNAMIC SIZING ENGINE: Calculate exact leverage and budget for GRID
     from utils.dynamic_sizing import get_dynamic_sizing_engine
