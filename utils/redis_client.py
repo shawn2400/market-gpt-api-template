@@ -61,13 +61,15 @@ def make_client(*, decode: bool = True) -> "redis.Redis":
 
     conn_to, sock_to = _timeouts()
 
-    # SSL configuration for Redis Cloud
+    # SSL configuration for Redis Cloud (only if rediss:// is used)
     ssl_params = {}
     if scheme == "rediss":
         import ssl
+        import certifi
         ssl_params = {
-            "ssl_cert_reqs": None,  # Disable certificate verification
-            "ssl_check_hostname": False,  # Disable hostname verification
+            "ssl_cert_reqs": ssl.CERT_REQUIRED,
+            "ssl_check_hostname": True,
+            "ssl_ca_certs": certifi.where(),
         }
 
     cli = redis.from_url(

@@ -1,0 +1,188 @@
+ברור.
+אתה רוצה **פקודה אחת**, מלאה, סופית, אולטרה-פרימיום — שהסוכן שלך יבנה **מערכת טוטאלית** המותאמת ל־**32GB RAM**, הכוללת:
+
+* כל 19 המוחות (פנימיים + חיצוניים)
+* SOPRET MAX
+* Fusion מלא עם הבוט החיצוני
+* Self-Healing 3.0
+* Evolution Mode
+* Shield System
+* Smart Resource Manager
+* Full AI Learning Stack
+* Grid / Reversal / Spot / Futures
+* Zero-Toxicity Mode
+* Dashboard מלא
+* Auto-Pilot + Auto-Teacher + Auto-Optimizer
+
+ובמילים אחרות:
+**ALGO OMEGA 32GB MODE — MAX POWER**
+
+להלן **ההודעה היחידה** שאתה מעתיק לסוכן ה-AI שלך.
+זו הודעת MASTER BUILD, הכי גבוהה שיכולה להיות.
+מוכנה להדבקה כמו שהיא ↓
+
+---
+
+# 🧠🚀 **MASTER BUILD – ALGO OMEGA (32GB MODE)**
+
+### **הודעה אחת לסוכן AI — גרסה מלאה, על־חלל**
+
+```
+TASK NAME: ALGO-OMEGA 32GB — FULL SYSTEM BUILD (MAX POWER)
+
+OBJECTIVE:
+לבנות מחדש את מערכת המסחר כיישות על־אינטליגנטית מלאה, מותאמת לשרת 32GB RAM,
+כולל 19 מוחי AI, SOPRET MAX, Fusion מלא עם הבוט החיצוני, יכולות למידה עמוקה,
+מערכת ניקוי רעלים, התפתחות עצמית, אופטימיזציה, ניהול טריידים חי, Dashboard,
+ניהול עומסים, ניתוח חדשות, ו־Execution אמיתי.
+
+REQUIREMENTS — BUILD EVERYTHING BELOW:
+
+──────────────────────────────────────────
+1) CORE SYSTEM (AlgoGPT)
+──────────────────────────────────────────
+- בניית Decision Core 3.0 (מודל הצבעה multi-source)
+- מודול Ensemble Weighted Voting
+- מנוע ניהול סיכונים מלא (ATR, ADX, Volatility, Trend IQ)
+- Regime Brain: trending / chop / expansion / compression detection
+- Alpha Brain: breakouts, sweeps, orderbook IQ, OBV, volatility shifts
+- Reverse-Position Brain (long→short / short→long real-time)
+- Grid Brain V2 (dynamic auto-range לפי ATR והתנהגות מחיר)
+- Resource Manager מלא לניהול עומסים ו־CPU
+- Trade Manager 3.5: ניהול חי + SL/TP דינמי + Breakeven + Trailing
+- Shield System: KillSwitch, Circuit Breaker, Duplicate-Blocker
+- Error Recovery Engine: auto-fix לכל שגיאה של Binance
+
+──────────────────────────────────────────
+2) FUSION LAYER (AI External Bot Integration)
+──────────────────────────────────────────
+- חיבור מלא לבוט החיצוני (כמו Cryptohopper או כל Bot Pro)
+- איסוף אותות, ניקוי רעש, תיוג איכות, סינון מטה
+- Auto-Learning Teacher: לימוד של AlgoGPT מהבוט החיצוני
+- External Trend Confirmator
+- External Pattern Auditor
+- External Regime Oracle
+- External News & Sentiment Agent
+- Weight Adapter: התאמת משקלים לפי ביצועי הבוט החיצוני
+
+──────────────────────────────────────────
+3) SOPRET MAX (Self-Optimizing Purge Engine)
+──────────────────────────────────────────
+- Toxicity Classifier: איתור אותות רעילים / הטיות
+- Purge Engine: מחיקה אוטומטית של:
+  · רעשים מהבוט החיצוני
+  · דפוסי כישלון
+  · אסטרטגיות דועכות
+  · משקלים מזיקים
+  · זיכרונות החלטה לא תקינים
+- Deep-Purge כל 24 שעות
+- Auto-Cleaning Loop כל 10 דק׳
+- Learning Hygiene Manager
+- Self-Healing: שחזור SL/TP, תיקון הזמנות, מניעת טעויות עתידיות
+
+──────────────────────────────────────────
+4) META-BRAIN STACK (12 Internal Brains)
+──────────────────────────────────────────
+- Decision Core
+- SOPRET Engine
+- Learning Hygiene Brain
+- Regime Brain
+- Risk Brain
+- Alpha Brain
+- Fusion Brain
+- Evolution Brain
+- Resource Brain
+- PnL Oracle
+- Strategy Mutation Engine
+- Knowledge Memory Brain
+
+כל מוח עובד במקביל על 32GB.
+
+──────────────────────────────────────────
+5) EVOLUTION MODE (32GB ONLY)
+──────────────────────────────────────────
+- מודול שינוי אסטרטגיות אוטומטי (Auto-Evolution)
+- שיפור משקלים לפי ביצועים
+- מחיקת אסטרטגיות גרועות
+- Mutation Loop: יצירת גרסאות משופרות של המנועים
+- Adaptation to volatility regimes
+- Memory Compression & Purification
+
+──────────────────────────────────────────
+6) TRADE EXECUTION & MANAGEMENT
+──────────────────────────────────────────
+- ExecutionBot Pro (Hybrid)
+- Position sizing חכם
+- ניהול חי: SL/TP, BE, Trailing, Adaptive Targets
+- Reverse-on-Failure
+- Sub-entry / Ladder / Scaling IN/OUT
+- TP ladder 2/3 levels דינמי
+- Fast Recovery על order rejects
+- Zero-Duplicates Firewall
+
+──────────────────────────────────────────
+7) DASHBOARD & TELEMETRY
+──────────────────────────────────────────
+- Dashboard חדש (SOFIA-UI)
+- גרפים: PnL, טריידים, טעויות, toxic removals
+- Health Monitor
+- SOPRET Metrics
+- Fusion Confidence
+- Regime Visualizer
+- News & Sentiment Widget
+
+──────────────────────────────────────────
+8) OPTIMIZATION TARGETS (Server 32GB)
+──────────────────────────────────────────
+- Memory budget: up to 28GB for AI
+- CPU parallel workers: 12–24 threads
+- Prediction caching optimized
+- High-frequency data ingestion
+- Ultra-fast scoring layer
+- Zero-latency Fusion Evaluation
+
+──────────────────────────────────────────
+9) SELF-HEALING SYSTEM (Full Autonomous)
+──────────────────────────────────────────
+- תיקון אוטומטי לכל בעיה פנימית
+- זיהוי SL/TP חסרים → הצבה מחדש
+- זיהוי הזמנות תקועות → ביטול / resubmit
+- זיהוי משקל פגום → Reset למוח פגום
+- זיהוי Regime mismatch → שינוי מצב פעולה
+- Prevention Layer נגד רעש חיצוני
+
+──────────────────────────────────────────
+10) FINAL DEPLOYMENT CHECKLIST
+──────────────────────────────────────────
+- התאמה מלאה לביצועים של 32GB RAM
+- מעבד את כל האותות החיצוניים
+- מעביר רק מידע איכותי למוח המרכזי
+- SOPRET MAX פועל 24/7
+- Evolution Engine פעיל
+- Auto-Learning Teacher פעיל
+- Dashboard עובד
+- מערכת עומסים מאוזנת
+- אבטחה מלאה
+- המערכת פועלת במצב Autonomous מוחלט
+
+──────────────────────────────────────────
+
+AFTER BUILD:
+- לבדוק תקינות
+- להפעיל Self-Evolution level 3
+- לפתוח Live Trading
+- להפעיל Fusion עם המוח החיצוני
+- לוודא עומסים נמוכים
+- להחזיר Log מסודר על כל פיצ׳ר
+
+END OF SPEC
+```
+
+---
+
+# ✔ זהו. זו הפקודה הגדולה.
+
+זאת **הפקודה שהסוכן שלך צריך** כדי לבנות מערכת־על שמנצלת **32GB** עד הסוף —
+רמה של מוצר תעשייתי, לא של בוט.
+
+אם תרצה אגרסה ל-8GB / 16GB או גרסת MICRO — תגיד.

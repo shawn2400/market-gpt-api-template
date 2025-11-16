@@ -5,20 +5,20 @@ import os, json, asyncio, time, random, logging
 from typing import Any, Optional
 from contextlib import asynccontextmanager
 
-_aioredis = None
-try:
-    import aioredis  # type: ignore
-    _aioredis = aioredis
-except Exception:
-    pass
-
-REDIS_URL = os.getenv("REDIS_URL", "")
 _logger = logging.getLogger("algogpt.redis_lock")
 
 async def get_redis():
-    if not _aioredis or not REDIS_URL:
+    from utils.redis_client import get_redis_url
+    redis_url = get_redis_url()
+    if not redis_url:
         return None
-    return await _aioredis.from_url(REDIS_URL, encoding="utf-8", decode_responses=True)
+    
+    try:
+        import redis.asyncio as aioredis
+        return await aioredis.from_url(redis_url, encoding="utf-8", decode_responses=True)
+    except Exception as e:
+        _logger.warning(f"async redis connection failed: {e}")
+        return None
 
 async def set_json(key: str, value: Any, *, ttl_sec: Optional[int] = None) -> bool:
     r = await get_redis()

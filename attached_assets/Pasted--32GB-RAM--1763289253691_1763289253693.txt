@@ -1,0 +1,188 @@
+הנה **התרשים המפורט, המלא, המקצועי והנקי ביותר** – מותאם למערכת שלך, ל־32GB RAM, כולל כל השכבות, כל המנועים, כל ה־AI Brains, SOPRET, Cryptohopper, Auto Executor, Fusion Engine, Learning Loop, Risk Engine, Telegram, Dashboard, Redis, הכול.
+
+עשיתי אותו בצורה **מאוד ברורה, מרווחת, קריאה**, כמו שביקשת — רמה על־חלל.
+זה מוכן להעתקה *1:1* לסוכן.
+
+---
+
+# 🚀 **ALGO-UNIVERSE v12 — תרשים מערכת מלא, מקצועי וקריא**
+
+### **(32GB Architecture — Optimized Edition)**
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          🌐  EXTERNAL INTELLIGENCE LAYER                    │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  CRYPTOHOPPER HERO BOT                                                      │
+│  • 100+ Exchanges Scan                                                      │
+│  • AI Pattern Recognition                                                   │
+│  • 24/7 Signal Stream                                                       │
+│  • Regime + Trend Detection                                                 │
+│  • External Insights / Warnings                                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                                       │
+                                       ▼
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        🔵  MASTER INGESTION & NORMALIZATION                 │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  • Binance/Bybit Live Market Stream                                         │
+│  • OHLCV, OrderBook, Funding, ΔOI                                           │
+│  • Cryptohopper Signals                                                     │
+│  • AI Insights from Side-Brain                                              │
+│  • System Health, Latency, Memory Usage                                     │
+│                                                                             │
+│  → Normalization Engine                                                     │
+│    • Filters, Validators, Cleanup                                           │
+│    • Timestamp Sync                                                         │
+│    • Noise Reduction                                                        │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                                       │
+                                       ▼
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              🧠  ALGO-CORE BRAIN                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  🔹 Technical Engine (29 Indicators)                                        │
+│     RSI • MACD • EMA(21/50) • ADX • ATR • OBV • BBANDS                     │
+│                                                                             │
+│  🔹 Market Regime Engine                                                    │
+│     Trending / Ranging / Volatile / Chop Zones                              │
+│                                                                             │
+│  🔹 Risk Engine                                                              │
+│     Position Sizing, ATR-SL, TP Ladder, Leverage, Exposure Gate             │
+│                                                                             │
+│  🔹 Pattern Engine                                                           │
+│     Breakout / Breakdown / Sweep / Reversal / Volume Spike                  │
+│                                                                             │
+│  🔹 News / Sentiment Engine (External Worker)                               │
+│                                                                             │
+│  🔹 Ensemble Fusion Engine                                                   │
+│     Cryptohopper (25%) + Technical (30%) + Regime (20%)                    │
+│     + Risk (15%) + Alpha (10%) → Final Decision                             │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                                       │
+                                       ▼
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                       🔥  SOPRET — IMMUNE SYSTEM LAYER                      │
+│             (Self-Optimizing Purge Real-Time Engine — 32GB Mode)            │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  • Toxic Signal Detection                                                   │
+│  • Low-Confidence Pattern Deletion                                          │
+│  • Ensemble Weight Poisoning Filter                                         │
+│  • Strategy Decay Cleanup                                                   │
+│  • Memory-Toxin Purging                                                     │
+│  • Failed Decision Quarantine                                               │
+│                                                                             │
+│  → Output: CLEAN, RELIABLE decision-set only                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                                       │
+                                       ▼
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        🔶  DECISION AUTHORITY & EXECUTION                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  • Auto Executor (Live Trade Engine)                                        │
+│  • Hybrid/Direct Flow Selector                                              │
+│  • Approval Gate (Telegram Inline)                                          │
+│  • Stop-Limit Only                                                          │
+│  • SL/TP Auto-Attach                                                        │
+│  • Breakeven Engine                                                         │
+│  • Trailing ATR Engine                                                      │
+│  • Reverse Mode (Long → Short / Short → Long)                               │
+│  • Grid Engine (Smart Grid)                                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                                       │
+                                       ▼
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              📡  LIVE MANAGEMENT LAYER                      │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  • Manage Open Trades (MACD/ADX/ATR)                                        │
+│  • Dynamic TP Move                                                          │
+│  • SL Breakeven                                                              │
+│  • Auto-Reduce in Chop                                                       │
+│  • Auto-Exit on Risk                                                         │
+│  • Circuit Breaker (Daily Loss Cap)                                          │
+│  • KillSwitch                                                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                                       │
+                                       ▼
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              💾  STORAGE & STATE                             │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  Redis (2GB dedicated):                                                     │
+│    • Signals Cache                                                          │
+│    • Open Positions                                                         │
+│    • Recent Decisions                                                       │
+│    • Toxicity Database (SOPRET)                                             │
+│    • Temp Snapshots                                                         │
+│                                                                             │
+│  FS:                                                                        │
+│    • trades_log.json                                                        │
+│    • pnl_summary.json                                                       │
+│    • daily_report.csv / pdf                                                │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                                       │
+                                       ▼
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         📊  DASHBOARD + TELEGRAM UI                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  • Positions                                                                 │
+│  • Performance                                                               │
+│  • Errors / Toxic Events                                                     │
+│  • Daily Summary                                                             │
+│  • Approval Buttons                                                          │
+│  • /status /positions /scan /exec                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                                       │
+                                       ▼
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         🔁  META-LEARNING LOOP (32GB Mode)                   │
+├─────────────────────────────────────────────────────────────────────────────┤
+│  • Weight Adjustment                                                         │
+│  • Error Analysis                                                            │
+│  • Strategy Switching                                                        │
+│  • Pattern Evolution                                                         │
+│  • Regime Relearn                                                            │
+│  • Toxicity Feedback Loop (SOPRET)                                           │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                                       │
+                                       ▼
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           🟣  NIGHTLY DEEP LEARNING                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│ 00:00-06:00 — Heavy ML Work:                                                │
+│   • Decay Analysis                                                           │
+│   • Strategy Purging                                                         │
+│   • Ensemble Rebuild                                                         │
+│   • Pattern Reweighting                                                      │
+│   • Daily Health Optimization                                                 │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+# 🟢 **רוצה שאוציא גם גרסת PDF מקצועית של התרשים?**
+
+עם צבעים • אייקונים • כותרות • High Resolution?
+
+רק תגיד — ואני מייצר PDF/PNG ב־2 סגנונות:
+✨ Enterprise
+✨ Cyber-AI Trading Blueprint
+
+רוצה?
