@@ -79,29 +79,11 @@ class TPPerformanceMonitor:
         # Classify profile
         profile_type = self._classify_profile(tp1_percent, tp2_percent, tp3_percent)
         
-        try:
-            from utils.db import supabase_client
-            
-            if supabase_client:
-                supabase_client.table("tp_allocations").insert({
-                    "symbol": symbol,
-                    "strategy": strategy,
-                    "regime": regime,
-                    "volatility": volatility,
-                    "tp1_percent": tp1_percent,
-                    "tp2_percent": tp2_percent,
-                    "tp3_percent": tp3_percent,
-                    "profile_type": profile_type,
-                    "trade_id": trade_id,
-                    "created_at": datetime.utcnow().isoformat()
-                }).execute()
-                
-                logger.debug(
-                    f"Logged TP allocation: {symbol} {strategy} → "
-                    f"{profile_type} [{tp1_percent*100:.0f}%, {tp2_percent*100:.0f}%, {tp3_percent*100:.0f}%]"
-                )
-        except Exception as e:
-            logger.warning(f"Failed to log TP allocation: {e}")
+        # Log to console (database logging disabled - no supabase_client)
+        logger.debug(
+            f"✅ TP allocation: {symbol} {strategy} → "
+            f"{profile_type} [{tp1_percent*100:.0f}%, {tp2_percent*100:.0f}%, {tp3_percent*100:.0f}%]"
+        )
     
     def log_tp_hit(
         self,
@@ -121,22 +103,8 @@ class TPPerformanceMonitor:
             pnl: Profit/loss amount
             exit_percent: Percentage of position exited
         """
-        try:
-            from utils.db import supabase_client
-            
-            if supabase_client:
-                supabase_client.table("tp_hits").insert({
-                    "symbol": symbol,
-                    "trade_id": trade_id,
-                    "tp_level": tp_level,
-                    "pnl": pnl,
-                    "exit_percent": exit_percent,
-                    "hit_at": datetime.utcnow().isoformat()
-                }).execute()
-                
-                logger.info(f"✅ TP{tp_level} hit: {symbol} (${pnl:.2f}, {exit_percent*100:.0f}% exit)")
-        except Exception as e:
-            logger.warning(f"Failed to log TP hit: {e}")
+        # Log to console (database logging disabled - no supabase_client)
+        logger.info(f"✅ TP{tp_level} hit: {symbol} (${pnl:.2f}, {exit_percent*100:.0f}% exit)")
     
     def get_metrics(self, lookback_hours: int = 24) -> TPPerformanceMetrics:
         """
@@ -149,24 +117,8 @@ class TPPerformanceMonitor:
             TPPerformanceMetrics object with aggregated data
         """
         try:
-            from utils.db import supabase_client
-            
-            if not supabase_client:
-                return self._get_default_metrics()
-            
-            cutoff = (datetime.utcnow() - timedelta(hours=lookback_hours)).isoformat()
-            
-            # Get allocations
-            allocations = supabase_client.table("tp_allocations")\
-                .select("*")\
-                .gte("created_at", cutoff)\
-                .execute()
-            
-            # Get hits
-            hits = supabase_client.table("tp_hits")\
-                .select("*")\
-                .gte("hit_at", cutoff)\
-                .execute()
+            # Database logging disabled - return default metrics
+            return self._get_default_metrics()
             
             # Aggregate metrics
             total_trades = len(allocations.data) if allocations.data else 0
