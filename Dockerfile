@@ -25,7 +25,7 @@ RUN apt-get update -y \
 WORKDIR /app
 COPY requirements.txt .
 RUN python -m pip install --upgrade pip \
- && pip install --only-binary=:all: -r requirements.txt
+ && pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
