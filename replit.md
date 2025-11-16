@@ -73,13 +73,25 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Trading Gatekeeper**: Unified pre-trade validation integrating all filters and Dynamic Leverage.
 -   **Zero Tolerance Filter**: Auto-cleanup for expired temp blacklist entries; requires 5 failures before 24h ban.
 
-**Dynamic TOP 50 Symbol Filter (Musical Chairs System):**
--   Blocks trades for symbols outside the TOP 50.
+**Dynamic TOP 100 Symbol Filter (Musical Chairs System):**
+-   Blocks trades for symbols outside the TOP 100 (expanded from TOP 50 for better coverage).
 -   Dynamic scheduler for continuous ranking based on volume, liquidity, and volatility/performance.
 -   SmartTop50Scanner for efficient candidate scanning.
 -   DynamicGridApprover and TieredGridSystem for GRID trading.
 -   GarbageDetector for identifying and blacklisting underperforming symbols.
 -   Hybrid persistence with Redis and PostgreSQL.
+
+**Binance Symbol Validator (v1.0):**
+-   Real-time symbol precision validation against Binance exchange info.
+-   Automatic quantity/price rounding to match exchange requirements (minQty, stepSize, tickSize).
+-   Prevents "Precision is over the maximum" errors by enforcing exact Binance rules.
+-   Synchronous exchange info fetch with caching for performance.
+
+**Trade Execution Pipeline (Nov 2025 Fix):**
+-   **Qty Calculation from Budget**: When `qty` not provided, automatically calculates: `qty = (budget_usd × leverage) / current_price`.
+-   **HYBRID Flow Support**: Passes `budget` instead of `qty` to `execute_trade_live`, which then calculates qty internally.
+-   **Metadata Persistence**: All orders save entry_price, quantity, leverage, SL/TP to Redis before execution.
+-   **Enhanced Error Logging**: Shows exact Binance error reason and suggested fixes for debugging.
 
 ### Telegram Digest System
 Consolidated notification system for batched reports on Health, Trade/PnL, Critical Alerts, and AI Trade Reviews.
