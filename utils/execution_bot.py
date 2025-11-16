@@ -952,7 +952,7 @@ class ExecutionBot:
         
         symbol = str(ticket.get("symbol", "")).upper()
         side = str(ticket.get("side", "")).upper()
-        leverage = int(ticket.get("leverage") or 2)
+        leverage = round(float(ticket.get("leverage") or 2))  # Round 4.95 → 5 instead of int() truncating to 4
         budget_usd = float(ticket.get("budget_usd") or ticket.get("budget") or 100.0)
         
         # Extract GRID parameters
@@ -976,9 +976,9 @@ class ExecutionBot:
         price_step = (grid_max - grid_min) / (grid_levels - 1) if grid_levels > 1 else 0
         prices = [grid_min + (i * price_step) for i in range(grid_levels)]
         
-        # 🛡️ SMART GRID: Ensure each level meets Binance minNotional ($25 per order - DYNAMIC BUDGET v2.0)
-        from utils.budget import MIN_BUDGET
-        MIN_NOTIONAL_USD = MIN_BUDGET  # Dynamic: $25 minimum (was $100 hardcoded)
+        # 🛡️ SMART GRID: Ensure each level meets Binance minNotional ($100 per order AFTER leverage)
+        # Note: MIN_BUDGET=$25 is budget BEFORE leverage, MIN_NOTIONAL_USD=$100 is Binance requirement AFTER leverage
+        MIN_NOTIONAL_USD = 100.0  # Binance Futures minimum notional per order
         budget_per_level = budget_usd / grid_levels
         notional_per_level = (budget_usd * leverage) / grid_levels
         
