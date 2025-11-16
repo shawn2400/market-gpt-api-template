@@ -64,7 +64,7 @@ class PrecisionCalculator:
         # Hard limits (for safety only, NOT templates)
         self.MIN_LEVERAGE = 1.0
         self.MAX_LEVERAGE = 10.0
-        self.MIN_INVESTMENT_USD = 10.0  # Minimum position size
+        self.MIN_INVESTMENT_USD = 25.0  # Minimum position size ($25 × 5x leverage = $125 notional, meets Binance $100 min)
         self.MIN_WALLET_PCT = 1.0  # At least 1% of wallet
         self.MAX_WALLET_PCT = 95.0  # Leave 5% buffer
     
