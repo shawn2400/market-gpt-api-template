@@ -1,105 +1,53 @@
 #!/bin/bash
-# ================================================================================
-# AlgoGPT Startup Script for Render
-# ================================================================================
-# This script starts the main Gunicorn server + all 9 background workers
-# Database: Uses Replit PostgreSQL (no local installation needed)
-# ================================================================================
+# AlgoGPT - Reserved VM Startup Script
+# Runs all services on single VM
+set -e
+echo "🚀 Starting AlgoGPT Trading System..."
+echo "📊 Environment: Production (Reserved VM)"
+echo "💾 RAM: 2GB | Region: Frankfurt"
 
-set -e  # Exit on error
+# Start Gunicorn API server
+echo "🌐 Starting API Server..."
+gunicorn -c gunicorn.conf.py main:app &
 
-echo "🚀 Starting AlgoGPT Production System..."
-echo "=========================================="
-
-# Verify DATABASE_URL is set
-if [ -z "$DATABASE_URL" ]; then
-    echo "❌ ERROR: DATABASE_URL environment variable not set!"
-    echo "   Please set it in Render dashboard to your Replit PostgreSQL URL"
-    exit 1
-fi
-
-echo "✅ Database URL configured"
-
-# Set default PORT if not set
-export PORT=${PORT:-10000}
-export PYTHONPATH=${PYTHONPATH:-/app}
-
-# ===================================================================
-# START BACKGROUND WORKERS
-# ===================================================================
-
-echo "📡 Starting background workers..."
-
-# 1. Auto Health Monitor
-echo "  → Auto Health Monitor"
-python workers/auto_health_monitor.py &
-HEALTH_PID=$!
-
-# 2. Auto Scanner (GPT Auto Suggest)
-echo "  → Auto Scanner"
-python workers/gpt_auto_suggest.py &
-SCANNER_PID=$!
-
-# 3. Daily Digest
-echo "  → Daily Digest"
-python workers/daily_digest.py &
-DIGEST_PID=$!
-
-# 4. GPT-5 Central Brain (Orchestrator)
-echo "  → GPT-5 Orchestrator"
-python workers/gpt5_orchestrator.py &
-GPT5_PID=$!
-
-# 5. GitHub Auto-Commit
-echo "  → GitHub Auto-Commit"
-python workers/github_auto_commit.py &
-GITHUB_PID=$!
-
-# 6. Heartbeat Monitor
-echo "  → Heartbeat Monitor"
-python workers/system_heartbeat.py &
-HEARTBEAT_PID=$!
-
-# 7. N8N Bridge
-echo "  → N8N Bridge"
-python workers/n8n_bridge.py &
-N8N_PID=$!
-
-# 8. Position Monitor
-echo "  → Position Monitor"
-python workers/position_monitor.py &
-POSITION_PID=$!
-
-# 9. Sentinel Security
-echo "  → Sentinel Security"
-python workers/sentinel_security.py &
-SENTINEL_PID=$!
-
-echo "✅ All 9 background workers started"
-
-# Give workers 5 seconds to initialize
-echo "⏳ Waiting 5 seconds for workers to initialize..."
+# Wait for API to be ready
 sleep 5
 
-# ===================================================================
-# START MAIN GUNICORN SERVER
-# ===================================================================
+# Start all workers in background
+echo "👷 Starting Background Workers..."
+python workers/auto_health_monitor.py &
+echo "✅ Auto Health Monitor started"
 
-echo "🌐 Starting Gunicorn server on port $PORT..."
-echo "=========================================="
+python workers/auto_optimization_orchestrator.py &
+echo "✅ Auto Optimization started"
 
-# Cleanup function to kill all background workers on exit
-cleanup() {
-    echo ""
-    echo "🛑 Shutting down AlgoGPT..."
-    echo "  → Stopping background workers..."
-    kill $HEALTH_PID $SCANNER_PID $DIGEST_PID $GPT5_PID $GITHUB_PID $HEARTBEAT_PID $N8N_PID $POSITION_PID $SENTINEL_PID 2>/dev/null || true
-    echo "  → Stopping Gunicorn..."
-    exit 0
-}
+python workers/gpt_auto_suggest.py &
+echo "✅ Auto Scanner started"
 
-# Trap SIGTERM and SIGINT (Ctrl+C)
-trap cleanup SIGTERM SIGINT
+python workers/fills_watcher.py &
+echo "✅ Fills Watcher started"
 
-# Start Gunicorn with production config
-exec gunicorn -c gunicorn_conf.py main:app
+python workers/insurance_monitor.py &
+echo "✅ Insurance Monitor started"
+
+python workers/position_monitor.py &
+echo "✅ Position Monitor started"
+
+python workers/quantum_top50_worker.py &
+echo "✅ Quantum TOP 50 started"
+
+python workers/sentinel_security.py &
+echo "✅ Sentinel Security started"
+
+python workers/telegram_digest_reporter.py &
+echo "✅ Telegram Digest started"
+
+echo ""
+echo "🎉 All services started successfully!"
+echo "📊 Total: 1 API + 9 Workers"
+echo "⏰ $(date)"
+
+# Keep container alive
+tail -f /dev/null
+
+
