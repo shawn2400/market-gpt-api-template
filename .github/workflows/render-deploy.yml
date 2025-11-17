@@ -25,23 +25,41 @@ jobs:
           RENDER_SERVICE_ID: ${{ secrets.RENDER_SERVICE_ID }}
         run: |
           echo "🚀 Triggering Render deployment..."
+          echo "📋 Service ID: ${RENDER_SERVICE_ID}"
+          echo "🔑 API Key present: $([ -n "${RENDER_API_KEY}" ] && echo 'Yes' || echo 'No')"
+          
+          # Check if secrets are set
+          if [ -z "${RENDER_API_KEY}" ]; then
+            echo "❌ RENDER_API_KEY secret not set!"
+            exit 1
+          fi
+          
+          if [ -z "${RENDER_SERVICE_ID}" ]; then
+            echo "❌ RENDER_SERVICE_ID secret not set!"
+            exit 1
+          fi
           
           # Trigger deployment via Render API
+          echo "📤 Calling Render API..."
           RESPONSE=$(curl -X POST \
             "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys" \
             -H "Authorization: Bearer ${RENDER_API_KEY}" \
             -H "Content-Type: application/json" \
             -d '{"clearCache": false}' \
-            -w "\n%{http_code}")
+            -w "\n%{http_code}" \
+            -s)
           
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | head -n-1)
+          
+          echo "📊 HTTP Status: $HTTP_CODE"
           
           if [ "$HTTP_CODE" = "201" ] || [ "$HTTP_CODE" = "200" ]; then
             echo "✅ Deployment triggered successfully!"
             echo "$BODY" | python3 -m json.tool 2>/dev/null || echo "$BODY"
           else
             echo "❌ Deployment failed with HTTP $HTTP_CODE"
+            echo "Response body:"
             echo "$BODY"
             exit 1
           fi
