@@ -7,7 +7,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Jerusalem \
-    PORT=10000
+    PORT=10000 \
+    PYTHONPATH=/app
 
 # Install system dependencies including monitoring tools
 RUN apt-get update -y \
