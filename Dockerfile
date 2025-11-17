@@ -7,7 +7,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
     DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Jerusalem \
-    PORT=8000
+    PORT=10000
 
 # Install system dependencies including monitoring tools
 RUN apt-get update -y \
@@ -29,9 +29,13 @@ RUN python -m pip install --upgrade pip \
 
 COPY . .
 
-EXPOSE 8000
+# Copy startup script and make executable
+COPY start.sh /app/start.sh
+RUN chmod +x /app/start.sh
+
+EXPOSE 10000
 HEALTHCHECK --interval=30s --timeout=8s --retries=5 \
   CMD curl -fsS http://127.0.0.1:${PORT}/readyz || exit 1
 
 ENTRYPOINT ["/usr/bin/tini","--"]
-CMD ["gunicorn","-c","gunicorn_conf.py","main:app"]
+CMD ["/app/start.sh"]
