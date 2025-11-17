@@ -133,3 +133,21 @@ services:
         value: 1
       - key: SAFE_BOOT_MODE
         value: 0
+      
+      # 🛡️ Auto-Ban-Shield v2.0 (Dynamic Rate Limiting)
+      - key: BAN_SHIELD_ENABLE
+        value: 1
+      - key: BAN_SHIELD_MAX_RPM
+        value: 40
+      - key: BAN_SHIELD_GREEN_ZONE
+        value: 30
+      - key: BAN_SHIELD_YELLOW_ZONE
+        value: 38
+      - key: BAN_SHIELD_RED_ZONE
+        value: 40
+      - key: BAN_SHIELD_MONITOR_ENABLE
+        value: 1
+      - key: SHIELD_MONITOR_INTERVAL
+        value: 10
+      - key: SHIELD_ALERT_COOLDOWN
+        value: 300
