@@ -1,78 +1,7 @@
 # AlgoGPT - Algorithmic Trading Platform
 
 ## Overview
-AlgoGPT is an autonomous algorithmic trading platform designed for 24/7 Binance Futures trading. It leverages AI, specifically DeepSeek Chat, to scan 534 symbols and make intelligent trade decisions. The platform integrates 7 trading strategies, dynamic capital management, and aims for 4-10 high-quality daily trades. Its MetaBrain v9.1 eliminates hardcoded logic, with all trade parameters determined by AI analysis. The system features intelligent brain management with auto-suspend/resume for failed providers, automatic Hedge Mode activation, and is built for scalability and autonomous operation with a self-adaptive engine and complete data persistence.
-
-## Recent Changes
-
-### November 17, 2025 - Emergency Kill-Switch & BAN Recovery System (CRITICAL)
-**Problem:** Despite WebSocket fix, workers continued REST API polling → IP ban persists and extends with each request.
-
-**Root Cause Analysis:**
-1. WebSocket started successfully in main.py ✅
-2. BUT: 9 workers in start.sh still polling REST API directly ❌
-3. Each REST request extends ban timer by 2-3 hours
-4. Result: Perpetual ban cycle (418 errors, -1003 codes)
-
-**Emergency Solution Implemented:**
-1. **Kill-Switch System** (`render.yaml`): Added `EMERGENCY_KILL_SWITCH=1` to disable all 9 workers
-2. **Start.sh Logic**: Checks kill-switch flag, only starts API server (not workers) when active
-3. **BAN Checker** (`scripts/check_ban_status.py`): Verifies ban clearance with single lightweight API call
-4. **Safe-Boot Mode** (`scripts/safe_boot_workers.sh`): Staggered worker startup with 12s delays to prevent new ban
-5. **Recovery Documentation** (`scripts/BAN_RECOVERY_README.md`): Complete 3-phase recovery protocol
-
-**3-Phase Recovery Protocol:**
-- **Phase 1 (NOW):** Kill-switch active, 0 workers running, WebSocket only → Ban timer stops extending
-- **Phase 2 (3+ hours):** Complete silence, wait for ban clearance, verify with checker script
-- **Phase 3 (After ban clears):** Disable kill-switch, GitHub push, Safe-Boot with throttling
-
-**Current Status:**
-- 🚨 Kill-Switch: **ACTIVE** (EMERGENCY_KILL_SWITCH=1)
-- 📊 Workers: **0/9 running**
-- 🔌 WebSocket: **ACTIVE** (via API server)
-- ⚠️ IP Ban: **Active until ~16:18 IST** (estimated)
-- 📝 Next Action: Wait 3 hours → Check ban → Re-enable workers
-
-**Files Modified:** `render.yaml`, `start.sh`, `scripts/check_ban_status.py`, `scripts/safe_boot_workers.sh`, `scripts/BAN_RECOVERY_README.md`
-
-### November 17, 2025 - WebSocket IP Ban Fix (CRITICAL)
-**Problem:** WebSocket User Stream was configured via env vars but NEVER initialized in main.py, causing 100% REST API polling → 2400+ requests/min → Binance IP ban (418 errors).
-
-**Root Cause:** render.yaml had `USER_STREAM_ENABLE=1` and `STREAM_TP_BE=true`, but WebSocket never started on app launch.
-
-**Solution Implemented:**
-1. Added WebSocket auto-initialization to `main.py` startup event (lines 2007-2030)
-2. WebSocket starts on app launch with 2-second warmup period
-3. Status verification logs confirm connection or background startup
-4. Graceful fallback to REST API if WebSocket fails
-
-**Impact:**
-- ✅ WebSocket now starts automatically on every deployment
-- ✅ Expected API call reduction: 72% (2400+/min → 670/min)
-- ✅ Eliminates Binance IP ban issue (418 errors)
-- ✅ Auto-reconnect with exponential backoff on connection failures
-- ✅ Architect approved: "No critical blockers for deployment"
-
-**Files Modified:** `main.py` (commit 6359878)
-
-### November 17, 2025 - Automated GitHub→Render Deployment Pipeline
-Implemented 100% automated deployment system for autonomous 24/7 operation:
-
-1. **GitHub Action Auto-Deploy** (`.github/workflows/render-deploy.yml`): Triggers Render deployment on every push to main branch
-2. **Render API Integration**: Automated deployment via Render API using encrypted GitHub Secrets (RENDER_API_KEY, RENDER_SERVICE_ID)
-3. **WebSocket Optimization Deployed**: Production now running with `USER_STREAM_ENABLE=1`, `STREAM_TP_BE=true`, reducing Binance API calls by 72% (2400+/min → ~670/min)
-4. **Optimized Polling Intervals**: Insurance Monitor (180s), Fills Watcher (60s), Position Monitor (120s), Health Check (90s)
-
-**Result**: Push to GitHub → Auto-deploy to Render → WebSocket activated → Zero manual intervention required ✅
-
-### November 17, 2025 - Critical Bug Fixes
-Fixed 3 critical bugs preventing stable production deployment on Render.com Reserved VM:
-
-1. **RuntimeError in main.py** (line 269): Added try/except handler in `_head_compat_and_soft_readyz` middleware to prevent HEAD request crashes
-2. **FutureWarning in utils/indicators.py**: Replaced deprecated `fillna(method='ffill')` with modern `ffill()` for pandas 2.0+ compatibility
-3. **Precision rounding in utils/binance_symbol_validator.py**: Fixed Decimal quantize pattern to prevent InvalidOperation errors
-
-All fixes pushed to GitHub via API (bypassing Replit git restrictions) using `scripts/upload_critical_fixes.py`.
+AlgoGPT is an autonomous algorithmic trading platform for 24/7 Binance Futures, leveraging AI (DeepSeek Chat) to analyze 534 symbols and execute intelligent trades. It integrates 7 trading strategies, dynamic capital management, and aims for 4-10 high-quality daily trades. The platform features a MetaBrain v9.1 that eliminates hardcoded logic, with all trade parameters determined by AI. It includes intelligent brain management, auto-suspend/resume for failed providers, automatic Hedge Mode activation, and is designed for scalability and autonomous operation with a self-adaptive engine and complete data persistence. Recent critical updates include a dynamic rate-limiting system (Auto-Ban-Shield v2.0) to prevent IP bans, an emergency kill-switch for system recovery, and automated GitHub-to-Render deployment.
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
@@ -90,28 +19,27 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, and ATR-based trailing stops.
 -   **Market Scanner**: Autonomous multi-timeframe technical analysis across Binance Futures.
 -   **AI-Powered Proposals**: Uses DeepSeek Chat for trade decisions with adaptive Risk/Reward, intelligent brain management, and dynamic quality threshold enforcement.
--   **GRID Trading**: Integrated FUTURES GRID trading with dynamic symbol selection, tiered strategies, dynamic sizing, and automatic SL/TP protection for all GRID fills.
+-   **GRID Trading**: Integrated FUTURES GRID trading with dynamic symbol selection, tiered strategies, dynamic sizing, and automatic SL/TP protection.
 -   **Risk Management**: Includes quality filters, dynamic filters, liquidity checks, cooldowns, daily trade caps, and a circuit breaker.
--   **Dynamic Budget System**: Real-time trade budget calculation based on available wallet balance, trade quality, volatility, and market regime. Features Budget Re-Evaluation for scale-in on profitable positions and regime-aware multipliers.
+-   **Dynamic Budget System**: Real-time trade budget calculation based on available wallet balance, trade quality, volatility, and market regime. Features Budget Re-Evaluation for scale-in and regime-aware multipliers.
 -   **Dynamic SL/TP Calculation**: ATR-based Stop Loss and RR-based Take Profit.
 -   **Complete Data Persistence**: All critical data is saved to a PostgreSQL database.
 
 **MetaBrain v9.1 - AI-Driven Precision Trading:**
--   **1-Brain Lean Architecture**: DeepSeek Chat for autonomous trade decisions, with optional expansion brains for multi-brain consensus.
+-   **1-Brain Lean Architecture**: DeepSeek Chat for autonomous trade decisions, with optional expansion brains.
 -   **Intelligent Brain Management**: Auto-suspends/resumes failed AI providers, dynamic consensus thresholds, cost tracking, and token budgeting.
--   **Smart Override Logic**: AI participates in decisions but respects MIN_QUALITY threshold, with a system for auto-approval, borderline consensus, or AI rejection based on score gaps.
--   **Regime-Based Dynamic MIN_QUALITY**: Adaptive quality thresholds based on market regime (CHOPPY, SIDEWAYS, TRENDING, VOLATILE).
+-   **Smart Override Logic**: AI participates in decisions but respects MIN_QUALITY threshold, with a system for auto-approval or rejection.
+-   **Regime-Based Dynamic MIN_QUALITY**: Adaptive quality thresholds based on market regime.
 -   **Precision Calculator**: Calculates exact leverage and investment based on trade quality, market volatility, regime, and balance.
 -   **Deep Market Analyzer & Live Regime Detector**: Multi-layer technical analysis and real-time market classification.
 -   **Dynamic Protection Manager**: AI suggests regime-specific parameter sets with guardrails.
--   **Balance-Tiered Risk Profiles**: Auto-adjusts trading parameters (position size, leverage, max positions, daily risk limit) based on 5 account tiers.
+-   **Balance-Tiered Risk Profiles**: Auto-adjusts trading parameters based on 5 account tiers.
 -   **Auto-Strategy Selection Engine**: Automatically chooses optimal strategy based on market conditions.
--   **Multi-Target TP System v2.0**: 3-level take profit with fully dynamic exit percentages that adapt to market conditions and volatility-adjusted RR ratios.
+-   **Multi-Target TP System v2.0**: 3-level take profit with dynamic exit percentages and volatility-adjusted RR ratios.
 
 **ExecutionBot - Unified Trade Execution Wrapper:**
 -   Centralized architecture for all trade execution logic with source-aware approval gating.
 -   **100% SL/TP Protection**: All positions receive automatic Stop Loss and Take Profit orders immediately after entry, with emergency closure if placement fails.
--   **Fills Watcher Hardening**: Critical alerts and Telegram notifications if trade_manager import fails, preventing silent degradation.
 
 **Auto-Optimization System (Self-Adaptive Trading):**
 -   **Intelligent Parameter Tuning**: Analyzes performance and adjusts `min_quality`, RR, and leverage.
@@ -119,7 +47,7 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Symbol Tiering Engine & Dynamic Blacklist Manager**: Classifies symbols by performance and auto-blacklists underperforming ones.
 
 **Trailing TP System:**
--   Auto-activates at 25-30% profit and dynamically adjusts trailing distance to secure profits.
+-   Auto-activates at 25-30% profit and dynamically adjusts trailing distance.
 
 **Insurance Monitor System (Account Protection):**
 -   Multi-layered protection including Drawdown Protection, Margin Ratio Defense, Cross/Isolated Balancer, and a Circuit Breaker.
@@ -149,7 +77,6 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Order Quality Monitor**: Tracks fill rate, slippage, and execution speed.
 -   **Position Limits Manager**: Sets max positions per symbol, total open orders, and correlation exposure limits.
 -   **Trading Gatekeeper**: Unified pre-trade validation integrating all filters and Dynamic Leverage.
--   **Zero Tolerance Filter**: Auto-cleanup for expired temp blacklist entries.
 
 **Dynamic TOP 100 Symbol Filter (Musical Chairs System):**
 -   Blocks trades for symbols outside the TOP 100, with dynamic scheduling for continuous ranking.
