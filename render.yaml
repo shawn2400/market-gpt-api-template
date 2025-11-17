@@ -18,7 +18,7 @@ services:
       - key: TZ
         value: Asia/Jerusalem
       
-      # API Keys (set these in Render Dashboard)
+      # API Keys
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
@@ -42,7 +42,7 @@ services:
       - key: XAI_API_KEY
         sync: false
       
-      # Database (set Neon URL in dashboard)
+      # Database
       - key: DATABASE_URL
         sync: false
       - key: NEON_DATABASE_URL
@@ -54,7 +54,7 @@ services:
       - key: NEON_ENDPOINT_ID
         sync: false
       
-      # Redis (set Redis Cloud URL in dashboard)
+      # Redis
       - key: REDIS_URL
         sync: false
       
