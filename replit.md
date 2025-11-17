@@ -1,7 +1,12 @@
 # AlgoGPT - Algorithmic Trading Platform
 
 ## Overview
-AlgoGPT is an autonomous algorithmic trading platform for 24/7 Binance Futures, leveraging AI (DeepSeek Chat) to analyze 534 symbols and execute intelligent trades. It integrates 7 trading strategies, dynamic capital management, and aims for 4-10 high-quality daily trades. The platform features a MetaBrain v9.1 that eliminates hardcoded logic, with all trade parameters determined by AI. It includes intelligent brain management, auto-suspend/resume for failed providers, automatic Hedge Mode activation, and is designed for scalability and autonomous operation with a self-adaptive engine and complete data persistence. Recent critical updates include a dynamic rate-limiting system (Auto-Ban-Shield v2.0) to prevent IP bans, an emergency kill-switch for system recovery, and automated GitHub-to-Render deployment.
+AlgoGPT is an autonomous algorithmic trading platform for 24/7 Binance Futures, leveraging AI (DeepSeek Chat) to analyze 534 symbols and execute intelligent trades. It integrates 7 trading strategies, dynamic capital management, and aims for 4-10 high-quality daily trades. The platform features a MetaBrain v9.1 that eliminates hardcoded logic, with all trade parameters determined by AI. It includes intelligent brain management, auto-suspend/resume for failed providers, automatic Hedge Mode activation, and is designed for scalability and autonomous operation with a self-adaptive engine and complete data persistence.
+
+**Recent Critical Updates (November 2025):**
+- **Auto-Ban-Shield v2.0**: Production-ready dynamic rate limiting system with 3-tier priority (CRITICAL/NORMAL/LOW), background event loop for async/sync compatibility, complete coverage of all Binance REST endpoints including fallbacks, preventing IP bans while maintaining trading performance.
+- **Emergency Kill-Switch**: Instant shutdown system with WebSocket-only mode for ban recovery, automated via GitHub-to-Render deployment.
+- **Production PYTHONPATH Fix**: Resolved "No module named 'utils'" errors in Render deployment with proper Docker environment configuration.
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
