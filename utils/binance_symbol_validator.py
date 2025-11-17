@@ -124,8 +124,9 @@ class BinanceSymbolValidator:
         decimal_tick = Decimal(str(tick_size))
         rounded = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_DOWN) * decimal_tick
         
-        # FIX: Use Decimal(10)**-precision instead of string pattern
-        return float(rounded.quantize(Decimal(10)**-precision, rounding=ROUND_DOWN))
+        # Use proper precision pattern (e.g., 0.01 for precision=2)
+        precision_pattern = Decimal(10) ** -precision if precision > 0 else Decimal('1')
+        return float(rounded.quantize(precision_pattern, rounding=ROUND_DOWN))
     
     def round_quantity(self, symbol: str, quantity: float, is_market: bool = False) -> float:
         """
@@ -152,8 +153,9 @@ class BinanceSymbolValidator:
         decimal_step = Decimal(str(step_size))
         rounded = (decimal_qty / decimal_step).quantize(Decimal('1'), rounding=ROUND_DOWN) * decimal_step
         
-        # FIX: Use Decimal(10)**-precision instead of string pattern
-        return float(rounded.quantize(Decimal(10)**-precision, rounding=ROUND_DOWN))
+        # Use proper precision pattern (e.g., 0.001 for precision=3)
+        precision_pattern = Decimal(10) ** -precision if precision > 0 else Decimal('1')
+        return float(rounded.quantize(precision_pattern, rounding=ROUND_DOWN))
     
     def validate_order(
         self,
