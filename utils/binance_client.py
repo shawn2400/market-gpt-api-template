@@ -217,20 +217,36 @@ def _shielded_call(endpoint: str, fn: Callable, *args, **kwargs) -> Any:
     shield = get_shield()
     tracker = get_tracker()
     
-    # Acquire permission via async shield
+    # Acquire permission via async shield (handle both sync and async contexts)
     try:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
+        # Already in async context - use asyncio.create_task or run in thread
+        # For sync wrapper, we need to use run_coroutine_threadsafe
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                asyncio.run,
+                shield.acquire(
+                    priority=priority,  # type: ignore
+                    endpoint=endpoint,
+                    worker="binance_client"
+                )
+            )
+            allowed = future.result(timeout=5)
     except RuntimeError:
+        # No running loop - create new one (sync context)
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-    
-    allowed = loop.run_until_complete(
-        shield.acquire(
-            priority=priority,  # type: ignore
-            endpoint=endpoint,
-            worker="binance_client"
-        )
-    )
+        try:
+            allowed = loop.run_until_complete(
+                shield.acquire(
+                    priority=priority,  # type: ignore
+                    endpoint=endpoint,
+                    worker="binance_client"
+                )
+            )
+        finally:
+            loop.close()
     
     if not allowed:
         logger.warning(
@@ -453,10 +469,13 @@ def futures_index_price(symbol: str) -> Optional[float]:
         pass
     try:
         if hasattr(client, "futures_premium_index"):
-            data = client.futures_premium_index(symbol=sym)
+            data = _shielded_call(
+                "futures_premium_index",
+                lambda: client.futures_premium_index(symbol=sym)
+            )
             if isinstance(data, list) and data:
                 data = data[0]
-            p = data.get("indexPrice")
+            p = data.get("indexPrice") if data else None
             if p is not None:
                 val = float(p)
                 _cache_put(_index_cache, sym, val)
@@ -836,7 +855,10 @@ def set_breakeven_stop(
 def get_klines_df(symbol: str, interval: str = "5m", limit: int = 120):
     try:
         import pandas as pd  # type: ignore
-        arr = client.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(max(limit, 50), 1000)) or []
+        arr = _shielded_call(
+            "futures_klines",
+            lambda: client.futures_klines(symbol=symbol.upper(), interval=interval, limit=min(max(limit, 50), 1000))
+        ) or []
         if not arr:
             return None
         cols = ["open_time","open","high","low","close","volume","close_time","qv","nTrades","taker_base","taker_quote","x"]
