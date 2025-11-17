@@ -127,8 +127,9 @@ services:
         value: critical
       
       # 🚨 EMERGENCY KILL-SWITCH (BAN RECOVERY)
-      # Set to 1 to disable ALL workers during IP ban cooldown
+      # Phase 1: EMERGENCY_KILL_SWITCH=1 → All workers OFF, WebSocket only
+      # Phase 3: EMERGENCY_KILL_SWITCH=0, SAFE_BOOT_MODE=1 → Staggered startup
       - key: EMERGENCY_KILL_SWITCH
         value: 1
-      - key: BAN_RECOVERY_MODE
-        value: 1
+      - key: SAFE_BOOT_MODE
+        value: 0
