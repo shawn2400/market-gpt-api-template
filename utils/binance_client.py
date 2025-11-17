@@ -484,10 +484,13 @@ def futures_index_price(symbol: str) -> Optional[float]:
         pass
     try:
         if hasattr(client, "_request_futures_api"):
-            data = client._request_futures_api("get", "premiumIndex", data={"symbol": sym})  # type: ignore
+            data = _shielded_call(
+                "futures_premium_index",
+                lambda: client._request_futures_api("get", "premiumIndex", data={"symbol": sym})  # type: ignore
+            )
             if isinstance(data, list) and data:
                 data = data[0]
-            p = data.get("indexPrice")
+            p = data.get("indexPrice") if data else None
             if p is not None:
                 val = float(p)
                 _cache_put(_index_cache, sym, val)
