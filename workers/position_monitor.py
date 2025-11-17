@@ -18,6 +18,14 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.binance_client import _init_client as get_client, futures_cancel_all_orders
 from utils.alerts import send_telegram_message
 
+# 🛡️ Auto-Ban-Shield Integration
+try:
+    from utils.binance_api_wrapper import update_position_context
+    _BAN_SHIELD_AVAILABLE = True
+except Exception:
+    update_position_context = None  # type: ignore
+    _BAN_SHIELD_AVAILABLE = False
+
 try:
     from utils.telegram_digest import get_digest
 except Exception:
@@ -77,6 +85,20 @@ try:
 except Exception as e:
     risk_manager = None  # type: ignore
     logger.warning(f"⚠️ Advanced Risk Manager unavailable: {e}")
+
+# 🛡️ HEDGE POSITION MANAGER (Dual Position Detection)
+try:
+    from utils.hedge_position_manager import get_hedge_manager
+    hedge_manager = get_hedge_manager()
+    logger.info("✅ Hedge Position Manager loaded successfully")
+except Exception as e:
+    hedge_manager = None  # type: ignore
+    logger.warning(f"⚠️ Hedge Position Manager unavailable: {e}")
+
+# 🧹 ORDER HYGIENE (Orphaned Orders Cleanup)
+ENABLE_ORDER_HYGIENE = os.getenv("ENABLE_ORDER_HYGIENE", "1") == "1"
+ORDER_HYGIENE_INTERVAL_SEC = int(os.getenv("ORDER_HYGIENE_INTERVAL_SEC", "300"))  # 5 minutes
+_last_hygiene_cleanup = 0.0  # Track last cleanup time
 
 # 🧠 BREAKEVEN STATE MANAGER (Prevent Duplicate Notifications)
 try:
@@ -169,6 +191,53 @@ def cleanup_orders_for_closed_positions(closed_symbols: List[str]) -> None:
         except Exception as e:
             logger.error(f"❌ Error cancelling orders for {symbol}: {e}")
 
+async def run_order_hygiene_cleanup() -> None:
+    """
+    🧹 ORDER HYGIENE: Clean up orphaned orders periodically.
+    
+    Runs every 5 minutes (configurable) to remove:
+    - ReduceOnly orders without matching position
+    - Stale LIMIT orders older than 10 minutes
+    - Stop orders without position
+    """
+    global _last_hygiene_cleanup
+    
+    if not ENABLE_ORDER_HYGIENE:
+        return
+    
+    # Check if enough time has passed
+    now = time.time()
+    if now - _last_hygiene_cleanup < ORDER_HYGIENE_INTERVAL_SEC:
+        return
+    
+    _last_hygiene_cleanup = now
+    logger.info("🧹 Running order hygiene cleanup...")
+    
+    try:
+        # Import cleanup logic from worker
+        import sys
+        worker_path = os.path.join(os.path.dirname(__file__), "order_hygiene_worker.py")
+        
+        # Import functions dynamically
+        spec = __import__("importlib.util").util.spec_from_file_location("order_hygiene_worker", worker_path)
+        if spec and spec.loader:
+            module = __import__("importlib.util").util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            
+            # Run cleanup
+            orphaned = module.get_orphaned_orders()
+            if orphaned:
+                total = sum(len(orders) for orders in orphaned.values())
+                logger.warning(f"🚨 Found {total} orphaned order(s) across {len(orphaned)} symbol(s)")
+                result = await module.cleanup_orphaned_orders(orphaned)
+                logger.info(f"✅ Hygiene cleanup: {result['cancelled']} cancelled, {result['failed']} failed")
+            else:
+                logger.debug("✅ No orphaned orders found")
+    
+    except Exception as e:
+        logger.error(f"❌ Order hygiene cleanup failed: {e}", exc_info=True)
+
+
 async def ensure_positions_protected() -> None:
     """
     🛡️ LAYER 3: Emergency Protection + Auto-protect
@@ -176,6 +245,7 @@ async def ensure_positions_protected() -> None:
     1. First checks if positions have SL/TP using Emergency Protection
     2. If UNPROTECTED → Emergency close + Circuit breaker
     3. If protected → Normal auto-protect (BE, trailing, etc)
+    4. Detects and resolves dual positions (LONG+SHORT on same symbol)
     
     Runs every 30 seconds to ensure LIVE protection + cleanup closed positions.
     """
@@ -187,6 +257,44 @@ async def ensure_positions_protected() -> None:
     try:
         positions = get_active_positions()
         current_symbols = {p["symbol"] for p in positions}
+        
+        # 🛡️ DUAL POSITION DETECTION & RESOLUTION
+        if hedge_manager:
+            try:
+                dual_positions = hedge_manager.detect_dual_positions(positions)
+                if dual_positions:
+                    logger.warning(f"🚨 Detected {len(dual_positions)} dual position(s): {', '.join(dual_positions.keys())}")
+                    
+                    for symbol, sides in dual_positions.items():
+                        # Resolve using "close_weaker" strategy
+                        result = hedge_manager.resolve_dual_position(
+                            symbol=symbol,
+                            sides=sides,
+                            strategy="close_weaker"  # Close leg with worse PnL
+                        )
+                        
+                        if result["status"] == "resolved":
+                            logger.info(f"✅ {symbol}: Dual position resolved - {result['reason']}")
+                            # Send Telegram alert
+                            await send_telegram_message(
+                                f"🔧 *Dual Position Resolved*\n\n"
+                                f"Symbol: `{symbol}`\n"
+                                f"Action: {result['reason']}\n\n"
+                                f"System automatically closed one leg to prevent conflicting positions"
+                            )
+                        elif result["status"] == "skipped":
+                            logger.info(f"✅ {symbol}: Intentional hedge - {result['reason']}")
+                        else:
+                            logger.error(f"❌ {symbol}: Failed to resolve dual position - {result.get('reason', 'Unknown error')}")
+            
+            except Exception as hedge_err:
+                logger.error(f"❌ Hedge position check failed: {hedge_err}", exc_info=True)
+        
+        # 🧹 ORDER HYGIENE: Clean orphaned orders periodically
+        try:
+            await run_order_hygiene_cleanup()
+        except Exception as hygiene_err:
+            logger.error(f"❌ Order hygiene failed: {hygiene_err}", exc_info=True)
         
         # 🧹 CRITICAL: Detect and cleanup closed positions EVERY 30 seconds
         closed_positions = []
@@ -763,6 +871,20 @@ async def monitor_loop():
         try:
             if ENABLE_AUTO_PROTECT:
                 await ensure_positions_protected()
+                
+                # 🛡️ Update Ban Shield context with current positions
+                if _BAN_SHIELD_AVAILABLE and update_position_context:
+                    try:
+                        client = get_client()
+                        if client:
+                            positions = client.futures_position_information()
+                            open_positions = [
+                                p for p in positions 
+                                if float(p.get('positionAmt', 0)) != 0
+                            ]
+                            update_position_context(len(open_positions))
+                    except Exception as shield_err:
+                        logger.debug(f"Shield context update error: {shield_err}")
         except Exception as e:
             logger.error(f"Error in auto-protect: {e}")
         
