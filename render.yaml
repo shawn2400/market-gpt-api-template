@@ -6,7 +6,7 @@ services:
     name: algogpt-trading-vm
     env: docker
     region: frankfurt
-    plan: standard  # 2GB RAM, $25/month - upgrade from starter for production
+    plan: standard  # 2GB RAM, $25/month
     dockerfilePath: ./Dockerfile
     dockerContext: .
     envVars:
