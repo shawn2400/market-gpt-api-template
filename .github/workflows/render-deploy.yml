@@ -1,4 +1,4 @@
-name: Deploy to Render on Push
+name: Auto-Deploy to Render
 
 on:
   push:
