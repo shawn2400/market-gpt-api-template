@@ -1,9 +1,9 @@
 # utils/binance_client.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import os, time, math, logging, threading
+import os, time, math, logging, threading, asyncio
 from contextlib import suppress
-from typing import Any, Dict, List, Optional, Tuple, cast
+from typing import Any, Dict, List, Optional, Tuple, cast, Callable
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,6 +11,28 @@ load_dotenv()
 from utils.metrics_tracker import observe_http, observe_http_ctx  # מדידת לטנסי/HTTP
 
 logger = logging.getLogger("algogpt.binance")
+
+# 🛡️ Auto-Ban-Shield Integration
+BAN_SHIELD_ENABLED = os.getenv("BAN_SHIELD_ENABLE", "1") == "1"
+BAN_SHIELD_BYPASS = os.getenv("BAN_SHIELD_BYPASS", "0") == "1"
+
+if BAN_SHIELD_ENABLED and not BAN_SHIELD_BYPASS:
+    logger.info("🛡️ Auto-Ban-Shield ENABLED (rate limiting active)")
+elif BAN_SHIELD_BYPASS:
+    logger.warning("⚠️ Ban Shield BYPASSED (emergency mode - no rate limiting!)")
+else:
+    logger.info("ℹ️ Ban Shield disabled")
+
+# Import shield components
+try:
+    from utils.ban_shield import get_shield
+    from utils.api_call_tracker import get_tracker
+    _SHIELD_AVAILABLE = True
+except Exception as e:
+    logger.warning(f"⚠️ Ban Shield unavailable: {e}")
+    _SHIELD_AVAILABLE = False
+    get_shield = None  # type: ignore
+    get_tracker = None  # type: ignore
 
 try:
     from binance.client import Client  # type: ignore
@@ -140,6 +162,97 @@ def _get_client() -> Optional[Client]:
         return _init_client()
 
 get_client = _get_client
+
+# 🛡️ PRIORITY MAP for Auto-Ban-Shield
+# Defines priority level for each API endpoint
+ENDPOINT_PRIORITY_MAP: Dict[str, str] = {
+    # CRITICAL: Trade execution, order management, position closure
+    "futures_create_order": "CRITICAL",
+    "futures_cancel_order": "CRITICAL",
+    "futures_cancel_all_open_orders": "CRITICAL",
+    "futures_account_trades": "CRITICAL",
+    "futures_balance": "CRITICAL",  # When positions open
+    
+    # NORMAL: Account info, position monitoring, order status
+    "futures_account": "NORMAL",
+    "futures_get_order": "NORMAL",
+    "futures_get_all_orders": "NORMAL",
+    "futures_get_open_orders": "NORMAL",
+    "futures_position_information": "NORMAL",  # Boosted to CRITICAL when positions > 0
+    "futures_exchange_info": "NORMAL",
+    "futures_change_leverage": "NORMAL",
+    "futures_change_margin_type": "NORMAL",
+    
+    # LOW: Market data, price queries, scanning
+    "futures_mark_price": "LOW",
+    "futures_ticker": "LOW",
+    "futures_klines": "LOW",
+    "futures_continuous_klines": "LOW",
+    "futures_depth": "LOW",
+    "futures_funding_rate": "LOW",
+    "futures_index_info": "LOW",
+}
+
+def _shielded_call(endpoint: str, fn: Callable, *args, **kwargs) -> Any:
+    """
+    Execute Binance API call through Auto-Ban-Shield with rate limiting
+    
+    Args:
+        endpoint: Endpoint name (e.g., 'futures_create_order')
+        fn: Function to call
+        *args, **kwargs: Arguments to pass to function
+        
+    Returns:
+        Function result or None if blocked by shield
+    """
+    # Check if shield is available and enabled
+    if not BAN_SHIELD_ENABLED or BAN_SHIELD_BYPASS or not _SHIELD_AVAILABLE:
+        # Direct pass-through
+        return fn(*args, **kwargs)
+    
+    # Get priority for this endpoint
+    priority = ENDPOINT_PRIORITY_MAP.get(endpoint, "NORMAL")
+    
+    # Get shield and tracker
+    shield = get_shield()
+    tracker = get_tracker()
+    
+    # Acquire permission via async shield
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+    
+    allowed = loop.run_until_complete(
+        shield.acquire(
+            priority=priority,  # type: ignore
+            endpoint=endpoint,
+            worker="binance_client"
+        )
+    )
+    
+    if not allowed:
+        logger.warning(
+            f"🚫 API call blocked by shield: {endpoint} "
+            f"(priority={priority}, zone={shield.current_zone})"
+        )
+        return None
+    
+    # Record call in tracker
+    tracker.record_call(
+        worker="binance_client",
+        endpoint=endpoint,
+        priority=priority,
+        zone=shield.current_zone
+    )
+    
+    # Execute API call
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:
+        logger.error(f"❌ Shielded API call failed: {endpoint} - {e}")
+        raise
 
 class _ClientProxy:
     def __getattr__(self, name: str):
@@ -452,7 +565,10 @@ def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, An
 @observe_http(name="binance_cancel_order", include_labels=["symbol"])
 def futures_cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
     try:
-        return client.futures_cancel_order(symbol=symbol.upper(), orderId=int(order_id))
+        return _shielded_call(
+            "futures_cancel_order",
+            lambda: client.futures_cancel_order(symbol=symbol.upper(), orderId=int(order_id))
+        )
     except Exception as e:
         logger.warning("cancel_order failed %s/%s: %s", symbol, order_id, e)
         return {"ok": False, "error": str(e)}
@@ -461,7 +577,10 @@ def futures_cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
 @observe_http(name="binance_cancel_all", include_labels=["symbol"])
 def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:
     try:
-        res = client.futures_cancel_all_open_orders(symbol=symbol.upper())
+        res = _shielded_call(
+            "futures_cancel_all_open_orders",
+            lambda: client.futures_cancel_all_open_orders(symbol=symbol.upper())
+        )
         return {"ok": True, "result": res}
     except Exception as e:
         logger.error("futures_cancel_all_orders failed for %s: %s", symbol, e)
@@ -564,7 +683,10 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     last: Optional[Exception] = None
     for attempt in range(1, max(1, BINANCE_MAX_RETRIES) + 1):
         try:
-            res = client.futures_create_order(recvWindow=RECV_WINDOW, **kwargs)
+            res = _shielded_call(
+                "futures_create_order",
+                lambda: client.futures_create_order(recvWindow=RECV_WINDOW, **kwargs)
+            )
             return res or {}
         except BinanceAPIException as e:
             last = e
