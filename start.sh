@@ -8,7 +8,7 @@ echo "💾 RAM: 2GB | Region: Frankfurt"
 
 # Start Gunicorn API server
 echo "🌐 Starting API Server..."
-gunicorn -c gunicorn.conf.py main:app &
+gunicorn -c gunicorn_conf.py main:app &
 
 # Wait for API to be ready
 sleep 5
