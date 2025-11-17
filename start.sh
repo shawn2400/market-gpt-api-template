@@ -17,9 +17,9 @@ sleep 5
 
 # 🚨 EMERGENCY KILL-SWITCH CHECK
 EMERGENCY_KILL_SWITCH="${EMERGENCY_KILL_SWITCH:-0}"
-BAN_RECOVERY_MODE="${BAN_RECOVERY_MODE:-0}"
+SAFE_BOOT_MODE="${SAFE_BOOT_MODE:-0}"
 
-if [ "$EMERGENCY_KILL_SWITCH" = "1" ] || [ "$BAN_RECOVERY_MODE" = "1" ]; then
+if [ "$EMERGENCY_KILL_SWITCH" = "1" ]; then
     echo ""
     echo "🚨 EMERGENCY KILL-SWITCH ACTIVE 🚨"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -28,10 +28,11 @@ if [ "$EMERGENCY_KILL_SWITCH" = "1" ] || [ "$BAN_RECOVERY_MODE" = "1" ]; then
     echo "🛡️  API Server: RUNNING (health checks only)"
     echo "⏰ Zero REST API calls to Binance"
     echo ""
-    echo "💡 To resume workers:"
+    echo "💡 To resume workers after ban clears:"
     echo "   1. Wait 3+ hours for IP ban to clear"
-    echo "   2. Set EMERGENCY_KILL_SWITCH=0 in render.yaml"
-    echo "   3. Re-deploy via GitHub push"
+    echo "   2. Verify ban cleared: python scripts/check_ban_status.py"
+    echo "   3. Set EMERGENCY_KILL_SWITCH=0 and SAFE_BOOT_MODE=1"
+    echo "   4. Re-deploy via GitHub push"
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     echo "📊 Total: 1 API Server ONLY (0 Workers)"
     echo "⏰ $(date)"
@@ -42,35 +43,57 @@ if [ "$EMERGENCY_KILL_SWITCH" = "1" ] || [ "$BAN_RECOVERY_MODE" = "1" ]; then
     exit 0
 fi
 
-# Start all workers in background
-echo "👷 Starting Background Workers..."
+# Check if Safe-Boot Mode is enabled (after BAN recovery)
+if [ "$SAFE_BOOT_MODE" = "1" ]; then
+    echo ""
+    echo "🚀 SAFE-BOOT MODE ACTIVATED"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "⚠️  Staggered worker startup (12s delays)"
+    echo "🛡️  REST rate limiting: 40 req/min max"
+    echo "⏰ Total startup time: ~2 minutes"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    # Use Safe-Boot script with staggered startup
+    if [ -f "/app/scripts/safe_boot_workers.sh" ]; then
+        bash /app/scripts/safe_boot_workers.sh
+    else
+        echo "⚠️  Safe-Boot script not found, falling back to standard startup"
+        SAFE_BOOT_MODE=0
+    fi
+fi
 
-python workers/auto_health_monitor.py &
-echo "✅ Auto Health Monitor started"
-
-python workers/auto_optimization_orchestrator.py &
-echo "✅ Auto Optimization started"
-
-python workers/gpt_auto_suggest.py &
-echo "✅ Auto Scanner started"
-
-python workers/fills_watcher.py &
-echo "✅ Fills Watcher started"
-
-python workers/insurance_monitor.py &
-echo "✅ Insurance Monitor started"
-
-python workers/position_monitor.py &
-echo "✅ Position Monitor started"
-
-python workers/quantum_top50_worker.py &
-echo "✅ Quantum TOP 50 started"
-
-python workers/sentinel_security.py &
-echo "✅ Sentinel Security started"
-
-python workers/telegram_digest_reporter.py &
-echo "✅ Telegram Digest started"
+# Standard startup (no ban recovery)
+if [ "$SAFE_BOOT_MODE" != "1" ]; then
+    echo "👷 Starting Background Workers (Standard Mode)..."
+    
+    python workers/auto_health_monitor.py &
+    echo "✅ Auto Health Monitor started"
+    
+    python workers/auto_optimization_orchestrator.py &
+    echo "✅ Auto Optimization started"
+    
+    python workers/gpt_auto_suggest.py &
+    echo "✅ Auto Scanner started"
+    
+    python workers/fills_watcher.py &
+    echo "✅ Fills Watcher started"
+    
+    python workers/insurance_monitor.py &
+    echo "✅ Insurance Monitor started"
+    
+    python workers/position_monitor.py &
+    echo "✅ Position Monitor started"
+    
+    python workers/quantum_top50_worker.py &
+    echo "✅ Quantum TOP 50 started"
+    
+    python workers/sentinel_security.py &
+    echo "✅ Sentinel Security started"
+    
+    python workers/telegram_digest_reporter.py &
+    echo "✅ Telegram Digest started"
+fi
 
 echo ""
 echo "🎉 All services started successfully!"
