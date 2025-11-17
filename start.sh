@@ -93,11 +93,14 @@ if [ "$SAFE_BOOT_MODE" != "1" ]; then
     
     python workers/telegram_digest_reporter.py &
     echo "✅ Telegram Digest started"
+    
+    python workers/ban_shield_monitor.py &
+    echo "✅ Ban Shield Monitor started"
 fi
 
 echo ""
 echo "🎉 All services started successfully!"
-echo "📊 Total: 1 API + 9 Workers"
+echo "📊 Total: 1 API + 10 Workers"
 echo "⏰ $(date)"
 
 # Keep container alive
