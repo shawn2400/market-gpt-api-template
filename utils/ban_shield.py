@@ -14,6 +14,7 @@ Dynamic Zones:
 """
 import time
 import asyncio
+import threading
 from typing import Optional, Literal
 from collections import deque
 from dataclasses import dataclass
@@ -21,6 +22,11 @@ from datetime import datetime
 import logging
 
 logger = logging.getLogger(__name__)
+
+# Global background event loop for sync callers
+_shield_loop: Optional[asyncio.AbstractEventLoop] = None
+_shield_loop_thread: Optional[threading.Thread] = None
+_shield_loop_lock = threading.Lock()
 
 # Priority levels
 Priority = Literal["CRITICAL", "NORMAL", "LOW"]
@@ -38,6 +44,29 @@ class APICall:
     endpoint: str
     worker: str
 
+def _ensure_shield_loop():
+    """Ensure background event loop exists for sync callers"""
+    global _shield_loop, _shield_loop_thread
+    
+    with _shield_loop_lock:
+        if _shield_loop is None or not _shield_loop.is_running():
+            def run_loop():
+                global _shield_loop
+                _shield_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(_shield_loop)
+                _shield_loop.run_forever()
+            
+            _shield_loop_thread = threading.Thread(target=run_loop, daemon=True)
+            _shield_loop_thread.start()
+            
+            # Wait for loop to start
+            for _ in range(50):
+                if _shield_loop and _shield_loop.is_running():
+                    break
+                time.sleep(0.01)
+    
+    return _shield_loop
+
 class BanShield:
     """
     Smart Rate Limiter with 3-tier priority system
@@ -48,6 +77,7 @@ class BanShield:
     - Context-aware throttling (position-aware)
     - Auto-recovery when load drops
     - Zero impact on critical trades
+    - Dual interface: async acquire() + sync acquire_sync()
     """
     
     def __init__(
@@ -263,6 +293,43 @@ class BanShield:
         """Check if we should resume paused workers"""
         rpm = self._get_current_rpm()
         return rpm < 25 and self.current_zone == "GREEN"
+    
+    def acquire_sync(
+        self,
+        priority: Priority = "NORMAL",
+        endpoint: str = "unknown",
+        worker: str = "unknown",
+        timeout: float = 5.0
+    ) -> bool:
+        """
+        Synchronous version of acquire() for use in sync contexts
+        
+        Uses background event loop thread to avoid blocking main loop
+        
+        Args:
+            priority: CRITICAL/NORMAL/LOW
+            endpoint: Binance endpoint name
+            worker: Worker name
+            timeout: Max wait time in seconds
+            
+        Returns:
+            True if allowed, False if blocked
+        """
+        loop = _ensure_shield_loop()
+        if loop is None:
+            logger.error("Failed to get shield background loop")
+            return True  # Fail open
+        
+        try:
+            # Submit coroutine to background loop
+            future = asyncio.run_coroutine_threadsafe(
+                self.acquire(priority=priority, endpoint=endpoint, worker=worker),
+                loop
+            )
+            return future.result(timeout=timeout)
+        except Exception as e:
+            logger.error(f"acquire_sync failed: {e}")
+            return True  # Fail open on error
 
 
 # Global shield instance
