@@ -2006,10 +2006,16 @@ async def _on_startup():
         try:
             logger.info("🔌 Starting WebSocket User Stream...")
             from utils import ws_user_stream as wsus
-            wsus.start()
-            logger.info("✅ WebSocket User Stream started - reduces REST API calls by 72%")
-            logger.info("  📊 Live updates: positions, fills, orders")
-            logger.info("  🔄 Auto-reconnect: enabled with exponential backoff")
+            await wsus.start_async()
+            # Verify WebSocket is running
+            status = wsus.status()
+            if status.get("running"):
+                logger.info("✅ WebSocket User Stream started - reduces REST API calls by 72%")
+                logger.info("  📊 Live updates: positions, fills, orders")
+                logger.info("  🔄 Auto-reconnect: enabled with exponential backoff")
+            else:
+                logger.warning("⚠️  WebSocket User Stream started but not running")
+                logger.warning("  ℹ️  System will fallback to REST API polling")
         except Exception as e:
             logger.warning(f"⚠️  WebSocket User Stream failed to start: {e}")
             logger.warning("  ℹ️  System will fallback to REST API polling")
