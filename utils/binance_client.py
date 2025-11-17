@@ -272,7 +272,10 @@ def futures_exchange_info_safe(force_refresh: bool = False) -> Optional[Dict[str
     if not force_refresh and _exinfo_cache["data"] and (ts - _exinfo_cache["ts"] < EXINFO_TTL):
         return _exinfo_cache["data"]
     try:
-        data = client.futures_exchange_info()
+        data = _shielded_call(
+            "futures_exchange_info",
+            lambda: client.futures_exchange_info()
+        )
         _exinfo_cache["data"] = data
         _exinfo_cache["ts"] = ts
         return data
@@ -283,7 +286,10 @@ def futures_exchange_info_safe(force_refresh: bool = False) -> Optional[Dict[str
 @observe_http(name="binance_ping")
 def fapi_ping() -> bool:
     try:
-        client.futures_ping()
+        _shielded_call(
+            "futures_ping",
+            lambda: client.futures_ping()
+        )
         return True
     except Exception as e:
         logger.warning("Futures ping failed: %s", e)
@@ -393,7 +399,10 @@ def get_recent_fills(symbol: str, limit: int = 50, lookback_seconds: int = 300) 
     try:
         # Binance API: futures_account_trades
         # https://binance-docs.github.io/apidocs/futures/en/#account-trade-list-user_data
-        fills = client.futures_account_trades(symbol=symbol.upper(), limit=min(limit, 1000))
+        fills = _shielded_call(
+            "futures_account_trades",
+            lambda: client.futures_account_trades(symbol=symbol.upper(), limit=min(limit, 1000))
+        )
         
         if not fills:
             return []
@@ -421,8 +430,11 @@ def futures_mark_price(symbol: str) -> Optional[float]:
         cached = _cache_get(_price_cache, sym)
         if cached is not None:
             return cached
-        d = client.futures_mark_price(symbol=sym)
-        p = float(d.get("markPrice") or 0.0)
+        d = _shielded_call(
+            "futures_mark_price",
+            lambda: client.futures_mark_price(symbol=sym)
+        )
+        p = float(d.get("markPrice") or 0.0) if d else 0.0
         if p > 0:
             _cache_put(_price_cache, sym, p)
         return p if p > 0 else None
@@ -496,8 +508,14 @@ def get_price(symbol: str) -> Optional[float]:
 @observe_http(name="binance_balance")
 def futures_balance() -> List[Dict[str, Any]]:
     try:
-        data = client.futures_account()
-        return data.get("assets") or data.get("balances") or client.futures_account_balance() or []
+        data = _shielded_call(
+            "futures_account",
+            lambda: client.futures_account()
+        )
+        return data.get("assets") or data.get("balances") or _shielded_call(
+            "futures_account_balance",
+            lambda: client.futures_account_balance()
+        ) or []
     except Exception as e:
         logger.error("Failed to fetch futures_balance: %s", e)
         return []
@@ -505,7 +523,10 @@ def futures_balance() -> List[Dict[str, Any]]:
 @observe_http(name="binance_positions", include_labels=["symbol"])
 def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
-        acc_info = client.futures_account() or {}
+        acc_info = _shielded_call(
+            "futures_account",
+            lambda: client.futures_account()
+        ) or {}
         positions = acc_info.get("positions", []) or []
         out = []
         su = symbol.upper() if symbol else None
@@ -534,10 +555,16 @@ def get_position_info(symbol: str) -> Dict[str, Any]:
 def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     try:
         if symbol:
-            return cast(List[Dict[str, Any]], client.futures_get_open_orders(symbol=symbol.upper()) or [])
+            return cast(List[Dict[str, Any]], _shielded_call(
+                "futures_get_open_orders",
+                lambda: client.futures_get_open_orders(symbol=symbol.upper())
+            ) or [])
         return cast(
             List[Dict[str, Any]],
-            client.futures_get_open_orders() or []
+            _shielded_call(
+                "futures_get_open_orders",
+                lambda: client.futures_get_open_orders()
+            ) or []
         )
     except Exception as e:
         logger.error("Failed to get open orders: %s", e)
@@ -554,7 +581,10 @@ def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, An
         return []
     limit = max(1, min(int(limit), 1000))
     try:
-        return cast(List[Dict[str, Any]], client.futures_get_all_orders(symbol=symbol.upper(), limit=limit, **kwargs) or [])
+        return cast(List[Dict[str, Any]], _shielded_call(
+            "futures_get_all_orders",
+            lambda: client.futures_get_all_orders(symbol=symbol.upper(), limit=limit, **kwargs)
+        ) or [])
     except BinanceAPIException as e:
         logger.error("get_all_orders failed: %s", e)
         return []
