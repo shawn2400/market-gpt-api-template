@@ -195,7 +195,10 @@ ENDPOINT_PRIORITY_MAP: Dict[str, str] = {
 
 def _shielded_call(endpoint: str, fn: Callable, *args, **kwargs) -> Any:
     """
-    Execute Binance API call through Auto-Ban-Shield with rate limiting
+    Execute Binance API call through Auto-Ban-Shield with rate limiting (SYNC version)
+    
+    This uses the shield's background event loop to avoid blocking.
+    Safe to call from both sync and async contexts.
     
     Args:
         endpoint: Endpoint name (e.g., 'futures_create_order')
@@ -217,36 +220,12 @@ def _shielded_call(endpoint: str, fn: Callable, *args, **kwargs) -> Any:
     shield = get_shield()
     tracker = get_tracker()
     
-    # Acquire permission via async shield (handle both sync and async contexts)
-    try:
-        loop = asyncio.get_running_loop()
-        # Already in async context - use asyncio.create_task or run in thread
-        # For sync wrapper, we need to use run_coroutine_threadsafe
-        import concurrent.futures
-        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-            future = executor.submit(
-                asyncio.run,
-                shield.acquire(
-                    priority=priority,  # type: ignore
-                    endpoint=endpoint,
-                    worker="binance_client"
-                )
-            )
-            allowed = future.result(timeout=5)
-    except RuntimeError:
-        # No running loop - create new one (sync context)
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            allowed = loop.run_until_complete(
-                shield.acquire(
-                    priority=priority,  # type: ignore
-                    endpoint=endpoint,
-                    worker="binance_client"
-                )
-            )
-        finally:
-            loop.close()
+    # Use synchronous acquire (runs on background event loop)
+    allowed = shield.acquire_sync(
+        priority=priority,  # type: ignore
+        endpoint=endpoint,
+        worker="binance_client"
+    )
     
     if not allowed:
         logger.warning(
@@ -501,18 +480,24 @@ def futures_index_price(symbol: str) -> Optional[float]:
         import httpx  # type: ignore
         base = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com").rstrip("/")
         url = f"{base}/fapi/v1/premiumIndex"
-        with observe_http_ctx(name="binance_http"):
-            with httpx.Client(timeout=float(os.getenv("BINANCE_HTTP_TIMEOUT", "10.0"))) as cli:
-                r = cli.get(url, params={"symbol": sym})
-                r.raise_for_status()
-                data = r.json()
-                if isinstance(data, list) and data:
-                    data = data[0]
-                p = data.get("indexPrice")
-                if p is not None:
-                    val = float(p)
-                    _cache_put(_index_cache, sym, val)
-                    return val
+        
+        def _httpx_fallback():
+            with observe_http_ctx(name="binance_http"):
+                with httpx.Client(timeout=float(os.getenv("BINANCE_HTTP_TIMEOUT", "10.0"))) as cli:
+                    r = cli.get(url, params={"symbol": sym})
+                    r.raise_for_status()
+                    return r.json()
+        
+        # Wrap httpx call in shield
+        data = _shielded_call("futures_premium_index", _httpx_fallback)
+        if data:
+            if isinstance(data, list) and data:
+                data = data[0]
+            p = data.get("indexPrice")
+            if p is not None:
+                val = float(p)
+                _cache_put(_index_cache, sym, val)
+                return val
     except Exception as e:
         logger.error("HTTP premiumIndex failed for %s: %s", sym, e)
     return None
