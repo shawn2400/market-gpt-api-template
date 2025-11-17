@@ -6,16 +6,19 @@ services:
     name: algogpt-trading-vm
     env: docker
     region: frankfurt
-    plan: standard
+    plan: standard  # 2GB RAM, $25/month
     dockerfilePath: ./Dockerfile
     dockerContext: .
     envVars:
+      # Core
       - key: PORT
         value: 10000
       - key: PYTHONUNBUFFERED
         value: 1
       - key: TZ
         value: Asia/Jerusalem
+      
+      # API Keys (set these in Render Dashboard)
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
@@ -28,6 +31,8 @@ services:
         sync: false
       - key: TELEGRAM_ADMIN_IDS
         sync: false
+      
+      # Optional AI Keys
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GEMINI_API_KEY
@@ -36,6 +41,8 @@ services:
         sync: false
       - key: XAI_API_KEY
         sync: false
+      
+      # Database (set Neon URL in dashboard)
       - key: DATABASE_URL
         sync: false
       - key: NEON_DATABASE_URL
@@ -46,10 +53,16 @@ services:
         sync: false
       - key: NEON_ENDPOINT_ID
         sync: false
+      
+      # Redis (set Redis Cloud URL in dashboard)
       - key: REDIS_URL
         sync: false
+      
+      # Webhooks
       - key: N8N_WEBHOOK_SECRET
         sync: false
+      
+      # Trading Configuration
       - key: ENABLE_AUTO_TRADING
         value: 1
       - key: ALLOW_MANAGE_OPEN_TRADES
@@ -64,6 +77,8 @@ services:
         value: 1
       - key: DYNAMIC_BUDGET_ENABLE
         value: 1
+      
+      # Budget & Risk
       - key: MIN_BUDGET_USD
         value: 25
       - key: MAX_BUDGET_USD
@@ -72,18 +87,26 @@ services:
         value: 6.0
       - key: BUDGET_PCT_OF_EQUITY
         value: 20.0
+      
+      # WebSocket Configuration (API Optimization - 72% reduction)
+      - key: USER_STREAM_ENABLE
+        value: 1
+      - key: STREAM_TP_BE
+        value: true
+      
+      # Intervals & Configuration (Optimized for WebSocket)
       - key: HEALTH_CHECK_INTERVAL
-        value: 30
+        value: 90
       - key: OPTIMIZATION_INTERVAL_HOURS
         value: 4
       - key: POSITION_REPORT_INTERVAL_SEC
         value: 1800
       - key: AUTO_PROTECT_INTERVAL_SEC
-        value: 30
+        value: 120
       - key: FILLS_WATCH_INTERVAL_SEC
-        value: 15
-      - key: INSURANCE_CHECK_INTERVAL_SEC
         value: 60
+      - key: INSURANCE_CHECK_INTERVAL_SEC
+        value: 180
       - key: POOL_PER_CYCLE
         value: 50
       - key: SUGGEST_GRID
