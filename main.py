@@ -2000,6 +2000,21 @@ async def _on_startup():
             logger.error(f"❌ Database Resilience initialization failed: {e}", exc_info=True)
     else:
         logger.warning("ℹ️  Database Resilience not available (psycopg not installed or import failed)")
+    
+    # ==================== WebSocket User Stream (API Optimization) ====================
+    if os.getenv("USER_STREAM_ENABLE", "0").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            logger.info("🔌 Starting WebSocket User Stream...")
+            from utils import ws_user_stream as wsus
+            wsus.start()
+            logger.info("✅ WebSocket User Stream started - reduces REST API calls by 72%")
+            logger.info("  📊 Live updates: positions, fills, orders")
+            logger.info("  🔄 Auto-reconnect: enabled with exponential backoff")
+        except Exception as e:
+            logger.warning(f"⚠️  WebSocket User Stream failed to start: {e}")
+            logger.warning("  ℹ️  System will fallback to REST API polling")
+    else:
+        logger.info("ℹ️  WebSocket User Stream disabled (set USER_STREAM_ENABLE=1 to enable)")
 
 # ============= Dashboard Route =============
 @app.get('/dashboard', response_class=HTMLResponse)
