@@ -44,23 +44,22 @@ Exit codes:
 
 ### Phase 3: Safe-Boot Mode (AFTER BAN CLEARED)
 
-#### Step 1: Disable Kill-Switch
+#### Step 1: Enable Safe-Boot Mode
 Edit `render.yaml`:
 ```yaml
 - key: EMERGENCY_KILL_SWITCH
-  value: 0  # Changed from 1
-- key: BAN_RECOVERY_MODE
-  value: 0  # Changed from 1
+  value: 0  # Changed from 1 - disable kill-switch
+- key: SAFE_BOOT_MODE
+  value: 1  # Changed from 0 - enable staggered startup
 ```
 
 #### Step 2: Push to GitHub
 ```bash
-git add render.yaml
-git commit -m "🚀 Disable kill-switch - ban cleared"
-git push origin main
+# Use GitHub API push script
+python scripts/push_kill_switch.py
 ```
 
-GitHub Actions will auto-deploy to Render with workers enabled.
+GitHub Actions will auto-deploy to Render with Safe-Boot Mode enabled.
 
 #### Step 3: Staggered Startup (Automatic)
 Workers start with 12-second delays to prevent burst:
