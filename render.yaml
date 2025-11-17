@@ -125,3 +125,10 @@ services:
         value: 1
       - key: SENTINEL_ALERT_LEVEL
         value: critical
+      
+      # 🚨 EMERGENCY KILL-SWITCH (BAN RECOVERY)
+      # Set to 1 to disable ALL workers during IP ban cooldown
+      - key: EMERGENCY_KILL_SWITCH
+        value: 1
+      - key: BAN_RECOVERY_MODE
+        value: 1
