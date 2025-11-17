@@ -116,10 +116,10 @@ def vwap(df: pd.DataFrame, period: Optional[int] = None) -> pd.Series:
     pv = typical_price * v
     
     if period is None:
-        return (pv.cumsum() / v.cumsum()).fillna(method='ffill')
+        return (pv.cumsum() / v.cumsum()).ffill()
     else:
         return (pv.rolling(window=period, min_periods=1).sum() / 
-                v.rolling(window=period, min_periods=1).sum()).fillna(method='ffill')
+                v.rolling(window=period, min_periods=1).sum()).ffill()
 
 def keltner_bands(df: pd.DataFrame, period: int = 20, atr_period: int = 14, multiplier: float = 2.0):
     """
