@@ -264,10 +264,13 @@ async def _head_compat_and_soft_readyz(request: Request, call_next):
     if request.url.path == "/readyz":
         return JSONResponse({"ok": True, "timestamp": int(time.time())}, status_code=200)
     if request.method == "HEAD":
-        scope_copy = dict(request.scope); scope_copy["method"] = "GET"
-        new_req = Request(scope_copy, receive=request.receive)
-        resp = await call_next(new_req)
-        return StarletteResponse(status_code=resp.status_code, headers=dict(resp.headers), media_type=resp.media_type)
+        try:
+            scope_copy = dict(request.scope); scope_copy["method"] = "GET"
+            new_req = Request(scope_copy, receive=request.receive)
+            resp = await call_next(new_req)
+            return StarletteResponse(status_code=resp.status_code, headers=dict(resp.headers), media_type=resp.media_type)
+        except Exception:
+            return StarletteResponse(status_code=200)
     return await call_next(request)
 
 @app.get("/readyz")
