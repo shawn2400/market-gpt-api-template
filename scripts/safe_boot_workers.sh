@@ -57,13 +57,18 @@ python workers/sentinel_security.py &
 echo "✅ Sentinel Security started"
 sleep $DELAY
 
-echo "📊 [9/9] Starting Telegram Digest Reporter..."
+echo "📊 [9/10] Starting Telegram Digest Reporter..."
 python workers/telegram_digest_reporter.py &
 echo "✅ Telegram Digest started"
+sleep $DELAY
+
+echo "📊 [10/10] Starting Ban Shield Monitor..."
+python workers/ban_shield_monitor.py &
+echo "✅ Ban Shield Monitor started"
 
 echo ""
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-echo "🎉 All 9 workers started successfully!"
+echo "🎉 All 10 workers started successfully!"
 echo "⏰ Total startup time: ~2 minutes"
 echo "📊 Monitoring for REST API bursts..."
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
