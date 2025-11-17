@@ -2,9 +2,14 @@
 # AlgoGPT - Reserved VM Startup Script
 # Runs all services on single VM
 set -e
+
+# Set Python path to current directory
+export PYTHONPATH="$(pwd)"
+
 echo "🚀 Starting AlgoGPT Trading System..."
 echo "📊 Environment: Production (Reserved VM)"
 echo "💾 RAM: 2GB | Region: Frankfurt"
+echo "🐍 PYTHONPATH: $PYTHONPATH"
 
 # Start Gunicorn API server
 echo "🌐 Starting API Server..."
