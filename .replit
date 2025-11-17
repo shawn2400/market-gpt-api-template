@@ -6,7 +6,7 @@ integrations = ["python_database:1.0.0", "github:1.0.0"]
 
 [nix]
 channel = "stable-25_05"
-packages = ["cairo", "cargo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "iproute2", "lcms2", "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "libyaml", "nettools", "openjpeg", "pkg-config", "postgresql", "qhull", "rustc", "tcl", "tk", "xsimd", "zlib"]
+packages = ["cairo", "cargo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "iproute2", "lcms2", "libiconv", "libimagequant", "libjpeg", "libtiff", "libwebp", "libxcrypt", "libyaml", "nettools", "openjpeg", "pkg-config", "postgresql", "qhull", "rustc", "tcl", "tk", "xsimd", "zlib", "gh"]
 
 [workflows]
 runButton = "Project"
@@ -35,10 +35,6 @@ args = "Sentinel Security"
 [[workflows.workflow.tasks]]
 task = "workflow.run"
 args = "Telegram Digest Reporter"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Auto Cleanup"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
@@ -107,17 +103,6 @@ author = "agent"
 [[workflows.workflow.tasks]]
 task = "shell.exec"
 args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/telegram_digest_reporter.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
-name = "Auto Cleanup"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG CLEANUP_INTERVAL_SEC=21600 LOGS_RETENTION_DAYS=7 AI_REVIEWS_KEEP_COUNT=100 IMPROVEMENTS_RETENTION_DAYS=30 python workers/auto_cleanup.py"
 
 [workflows.workflow.metadata]
 outputType = "console"
