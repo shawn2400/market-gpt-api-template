@@ -1,15 +1,12 @@
 #!/bin/bash
 # AlgoGPT - Reserved VM Startup Script
 # Runs all services on single VM
-set -e
 
-# Set Python path to current directory
-export PYTHONPATH="$(pwd)"
+set -e
 
 echo "🚀 Starting AlgoGPT Trading System..."
 echo "📊 Environment: Production (Reserved VM)"
 echo "💾 RAM: 2GB | Region: Frankfurt"
-echo "🐍 PYTHONPATH: $PYTHONPATH"
 
 # Start Gunicorn API server
 echo "🌐 Starting API Server..."
@@ -18,8 +15,36 @@ gunicorn -c gunicorn_conf.py main:app &
 # Wait for API to be ready
 sleep 5
 
+# 🚨 EMERGENCY KILL-SWITCH CHECK
+EMERGENCY_KILL_SWITCH="${EMERGENCY_KILL_SWITCH:-0}"
+BAN_RECOVERY_MODE="${BAN_RECOVERY_MODE:-0}"
+
+if [ "$EMERGENCY_KILL_SWITCH" = "1" ] || [ "$BAN_RECOVERY_MODE" = "1" ]; then
+    echo ""
+    echo "🚨 EMERGENCY KILL-SWITCH ACTIVE 🚨"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "⚠️  All workers DISABLED (BAN recovery mode)"
+    echo "🔌 WebSocket UserStream: ACTIVE (via API server)"
+    echo "🛡️  API Server: RUNNING (health checks only)"
+    echo "⏰ Zero REST API calls to Binance"
+    echo ""
+    echo "💡 To resume workers:"
+    echo "   1. Wait 3+ hours for IP ban to clear"
+    echo "   2. Set EMERGENCY_KILL_SWITCH=0 in render.yaml"
+    echo "   3. Re-deploy via GitHub push"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "📊 Total: 1 API Server ONLY (0 Workers)"
+    echo "⏰ $(date)"
+    echo ""
+    
+    # Keep container alive with only API server
+    tail -f /dev/null
+    exit 0
+fi
+
 # Start all workers in background
 echo "👷 Starting Background Workers..."
+
 python workers/auto_health_monitor.py &
 echo "✅ Auto Health Monitor started"
 
@@ -54,4 +79,3 @@ echo "⏰ $(date)"
 
 # Keep container alive
 tail -f /dev/null
-
