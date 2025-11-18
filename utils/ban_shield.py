@@ -82,10 +82,10 @@ class BanShield:
     
     def __init__(
         self,
-        max_requests_per_min: int = 40,
-        green_zone: int = 30,
-        yellow_zone: int = 38,
-        red_zone: int = 40
+        max_requests_per_min: int = 25,
+        green_zone: int = 18,
+        yellow_zone: int = 22,
+        red_zone: int = 25
     ):
         self.max_rpm = max_requests_per_min
         self.green_zone = green_zone
