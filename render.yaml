@@ -1,12 +1,12 @@
 # AlgoGPT - Render.com Reserved VM Configuration
-# Single VM running all services - $25/month (2GB RAM)
+# Clean Production Build - BAN-Safe Version
 
 services:
   - type: pserv
     name: algogpt-trading-vm
     env: docker
     region: frankfurt
-    plan: standard  # 2GB RAM, $25/month
+    plan: standard        # 2GB RAM - $25/month
     dockerfilePath: ./Dockerfile
     dockerContext: .
     envVars:
@@ -17,13 +17,11 @@ services:
         value: 1
       - key: TZ
         value: Asia/Jerusalem
-      
-      # API Keys (set these in Render Dashboard)
+
+      # ====== API Keys (set only in Render Dashboard) ======
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
-        sync: false
-      - key: DEEPSEEK_API_KEY
         sync: false
       - key: TELEGRAM_BOT_TOKEN
         sync: false
@@ -31,18 +29,18 @@ services:
         sync: false
       - key: TELEGRAM_ADMIN_IDS
         sync: false
-      
-      # Optional AI Keys
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: GEMINI_API_KEY
         sync: false
-      - key: OPENAI_API_KEY
-        sync: false
       - key: XAI_API_KEY
         sync: false
-      
-      # Database (set Neon URL in dashboard)
+
+      # ====== Database (Neon) ======
       - key: DATABASE_URL
         sync: false
       - key: NEON_DATABASE_URL
@@ -53,31 +51,35 @@ services:
         sync: false
       - key: NEON_ENDPOINT_ID
         sync: false
-      
-      # Redis (set Redis Cloud URL in dashboard)
+
+      # ====== Redis (Redis Cloud) ======
       - key: REDIS_URL
         sync: false
-      
-      # Webhooks
+
+      # ====== Webhooks ======
       - key: N8N_WEBHOOK_SECRET
         sync: false
-      
-      # Trading Configuration
+
+      # ======================================================
+      # Trading System Configuration
+      # ======================================================
+
+      # Disable everything during BAN
       - key: ENABLE_AUTO_TRADING
-        value: 1
+        value: 0
       - key: ALLOW_MANAGE_OPEN_TRADES
-        value: 1
+        value: 0
       - key: ENABLE_POSITION_MONITOR
-        value: 1
+        value: 0
       - key: ENABLE_INSURANCE_MONITOR
-        value: 1
+        value: 0
       - key: ENABLE_AUTO_PROTECT
-        value: 1
+        value: 0
       - key: AUTO_RUN
-        value: 1
+        value: 0
       - key: DYNAMIC_BUDGET_ENABLE
-        value: 1
-      
+        value: 0
+
       # Budget & Risk
       - key: MIN_BUDGET_USD
         value: 25
@@ -87,55 +89,54 @@ services:
         value: 6.0
       - key: BUDGET_PCT_OF_EQUITY
         value: 20.0
-      
-      # WebSocket Configuration (API Optimization - 72% reduction)
+
+      # WebSocket – Allowed even in BAN
       - key: USER_STREAM_ENABLE
         value: 1
       - key: STREAM_TP_BE
         value: true
-      
-      # Intervals & Configuration (Optimized for WebSocket)
+
+      # ===== Intervals (SAFE MODE) =====
       - key: HEALTH_CHECK_INTERVAL
-        value: 90
-      - key: OPTIMIZATION_INTERVAL_HOURS
-        value: 4
-      - key: POSITION_REPORT_INTERVAL_SEC
-        value: 1800
-      - key: AUTO_PROTECT_INTERVAL_SEC
         value: 120
+      - key: OPTIMIZATION_INTERVAL_HOURS
+        value: 12
+      - key: POSITION_REPORT_INTERVAL_SEC
+        value: 3600
+      - key: AUTO_PROTECT_INTERVAL_SEC
+        value: 9999
       - key: FILLS_WATCH_INTERVAL_SEC
-        value: 60
+        value: 9999
       - key: INSURANCE_CHECK_INTERVAL_SEC
-        value: 180
-      - key: POOL_PER_CYCLE
-        value: 50
+        value: 9999
+      - key: FILLS_WATCH_ENABLE
+        value: 0
       - key: SUGGEST_GRID
-        value: 1
-      - key: AUTO_FIX_ENABLE
-        value: 1
+        value: 0
+
+      # Alerts / Logging
       - key: TELEGRAM_SEND_ENABLE
         value: 1
-      - key: OPTIMIZATION_LOOKBACK_DAYS
-        value: 7
-      - key: FILLS_WATCH_ENABLE
-        value: 1
       - key: POSITION_ALERT_LEVEL
-        value: all
+        value: critical
       - key: SENTINEL_ENABLED
         value: 1
       - key: SENTINEL_ALERT_LEVEL
         value: critical
-      
-      # 🚨 EMERGENCY KILL-SWITCH (BAN RECOVERY)
-      # Phase 1: EMERGENCY_KILL_SWITCH=1 → All workers OFF, WebSocket only
-      # Phase 3: EMERGENCY_KILL_SWITCH=0, SAFE_BOOT_MODE=1 → Staggered startup
+
+      # ======================================================
+      # 🚨 Emergency Kill Switch (This is EXTREMELY important)
+      # ======================================================
+
       - key: EMERGENCY_KILL_SWITCH
-        value: 1
+        value: 1           # 🔥 ALL WORKERS OFF, API ONLY
+
       - key: SAFE_BOOT_MODE
-        value: 0
-      
-      # 🛡️ Auto-Ban-Shield v2.0 (Dynamic Rate Limiting)
-      # STRICTER LIMITS: Reduced from 40→25 RPM after second BAN
+        value: 1           # Start only API + WebSocket
+
+      # ======================================================
+      # Auto-Ban Shield v2.0
+      # ======================================================
       - key: BAN_SHIELD_ENABLE
         value: 1
       - key: BAN_SHIELD_MAX_RPM
@@ -152,3 +153,4 @@ services:
         value: 10
       - key: SHIELD_ALERT_COOLDOWN
         value: 300
+
