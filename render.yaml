@@ -135,16 +135,17 @@ services:
         value: 0
       
       # 🛡️ Auto-Ban-Shield v2.0 (Dynamic Rate Limiting)
+      # STRICTER LIMITS: Reduced from 40→25 RPM after second BAN
       - key: BAN_SHIELD_ENABLE
         value: 1
       - key: BAN_SHIELD_MAX_RPM
-        value: 40
+        value: 25
       - key: BAN_SHIELD_GREEN_ZONE
-        value: 30
+        value: 18
       - key: BAN_SHIELD_YELLOW_ZONE
-        value: 38
+        value: 22
       - key: BAN_SHIELD_RED_ZONE
-        value: 40
+        value: 25
       - key: BAN_SHIELD_MONITOR_ENABLE
         value: 1
       - key: SHIELD_MONITOR_INTERVAL
