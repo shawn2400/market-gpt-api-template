@@ -125,14 +125,14 @@ services:
         value: critical
 
       # ======================================================
-      # 🚨 Emergency Kill Switch (This is EXTREMELY important)
+      # 🚨 Emergency Kill Switch (UPDATED)
       # ======================================================
 
       - key: EMERGENCY_KILL_SWITCH
-        value: 1           # 🔥 ALL WORKERS OFF, API ONLY
+        value: 0           # ✔️ UPDATED — FULL SYSTEM ENABLED
 
       - key: SAFE_BOOT_MODE
-        value: 1           # Start only API + WebSocket
+        value: 1           # ✔️ UPDATED — API+WS ONLY AT START
 
       # ======================================================
       # Auto-Ban Shield v2.0
@@ -153,4 +153,5 @@ services:
         value: 10
       - key: SHIELD_ALERT_COOLDOWN
         value: 300
+
 
