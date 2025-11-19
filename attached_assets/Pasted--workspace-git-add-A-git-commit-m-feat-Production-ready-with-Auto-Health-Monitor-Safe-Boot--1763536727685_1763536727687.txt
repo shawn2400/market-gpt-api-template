@@ -1,0 +1,49 @@
+~/workspace$ git add -A
+git commit -m "feat: Production-ready with Auto-Health Monitor + Safe-Boot Mode"
+git push origin main
+[main 8be2203] feat: Production-ready with Auto-Health Monitor + Safe-Boot Mode
+ 1 file changed, 83 insertions(+)
+ create mode 100644 attached_assets/Pasted--1-1-Cursor-Replit--1763536401467_1763536401469.txt
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ rm -f .git/index.lock
+git pull --rebase origin main
+git push origin main
+remote: Enumerating objects: 469, done.
+remote: Counting objects: 100% (469/469), done.
+remote: Compressing objects: 100% (154/154), done.
+remote: Total 447 (delta 380), reused 350 (delta 293), pack-reused 0 (from 0)
+Receiving objects: 100% (447/447), 86.91 KiB | 12.42 MiB/s, done.
+Resolving deltas: 100% (380/380), completed with 19 local objects.
+From https://github.com/shawn2400/market-gpt-api-template
+ * branch            main       -> FETCH_HEAD
+ + fbb7023...693b70d main       -> origin/main  (forced update)
+warning: skipped previously applied commit 415ad64
+warning: skipped previously applied commit da43628
+warning: skipped previously applied commit 6331327
+hint: use --reapply-cherry-picks to include skipped commits
+hint: Disable this message with "git config set advice.skippedCherryPicks false"
+Auto-merging Dockerfile
+Auto-merging requirements.txt
+CONFLICT (content): Merge conflict in requirements.txt
+error: could not apply a91dfca... Update dependencies and optimize installation process
+hint: Resolve all conflicts manually, mark them as resolved with
+hint: "git add/rm <conflicted_files>", then run "git rebase --continue".
+hint: You can instead skip this commit: run "git rebase --skip".
+hint: To abort and get back to the state before "git rebase", run "git rebase --abort".
+hint: Disable this message with "git config set advice.mergeConflict false"
+Could not apply a91dfca... # Update dependencies and optimize installation process
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (non-fast-forward)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because a pushed branch tip is behind its remote
+hint: counterpart. If you want to integrate the remote changes, use 'git pull'
+hint: before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ 
