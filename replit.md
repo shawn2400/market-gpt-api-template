@@ -78,6 +78,10 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 
 **Dynamic Smart Filter v2.0 (100% Regime-Aware + Adaptive Volume):**
 -   **🆕 Adaptive Volume Analyzer (v2.0)**: Measures real-time market-wide volume distribution and auto-adjusts thresholds based on actual conditions, not assumptions. Compares each symbol's volume against market median to determine relative strength.
+-   **🆕 Market-Wide Volume Regime Detection**: Automatically detects LOW_VOLUME/NORMAL/HIGH_VOLUME market conditions by analyzing % of symbols below median volume.
+    -   **LOW_VOLUME Market** (>60% symbols < 0.5x median): Auto-reduces thresholds by 65% to enable trading in weak markets
+    -   **NORMAL Market** (30-60% symbols < 0.5x median): Standard thresholds
+    -   **HIGH_VOLUME Market** (<30% symbols < 0.5x median): Auto-increases thresholds by 50% for stricter filtering
 -   **Adaptive Volume Thresholds**: Volume requirements adapt automatically to market conditions using percentile strategies. Safety guardrails prevent extreme values (0.03x - 0.50x range).
     -   **p75 (Conservative/Default)**: High threshold (~3.5x median), only top 25% volume symbols pass - strict filtering for quality
     -   **median (Balanced)**: Medium threshold (~1.0x median), ~50% of symbols pass - balanced approach
@@ -86,7 +90,7 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Dynamic BTC Correlation Penalty**: Scales BTC penalty based on regime/mood/confidence (e.g., CHOPPY+BEARISH=-0.4 instead of fixed -1.0).
 -   **Adaptive Direction Penalty**: Counter-trend penalties adjust by regime strength - CHOPPY (-0.8), TRENDING (-1.0), VOLATILE (-1.2).
 -   **Market Intelligence Integration**: Queries Market Intelligence in real-time for regime/mood analysis before filtering.
--   **100% Dynamic Operation**: Zero hard-coded thresholds - all parameters measured from live market data across 591 symbols. Fallback to safe defaults if adaptive system fails.
+-   **100% Dynamic Operation**: Zero hard-coded thresholds - all parameters measured from live market data across 591 symbols. Automatically adjusts to market-wide volume conditions without manual intervention.
 -   **Smart Caching**: 5-minute TTL on volume stats to balance freshness vs API efficiency.
 
 **Dynamic TOP 100 Symbol Filter (Musical Chairs System):**
