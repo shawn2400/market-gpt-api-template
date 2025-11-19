@@ -684,33 +684,62 @@ class ExecutionBot:
                     except Exception as track_err:
                         self.log.warning(f"Failed to track order for timeout: {track_err}")
                 
-                # 🛡️ For MARKET orders, attach SL/TP immediately (LIMIT orders handled by Fills Watcher)
+                # 🛡️ For MARKET orders, attach Multi-Target TP (TP1/TP2/TP3) + SL immediately
+                # LIMIT orders handled by Fills Watcher
                 sl_order = None
-                tp_order = None
+                tp_orders = []  # Changed from tp_order to tp_orders (list for TP1/TP2/TP3)
                 sltp_failed = False
                 
                 if order_type == "MARKET":
                     try:
-                        from utils.universal_sltp_manager import attach_sltp_protection
-                        import asyncio
+                        from utils.universal_sltp_manager import attach_multi_target_protection
                         
-                        protection_result = asyncio.run(attach_sltp_protection(
+                        # Get strategy and regime from ticket (defaults if missing)
+                        strategy = ticket.get("strategy", "momentum")
+                        regime = ticket.get("market_regime", "choppy")
+                        win_rate = ticket.get("win_rate")
+                        volatility = ticket.get("atr_pct")
+                        
+                        # Convert qty string to float
+                        total_quantity = float(qty)
+                        
+                        self.log.info(
+                            f"🎯 Attaching Multi-Target TP for {symbol}: "
+                            f"entry={current_price:.6f}, qty={total_quantity}, leverage={leverage}"
+                        )
+                        
+                        # 🔧 FIX: Use await instead of asyncio.run() to avoid event loop conflicts
+                        protection_result = await attach_multi_target_protection(
                             symbol=symbol,
                             side=position_side,
+                            entry_price=current_price,
                             sl_price=sl_price,
-                            tp_price=tp_price
-                        ))
+                            total_quantity=total_quantity,
+                            leverage=leverage,
+                            strategy=strategy,
+                            volatility=volatility,
+                            regime=regime,
+                            win_rate=win_rate,
+                            position_side=position_side
+                        )
                         
                         if protection_result["ok"]:
                             sl_order = protection_result.get("sl_order")
-                            tp_order = protection_result.get("tp_order")
-                            self.log.info(f"✅ Universal SL/TP protection attached for {symbol}")
+                            tp_orders = protection_result.get("tp_orders", [])
+                            tp_config = protection_result.get("tp_config")
+                            
+                            self.log.info(
+                                f"✅ Multi-Target TP protection attached for {symbol}:\n"
+                                f"   SL: 1 order\n"
+                                f"   TP: {len(tp_orders)} orders (TP1/TP2/TP3)\n"
+                                f"   RR Ratio: {tp_config['risk_reward_ratio']:.1f}"
+                            )
                         else:
                             sltp_failed = True
-                            self.log.error(f"🚨 Universal SL/TP protection FAILED for {symbol}: {protection_result.get('errors')}")
+                            self.log.error(f"🚨 Multi-Target TP protection FAILED for {symbol}: {protection_result.get('errors')}")
                             
                     except Exception as sltp_err:
-                        self.log.error(f"🚨 CRITICAL: Failed to attach SL/TP for {symbol}: {sltp_err}")
+                        self.log.error(f"🚨 CRITICAL: Failed to attach Multi-Target TP for {symbol}: {sltp_err}")
                         sltp_failed = True
                 
                 # 🔧 FIX: Close position if SL/TP failed (cannot leave unprotected!)
@@ -720,7 +749,7 @@ class ExecutionBot:
                     # 🔧 FIX: Cancel any successfully placed SL/TP orders first (prevent dangling orders)
                     try:
                         from utils.binance_client import futures_cancel_all_orders
-                        if sl_order or tp_order:
+                        if sl_order or tp_orders:  # tp_orders is now a list (TP1/TP2/TP3)
                             cancelled_count = futures_cancel_all_orders(symbol)
                             self.log.info(f"🗑️ Cancelled {cancelled_count} orders for {symbol} (cleanup before emergency close)")
                     except Exception as cancel_err:
@@ -755,7 +784,7 @@ class ExecutionBot:
                     "exchange": "binance_futures",
                     "order": order,
                     "sl_order": sl_order,
-                    "tp_order": tp_order,
+                    "tp_orders": tp_orders,  # Changed to tp_orders (list of 3 TP orders)
                     "status": "opened"
                 }
             except Exception as e1:

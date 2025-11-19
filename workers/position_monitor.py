@@ -394,6 +394,102 @@ async def ensure_positions_protected() -> None:
                 f"{'...' if len(positions) > 5 else ''}"
             )
         
+        # 🎯 LAYER 0: Initial Multi-Target TP Protection (NEW - MetaBrain v9.1)
+        # Adds TP1/TP2/TP3 to positions that lack TP orders
+        # This runs ONCE per position (tracked via Redis state manager)
+        try:
+            from utils.universal_sltp_manager import attach_multi_target_protection
+            from utils.binance_client import get_all_orders
+            
+            for pos in positions:
+                symbol = pos.get("symbol", "")
+                amt = float(pos.get("positionAmt", 0))
+                
+                if amt == 0:
+                    continue
+                
+                position_side = "LONG" if amt > 0 else "SHORT"
+                entry_price = float(pos.get("entryPrice", 0))
+                mark_price = float(pos.get("markPrice", 0))
+                leverage = int(pos.get("leverage", 10))
+                
+                if entry_price <= 0 or mark_price <= 0:
+                    continue
+                
+                # Check if position already has TP orders
+                try:
+                    open_orders = get_all_orders(symbol) or []
+                    
+                    # Filter for TP orders (TAKE_PROFIT, TAKE_PROFIT_MARKET, or LIMIT with reduceOnly)
+                    tp_orders = [
+                        o for o in open_orders
+                        if o.get("type") in ("TAKE_PROFIT", "TAKE_PROFIT_MARKET") or
+                           (o.get("type") == "LIMIT" and o.get("reduceOnly") == True)
+                    ]
+                    
+                    if tp_orders:
+                        logger.debug(f"✅ {symbol}: Already has {len(tp_orders)} TP order(s), skipping initial TP protection")
+                        continue
+                    
+                    # No TP orders found - add Multi-Target TP
+                    logger.info(f"🎯 {symbol}: No TP orders found, adding Multi-Target TP protection...")
+                    
+                    # Calculate ATR for volatility
+                    atr = await calculate_symbol_atr(symbol, period=14)
+                    volatility = (atr / mark_price) if atr > 0 and mark_price > 0 else 0.02
+                    
+                    # Calculate SL (needed for TP calculation)
+                    # Use 2% fallback if ATR unavailable
+                    sl_price = entry_price * (1 - 0.02) if position_side == "LONG" else entry_price * (1 + 0.02)
+                    if atr > 0:
+                        atr_mult = 1.5
+                        sl_price = entry_price - (atr * atr_mult) if position_side == "LONG" else entry_price + (atr * atr_mult)
+                    
+                    # Add Multi-Target TP protection
+                    protection_result = await attach_multi_target_protection(
+                        symbol=symbol,
+                        side=position_side,
+                        entry_price=entry_price,
+                        sl_price=sl_price,
+                        total_quantity=abs(amt),
+                        leverage=leverage,
+                        strategy="momentum",  # Default
+                        volatility=volatility,
+                        regime="choppy",  # Default
+                        win_rate=None,
+                        position_side=position_side
+                    )
+                    
+                    if protection_result["ok"]:
+                        tp_orders_placed = protection_result.get("tp_orders", [])
+                        tp_config = protection_result.get("tp_config")
+                        
+                        logger.info(
+                            f"✅ {symbol}: Multi-Target TP added: "
+                            f"{len(tp_orders_placed)} orders (TP1/TP2/TP3), "
+                            f"RR={tp_config['risk_reward_ratio']:.1f}"
+                        )
+                        
+                        # Send Telegram notification
+                        await send_telegram_message(
+                            f"🎯 *Multi-Target TP Added*\n\n"
+                            f"Symbol: `{symbol}`\n"
+                            f"Side: {position_side}\n"
+                            f"Entry: {entry_price:.6f}\n\n"
+                            f"TP1: {tp_config['targets'][0]['price']:.6f} ({tp_config['targets'][0]['exit_percent']*100:.0f}%)\n"
+                            f"TP2: {tp_config['targets'][1]['price']:.6f} ({tp_config['targets'][1]['exit_percent']*100:.0f}%)\n"
+                            f"TP3: {tp_config['targets'][2]['price']:.6f} ({tp_config['targets'][2]['exit_percent']*100:.0f}%)\n\n"
+                            f"Risk/Reward: {tp_config['risk_reward_ratio']:.1f}x"
+                        )
+                    else:
+                        logger.error(f"❌ {symbol}: Failed to add Multi-Target TP: {protection_result.get('errors')}")
+                
+                except Exception as tp_check_err:
+                    logger.error(f"❌ {symbol}: Initial TP protection check failed: {tp_check_err}", exc_info=True)
+        
+        except Exception as initial_tp_err:
+            logger.error(f"❌ Initial TP protection failed: {initial_tp_err}", exc_info=True)
+        
         for pos in positions:
             symbol = pos.get("symbol", "")
             amt = float(pos.get("positionAmt", 0))
