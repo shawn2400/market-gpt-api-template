@@ -103,6 +103,9 @@ _completed_trades_buffer: List[Dict[str, Any]] = []  # Buffer for batch AI revie
 # Track TP Extension state
 _tp_extension_state: Dict[str, Dict[str, Any]] = {}  # symbol -> {last_tp_hit: int, extended: bool, ...}
 
+# Track Trailing SL state
+_trailing_sl_state: Dict[str, Dict[str, Any]] = {}  # symbol -> {peak_price: float, sl_price: float, ...}
+
 def _position_snapshot(symbol: str) -> Tuple[Optional[float], Optional[float]]:
     """
     מחזיר (entry_price, qty_abs) אם יש פוזיציה, אחרת (None, None)
@@ -270,6 +273,192 @@ def _check_and_extend_tp(symbol: str, current_price: float, entry_price: float, 
     
     except Exception as e:
         log.error(f"❌ Failed to place extended TP orders for {symbol}: {e}", exc_info=True)
+
+
+def _update_trailing_sl(symbol: str, current_price: float, entry_price: float, remaining_qty: float) -> None:
+    """
+    🛡️ DYNAMIC TRAILING SL: Update Stop Loss as price moves up, synchronized with TP.
+    
+    Activates after TP1, moves SL up to lock profits as price climbs.
+    Synchronized with TP Extension - when generating new TPs, SL also moves up.
+    
+    Args:
+        symbol: Trading symbol
+        current_price: Current market price
+        entry_price: Original entry price
+        remaining_qty: Remaining position quantity
+    """
+    if not TP_EXTENSION_AVAILABLE or remaining_qty <= 0:
+        return
+    
+    # Get position data
+    pos_data = _active_positions.get(symbol)
+    if not pos_data:
+        return
+    
+    side = pos_data.get("side", "LONG")
+    original_sl = pos_data.get("sl_price")
+    
+    if not original_sl:
+        return  # No SL to trail
+    
+    # Get or initialize trailing state
+    if symbol not in _trailing_sl_state:
+        # Initialize trailing state
+        _trailing_sl_state[symbol] = {
+            "peak_price": entry_price,
+            "current_sl": original_sl,
+            "activated": False,
+            "last_update_time": time.time()
+        }
+    
+    trail_state = _trailing_sl_state[symbol]
+    
+    # Check if TP1 was hit (activation trigger)
+    tp_prices = pos_data.get("tp_prices", [])
+    tp1_hit = False
+    if tp_prices and len(tp_prices) >= 1:
+        if side == "LONG":
+            tp1_hit = current_price >= tp_prices[0]
+        else:  # SHORT
+            tp1_hit = current_price <= tp_prices[0]
+    
+    # Activate trailing after TP1
+    if not trail_state["activated"] and tp1_hit:
+        trail_state["activated"] = True
+        trail_state["peak_price"] = current_price
+        log.info(f"🛡️ Trailing SL activated for {symbol} @ {current_price:.4f}")
+    
+    if not trail_state["activated"]:
+        return  # Not activated yet
+    
+    # Update peak price
+    peak_updated = False
+    if side == "LONG" and current_price > trail_state["peak_price"]:
+        trail_state["peak_price"] = current_price
+        peak_updated = True
+    elif side == "SHORT" and current_price < trail_state["peak_price"]:
+        trail_state["peak_price"] = current_price
+        peak_updated = True
+    
+    if not peak_updated:
+        return  # Price hasn't improved, no SL update needed
+    
+    # Calculate trailing distance based on volatility
+    try:
+        klines = get_klines(symbol, "15m", 24)
+        if klines and len(klines) >= 14:
+            highs = [float(k[2]) for k in klines]
+            lows = [float(k[3]) for k in klines]
+            closes = [float(k[4]) for k in klines]
+            
+            # Calculate ATR
+            atr_sum = 0.0
+            for i in range(1, 14):
+                tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+                atr_sum += tr
+            atr = atr_sum / 14
+            volatility = atr / current_price
+        else:
+            volatility = 0.02  # Default 2%
+    except Exception as e:
+        log.debug(f"Failed to calculate ATR for trailing SL: {e}")
+        volatility = 0.02
+    
+    # Dynamic trailing distance based on volatility and TP level
+    # Base distance: 2-5% depending on volatility
+    if volatility > 0.10:
+        trailing_distance_pct = 0.05  # 5% for high volatility
+    elif volatility > 0.05:
+        trailing_distance_pct = 0.03  # 3% for medium volatility
+    else:
+        trailing_distance_pct = 0.02  # 2% for low volatility
+    
+    # Tighten trailing distance as we reach higher TP levels
+    ext_state = _tp_extension_state.get(symbol, {})
+    last_tp_hit = ext_state.get("last_tp_hit", 0)
+    if last_tp_hit >= 3:
+        trailing_distance_pct *= 0.8  # Tighter SL after TP3 (80% of base)
+    elif last_tp_hit >= 4:
+        trailing_distance_pct *= 0.6  # Even tighter after TP4 (60% of base)
+    
+    # Calculate new SL price
+    if side == "LONG":
+        new_sl = trail_state["peak_price"] * (1 - trailing_distance_pct)
+        # Only move SL up, never down
+        if new_sl <= trail_state["current_sl"]:
+            return
+    else:  # SHORT
+        new_sl = trail_state["peak_price"] * (1 + trailing_distance_pct)
+        # Only move SL down (up in price), never up (down in price)
+        if new_sl >= trail_state["current_sl"]:
+            return
+    
+    # Throttle updates (minimum 30 seconds between SL updates)
+    if time.time() - trail_state["last_update_time"] < 30:
+        return
+    
+    # Round to symbol precision
+    try:
+        validator = BinanceSymbolValidator()
+        new_sl_rounded = validator.round_price(symbol, new_sl)
+    except Exception:
+        new_sl_rounded = round(new_sl, 4)
+    
+    # Cancel existing SL order and place new one
+    try:
+        # Cancel all existing stop orders for this symbol
+        from utils.binance_client import futures_cancel_all_orders
+        futures_cancel_all_orders(symbol=symbol)
+        
+        # Place new SL order
+        sl_side = "SELL" if side == "LONG" else "BUY"
+        result = futures_create_order(
+            symbol=symbol,
+            side=sl_side,
+            type="STOP_MARKET",
+            quantity=str(remaining_qty),
+            stopPrice=str(new_sl_rounded),
+            reduceOnly=True,
+            positionSide=side
+        )
+        
+        if result.get("ok"):
+            old_sl = trail_state["current_sl"]
+            trail_state["current_sl"] = new_sl_rounded
+            trail_state["last_update_time"] = time.time()
+            
+            # Calculate profit locked
+            if side == "LONG":
+                profit_locked_pct = ((new_sl_rounded - entry_price) / entry_price) * 100
+            else:
+                profit_locked_pct = ((entry_price - new_sl_rounded) / entry_price) * 100
+            
+            log.info(
+                f"🛡️ Trailing SL updated: {symbol} {old_sl:.4f} → {new_sl_rounded:.4f} "
+                f"(Peak: {trail_state['peak_price']:.4f}, Locked: +{profit_locked_pct:.2f}%)"
+            )
+            
+            # Send Telegram notification (throttled)
+            try:
+                msg = (
+                    f"🛡️ <b>Trailing SL Updated!</b>\n\n"
+                    f"🎯 Symbol: <b>{symbol}</b>\n"
+                    f"📈 Side: <b>{side}</b>\n"
+                    f"📊 Peak: <code>{trail_state['peak_price']:.4f}</code>\n"
+                    f"🛡️ New SL: <code>{new_sl_rounded:.4f}</code>\n"
+                    f"💰 Profit Locked: <code>+{profit_locked_pct:.2f}%</code>\n"
+                    f"📏 Trailing: <code>{trailing_distance_pct*100:.1f}%</code> from peak"
+                )
+                send_telegram(msg, parse_mode="HTML")
+                log.info(f"✅ Trailing SL notification sent for {symbol}")
+            except Exception as e:
+                log.debug(f"Failed to send trailing SL notification: {e}")
+        else:
+            log.warning(f"❌ Failed to update trailing SL: {result.get('error')}")
+    
+    except Exception as e:
+        log.error(f"❌ Failed to update trailing SL for {symbol}: {e}", exc_info=True)
 
 
 def _get_trade_params_from_db(symbol: str) -> Dict[str, Any]:
@@ -565,6 +754,12 @@ def _tick_symbol(symbol: str):
                 _check_and_extend_tp(symbol, current, ep, qty)
             except Exception as e:
                 log.debug(f"TP extension check failed for {symbol}: {e}")
+            
+            # 🛡️ Trailing SL Update (synchronized with TP)
+            try:
+                _update_trailing_sl(symbol, current, ep, qty)
+            except Exception as e:
+                log.debug(f"Trailing SL update failed for {symbol}: {e}")
 
     except Exception as e:
         log.debug("tick_symbol_failed %s: %s", symbol, e)
