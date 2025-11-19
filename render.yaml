@@ -1,5 +1,4 @@
 # AlgoGPT - Full Auto-Trading (No Approval, Production Mode)
-
 services:
   - type: pserv
     name: algogpt-trading-vm
@@ -10,7 +9,9 @@ services:
     dockerContext: .
     envVars:
 
+      # -----------------------------
       # Core
+      # -----------------------------
       - key: PORT
         value: 10000
       - key: PYTHONUNBUFFERED
@@ -18,7 +19,9 @@ services:
       - key: TZ
         value: Asia/Jerusalem
 
+      # -----------------------------
       # API Keys
+      # -----------------------------
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
@@ -32,15 +35,17 @@ services:
       - key: DEEPSEEK_API_KEY
         sync: false
 
-      # Redis / DB
+      # -----------------------------
+      # Redis / Database
+      # -----------------------------
       - key: DATABASE_URL
         sync: false
       - key: REDIS_URL
         sync: false
 
-      # -------------------------------------------------------
-      # Trading Engine - Full Automatic Mode
-      # -------------------------------------------------------
+      # ======================================================
+      # 🔥 Trading Engine – Full Automatic Mode
+      # ======================================================
 
       # Autopilot ON
       - key: ENABLE_AUTO_TRADING
@@ -56,7 +61,7 @@ services:
       - key: CONFIRM_STORE_ENABLE
         value: 0
 
-      # Auto-management
+      # Auto-Management
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: 1
       - key: ENABLE_POSITION_MONITOR
@@ -66,13 +71,13 @@ services:
       - key: ENABLE_INSURANCE_MONITOR
         value: 1
 
-      # Quality Score Dynamic
+      # Quality Score (Dynamic)
       - key: MIN_QUALITY_SCORE
         value: 5.5
       - key: QUALITY_DYN_ENABLED
         value: 1
 
-      # Budgets
+      # Budget Settings
       - key: MIN_BUDGET_USD
         value: 25
       - key: MAX_BUDGET_USD
@@ -80,7 +85,7 @@ services:
       - key: BUDGET_PCT_OF_EQUITY
         value: 20.0
 
-      # WebSocket
+      # Websocket
       - key: USER_STREAM_ENABLE
         value: 1
       - key: STREAM_TP_BE
@@ -90,7 +95,7 @@ services:
       - key: WEBSOCKET_BUFFER
         value: 200
 
-      # SL/TP & Smart Management
+      # Smart SL/TP
       - key: TP_MODE
         value: hybrid
       - key: SL_MODE
@@ -104,11 +109,11 @@ services:
       - key: DYNAMIC_TP_ENABLE
         value: 1
 
-      # Safe Limits
+      # Safety
       - key: CIRCUIT_BREAKER_ENABLE
         value: 1
 
-      # Fallback symbols (Avoid scan errors)
+      # Fallback symbols
       - key: FALLBACK_SYMBOLS
         value: "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT"
 
@@ -126,13 +131,43 @@ services:
       - key: FILLS_WATCH_ENABLE
         value: 1
 
-      # Emergency
+      # -----------------------------
+      # 🔒 Emergency Control
+      # -----------------------------
       - key: EMERGENCY_KILL_SWITCH
         value: 0
+
+      # -----------------------------
+      # 🟦 Safe-Boot Mode (Enabled)
+      # -----------------------------
       - key: SAFE_BOOT_MODE
+        value: 1
+      - key: SAFE_BOOT_STAGGER_DELAY
+        value: 5
+
+      # ======================================================
+      # 🛡 Auto-Health Monitor (Enabled)
+      # ======================================================
+      - key: AUTO_HEALTH_MONITOR
+        value: 1
+      - key: AUTO_HEALTH_INTERVAL
+        value: 60
+      - key: AUTO_HEALTH_ALERTS
+        value: 1
+      - key: AUTO_HEALTH_VERBOSE
         value: 0
 
+      # ======================================================
+      # 🛠 Auto-Repair / Self-Healing (Disabled – has bugs)
+      # ======================================================
+      - key: AUTO_REPAIR_ENABLE
+        value: 0
+      - key: SELF_HEALING_ENABLE
+        value: 0
+
+      # ======================================================
       # BAN Shield
+      # ======================================================
       - key: BAN_SHIELD_ENABLE
         value: 1
       - key: BAN_SHIELD_MAX_RPM
@@ -149,5 +184,6 @@ services:
         value: 10
       - key: SHIELD_ALERT_COOLDOWN
         value: 300
+
 
 
