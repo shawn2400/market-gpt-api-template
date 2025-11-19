@@ -211,6 +211,23 @@ class BreakevenStateManager:
         
         logger.debug(f"✅ {symbol}: Marked breakeven notification as sent @ {be_price:.8f}")
     
+    def is_be_activated(self, symbol: str) -> bool:
+        """
+        Check if breakeven was already activated for this symbol
+        
+        Args:
+            symbol: Trading symbol
+            
+        Returns:
+            True if breakeven was previously activated (notification sent)
+        """
+        # Try Redis first, fallback to memory
+        state = self._load_from_redis(symbol)
+        if state is None:
+            state = _breakeven_cache.get(symbol)
+        
+        return state is not None
+    
     def cleanup_symbol(self, symbol: str) -> None:
         """
         Cleanup state for closed position

@@ -109,6 +109,15 @@ except Exception as e:
     breakeven_state = None  # type: ignore
     logger.warning(f"⚠️ Breakeven State Manager unavailable: {e}")
 
+# 🎯 LIVE POSITION MANAGER (Dynamic Trailing SL after BE)
+try:
+    from utils.live_position_manager import get_live_position_manager
+    live_position_manager = get_live_position_manager()
+    logger.info("✅ Live Position Manager loaded successfully")
+except Exception as e:
+    live_position_manager = None  # type: ignore
+    logger.warning(f"⚠️ Live Position Manager unavailable: {e}")
+
 async def calculate_symbol_atr(symbol: str, period: int = 14) -> float:
     """
     Calculate ATR (Average True Range) for a symbol
@@ -528,7 +537,8 @@ async def ensure_positions_protected() -> None:
                                 positionSide=position_side
                             )
                             
-                            logger.info(f"🚀 {symbol}: Breakeven SL activated @ {be_price:.8f}")
+                            sl_order_id = sl_order.get("orderId") if isinstance(sl_order, dict) else None
+                            logger.info(f"🚀 {symbol}: Breakeven SL activated @ {be_price:.8f} (Order #{sl_order_id})")
                             
                             # 🧠 DEDUPLICATION: Only send Telegram if price changed or first time
                             should_notify = True
@@ -541,7 +551,7 @@ async def ensure_positions_protected() -> None:
                                     f"🚀 Breakeven Activated\n\n"
                                     f"Symbol: {symbol}\n"
                                     f"SL moved to breakeven: {be_price:.8f}\n\n"
-                                    f"Position now risk-free!",
+                                    f"Position now risk-free! Trailing SL will activate automatically.",
                                     parse_mode=""  # Empty string = no formatting, ignores env var
                                 )
                                 
@@ -551,10 +561,81 @@ async def ensure_positions_protected() -> None:
                             else:
                                 logger.debug(f"🔇 {symbol}: Breakeven notification suppressed (duplicate)")
                             
-                            continue
+                            # 🎯 IMPORTANT: Don't continue - allow trailing SL check below
+                            # continue
                             
                         except Exception as be_err:
                             logger.error(f"❌ Failed to set breakeven SL for {symbol}: {be_err}")
+                    
+                    # 🎯 LAYER 4: Trailing SL after Breakeven (Dynamic Protection)
+                    # Only activate if BE was already triggered (BE is stored in breakeven_state)
+                    if breakeven_state and breakeven_state.is_be_activated(symbol):
+                        try:
+                            atr = await calculate_symbol_atr(symbol, period=14)
+                            if atr > 0:
+                                from utils.binance_client import futures_create_order, futures_cancel_all_orders, futures_get_open_orders
+                                
+                                # Calculate trailing distance (0.7x ATR for tighter trailing)
+                                trailing_distance = atr * 0.7
+                                
+                                # Calculate new SL based on current price
+                                if position_side == "LONG":
+                                    new_sl = mark_price - trailing_distance
+                                    # Only move SL up, never down
+                                    if new_sl > entry_price:
+                                        # Check if we need to update (significant move > 0.3 ATR from entry)
+                                        current_sl_distance_from_entry = new_sl - entry_price
+                                        if current_sl_distance_from_entry > (atr * 0.3):
+                                            logger.info(
+                                                f"🎯 {symbol} LONG Trailing SL: Mark={mark_price:.8f}, "
+                                                f"NewSL={new_sl:.8f} (+{((new_sl-entry_price)/entry_price)*100:.2f}% from entry)"
+                                            )
+                                            
+                                            # Cancel existing orders and place new trailing SL
+                                            futures_cancel_all_orders(symbol)
+                                            close_side = "SELL"
+                                            
+                                            sl_order = futures_create_order(
+                                                symbol=symbol,
+                                                side=close_side,
+                                                type="STOP_MARKET",
+                                                quantity=abs(amt),
+                                                stopPrice=new_sl,
+                                                reduceOnly=True,
+                                                positionSide=position_side
+                                            )
+                                            
+                                            logger.info(f"📈 {symbol}: Trailing SL moved to {new_sl:.8f} (was {entry_price:.8f})")
+                                else:  # SHORT
+                                    new_sl = mark_price + trailing_distance
+                                    # Only move SL down (better for SHORT), never up
+                                    if new_sl < entry_price:
+                                        # Check if we need to update
+                                        current_sl_distance_from_entry = entry_price - new_sl
+                                        if current_sl_distance_from_entry > (atr * 0.3):
+                                            logger.info(
+                                                f"🎯 {symbol} SHORT Trailing SL: Mark={mark_price:.8f}, "
+                                                f"NewSL={new_sl:.8f} (-{((entry_price-new_sl)/entry_price)*100:.2f}% from entry)"
+                                            )
+                                            
+                                            # Cancel existing orders and place new trailing SL
+                                            futures_cancel_all_orders(symbol)
+                                            close_side = "BUY"
+                                            
+                                            sl_order = futures_create_order(
+                                                symbol=symbol,
+                                                side=close_side,
+                                                type="STOP_MARKET",
+                                                quantity=abs(amt),
+                                                stopPrice=new_sl,
+                                                reduceOnly=True,
+                                                positionSide=position_side
+                                            )
+                                            
+                                            logger.info(f"📉 {symbol}: Trailing SL moved to {new_sl:.8f} (was {entry_price:.8f})")
+                        
+                        except Exception as trail_err:
+                            logger.error(f"❌ {symbol}: Trailing SL error: {trail_err}")
                     
                     # 🎯 LAYER 1: Calculate and apply dynamic SL to Binance
                     # 🛡️ Skip dynamic SL if within 60-second hold period (prevents premature exits)
