@@ -17,11 +17,11 @@ from typing import Dict, Any, Optional, Tuple
 logger = logging.getLogger("algogpt.smart_filter")
 
 # Configurable thresholds
-# NOTE: Reduced from 1.5x to 0.8x to allow trading in quiet/CHOPPY markets
+# NOTE: Reduced to allow trading in CHOPPY/mean-reversion markets
 # GRID trades bypass this filter entirely (line 2124 in gpt_auto_suggest.py)
-VOLUME_SPIKE_MIN = float(os.getenv("VOLUME_SPIKE_MIN", "0.8"))  # 80% of average (was 1.5x)
+VOLUME_SPIKE_MIN = float(os.getenv("VOLUME_SPIKE_MIN", "0.1"))  # 10% of average volume - ULTRA-LOW for choppy markets
 PRICE_CHANGE_MIN = float(os.getenv("PRICE_CHANGE_MIN", "2.0"))  # 2% move
-QUALITY_SCORE_MIN = float(os.getenv("QUALITY_SCORE_MIN", "5.0"))  # 5/10 minimum (was 6.0)
+QUALITY_SCORE_MIN = float(os.getenv("QUALITY_SCORE_MIN", "2.5"))  # 2.5/10 allows counter-trend + BTC penalties (was 3.0 → 3.5 → 4.0 → 5.0)
 
 def stage1_volume_spike(ctx: Dict[str, Any]) -> Tuple[bool, str]:
     """

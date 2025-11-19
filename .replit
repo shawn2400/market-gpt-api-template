@@ -116,7 +116,7 @@ outputType = "console"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG POOL_PER_CYCLE=50 SUGGEST_GRID=1 AUTO_RUN=1 MIN_QUALITY_SCORE=6.0 python workers/gpt_auto_suggest.py"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG POOL_PER_CYCLE=50 SUGGEST_GRID=1 AUTO_RUN=1 MIN_QUALITY_SCORE=2.5 QUALITY_SCORE_MIN=2.5 VOLUME_SPIKE_MIN=0.1 python workers/gpt_auto_suggest.py"
 
 [[workflows.workflow]]
 name = "Auto Optimization"

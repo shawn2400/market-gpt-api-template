@@ -300,7 +300,7 @@ POOL_PER_CYCLE    = int(os.getenv("SYMBOLS_PER_CYCLE","50"))  # 🚀 Increased f
 MAX_CONCURRENCY   = int(os.getenv("OPENAI_MAX_CONCURRENCY","2"))
 CAP_PER_CYCLE_ENV = int(os.getenv("SUGGEST_CAP_PER_CYCLE","5"))
 
-SUCCESS_PCT_MIN   = float(os.getenv("SUCCESS_PCT_MIN","70"))
+SUCCESS_PCT_MIN   = float(os.getenv("SUCCESS_PCT_MIN","60"))
 
 # תקציב בסיס (ישמש כפולבק אם הדינמי כבוי)
 BUDGET_USD_FALLBK = float(os.getenv("MAX_TRADE_BUDGET","100"))  # Fallback OK - dynamic budget system handles minimums
@@ -1388,6 +1388,12 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
     trading_plan = data.get("trading_plan") or data.get("trading_proposal") or data.get("trade") or {}
     analysis = data.get("analysis") or {}
     
+    # Handle trades array format (e.g., trades: [{direction, entry, sl, tp1}])
+    trades_list = data.get("trades") or data.get("trade_list") or []
+    first_trade = {}
+    if trades_list and isinstance(trades_list, list) and len(trades_list) > 0:
+        first_trade = trades_list[0] if isinstance(trades_list[0], dict) else {}
+    
     # Helper function to recursively search for direction/side in nested dicts AND lists
     def find_direction(obj, depth=0):
         if depth > 5:  # Prevent infinite recursion
@@ -1419,6 +1425,8 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
     side = str(
         data.get("side") or 
         data.get("direction") or 
+        first_trade.get("side") or 
+        first_trade.get("direction") or 
         trading_plan.get("side") or 
         trading_plan.get("direction") or 
         analysis.get("side") or 
@@ -1431,19 +1439,21 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
     
     # Handle leverage from nested or top-level
     lev = _to_int(
-        data.get("leverage") or trading_plan.get("leverage"), 
+        data.get("leverage") or first_trade.get("leverage") or trading_plan.get("leverage"), 
         default=10
     ) or 10
     lev = max(SUGGEST_MIN_LEVERAGE, min(SUGGEST_MAX_LEVERAGE, lev))
     
-    # Handle multiple field name formats for stop loss and take profit (nested or top-level)
+    # Handle multiple field name formats for stop loss and take profit (nested or top-level or trades[0])
     sl = _to_float(
         data.get("sl") or data.get("stop_loss") or 
+        first_trade.get("sl") or first_trade.get("stop_loss") or
         trading_plan.get("sl") or trading_plan.get("stop_loss") or
         analysis.get("sl") or analysis.get("stop_loss")
     )
     tp1 = _to_float(
         data.get("tp1") or data.get("take_profit") or 
+        first_trade.get("tp1") or first_trade.get("take_profit") or
         trading_plan.get("tp1") or trading_plan.get("take_profit") or
         analysis.get("tp1") or analysis.get("take_profit")
     )
@@ -1451,18 +1461,19 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
     prop = {
         "symbol": symbol,
         "side": side if side in ("LONG","SHORT") else None,
-        "entry": _to_float(data.get("entry") or trading_plan.get("entry") or analysis.get("entry")),
+        "entry": _to_float(data.get("entry") or first_trade.get("entry") or trading_plan.get("entry") or analysis.get("entry")),
         "sl": sl,
         "tp1": tp1,
-        "tp2": _to_float(data.get("tp2") or trading_plan.get("tp2") or analysis.get("tp2")),
-        "tp3": _to_float(data.get("tp3") or trading_plan.get("tp3") or analysis.get("tp3")),
+        "tp2": _to_float(data.get("tp2") or first_trade.get("tp2") or trading_plan.get("tp2") or analysis.get("tp2")),
+        "tp3": _to_float(data.get("tp3") or first_trade.get("tp3") or trading_plan.get("tp3") or analysis.get("tp3")),
         "leverage": (1 if for_spot else lev),
         "success_pct": _to_float(
             data.get("success_pct") or data.get("confidence") or 
+            first_trade.get("success_pct") or first_trade.get("confidence") or
             trading_plan.get("success_pct") or trading_plan.get("confidence") or
             analysis.get("success_pct") or analysis.get("confidence")
         ),
-        "reason": data.get("reason") or data.get("reasoning") or trading_plan.get("reason") or trading_plan.get("reasoning") or analysis.get("reason") or "",
+        "reason": data.get("reason") or data.get("reasoning") or first_trade.get("reason") or first_trade.get("reasoning") or trading_plan.get("reason") or trading_plan.get("reasoning") or analysis.get("reason") or "",
     }
     if prop["side"] not in ("LONG","SHORT"):
         LOGGER.warning(
