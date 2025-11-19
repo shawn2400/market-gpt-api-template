@@ -23,6 +23,16 @@ except Exception:
         log.debug("trade_manager unavailable")
         pass
 
+# Import Multi-Target TP for dynamic TP extension
+try:
+    from utils.multi_target_tp import get_multi_target_tp
+    from utils.binance_client import futures_create_order, get_klines
+    from utils.binance_symbol_validator import BinanceSymbolValidator
+    TP_EXTENSION_AVAILABLE = True
+except Exception as e:
+    log.debug(f"TP Extension unavailable: {e}")
+    TP_EXTENSION_AVAILABLE = False
+
 # Import AI post-trade review and consensus improver
 try:
     from utils.ai_post_trade_review import review_completed_trade, TradeReviewResult  # type: ignore
@@ -90,6 +100,9 @@ _last_manage_ts: float = 0.0  # Track last time we called manage_open_trades
 _active_positions: Dict[str, Dict[str, Any]] = {}  # symbol -> {entry, qty, side, entry_time, ...}
 _completed_trades_buffer: List[Dict[str, Any]] = []  # Buffer for batch AI review
 
+# Track TP Extension state
+_tp_extension_state: Dict[str, Dict[str, Any]] = {}  # symbol -> {last_tp_hit: int, extended: bool, ...}
+
 def _position_snapshot(symbol: str) -> Tuple[Optional[float], Optional[float]]:
     """
     מחזיר (entry_price, qty_abs) אם יש פוזיציה, אחרת (None, None)
@@ -103,6 +116,160 @@ def _position_snapshot(symbol: str) -> Tuple[Optional[float], Optional[float]]:
     except Exception as e:
         log.debug("position_info_failed %s: %s", symbol, e)
     return None, None
+
+
+def _check_and_extend_tp(symbol: str, current_price: float, entry_price: float, remaining_qty: float) -> None:
+    """
+    🚀 DYNAMIC TP EXTENSION: Check if price hit TP3/TP4 and generate new TPs.
+    
+    Args:
+        symbol: Trading symbol
+        current_price: Current market price
+        entry_price: Original entry price
+        remaining_qty: Remaining position quantity
+    """
+    if not TP_EXTENSION_AVAILABLE or remaining_qty <= 0:
+        return
+    
+    # Get position data to determine side
+    pos_data = _active_positions.get(symbol)
+    if not pos_data:
+        return
+    
+    side = pos_data.get("side", "LONG")
+    
+    # Get TP data from position metadata (stored when position opened)
+    tp_prices = pos_data.get("tp_prices", [])
+    if not tp_prices or len(tp_prices) < 3:
+        return  # Not a multi-target TP position
+    
+    # Detect which TP level was just hit
+    last_tp_hit = None
+    if side == "LONG":
+        # For LONG: TP1 < TP2 < TP3 < current_price
+        if len(tp_prices) >= 3 and current_price >= tp_prices[2]:
+            last_tp_hit = 3
+        elif len(tp_prices) >= 4 and current_price >= tp_prices[3]:
+            last_tp_hit = 4
+    else:  # SHORT
+        # For SHORT: TP1 > TP2 > TP3 > current_price
+        if len(tp_prices) >= 3 and current_price <= tp_prices[2]:
+            last_tp_hit = 3
+        elif len(tp_prices) >= 4 and current_price <= tp_prices[3]:
+            last_tp_hit = 4
+    
+    if not last_tp_hit or last_tp_hit < 3:
+        return  # Not at TP3/TP4 yet
+    
+    # Check if we already extended for this TP level
+    ext_state = _tp_extension_state.get(symbol, {})
+    if ext_state.get("last_tp_hit") == last_tp_hit and ext_state.get("extended"):
+        return  # Already extended for this TP level
+    
+    # Calculate current volatility (ATR)
+    try:
+        klines = get_klines(symbol, "15m", 24)
+        if klines and len(klines) >= 14:
+            highs = [float(k[2]) for k in klines]
+            lows = [float(k[3]) for k in klines]
+            closes = [float(k[4]) for k in klines]
+            
+            # Simple ATR calculation
+            atr_sum = 0.0
+            for i in range(1, 14):
+                tr = max(highs[i] - lows[i], abs(highs[i] - closes[i-1]), abs(lows[i] - closes[i-1]))
+                atr_sum += tr
+            atr = atr_sum / 14
+            volatility = atr / current_price
+        else:
+            volatility = 0.02  # Default 2%
+    except Exception as e:
+        log.debug(f"Failed to calculate ATR for {symbol}: {e}")
+        volatility = 0.02
+    
+    # Get multi-target TP manager
+    tp_manager = get_multi_target_tp()
+    
+    # Build current TP config
+    current_config = {
+        "targets": [{"price": tp, "exit_percent": 0.33} for tp in tp_prices],
+        "trailing_stop": {"trailing_percent": 0.03},
+        "risk_reward_ratio": 2.0,
+        "side": side
+    }
+    
+    # Generate extended TP levels
+    extended_config = tp_manager.extend_tp_levels(
+        current_tp_config=current_config,
+        last_tp_hit=last_tp_hit,
+        current_price=current_price,
+        remaining_quantity=remaining_qty,
+        volatility=volatility
+    )
+    
+    if not extended_config:
+        return
+    
+    # Place new TP orders
+    try:
+        validator = BinanceSymbolValidator()
+        
+        for target in extended_config["targets"]:
+            tp_price = target["price"]
+            tp_qty = remaining_qty * target["exit_percent"]
+            
+            # Round to symbol precision
+            tp_price_rounded = validator.round_price(symbol, tp_price)
+            tp_qty_rounded = validator.round_quantity(symbol, tp_qty)
+            
+            # Determine order side (opposite of position)
+            order_side = "SELL" if side == "LONG" else "BUY"
+            
+            # Place TP order
+            result = futures_create_order(
+                symbol=symbol,
+                side=order_side,
+                type="LIMIT",
+                quantity=str(tp_qty_rounded),
+                price=str(tp_price_rounded),
+                timeInForce="GTC",
+                reduceOnly=True,
+                positionSide=side
+            )
+            
+            if result.get("ok"):
+                log.info(
+                    f"✅ TP{target['level']} placed: {symbol} {order_side} {tp_qty_rounded} @ {tp_price_rounded}"
+                )
+            else:
+                log.warning(f"❌ Failed to place TP{target['level']}: {result.get('error')}")
+        
+        # Update extension state
+        _tp_extension_state[symbol] = {
+            "last_tp_hit": last_tp_hit,
+            "extended": True,
+            "new_tps": [t["price"] for t in extended_config["targets"]]
+        }
+        
+        # Send Telegram notification
+        try:
+            msg = (
+                f"🚀 <b>TP Extension Activated!</b>\n\n"
+                f"🎯 Symbol: <b>{symbol}</b>\n"
+                f"📈 Side: <b>{side}</b>\n"
+                f"✅ TP{last_tp_hit} Hit @ <code>{current_price:.4f}</code>\n\n"
+                f"🎯 New Targets Generated:\n"
+            )
+            for target in extended_config["targets"]:
+                msg += f"   • TP{target['level']}: <code>{target['price']:.4f}</code> ({target['exit_percent']*100:.0f}%)\n"
+            
+            send_telegram(msg, parse_mode="HTML")
+            log.info(f"✅ TP Extension notification sent for {symbol}")
+        except Exception as e:
+            log.warning(f"Failed to send TP extension notification: {e}")
+    
+    except Exception as e:
+        log.error(f"❌ Failed to place extended TP orders for {symbol}: {e}", exc_info=True)
 
 
 def _get_trade_params_from_db(symbol: str) -> Dict[str, Any]:
@@ -392,6 +559,12 @@ def _tick_symbol(symbol: str):
                     log.info(f"✅ Telegram sent: TP1 hit {symbol}")
                 except Exception as e:
                     log.warning(f"Failed to send TP1 Telegram: {e}")
+            
+            # 🚀 TP3/TP4 Extension Detection
+            try:
+                _check_and_extend_tp(symbol, current, ep, qty)
+            except Exception as e:
+                log.debug(f"TP extension check failed for {symbol}: {e}")
 
     except Exception as e:
         log.debug("tick_symbol_failed %s: %s", symbol, e)
