@@ -468,7 +468,12 @@ def _get_trade_params_from_db(symbol: str) -> Dict[str, Any]:
     This prevents the 0.0 TP/SL calculation issue by reading stored values.
     
     Returns:
-        dict: {"tp_price": float|None, "sl_price": float|None, "entry_price": float|None, "leverage": int|None}
+        dict: {
+            "tp_prices": [float, ...],  # List of all TPs (TP1, TP2, TP3)
+            "sl_price": float|None, 
+            "entry_price": float|None, 
+            "leverage": int|None
+        }
     """
     try:
         import psycopg2
@@ -481,9 +486,9 @@ def _get_trade_params_from_db(symbol: str) -> Dict[str, Any]:
         conn = psycopg2.connect(DATABASE_URL)
         cursor = conn.cursor()
         
-        # Get most recent open trade for this symbol
+        # Get most recent open trade for this symbol (with Multi-Target TPs)
         cursor.execute("""
-            SELECT tp, sl, entry, leverage
+            SELECT tp, sl, entry, leverage, tp1, tp2, tp3
             FROM trades_log
             WHERE symbol = %s 
               AND status = 'OPEN'
@@ -496,10 +501,24 @@ def _get_trade_params_from_db(symbol: str) -> Dict[str, Any]:
         conn.close()
         
         if row:
-            tp, sl, entry, leverage = row
-            log.info(f"💾 [_get_trade_params_from_db] {symbol}: TP={tp}, SL={sl}, Entry={entry}, Leverage={leverage}")
+            tp, sl, entry, leverage, tp1, tp2, tp3 = row
+            
+            # Build TP list (prioritize tp1/tp2/tp3, fallback to single tp)
+            tp_prices = []
+            if tp1:
+                tp_prices.append(float(tp1))
+            if tp2:
+                tp_prices.append(float(tp2))
+            if tp3:
+                tp_prices.append(float(tp3))
+            
+            # Fallback: if no multi-target TPs, use single TP
+            if not tp_prices and tp:
+                tp_prices.append(float(tp))
+            
+            log.info(f"💾 [_get_trade_params_from_db] {symbol}: TPs={tp_prices}, SL={sl}, Entry={entry}, Leverage={leverage}")
             return {
-                "tp_price": float(tp) if tp else None,
+                "tp_prices": tp_prices,
                 "sl_price": float(sl) if sl else None,
                 "entry_price": float(entry) if entry else None,
                 "leverage": int(leverage) if leverage else None
@@ -556,7 +575,7 @@ def _tick_symbol(symbol: str):
         db_params = _get_trade_params_from_db(symbol)
         
         # Use DB values if available, otherwise use defaults
-        tp_price_from_db = db_params.get("tp_price")
+        tp_prices_from_db = db_params.get("tp_prices", [])
         sl_price_from_db = db_params.get("sl_price")
         leverage_from_db = db_params.get("leverage")
         
@@ -569,12 +588,12 @@ def _tick_symbol(symbol: str):
             "side": side,     # From positionAmt sign
             "entry_time": now,
             "sl_price": sl_price_from_db,  # 💾 From DB instead of None
-            "tp_prices": [tp_price_from_db] if tp_price_from_db else [],  # 💾 From DB instead of []
+            "tp_prices": tp_prices_from_db,  # 💾 ALL TPs (TP1/TP2/TP3) from DB
             "regime": "UNKNOWN",
             "leverage": final_leverage  # 💾 Prefer DB, fallback to Binance
         }
         
-        log.info(f"💾 Position tracked for {symbol}: TP={tp_price_from_db}, SL={sl_price_from_db}, Leverage={final_leverage}")
+        log.info(f"💾 Position tracked for {symbol}: TPs={tp_prices_from_db}, SL={sl_price_from_db}, Leverage={final_leverage}")
         
         # NOTE: Universal SL/TP protection is handled by FillsWatcherThread (_watch_fills_once)
         # No need to duplicate logic here - the dedicated thread will detect fills and attach protection
