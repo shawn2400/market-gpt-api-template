@@ -354,10 +354,13 @@ def validate_rr_smart(rr_ratio: float, min_rr: float, consensus_result: Optional
         return False, f"NO_CONSENSUS_DATA: RR={rr_ratio:.3f} < {min_rr:.2f}, consensus unavailable"
     
     approve_count = consensus_result.get("approve_count", 0)
-    if approve_count >= 2:
-        return True, f"CONSENSUS_APPROVE: RR={rr_ratio:.3f}, {approve_count}/3 AI approved (66% majority)"
+    total_brains = consensus_result.get("total_brains", 1)
+    required_approvals = max(1, int(total_brains * 0.66))
+    
+    if approve_count >= required_approvals:
+        return True, f"CONSENSUS_APPROVE: RR={rr_ratio:.3f}, {approve_count}/{total_brains} AI approved ({approve_count/total_brains*100:.0f}% majority)"
     else:
-        return False, f"INSUFFICIENT_CONSENSUS: RR={rr_ratio:.3f}, only {approve_count}/3 AI approved (need ≥2 for 66%)"
+        return False, f"INSUFFICIENT_CONSENSUS: RR={rr_ratio:.3f}, only {approve_count}/{total_brains} AI approved (need ≥{required_approvals} for 66%)"
 
 def _hash_proposal(key_fields: Dict[str, Any]) -> str:
     key = f"{key_fields.get('trade_type','')}|{key_fields.get('symbol','')}|{key_fields.get('side','')}|" \
