@@ -22,18 +22,20 @@ async def execute_grid_trade(
     symbol: str,
     side: str,
     budget: float,
-    leverage: int = 10,
+    leverage: Optional[int] = None,  # 🎯 Dynamic leverage (calculated if not provided)
     grids: int = 3,
     atr_mults: Optional[List[float]] = None,
     dry_run: bool = True,
+    quality_score: float = 7.0,  # For dynamic leverage calculation
 ) -> Dict[str, Any]:
     """
     מבצע Grid Trade (Futures בלבד).
     - side: LONG/SHORT
     - budget: תקציב כולל ב-USDT
-    - leverage: מינוף
+    - leverage: מינוף (אם None, מחושב דינמית 2-35x)
     - grids: מספר רמות
     - atr_mults: לא חובה, ברירת מחדל [1.0, 1.8, 2.6]
+    - quality_score: Trade quality for dynamic leverage (default 7.0)
     """
 
     s = symbol.upper().strip()
@@ -44,6 +46,41 @@ async def execute_grid_trade(
     price = get_price(s)
     if not price or not is_price_fresh(s):
         return {"ok": False, "error": f"Price not available/fresh for {s}"}
+    
+    # 🎯 Calculate ATR for dynamic leverage (if leverage not provided)
+    atr_pct = 0.02  # Default 2%
+    if leverage is None:
+        try:
+            from utils.get_klines import get_klines
+            from utils.indicators import atr as calc_atr
+            import pandas as pd
+            
+            klines = await get_klines(s, interval="15m", limit=20)
+            if klines is not None and len(klines) >= 14:
+                df = pd.DataFrame(klines)
+                atr_series = calc_atr(df, period=14)
+                if not atr_series.empty:
+                    atr_value = float(atr_series.iloc[-1])
+                    atr_pct = atr_value / float(price)
+        except Exception:
+            pass
+    
+    # 🎯 Calculate Dynamic Leverage (if not provided)
+    if leverage is None:
+        try:
+            from utils.dynamic_leverage import DynamicLeverageCalculator
+            
+            calculator = DynamicLeverageCalculator()
+            leverage = int(calculator.calculate_leverage(
+                trade_quality=quality_score,
+                symbol=s,
+                atr_pct=atr_pct,
+                current_price=float(price)
+            ))
+            logger.info(f"🎯 [GRID] Dynamic leverage calculated: {leverage}x (Quality={quality_score:.1f}, ATR={atr_pct:.2%})")
+        except Exception as e:
+            logger.warning(f"⚠️ [GRID] Dynamic leverage calculation failed: {e}, using fallback 5x")
+            leverage = 5  # Safe fallback
 
     # --- תכנון Grid ---
     plan = plan_grid(symbol=s, price=price, flags={"vol_regime": "mid"}, budget_usd=budget, side=side_u)

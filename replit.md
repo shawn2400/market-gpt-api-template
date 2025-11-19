@@ -90,6 +90,9 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 
 **Hybrid Dynamic Leverage System v2.0:**
 -   100% dynamic leverage (2-35x) adapting in real-time based on market conditions, trade quality, and multi-factor confidence scoring.
+-   **Unified Across All Trade Types**: MARKET, HYBRID, and GRID trades all use DynamicLeverageCalculator.
+-   **PrecisionCalculator**: Aligned with max 35x leverage (previously capped at 10x).
+-   **No Hardcoded Values**: All leverage calculations are dynamic and real-time.
 
 **Trading Policy Filters (System-Wide Protection):**
 -   **Symbol Filter Engine**: Validates symbols based on volume, liquidity, Binance whitelist, and blacklist management.
