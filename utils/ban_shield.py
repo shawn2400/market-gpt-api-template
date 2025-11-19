@@ -399,16 +399,17 @@ def auto_classify_priority(endpoint: str) -> Priority:
     """
     Automatically classify API call priority based on endpoint
     
-    CRITICAL: Trade execution, SL/TP, position closure
-    NORMAL: Market data, account info, position monitoring
+    CRITICAL: Trade execution, SL/TP, position closure, account info (balance/margin)
+    NORMAL: Market data, position monitoring
     LOW: Scanners, background tasks
     """
     endpoint_lower = endpoint.lower()
     
-    # CRITICAL endpoints
+    # CRITICAL endpoints (MUST NEVER BE BLOCKED)
     critical_keywords = [
         'order', 'trade', 'position', 'close', 'cancel',
-        'stoploss', 'takeprofit', 'liquidation'
+        'stoploss', 'takeprofit', 'liquidation',
+        'account', 'balance', 'margin'  # Account info is CRITICAL for budget calculations
     ]
     if any(kw in endpoint_lower for kw in critical_keywords):
         return "CRITICAL"

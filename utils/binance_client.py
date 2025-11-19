@@ -163,27 +163,27 @@ def _get_client() -> Optional[Client]:
 
 get_client = _get_client
 
-# 🛡️ PRIORITY MAP for Auto-Ban-Shield
+# 🛡️ PRIORITY MAP for Auto-Ban-Shield v2.1
 # Defines priority level for each API endpoint
 ENDPOINT_PRIORITY_MAP: Dict[str, str] = {
-    # CRITICAL: Trade execution, order management, position closure
+    # CRITICAL: Trade execution, order management, position closure, account info (NEVER BLOCKED)
     "futures_create_order": "CRITICAL",
     "futures_cancel_order": "CRITICAL",
     "futures_cancel_all_open_orders": "CRITICAL",
     "futures_account_trades": "CRITICAL",
-    "futures_balance": "CRITICAL",  # When positions open
+    "futures_balance": "CRITICAL",
+    "futures_account": "CRITICAL",  # CRITICAL for budget calculations & margin checks
+    "futures_position_information": "CRITICAL",  # CRITICAL for position monitoring
     
-    # NORMAL: Account info, position monitoring, order status
-    "futures_account": "NORMAL",
+    # NORMAL: Order status, exchange info, settings
     "futures_get_order": "NORMAL",
     "futures_get_all_orders": "NORMAL",
     "futures_get_open_orders": "NORMAL",
-    "futures_position_information": "NORMAL",  # Boosted to CRITICAL when positions > 0
     "futures_exchange_info": "NORMAL",
     "futures_change_leverage": "NORMAL",
     "futures_change_margin_type": "NORMAL",
     
-    # LOW: Market data, price queries, scanning
+    # LOW: Market data, price queries, scanning (can be delayed/throttled)
     "futures_mark_price": "LOW",
     "futures_ticker": "LOW",
     "futures_klines": "LOW",

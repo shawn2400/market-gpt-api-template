@@ -216,6 +216,8 @@ async def run_order_hygiene_cleanup() -> None:
     - ReduceOnly orders without matching position
     - Stale LIMIT orders older than 10 minutes
     - Stop orders without position
+    
+    NOTE: Currently disabled - waiting for order_hygiene module update
     """
     global _last_hygiene_cleanup
     
@@ -228,24 +230,8 @@ async def run_order_hygiene_cleanup() -> None:
         return
     
     _last_hygiene_cleanup = now
-    logger.info("🧹 Running order hygiene cleanup...")
-    
-    try:
-        # Import cleanup logic from utils (not workers)
-        from utils.order_hygiene import get_orphaned_orders, cleanup_orphaned_orders
-        
-        # Run cleanup
-        orphaned = await get_orphaned_orders()
-        if orphaned:
-            total = sum(len(orders) for orders in orphaned.values())
-            logger.warning(f"🚨 Found {total} orphaned order(s) across {len(orphaned)} symbol(s)")
-            result = await cleanup_orphaned_orders(orphaned)
-            logger.info(f"✅ Hygiene cleanup: {result['cancelled']} cancelled, {result['failed']} failed")
-        else:
-            logger.debug("✅ No orphaned orders found")
-    
-    except Exception as e:
-        logger.error(f"❌ Order hygiene cleanup failed: {e}", exc_info=True)
+    logger.debug("🧹 Order hygiene: disabled (module not ready)")
+    return
 
 
 async def ensure_positions_protected() -> None:
