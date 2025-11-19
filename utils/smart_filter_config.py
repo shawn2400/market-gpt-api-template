@@ -52,15 +52,15 @@ class SmartFilterConfigProvider:
         },
         "trending": {
             "volume_min": 0.5,      # Higher - need confirmation
-            "quality_min": 4.0,      # High - only strong setups
-            "direction_penalty": -2.0,  # Strong penalty for counter-trend
-            "btc_penalty_base": -1.5
+            "quality_min": 2.8,      # Relaxed from 4.0 - allow quality trades
+            "direction_penalty": -1.3,  # Relaxed from -2.0
+            "btc_penalty_base": -1.2    # Relaxed from -1.5
         },
         "volatile": {
             "volume_min": 0.3,
-            "quality_min": 3.0,
-            "direction_penalty": -1.5,
-            "btc_penalty_base": -1.0
+            "quality_min": 2.5,      # Relaxed from 3.0
+            "direction_penalty": -1.2,  # Relaxed from -1.5
+            "btc_penalty_base": -0.8    # Relaxed from -1.0
         }
     }
     
@@ -92,14 +92,7 @@ class SmartFilterConfigProvider:
         Returns:
             SmartFilterThresholds with adaptive values
         """
-        # Cache key
-        cache_key = f"{regime}_{mood}_{confidence:.0f}"
-        
-        # Check cache (valid for short time)
-        if cache_key in self._cache:
-            return self._cache[cache_key]
-        
-        # Get base thresholds for regime
+        # Get base thresholds for regime (no caching - always fresh values)
         regime_lower = regime.lower()
         if regime_lower not in self.REGIME_THRESHOLDS:
             self.logger.warning(f"Unknown regime '{regime}', defaulting to choppy")
@@ -116,22 +109,17 @@ class SmartFilterConfigProvider:
         # Higher confidence = stronger penalty
         btc_penalty = base["btc_penalty_base"] * mood_modifier * (confidence / 100.0)
         
-        # Confidence adjustment for thresholds
-        # Lower confidence → relax thresholds slightly
-        confidence_factor = max(0.8, confidence / 100.0)
-        
+        # Use base thresholds directly - no confidence multiplication!
+        # Confidence already affects BTC penalty, that's enough dynamic adjustment
         thresholds = SmartFilterThresholds(
             volume_spike_min=base["volume_min"],
-            quality_score_min=base["quality_min"] * confidence_factor,
+            quality_score_min=base["quality_min"],  # Direct value - no multiplication!
             btc_penalty=btc_penalty,
-            direction_penalty=base["direction_penalty"] * confidence_factor,
+            direction_penalty=base["direction_penalty"],  # Direct value - no multiplication!
             regime=regime,
             mood=mood,
             confidence=confidence
         )
-        
-        # Cache result
-        self._cache[cache_key] = thresholds
         
         self.logger.info(
             f"🎯 [{symbol}] Dynamic Thresholds: {regime.upper()} {mood.upper()} "
@@ -202,10 +190,6 @@ class SmartFilterConfigProvider:
         self.logger.debug("Smart Filter threshold cache cleared")
 
 
-# Global provider instance
-_provider = SmartFilterConfigProvider()
-
-
 def get_dynamic_thresholds(regime: str, mood: str, confidence: float = 50.0, symbol: str = "UNKNOWN") -> SmartFilterThresholds:
     """
     Get dynamic Smart Filter thresholds based on market regime.
@@ -215,7 +199,8 @@ def get_dynamic_thresholds(regime: str, mood: str, confidence: float = 50.0, sym
         if volume_ratio >= thresholds.volume_spike_min:
             # Pass Stage 1
     """
-    return _provider.get_thresholds(regime, mood, confidence, symbol)
+    provider = SmartFilterConfigProvider()  # Fresh instance - no caching!
+    return provider.get_thresholds(regime, mood, confidence, symbol)
 
 
 def get_thresholds_from_context(ctx: Dict[str, Any]) -> SmartFilterThresholds:
@@ -225,4 +210,5 @@ def get_thresholds_from_context(ctx: Dict[str, Any]) -> SmartFilterThresholds:
     Usage:
         thresholds = get_thresholds_from_context(market_ctx)
     """
-    return _provider.get_thresholds_from_context(ctx)
+    provider = SmartFilterConfigProvider()  # Fresh instance - always uses latest REGIME_THRESHOLDS!
+    return provider.get_thresholds_from_context(ctx)
