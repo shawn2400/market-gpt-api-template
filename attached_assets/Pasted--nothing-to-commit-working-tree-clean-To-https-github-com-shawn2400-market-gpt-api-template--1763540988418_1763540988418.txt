@@ -1,0 +1,95 @@
+
+nothing to commit, working tree clean
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ git add .
+git commit -m "MetaBrain v9.1 - 100% Dynamic Auto Trading (10-12h deployment)"
+git push origin main
+On branch main
+Your branch is ahead of 'origin/main' by 7 commits.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ git add .
+git commit -m "MetaBrain v9.1 - 100% Dynamic Auto Trading (10-12h deployment)"
+git push origin main
+On branch main
+Your branch is ahead of 'origin/main' by 7 commits.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ # 1. הסר את ה-lock file
+rm -f .git/index.lock
+
+# 2. Pull שינויים מ-GitHub
+git pull --rebase origin main
+
+# 3. אם יש conflicts - פתור אותם ואז:
+git rebase --continue
+
+# 4. Push את כל השינויים
+git push origin main
+remote: Enumerating objects: 5, done.
+remote: Counting objects: 100% (5/5), done.
+remote: Compressing objects: 100% (3/3), done.
+remote: Total 3 (delta 2), reused 0 (delta 0), pack-reused 0 (from 0)
+Unpacking objects: 100% (3/3), 1.31 KiB | 1.31 MiB/s, done.
+From https://github.com/shawn2400/market-gpt-api-template
+ * branch            main       -> FETCH_HEAD
+   693b70d..4da5965  main       -> origin/main
+Successfully rebased and updated refs/heads/main.
+fatal: no rebase in progress
+Enumerating objects: 89, done.
+Counting objects: 100% (89/89), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (61/61), done.
+Writing objects: 100% (63/63), 37.23 KiB | 6.20 MiB/s, done.
+Total 63 (delta 47), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (47/47), completed with 13 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   4da5965..08b84ea  main -> main
+~/workspace$ git add main.py
+git commit -m "Enhanced Startup Logs - Clear N8N, Stage Engine, Circuit Breaker visibility"
+git push origin main
+On branch main
+Your branch is ahead of 'origin/main' by 1 commit.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+    modified:   static/cache/ws_prices.json
+
+no changes added to commit (use "git add" and/or "git commit -a")
+Enumerating objects: 23, done.
+Counting objects: 100% (23/23), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (9/9), done.
+Writing objects: 100% (9/9), 1.49 KiB | 1.49 MiB/s, done.
+Total 9 (delta 8), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (8/8), completed with 8 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   08b84ea..b5450d5  main -> main
+~/workspace$ 
