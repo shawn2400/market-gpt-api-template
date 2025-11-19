@@ -4,6 +4,9 @@
 AlgoGPT is an autonomous algorithmic trading platform for 24/7 Binance Futures, leveraging AI (DeepSeek Chat) to analyze 534 symbols and execute intelligent trades. It integrates 7 trading strategies, dynamic capital management, and aims for 4-10 high-quality daily trades. The platform features a MetaBrain v9.1 that eliminates hardcoded logic, with all trade parameters determined by AI. It includes intelligent brain management, auto-suspend/resume for failed providers, automatic Hedge Mode activation, and is designed for scalability and autonomous operation with a self-adaptive engine and complete data persistence.
 
 **Recent Critical Updates (November 2025):**
+- **Stage Engine System (MetaBrain v9.1)**: 3-stage auto-deployment with 100% dynamic automatic trading, health monitoring, auto-promotion, and Stage-aware approval bypass in ExecutionBot (10-12h to full automation).
+- **Trailing TP Early Exit Fix**: Activation threshold 25%→50%, trailing distance 15%→10% to allow TP2/TP3 execution (45% exit percentages).
+- **ExecutionBot Stage Integration**: Auto-bypass approvals when enable_auto_trading=True, enabling 100% automatic trading in all stages with auto-trading enabled.
 - **Auto-Ban-Shield v2.0**: Production-ready dynamic rate limiting system with 3-tier priority (CRITICAL/NORMAL/LOW), background event loop for async/sync compatibility, complete coverage of all Binance REST endpoints including fallbacks, preventing IP bans while maintaining trading performance.
 - **Emergency Kill-Switch**: Instant shutdown system with WebSocket-only mode for ban recovery, automated via GitHub-to-Render deployment.
 - **Production PYTHONPATH Fix**: Resolved "No module named 'utils'" errors in Render deployment with proper Docker environment configuration.
@@ -31,9 +34,10 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Complete Data Persistence**: All critical data is saved to a PostgreSQL database.
 
 **MetaBrain v9.1 - AI-Driven Precision Trading:**
+-   **Stage Engine System**: 3-stage auto-deployment (Health Monitoring → Full Auto Trading Validation → Maximum Performance) with health-based auto-promotion and complete approval bypass for 100% dynamic automatic trading.
 -   **1-Brain Lean Architecture**: DeepSeek Chat for autonomous trade decisions, with optional expansion brains.
 -   **Intelligent Brain Management**: Auto-suspends/resumes failed AI providers, dynamic consensus thresholds, cost tracking, and token budgeting.
--   **Smart Override Logic**: AI participates in decisions but respects MIN_QUALITY threshold, with a system for auto-approval or rejection.
+-   **Smart Override Logic**: AI participates in decisions but respects MIN_QUALITY threshold, with Stage Engine auto-approval bypass for 100% automation.
 -   **Regime-Based Dynamic MIN_QUALITY**: Adaptive quality thresholds based on market regime.
 -   **Precision Calculator**: Calculates exact leverage and investment based on trade quality, market volatility, regime, and balance.
 -   **Deep Market Analyzer & Live Regime Detector**: Multi-layer technical analysis and real-time market classification.
@@ -41,9 +45,11 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Balance-Tiered Risk Profiles**: Auto-adjusts trading parameters based on 5 account tiers.
 -   **Auto-Strategy Selection Engine**: Automatically chooses optimal strategy based on market conditions.
 -   **Multi-Target TP System v2.0**: 3-level take profit with dynamic exit percentages and volatility-adjusted RR ratios.
+-   **Trailing TP Fix**: Activates at 50% profit (not 25%), trails 10% from peak (not 15%) to allow TP2/TP3 execution.
 
 **ExecutionBot - Unified Trade Execution Wrapper:**
 -   Centralized architecture for all trade execution logic with source-aware approval gating.
+-   **Stage Engine Integration**: Auto-bypass approvals when Stage Engine enable_auto_trading=True, enabling 100% dynamic automatic trading in all stages.
 -   **100% SL/TP Protection**: All positions receive automatic Stop Loss and Take Profit orders immediately after entry, with emergency closure if placement fails.
 
 **Auto-Optimization System (Self-Adaptive Trading):**

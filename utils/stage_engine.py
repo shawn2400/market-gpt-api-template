@@ -39,12 +39,12 @@ STAGES = {
         }
     },
     2: {
-        "name": "Pre-Trading Validation",
-        "description": "Limited workers, health checks",
-        "auto_run": False,
-        "enable_auto_trading": False,
-        "manage_trades": False,
-        "pool_per_cycle": 10,
+        "name": "Full Auto Trading (Validation)",
+        "description": "All systems operational, full automation with monitoring",
+        "auto_run": True,
+        "enable_auto_trading": True,
+        "manage_trades": True,
+        "pool_per_cycle": 30,
         "min_uptime_hours": 4.0,
         "promotion_criteria": {
             "uptime_hours": 6.0,

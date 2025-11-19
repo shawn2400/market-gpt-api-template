@@ -24,11 +24,11 @@ Auto-progression through 3 deployment stages:
 - Duration: 24-48 hours (configurable)
 - Promotion Criteria: GREEN health + stable metrics
 
-#### **Stage 2: Pre-Trading (Bug Fixes)** (12-24h)
-- Focus: Live trading preparation
-- Auto-Run: ✅ Enabled (minimal pool)
-- Auto-Trading: ❌ Disabled (manual approval only)
-- Duration: 12-24 hours
+#### **Stage 2: Full Auto Trading (Validation)** (6-12h)
+- Focus: 100% Dynamic Automatic Trading with monitoring
+- Auto-Run: ✅ Enabled (30 symbols pool)
+- Auto-Trading: ✅ **FULLY ENABLED** (100% automatic, zero manual approval)
+- Duration: 6-12 hours
 - Promotion Criteria: Low errors + stable execution
 
 #### **Stage 3: Full Auto Trading** 🚀
@@ -129,33 +129,36 @@ SELF_HEALING_MAX_FAILURES=5            # Consecutive failures before freeze
    - Telegram notification sent automatically
    - No manual intervention required
 
-### **Phase 2: Stage 2 (12-24h)**
-**Goal:** Prepare for live trading
+### **Phase 2: Stage 2 (6-12h)**
+**Goal:** 100% Automatic Trading with validation
 
 1. **Monitor Stage 2:**
-   - Auto-Run: **Enabled** (small pool - 10-20 symbols)
-   - Auto-Trading: **Still disabled** (manual approval only)
+   - Auto-Run: **Enabled** (medium pool - 30 symbols)
+   - Auto-Trading: ✅ **FULLY ENABLED** (100% automatic - zero manual approval)
    - Check `/stage_status` daily
-   - Verify: Low error count (<5 in 10m)
+   - Verify: Low error count (<3 in 10m)
+   - **Trades execute automatically** - no intervention needed!
 
 2. **Auto-Promotion to Stage 3:**
-   - System auto-promotes after 12h of stable Stage 2
+   - System auto-promotes after 6h of stable Stage 2
    - Telegram notification sent automatically
-   - **Trading fully activated**
+   - **Full pool activated** (30 → 50 symbols)
 
-### **Phase 3: Stage 3 (Full Auto)**
-**Goal:** Autonomous trading
+### **Phase 3: Stage 3 (Full Auto - Maximum Performance)**
+**Goal:** Maximum autonomous trading performance
 
 1. **Full Automation Active:**
    - Auto-Run: ✅ Enabled (full pool - 50 symbols)
-   - Auto-Trading: ✅ Enabled (zero intervention)
+   - Auto-Trading: ✅ Enabled (100% automatic - zero intervention)
    - Multi-Target TP: ✅ Active (TP1/TP2/TP3)
-   - Trailing TP: ✅ Activates at 50% profit
+   - Trailing TP: ✅ Activates at 50% profit (dynamic per trade)
+   - Dynamic SL/TP: ✅ All protection layers active (base defaults)
 
 2. **Monitoring:**
    - Telegram reports every 10 minutes
    - Use `/stage_status` anytime
    - System auto-freezes on critical errors
+   - **4-10 high-quality trades per day** expected
 
 ---
 
@@ -171,9 +174,9 @@ SELF_HEALING_MAX_FAILURES=5            # Consecutive failures before freeze
 ```
 
 ### **Expected Flow**
-1. **Deploy** → Stage 1 (24h)
-2. **Auto-promote** → Stage 2 (12h)
-3. **Auto-promote** → Stage 3 (permanent)
+1. **Deploy** → Stage 1 (4h) - Health monitoring only
+2. **Auto-promote** → Stage 2 (6h) - **100% AUTO TRADING** (30 symbols)
+3. **Auto-promote** → Stage 3 (permanent) - Maximum performance (50 symbols)
 
 ---
 
@@ -230,11 +233,11 @@ Use `/stage_freeze` anytime to stop auto-trading:
 
 | Stage | Duration | Auto-Run | Auto-Trading | Key Activity |
 |-------|----------|----------|--------------|--------------|
-| **1** | 24-48h | ❌ | ❌ | Health monitoring |
-| **2** | 12-24h | ✅ (minimal) | ❌ | Pre-trading tests |
-| **3** | Permanent | ✅ (full) | ✅ | Autonomous trading |
+| **1** | 4h | ❌ | ❌ | Health monitoring |
+| **2** | 6h | ✅ (30 symbols) | ✅ **100% AUTO** | Dynamic automatic trading |
+| **3** | Permanent | ✅ (50 symbols) | ✅ **100% AUTO** | Maximum performance |
 
-**Total time to full automation:** 36-72 hours
+**Total time to full automation:** 10-12 hours (not 36-72h!)**
 
 ---
 
@@ -252,23 +255,27 @@ Use `/stage_freeze` anytime to stop auto-trading:
 
 ## 🎉 Post-Deployment
 
-### **First 24 Hours**
+### **First 4 Hours** (Stage 1)
 - Monitor Telegram for stage status updates
 - Verify `/stage_status` shows Stage 1
 - Check health metrics: CPU, RAM, Redis, BanShield
 - **No trading expected** - just monitoring
 
-### **24-48 Hours**
+### **4-10 Hours** (Stage 2)
 - Auto-promotion to Stage 2 (Telegram notification)
-- Small pool trading begins (manual approval only)
-- Verify error rates low (<5 in 10m)
+- **100% automatic trading activated!** 🚀
+- 30 symbols pool - zero manual approval needed
+- Verify error rates low (<3 in 10m)
+- **Expect 2-6 automatic trades** in this phase
 
-### **36-72 Hours**
+### **10+ Hours** (Stage 3)
 - Auto-promotion to Stage 3 (Telegram notification)
-- **Full autonomous trading activated** 🚀
+- **Maximum performance activated** 🎯
+- 50 symbols pool - full automation
 - 4-10 high-quality trades per day
-- Multi-Target TP system active
-- Trailing TP with fixed early-exit bug
+- Multi-Target TP system active (TP1/TP2/TP3)
+- Trailing TP activates at 50% profit (dynamic per trade)
+- All base protection layers active (SL/TP defaults)
 
 ---
 

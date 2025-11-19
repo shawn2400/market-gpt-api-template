@@ -357,7 +357,25 @@ class ExecutionBot:
         - "approval", "ops_approval", "ops_approval_get", "ops_approval_fallback" - already approved
         - "telegram", "telegram_callback" - user-initiated, execute immediately
         - "auto_trade", "autopilot" - internal automation, execute immediately (confirm_first handled internally)
+        
+        Stage Engine Integration (MetaBrain v9.1):
+        - If Stage Engine has enable_auto_trading=True → BYPASS ALL APPROVALS
+        - 100% Dynamic Automatic Trading in all stages with auto-trading enabled
         """
+        # FIX: Stage Engine bypass - if enable_auto_trading=True, skip ALL approvals
+        try:
+            from utils import stage_engine
+            stage_info = stage_engine.get_stage_info()
+            if stage_info.get("enable_auto_trading"):
+                self.log.info(
+                    f"✅ Stage Engine AUTO mode (Stage {stage_engine.get_current_stage()}) - "
+                    f"bypassing approval for 100% dynamic automatic trading"
+                )
+                return False
+        except Exception as e:
+            self.log.debug(f"Stage Engine check failed (not critical): {e}")
+            pass  # Stage Engine not available, continue normal flow
+        
         if source in (
             "approval",
             "ops_approval",
