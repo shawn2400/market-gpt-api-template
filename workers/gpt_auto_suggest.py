@@ -1337,15 +1337,93 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
         LOGGER.warning(f"NO PROPOSAL from AI for {symbol}")
         return None
     
+    # ===== CRITICAL VALIDATION: Ensure direction/side exists BEFORE parsing =====
+    # If DeepSeek returns a proposal without direction, retry with explicit error message
+    def has_direction_field(obj, depth=0):
+        """Quick check if direction/side exists anywhere in nested structure"""
+        if depth > 5 or obj is None:
+            return False
+        if isinstance(obj, dict):
+            if any(k in obj for k in ["side", "direction"]):
+                return True
+            for v in obj.values():
+                if isinstance(v, (dict, list)) and has_direction_field(v, depth + 1):
+                    return True
+        elif isinstance(obj, (list, tuple)):
+            for item in obj[:10]:
+                if has_direction_field(item, depth + 1):
+                    return True
+        return False
+    
+    if not has_direction_field(data):
+        LOGGER.warning(f"⚠️ {symbol}: AI response missing direction/side field, retrying...")
+        try:
+            from utils.llm_client import llm_chat_completion
+            retry_response = await llm_chat_completion(
+                messages=[
+                    {"role": "system", "content": sys_prompt},
+                    {"role": "user", "content": user_prompt},
+                    {"role": "assistant", "content": str(data)[:500]},
+                    {"role": "user", "content": "ERROR: Your response is missing the REQUIRED 'side' or 'direction' field. Please respond again with the SAME trade proposal but include either 'side' or 'direction' field set to 'LONG' or 'SHORT'. Return ONLY the corrected JSON."}
+                ],
+                model="deepseek-chat",
+                temperature=0.3,  # Lower temperature for more deterministic retry
+                max_tokens=400
+            )
+            
+            if retry_response and "choices" in retry_response:
+                retry_content = retry_response["choices"][0]["message"]["content"]
+                retry_data = _parse_json_safe(retry_content)
+                if retry_data and has_direction_field(retry_data):
+                    LOGGER.info(f"✅ {symbol}: Retry successful, direction field found")
+                    data = retry_data
+                else:
+                    LOGGER.warning(f"❌ {symbol}: Retry failed, still no direction field")
+        except Exception as e:
+            LOGGER.warning(f"Retry failed for {symbol}: {e}")
+    
     # Parse and validate proposal (handle multiple field name formats)
     # Some AIs return "side", others return "direction"
-    # Support nested structures: trading_plan.direction, trade.direction, etc.
+    # Support DEEP nested structures: trading_plan, trade, analysis, proposal, etc.
     trading_plan = data.get("trading_plan") or data.get("trading_proposal") or data.get("trade") or {}
+    analysis = data.get("analysis") or {}
+    
+    # Helper function to recursively search for direction/side in nested dicts AND lists
+    def find_direction(obj, depth=0):
+        if depth > 5:  # Prevent infinite recursion
+            return None
+        
+        # Handle dictionaries
+        if isinstance(obj, dict):
+            # Check current level first
+            for key in ["side", "direction"]:
+                if key in obj and obj[key]:
+                    return str(obj[key]).upper()
+            # Check nested objects
+            for value in obj.values():
+                if isinstance(value, (dict, list)):
+                    result = find_direction(value, depth + 1)
+                    if result:
+                        return result
+        
+        # Handle lists/arrays (e.g., trading_opportunities[0].direction)
+        elif isinstance(obj, (list, tuple)):
+            for item in obj[:10]:  # Limit to first 10 items for safety
+                if isinstance(item, (dict, list)):
+                    result = find_direction(item, depth + 1)
+                    if result:
+                        return result
+        
+        return None
+    
     side = str(
         data.get("side") or 
         data.get("direction") or 
         trading_plan.get("side") or 
         trading_plan.get("direction") or 
+        analysis.get("side") or 
+        analysis.get("direction") or
+        find_direction(data) or  # Deep search as fallback
         ""
     ).upper()
     if for_spot and side != "LONG":
@@ -1361,27 +1439,30 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
     # Handle multiple field name formats for stop loss and take profit (nested or top-level)
     sl = _to_float(
         data.get("sl") or data.get("stop_loss") or 
-        trading_plan.get("sl") or trading_plan.get("stop_loss")
+        trading_plan.get("sl") or trading_plan.get("stop_loss") or
+        analysis.get("sl") or analysis.get("stop_loss")
     )
     tp1 = _to_float(
         data.get("tp1") or data.get("take_profit") or 
-        trading_plan.get("tp1") or trading_plan.get("take_profit")
+        trading_plan.get("tp1") or trading_plan.get("take_profit") or
+        analysis.get("tp1") or analysis.get("take_profit")
     )
     
     prop = {
         "symbol": symbol,
         "side": side if side in ("LONG","SHORT") else None,
-        "entry": _to_float(data.get("entry") or trading_plan.get("entry")),
+        "entry": _to_float(data.get("entry") or trading_plan.get("entry") or analysis.get("entry")),
         "sl": sl,
         "tp1": tp1,
-        "tp2": _to_float(data.get("tp2") or trading_plan.get("tp2")),
-        "tp3": _to_float(data.get("tp3") or trading_plan.get("tp3")),
+        "tp2": _to_float(data.get("tp2") or trading_plan.get("tp2") or analysis.get("tp2")),
+        "tp3": _to_float(data.get("tp3") or trading_plan.get("tp3") or analysis.get("tp3")),
         "leverage": (1 if for_spot else lev),
         "success_pct": _to_float(
             data.get("success_pct") or data.get("confidence") or 
-            trading_plan.get("success_pct") or trading_plan.get("confidence")
+            trading_plan.get("success_pct") or trading_plan.get("confidence") or
+            analysis.get("success_pct") or analysis.get("confidence")
         ),
-        "reason": data.get("reason") or data.get("reasoning") or trading_plan.get("reason") or trading_plan.get("reasoning") or "",
+        "reason": data.get("reason") or data.get("reasoning") or trading_plan.get("reason") or trading_plan.get("reasoning") or analysis.get("reason") or "",
     }
     if prop["side"] not in ("LONG","SHORT"):
         LOGGER.warning(
