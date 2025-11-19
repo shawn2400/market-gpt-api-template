@@ -354,27 +354,27 @@ class MarketIntelligence:
         
         🎯 GOAL: Generate trades in ALL market conditions (big, small, intermediate)
         """
-        # 🛡️ SAFETY-FIRST QUALITY BASELINE - All regimes start at 6.0 minimum
+        # 🎯 SINGLE-BRAIN OPTIMIZED THRESHOLDS - Relaxed for 1-brain consensus
         if regime == "choppy":
-            # CHOPPY = Scalping & range trades (still need minimum quality!)
-            base_rr = 1.1
-            base_quality = 6.0  # 🚨 RAISED from 4.0 to 6.0
+            # CHOPPY = Scalping & range trades (low RR acceptable)
+            base_rr = 1.05
+            base_quality = 4.0  # Lowered from 6.0 for single-brain config
         elif regime == "sideways":
             # SIDEWAYS = GRID trading + range bounces
-            base_rr = 1.15
-            base_quality = 6.2  # 🚨 RAISED from 4.2 to 6.2
+            base_rr = 1.08
+            base_quality = 4.2  # Lowered from 6.2 for single-brain config
         elif regime == "trending":
             # TRENDING = Traditional breakout trades
-            base_rr = 1.25
-            base_quality = 6.5  # 🚨 RAISED from 4.5 to 6.5
+            base_rr = 1.10
+            base_quality = 4.5  # Lowered from 6.5 for single-brain config
         elif regime == "volatile":
-            # VOLATILE = Need higher RR due to wider stops
-            base_rr = 1.4
-            base_quality = 7.0  # 🚨 RAISED from 5.0 to 7.0
+            # VOLATILE = Need slightly higher RR due to wider stops
+            base_rr = 1.15
+            base_quality = 5.0  # Lowered from 7.0 for single-brain config
         else:
             # Fallback
-            base_rr = 1.2
-            base_quality = 6.5  # 🚨 RAISED from 4.5 to 6.5
+            base_rr = 1.08
+            base_quality = 4.5  # Lowered from 6.5 for single-brain config
         
         # Mood adjustments - MINIMAL impact for CHOPPY markets
         # CHOPPY/SIDEWAYS don't need mood penalty (they're meant for neutral markets!)
@@ -391,9 +391,9 @@ class MarketIntelligence:
         elif volatility == "low":
             base_rr -= 0.05  # Tighter stops possible
         
-        # 🛡️ SAFETY FIRST: Enforce minimum quality threshold to prevent dangerous trades
-        min_rr = max(1.1, base_rr)  # Raised from 1.05 to 1.1 for safety
-        quality = max(6.0, base_quality)  # 🚨 CRITICAL: RAISED from 3.5 to 6.0 - NO trades below 6.0!
+        # 🎯 SINGLE-BRAIN CONFIG: Lowered floor for 1-brain consensus system
+        min_rr = max(1.05, base_rr)  # Lowered from 1.1 to 1.05 for single-brain
+        quality = max(3.5, base_quality)  # Lowered from 6.0 to 3.5 for single-brain
         
         return (min_rr, quality)
     

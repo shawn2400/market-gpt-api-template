@@ -312,8 +312,8 @@ SUGGEST_GRID      = os.getenv("SUGGEST_GRID","1").strip().lower() in ("1","true"
 
 DEFAULT_INTERVAL  = os.getenv("DEFAULT_INTERVAL","15m")
 
-MIN_RR_TOP10 = float(os.getenv("MIN_RR_TOP10", "1.10"))  # 🎯 Lowered for more trades (Top10 symbols)
-MIN_RR_ALT   = float(os.getenv("MIN_RR_ALT", "1.15"))  # 🎯 Lowered for more trades (Altcoins)
+MIN_RR_TOP10 = float(os.getenv("MIN_RR_TOP10", "1.05"))  # 🎯 Lowered to 1.05 for single-brain config
+MIN_RR_ALT   = float(os.getenv("MIN_RR_ALT", "1.08"))  # 🎯 Lowered to 1.08 for single-brain config
 
 # גג מינוף להצעות GPT (ביטחון)
 SUGGEST_MAX_LEVERAGE = int(os.getenv("SUGGEST_MAX_LEVERAGE","10"))

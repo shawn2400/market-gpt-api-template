@@ -39,10 +39,10 @@ class SmartFilterConfigProvider:
     # Regime-based threshold matrix
     REGIME_THRESHOLDS = {
         "choppy": {
-            "volume_min": 0.1,      # Very low - choppy markets have low volume
-            "quality_min": 2.0,      # Low - mean-reversion setups
-            "direction_penalty": -1.0,  # Reduced from -1.5
-            "btc_penalty_base": -0.5    # Reduced from -1.0
+            "volume_min": 0.05,      # Ultra-low - current market has very low volume
+            "quality_min": 1.8,      # Lowered - allow more trades
+            "direction_penalty": -0.8,  # Reduced from -1.0
+            "btc_penalty_base": -0.4    # Reduced from -0.5
         },
         "sideways": {
             "volume_min": 0.15,
@@ -51,14 +51,14 @@ class SmartFilterConfigProvider:
             "btc_penalty_base": -0.7
         },
         "trending": {
-            "volume_min": 0.5,      # Higher - need confirmation
-            "quality_min": 2.8,      # Relaxed from 4.0 - allow quality trades
-            "direction_penalty": -1.3,  # Relaxed from -2.0
-            "btc_penalty_base": -1.2    # Relaxed from -1.5
+            "volume_min": 0.20,      # Lowered from 0.35 - market has low volume
+            "quality_min": 2.0,      # Lowered from 2.5 - more permissive
+            "direction_penalty": -1.0,  # Reduced from -1.3
+            "btc_penalty_base": -1.0    # Reduced from -1.2
         },
         "volatile": {
-            "volume_min": 0.3,
-            "quality_min": 2.5,      # Relaxed from 3.0
+            "volume_min": 0.25,      # Reduced from 0.3
+            "quality_min": 2.2,      # Reduced from 2.5 - more permissive
             "direction_penalty": -1.2,  # Relaxed from -1.5
             "btc_penalty_base": -0.8    # Relaxed from -1.0
         }
