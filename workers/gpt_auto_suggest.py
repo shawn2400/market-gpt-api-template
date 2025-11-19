@@ -384,7 +384,7 @@ async def _fetch_context_batch(
         If use_multi_tf=True, context includes "multi_tf" field with all timeframes
     """
     if not CONTEXT_URL:
-        LOGGER.warning("CONTEXT_URL not set – using local context fallback")
+        LOGGER.debug("CONTEXT_URL not set – using local context fallback")
         return await _build_local_context(symbols, interval)
     
     # 🎯 CRITICAL: Use compact=False to get indicators (high_24h, low_24h, volume) for AI Strategy Consensus
