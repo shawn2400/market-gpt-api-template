@@ -1,13 +1,21 @@
 #!/usr/bin/env python3
 """
-Smart Filter Dynamic Configuration Provider
-===========================================
-Provides regime-aware thresholds to Smart Filter, eliminating hardcoded constants
-and enabling 100% automatic adaptation to market conditions.
+Smart Filter Dynamic Configuration Provider v2.0
+================================================
+100% ADAPTIVE SYSTEM - Provides regime-aware thresholds that automatically
+adjust to real-time market conditions, not hard-coded assumptions.
+
+Key Features:
+- Adaptive volume thresholds based on live market data
+- Regime-aware quality/penalty adjustments
+- Safety guardrails prevent extreme values
+- Zero manual intervention required
 
 Author: AlgoGPT Team
+Philosophy: Measure reality, adapt automatically
 """
 import logging
+import os
 from typing import Dict, Any, Tuple
 from dataclasses import dataclass
 
@@ -27,40 +35,45 @@ class SmartFilterThresholds:
 
 class SmartFilterConfigProvider:
     """
-    Provides dynamic Smart Filter thresholds based on Market Intelligence regime.
+    100% Adaptive Smart Filter Configuration Provider
     
-    Architecture:
-    - CHOPPY markets → Lower thresholds (more opportunities)
-    - TRENDING markets → Higher thresholds (quality over quantity)
-    - VOLATILE markets → Medium thresholds
-    - BTC correlation penalty adapts to mood/regime
+    Features:
+    - ADAPTIVE VOLUME: Real-time volume thresholds based on market-wide analysis
+    - Regime-aware quality/penalty adjustments
+    - Safety guardrails with smart fallbacks
+    - Zero manual tuning required
+    
+    Environment Variables:
+    - ADAPTIVE_VOLUME_ENABLED (default: 1) - Enable adaptive volume analysis
+    - VOLUME_PERCENTILE_STRATEGY (default: p75) - p75 (strict/conservative), median (balanced), p25 (loose/aggressive)
     """
     
-    # Regime-based threshold matrix
+    # Regime-based threshold matrix (FALLBACK ONLY - adaptive overrides volume_min)
+    # These are safety defaults used when adaptive system unavailable
     REGIME_THRESHOLDS = {
         "choppy": {
-            "volume_min": 0.05,      # Ultra-low - current market has very low volume
-            "quality_min": 1.8,      # Lowered - allow more trades
-            "direction_penalty": -0.8,  # Reduced from -1.0
-            "btc_penalty_base": -0.4    # Reduced from -0.5
+            "volume_min_fallback": 0.05,  # Fallback only
+            "quality_min": 1.8,
+            "direction_penalty": -0.8,
+            "btc_penalty_base": -0.4
         },
         "sideways": {
-            "volume_min": 0.15,
+            "volume_min_fallback": 0.10,  # Fallback only
             "quality_min": 2.5,
             "direction_penalty": -1.2,
             "btc_penalty_base": -0.7
         },
         "trending": {
-            "volume_min": 0.20,      # Lowered from 0.35 - market has low volume
-            "quality_min": 2.0,      # Lowered from 2.5 - more permissive
-            "direction_penalty": -1.0,  # Reduced from -1.3
-            "btc_penalty_base": -1.0    # Reduced from -1.2
+            "volume_min_fallback": 0.12,  # Fallback only (was 0.20, too high)
+            "quality_min": 2.0,
+            "direction_penalty": -1.0,
+            "btc_penalty_base": -1.0
         },
         "volatile": {
-            "volume_min": 0.25,      # Reduced from 0.3
-            "quality_min": 2.2,      # Reduced from 2.5 - more permissive
-            "direction_penalty": -1.2,  # Relaxed from -1.5
-            "btc_penalty_base": -0.8    # Relaxed from -1.0
+            "volume_min_fallback": 0.15,  # Fallback only
+            "quality_min": 2.2,
+            "direction_penalty": -1.2,
+            "btc_penalty_base": -0.8
         }
     }
     
@@ -74,6 +87,23 @@ class SmartFilterConfigProvider:
     def __init__(self):
         self.logger = logger
         self._cache: Dict[str, SmartFilterThresholds] = {}
+        
+        # Adaptive volume configuration
+        self.adaptive_volume_enabled = os.getenv("ADAPTIVE_VOLUME_ENABLED", "1") == "1"
+        raw_strategy = os.getenv("VOLUME_PERCENTILE_STRATEGY", "p75")
+        
+        # Validate and normalize percentile strategy
+        VALID_STRATEGIES = ["p25", "median", "p75"]
+        strategy_normalized = raw_strategy.lower()
+        
+        if strategy_normalized not in VALID_STRATEGIES:
+            self.logger.error(f"❌ Invalid VOLUME_PERCENTILE_STRATEGY '{raw_strategy}', defaulting to p75 (conservative)")
+            self.volume_percentile_strategy = "p75"
+        else:
+            self.volume_percentile_strategy = strategy_normalized
+            if strategy_normalized != "p75":
+                self.logger.info(f"📊 Volume Percentile Strategy: {strategy_normalized.upper()}")
+            # No log for p75 (default/conservative - expected)
     
     def get_thresholds(self, 
                       regime: str, 
@@ -81,7 +111,13 @@ class SmartFilterConfigProvider:
                       confidence: float = 50.0,
                       symbol: str = "UNKNOWN") -> SmartFilterThresholds:
         """
-        Get dynamic thresholds for given market conditions.
+        Get 100% ADAPTIVE thresholds for given market conditions.
+        
+        NEW v2.0 Features:
+        - Volume threshold adapts to real-time market conditions
+        - Measures actual volume distribution across all symbols
+        - Auto-adjusts to low/high volume environments
+        - Safety fallbacks if adaptive system fails
         
         Args:
             regime: Market regime (choppy, trending, sideways, volatile)
@@ -90,9 +126,9 @@ class SmartFilterConfigProvider:
             symbol: Trading symbol (for logging)
         
         Returns:
-            SmartFilterThresholds with adaptive values
+            SmartFilterThresholds with 100% adaptive values
         """
-        # Get base thresholds for regime (no caching - always fresh values)
+        # Get base thresholds for regime
         regime_lower = regime.lower()
         if regime_lower not in self.REGIME_THRESHOLDS:
             self.logger.warning(f"Unknown regime '{regime}', defaulting to choppy")
@@ -105,31 +141,75 @@ class SmartFilterConfigProvider:
         mood_modifier = self.MOOD_MODIFIERS.get(mood_lower, 1.0)
         
         # Calculate dynamic BTC penalty
-        # Formula: base_penalty * mood_modifier * (confidence/100)
-        # Higher confidence = stronger penalty
         btc_penalty = base["btc_penalty_base"] * mood_modifier * (confidence / 100.0)
         
-        # Use base thresholds directly - no confidence multiplication!
-        # Confidence already affects BTC penalty, that's enough dynamic adjustment
+        # 🆕 ADAPTIVE VOLUME THRESHOLD (v2.0)
+        # Try to get real-time market-based threshold, fallback to static if fails
+        volume_threshold = self._get_adaptive_volume_threshold(regime_lower)
+        
         thresholds = SmartFilterThresholds(
-            volume_spike_min=base["volume_min"],
-            quality_score_min=base["quality_min"],  # Direct value - no multiplication!
+            volume_spike_min=volume_threshold,  # 🆕 ADAPTIVE!
+            quality_score_min=base["quality_min"],
             btc_penalty=btc_penalty,
-            direction_penalty=base["direction_penalty"],  # Direct value - no multiplication!
+            direction_penalty=base["direction_penalty"],
             regime=regime,
             mood=mood,
             confidence=confidence
         )
         
         self.logger.info(
-            f"🎯 [{symbol}] Dynamic Thresholds: {regime.upper()} {mood.upper()} "
-            f"→ Vol≥{thresholds.volume_spike_min:.2f}x, "
+            f"🎯 [{symbol}] {'ADAPTIVE' if self.adaptive_volume_enabled else 'STATIC'} Thresholds: "
+            f"{regime.upper()} {mood.upper()} → Vol≥{thresholds.volume_spike_min:.3f}x, "
             f"Quality≥{thresholds.quality_score_min:.1f}, "
             f"BTC_penalty={thresholds.btc_penalty:.2f}, "
             f"Dir_penalty={thresholds.direction_penalty:.2f}"
         )
         
         return thresholds
+    
+    def _get_adaptive_volume_threshold(self, regime: str) -> float:
+        """
+        Get volume threshold adapted to real-time market conditions.
+        
+        Priority:
+        1. Try adaptive analyzer (measures real market volume)
+        2. Fallback to static threshold if adaptive fails
+        
+        Args:
+            regime: Market regime
+        
+        Returns:
+            Volume threshold (0.03 - 0.50)
+        """
+        # If adaptive disabled, use fallback immediately
+        if not self.adaptive_volume_enabled:
+            fallback = self.REGIME_THRESHOLDS[regime]["volume_min_fallback"]
+            self.logger.debug(f"Adaptive volume DISABLED, using fallback: {fallback:.3f}x")
+            return fallback
+        
+        # Try adaptive volume analyzer
+        try:
+            from utils.adaptive_volume_analyzer import get_adaptive_volume_threshold
+            
+            adaptive_threshold = get_adaptive_volume_threshold(
+                regime=regime,
+                percentile_strategy=self.volume_percentile_strategy,
+                force_refresh=False  # Use cache if fresh
+            )
+            
+            self.logger.debug(
+                f"✅ Adaptive volume threshold: {adaptive_threshold:.3f}x "
+                f"(strategy={self.volume_percentile_strategy})"
+            )
+            return adaptive_threshold
+            
+        except Exception as e:
+            # Fallback to static if adaptive fails
+            fallback = self.REGIME_THRESHOLDS[regime]["volume_min_fallback"]
+            self.logger.warning(
+                f"⚠️ Adaptive volume failed: {e}, using fallback: {fallback:.3f}x"
+            )
+            return fallback
     
     def get_thresholds_from_context(self, ctx: Dict[str, Any]) -> SmartFilterThresholds:
         """

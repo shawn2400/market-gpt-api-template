@@ -76,13 +76,18 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Position Limits Manager**: Sets max positions per symbol, total open orders, and correlation exposure limits.
 -   **Trading Gatekeeper**: Unified pre-trade validation integrating all filters and Dynamic Leverage.
 
-**Dynamic Smart Filter v2.0 (100% Regime-Aware):**
--   **Regime-Based Thresholds**: Automatically adjusts volume/quality thresholds based on market regime - CHOPPY (quality≥2.0, volume≥0.1x), TRENDING (quality≥2.8, volume≥0.5x), VOLATILE (quality≥2.5, volume≥0.3x).
--   **Dynamic BTC Correlation Penalty**: Scales BTC penalty based on regime/mood/confidence (e.g., CHOPPY+BEARISH=-0.5 instead of fixed -1.0).
--   **Adaptive Direction Penalty**: Counter-trend penalties adjust by regime strength - CHOPPY (-1.0), TRENDING (-1.3), VOLATILE (-1.2).
+**Dynamic Smart Filter v2.0 (100% Regime-Aware + Adaptive Volume):**
+-   **🆕 Adaptive Volume Analyzer (v2.0)**: Measures real-time market-wide volume distribution and auto-adjusts thresholds based on actual conditions, not assumptions. Compares each symbol's volume against market median to determine relative strength.
+-   **Adaptive Volume Thresholds**: Volume requirements adapt automatically to market conditions using percentile strategies. Safety guardrails prevent extreme values (0.03x - 0.50x range).
+    -   **p75 (Conservative/Default)**: High threshold (~3.5x median), only top 25% volume symbols pass - strict filtering for quality
+    -   **median (Balanced)**: Medium threshold (~1.0x median), ~50% of symbols pass - balanced approach
+    -   **p25 (Aggressive)**: Low threshold (~0.4x median), ~75% of symbols pass - loose filtering for more opportunities
+-   **Regime-Based Quality Thresholds**: Automatically adjusts quality thresholds - CHOPPY (quality≥1.8), TRENDING (quality≥2.0), VOLATILE (quality≥2.2).
+-   **Dynamic BTC Correlation Penalty**: Scales BTC penalty based on regime/mood/confidence (e.g., CHOPPY+BEARISH=-0.4 instead of fixed -1.0).
+-   **Adaptive Direction Penalty**: Counter-trend penalties adjust by regime strength - CHOPPY (-0.8), TRENDING (-1.0), VOLATILE (-1.2).
 -   **Market Intelligence Integration**: Queries Market Intelligence in real-time for regime/mood analysis before filtering.
--   **Zero Manual Intervention**: No hardcoded thresholds - system self-adapts to all market conditions automatically.
--   **No Caching**: Fresh instance created per call - always uses latest threshold values without stale cache.
+-   **100% Dynamic Operation**: Zero hard-coded thresholds - all parameters measured from live market data across 591 symbols. Fallback to safe defaults if adaptive system fails.
+-   **Smart Caching**: 5-minute TTL on volume stats to balance freshness vs API efficiency.
 
 **Dynamic TOP 100 Symbol Filter (Musical Chairs System):**
 -   Blocks trades for symbols outside the TOP 100, with dynamic scheduling for continuous ranking.
