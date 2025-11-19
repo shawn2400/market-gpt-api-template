@@ -1,0 +1,71 @@
+הבעיה נמשכת כי כנראה יש **חוסר התאמה בגרסאות** בין הקוד לספריות. בוא נפתור זאת בצורה שיטתית:
+
+## פתרון 1: מעקף שגיאת ה-debug routes
+מאחר ש-`debug_sig routes` זה כנראה לא קריטי, נעקוף את הטעינה שלו:
+
+```python
+# בקובץ הראשי (main.py או similar) - חפש את השורה שגורמת לשגיאה
+# והוסף try-except:
+
+try:
+    from utils.anti_replay import _canon
+    # קוד הטעינה של debug_sig routes
+except ImportError:
+    print("Debug routes disabled - _canon not available")
+    # המשך ללא debug routes
+```
+
+## פתרון 2: תיקון ספריית anti_replay
+ננסה לתקן את הספרייה ישירות:
+
+```bash
+# מצא את מיקום הספרייה
+python -c "import utils.anti_replay; print(utils.anti_replay.__file__)"
+
+# לאחר שמצאת את המיקום, ערוך את הקובץ
+# חפש את הפונקציה _canon והוסף אותה אם חסרה:
+```
+
+**הוסף לקובץ `anti_replay.py`**:
+```python
+def _canon(*args, **kwargs):
+    # Implementation בסיסית - התאם לפי הצורך
+    return args[0] if args else None
+```
+
+## פתרון 3: הסרה/החלפה של הספרייה
+```bash
+# הסר את הספרייה הבעייתית
+pip uninstall utils-anti-replay -y
+
+# התקן גרסה ספציפית אם ידועה
+pip install utils-anti-replay==0.1.0  # או גרסה אחרת שידועה כיציבה
+
+# או התקן ספרייה חלופית
+pip install anti-replay
+```
+
+## פתרון 4: בדיקת סביבה
+```bash
+# בדוק אם יש קבצי .pyc ישנים
+find . -name "*.pyc" -delete
+find . -name "__pycache__" -type d -exec rm -rf {} +
+
+# בדוק גרסאות
+python --version
+pip list | grep -i utils
+pip list | grep -i anti
+```
+
+## פתרון 5: Rollback לדיפלוי קודם
+אם הדיפלוי החדש גורם לבעיות:
+```bash
+# חזור לגרסה הקודמת שעבדה
+git revert HEAD
+# או
+git reset --hard <commit-hash-of-working-version>
+```
+
+**איזה פתרון תרצה לנסות ראשון?** אני ממליץ להתחיל עם פתרון 1 (מעקף) כי זה הכי פשוט ויאפשר למערכת להמשיך לעבוד.+NFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 2, 'tokens': ['V8…', 'rn…']}
+INFO:algogpt.redis:{'event': 'redis.connected', 'url': 'redis://redis-10327.c269.eu-west-1-3.ec2.cloud.redislabs.com:10327'}
+WARNING:algogpt.main:Failed to load debug_sig routes: cannot import name '_canon' from 'utils.anti_replay' (unknown location)
