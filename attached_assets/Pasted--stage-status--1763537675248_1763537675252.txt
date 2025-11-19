@@ -1,0 +1,188 @@
+הבנתי **בדיוק** מה אתה רוצה:
+
+❗ **לא פקודה אחת קטנה**
+❗ **לא רק /stage_status**
+
+אתה רוצה:
+
+### **מערכת Stage אוטומטית–דינמית–חכמה–ללא עומסים**,
+
+שמנהלת את עצמה מהתחלה ועד הסוף, כולל טלגרם, बिना שום פעולה ידנית שלך.
+
+אני אכין לך עכשיו **פקודה אחת לסוכן** שתבנה:
+
+# ✅ Stage Engine מלא, אוטומטי, דינמי, חכם, ללא עומסים
+
+כולל:
+
+### 1) **מעבר אוטומטי בין Stage 1 → Stage 2 → Stage 3 ללא מעורבות שלך**
+
+– לפי CPU / RAM
+– לפי BanShield
+– לפי Redis Health
+– לפי WS Stability
+– לפי Error count
+– לפי uptime
+– הכל בלי שתיגע.
+
+### 2) **Self-Healing עדין ושפוי (ללא עומס)**
+
+– רק תיקונים קריטיים
+– עם backoff חכם
+– בלי לייצר לולאות עומס
+– בלי לפגוע בביננס (RPM).
+
+### 3) **מערכת Auto-Promote אוטומטית**
+
+– Stage 1 רץ 20–60 דקות
+– אם הכול ירוק → עובר Stage
+– כל מעבר מדווח בטלגרם.
+
+### 4) **מערכת Auto-Freeze אוטומטית אם יש בעיה**
+
+– אם RPM עובר ל־RED
+– אם WS נופל
+– אם Redis מתנתק
+– אם CPU > 90% 3 פעמים
+→ המערכת עוצרת אוטומטית, שולחת טלגרם, נכנסת ל־SAFE MODE.
+
+### 5) **פקודות טלגרם חכמות**
+
+* `/stage_status`
+* `/stage_promote`
+* `/stage_freeze`
+* `/stage_resume`
+* `/stage_logs`
+
+### 6) **ללא עומסים!!!**
+
+– כל בדיקה לא יותר מפעם ב־60 שניות
+– אין לולאות
+– הכל async
+– הכל עם backoff linearly
+– הכל מתחבר למערכת BanShield כדי לא לעבור RPM.
+
+---
+
+# 🟦 פקודה לסוכן — בנה מערכת Stage מלאה ואוטומטית
+
+### **העתק → הדבק לסוכן.**
+
+*(זה כולל הכול. אוטומציה מלאה. בלי לגעת בקבצים שכבר קיימים.)*
+
+```
+TASK: Implement Full Auto-Stage Engine (Stage 1 → 2 → 3) fully automatic, dynamic, safe, and load-balanced.
+
+GOAL:
+Create a “Stage Engine” that:
+- Automatically monitors system health
+- Promotes/demotes stages dynamically
+- Sends Telegram alerts
+- Keeps RPM, CPU, RAM stable
+- Avoids any heavy loops or high-load workers
+- Requires ZERO user interaction
+
+FILES TO CREATE / UPDATE:
+1) utils/stage_engine.py
+2) utils/stage_controller.py (add current stage + set/get)
+3) utils/health_monitor.py (extend with health_summary method)
+4) utils/telegram_notifier.py (add helpers for stage messages)
+5) routes/telegram_stage.py (with 5 commands)
+6) modes/watcher_stage.py (lightweight loop, runs every 60 sec max)
+
+===========================
+STAGE LOGIC
+===========================
+Stage 1 – Stable-Health
+- AUTO_RUN=0
+- No trading
+- Only Health Monitor
+Promote → If uptime ≥ 20 minutes AND health is GREEN.
+
+Stage 2 – Pre-Trading Validation
+- AUTO_RUN=0
+- Enable WebSocket
+- Check position manager
+Promote → If stability ≥ 15 min AND RPM under GREEN.
+
+Stage 3 – Full Auto Trading
+- AUTO_RUN=1
+- ENABLE_AUTO_TRADING=1
+Demote → If health turns YELLOW/RED.
+
+===========================
+DYNAMIC AUTO-PROMOTION LOGIC
+===========================
+Every 60 seconds:
+- Collect health snapshot: CPU, RAM, RPM, Redis, WS
+- Count errors (last 10 minutes)
+- If stable, call StageController.promote()
+- If unstable, StageController.freeze()
+
+No continuous loops.
+Use asyncio sleep(60).
+
+===========================
+TELEGRAM COMMANDS
+===========================
+/stage_status → show current stage, uptime, CPU, RAM, RPM, Errors.
+/stage_promote → manual force promote one stage.
+/stage_freeze → freeze system and disable AUTO_RUN.
+/stage_resume → resume auto-stage logic.
+/stage_logs → short last 20 log lines.
+
+===========================
+PROTECTIONS
+===========================
+- BanShield integrated (respect MAX_RPM)
+- No more than 1 promotion per 10 minutes
+- Self-Healing disabled unless stability returns
+- Auto-Freeze if:
+   CPU > 90% 3 times
+   RAM > 85%
+   Redis disconnect
+   WS reconnect loop
+
+===========================
+LOAD MANAGEMENT
+===========================
+- Stage watcher runs once per minute
+- No heavy scanning
+- No multi-thread load
+- No DB spam
+- No Binance spam
+- Max 1 RPC per minute per module
+- All existing workers remain untouched unless stage allows
+
+===========================
+DO NOT MODIFY:
+- trade_executor
+- auto_executor
+- manage_open_trades
+- websocket handlers
+- main logic
+
+===========================
+DELIVERABLE:
+Provide patched files with only the new functionality.
+Ensure idempotent import structure.
+All new code must be async and lightweight.
+```
+
+---
+
+# 🟢 אחרי שהסוכן יבנה את זה
+
+תקבל מערכת:
+
+### **אוטומטית + דינמית + בטוחה + ללא עומס + מדווחת לטלגרם + מתקדמת**
+
+רמה של מערכות מסחר של קרנות השקעה.
+
+---
+
+רוצה שאוסיף גם:
+
+### **Auto-Stage Dashboard**
+
+בנתיב `/stage/monitor` (JSON + HTML גרפי)?
