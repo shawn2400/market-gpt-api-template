@@ -117,16 +117,24 @@ class BinanceSymbolValidator:
             return round(price, 4)
         
         tick_size = info["tickSize"]
-        precision = info["pricePrecision"]
         
-        # Round to tick size
+        # Critical fix: Round to tick size ONLY (ignore precision field)
         decimal_price = Decimal(str(price))
         decimal_tick = Decimal(str(tick_size))
-        rounded = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_DOWN) * decimal_tick
         
-        # Use proper precision pattern (e.g., 0.01 for precision=2)
-        precision_pattern = Decimal(10) ** -precision if precision > 0 else Decimal('1')
-        return float(rounded.quantize(precision_pattern, rounding=ROUND_DOWN))
+        # Calculate how many ticks fit into price
+        ticks = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_DOWN)
+        rounded = ticks * decimal_tick
+        
+        # Determine decimal places from tick size
+        tick_str = str(tick_size).rstrip('0').rstrip('.')
+        if '.' in tick_str:
+            decimal_places = len(tick_str.split('.')[1])
+        else:
+            decimal_places = 0
+        
+        # Format to exact decimal places needed for tick size
+        return float(round(float(rounded), decimal_places))
     
     def round_quantity(self, symbol: str, quantity: float, is_market: bool = False) -> float:
         """
@@ -146,16 +154,29 @@ class BinanceSymbolValidator:
             return round(quantity, 3)
         
         step_size = info["marketStepSize"] if is_market else info["stepSize"]
-        precision = info["quantityPrecision"]
         
-        # Round to step size
+        # Critical fix: Round to step size ONLY (ignore precision field)
+        # stepSize is the authoritative value - precision is just a hint
         decimal_qty = Decimal(str(quantity))
         decimal_step = Decimal(str(step_size))
-        rounded = (decimal_qty / decimal_step).quantize(Decimal('1'), rounding=ROUND_DOWN) * decimal_step
         
-        # Use proper precision pattern (e.g., 0.001 for precision=3)
-        precision_pattern = Decimal(10) ** -precision if precision > 0 else Decimal('1')
-        return float(rounded.quantize(precision_pattern, rounding=ROUND_DOWN))
+        # Calculate how many steps fit into quantity
+        steps = (decimal_qty / decimal_step).quantize(Decimal('1'), rounding=ROUND_DOWN)
+        rounded = steps * decimal_step
+        
+        # Determine decimal places from step size (e.g., 0.1 = 1 place, 0.01 = 2 places)
+        step_str = str(step_size).rstrip('0').rstrip('.')
+        if '.' in step_str:
+            decimal_places = len(step_str.split('.')[1])
+        else:
+            decimal_places = 0
+        
+        # Critical: If stepSize is 1 (whole numbers), return as int to avoid precision errors
+        if step_size >= 1.0:
+            return int(float(rounded))
+        
+        # Format to exact decimal places needed for step size
+        return float(round(float(rounded), decimal_places))
     
     def validate_order(
         self,
@@ -233,13 +254,15 @@ class BinanceSymbolValidator:
         return True, None, corrected
 
 
-# Singleton instance
+# Singleton instance (force reload after code changes)
 _validator_instance: Optional[BinanceSymbolValidator] = None
+_instance_version = 2
 
 
-def get_symbol_validator() -> BinanceSymbolValidator:
-    """Get singleton validator instance"""
+def get_symbol_validator(force_reload: bool = False) -> BinanceSymbolValidator:
+    """Get singleton validator instance (with force reload support)"""
     global _validator_instance
-    if _validator_instance is None:
+    if _validator_instance is None or force_reload:
         _validator_instance = BinanceSymbolValidator()
+        logger.info(f"🔄 BinanceSymbolValidator reloaded (version {_instance_version})")
     return _validator_instance

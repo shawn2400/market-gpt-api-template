@@ -635,7 +635,7 @@ class ExecutionBot:
             # 🛡️ VALIDATE ORDER with Binance Symbol Validator (precision, min quantity, notional)
             try:
                 from utils.binance_symbol_validator import get_symbol_validator
-                validator = get_symbol_validator()
+                validator = get_symbol_validator(force_reload=True)
                 
                 # Validate and get corrected params
                 is_valid, error_msg, corrected = validator.validate_order(

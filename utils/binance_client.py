@@ -346,7 +346,7 @@ def _quantize_price(symbol: str, price: float) -> str:
     decs = _decs(str(f.get("tickSize") or DEFAULT_PRICE_TICK_STR))
     return f"{adj:.{decs}f}"
 
-def _quantize_qty(symbol: str, qty: float) -> str:
+def _quantize_qty(symbol: str, qty: float) -> str | int:
     f = get_symbol_filters(symbol) or {}
     step = float(f.get("stepSize") or DEFAULT_QTY_STEP_STR)
     if step <= 0: step = float(DEFAULT_QTY_STEP_STR)
@@ -354,6 +354,11 @@ def _quantize_qty(symbol: str, qty: float) -> str:
     steps = math.floor(max(qty, 0.0) / step)
     adj = max(step, steps * step)
     decs = _decs(str(f.get("stepSize") or DEFAULT_QTY_STEP_STR))
+    
+    # CRITICAL FIX: Return int for whole numbers (stepSize >= 1.0) to avoid Binance precision errors
+    if step >= 1.0:
+        return int(adj)
+    
     return f"{adj:.{decs}f}"
 
 def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
