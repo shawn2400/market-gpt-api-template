@@ -42,7 +42,7 @@ VOLATILITY_THRESHOLD = float(os.getenv("VOLATILITY_THRESHOLD", "0.08"))  # 8%
 
 # 🛡️ LAYER 2: Time & Loss Protection
 MIN_HOLD_TIME_SEC = int(os.getenv("MIN_HOLD_TIME_SEC", "60"))
-MAX_LOSS_CAP = float(os.getenv("MAX_LOSS_CAP", "0.02"))  # 2% hard stop
+MAX_LOSS_CAP = float(os.getenv("MAX_LOSS_CAP", "0.05"))  # 5% hard stop (increased from 2% for longer holding times)
 
 # 🚀 LAYER 3: Breakeven Acceleration
 BREAKEVEN_THRESHOLD = float(os.getenv("BREAKEVEN_THRESHOLD", "0.005"))  # 0.5% profit

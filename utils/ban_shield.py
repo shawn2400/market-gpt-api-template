@@ -31,10 +31,10 @@ _shield_loop_lock = threading.Lock()
 # Priority levels
 Priority = Literal["CRITICAL", "NORMAL", "LOW"]
 
-# Zone thresholds
+# Zone thresholds (updated to prevent blocking account calls)
 GREEN_ZONE = 30  # req/min
 YELLOW_ZONE = 38  # req/min
-RED_ZONE = 40     # req/min
+RED_ZONE = 45     # req/min
 
 @dataclass
 class APICall:
@@ -82,10 +82,10 @@ class BanShield:
     
     def __init__(
         self,
-        max_requests_per_min: int = 25,
-        green_zone: int = 18,
-        yellow_zone: int = 22,
-        red_zone: int = 25
+        max_requests_per_min: int = 45,
+        green_zone: int = 30,
+        yellow_zone: int = 38,
+        red_zone: int = 42
     ):
         self.max_rpm = max_requests_per_min
         self.green_zone = green_zone
@@ -335,7 +335,7 @@ class BanShield:
 # Global shield instance
 _shield: Optional[BanShield] = None
 
-def init_shield(max_rpm: int = 40) -> BanShield:
+def init_shield(max_rpm: int = 45) -> BanShield:
     """Initialize global shield instance"""
     global _shield
     _shield = BanShield(max_requests_per_min=max_rpm)
