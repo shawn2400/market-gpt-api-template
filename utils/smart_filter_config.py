@@ -145,21 +145,56 @@ class SmartFilterConfigProvider:
     
     def get_thresholds_from_context(self, ctx: Dict[str, Any]) -> SmartFilterThresholds:
         """
-        Extract regime/mood from context and return thresholds.
+        Extract regime/mood from context OR query Market Intelligence.
         Falls back to safe defaults if market intelligence not available.
         
+        Priority:
+        1. Use regime/mood from ctx if available
+        2. Call Market Intelligence to analyze current conditions
+        3. Fallback to CHOPPY/NEUTRAL (safe defaults)
+        
         Args:
-            ctx: Market context with regime/mood data
+            ctx: Market context with market data
         
         Returns:
             SmartFilterThresholds
         """
-        regime = ctx.get("regime", "choppy")
-        mood = ctx.get("mood", "neutral")
-        confidence = ctx.get("confidence", 50.0)
         symbol = ctx.get("symbol", "UNKNOWN")
         
-        return self.get_thresholds(regime, mood, confidence, symbol)
+        # Option 1: Use regime/mood from ctx if already analyzed
+        if "regime" in ctx and "mood" in ctx:
+            regime = ctx.get("regime", "choppy")
+            mood = ctx.get("mood", "neutral")
+            confidence = ctx.get("confidence", 50.0)
+            
+            self.logger.debug(f"[{symbol}] Using regime from ctx: {regime}/{mood}")
+            return self.get_thresholds(regime, mood, confidence, symbol)
+        
+        # Option 2: Query Market Intelligence for fresh analysis
+        try:
+            from utils.market_intelligence import MarketIntelligence
+            mi = MarketIntelligence()
+            
+            # Run market analysis
+            condition = mi.analyze_market(ctx)
+            
+            self.logger.info(
+                f"[{symbol}] Fresh Market Intelligence: {condition.regime.upper()}/{condition.mood.upper()} "
+                f"(confidence={condition.confidence:.0f}%)"
+            )
+            
+            return self.get_thresholds(
+                condition.regime, 
+                condition.mood, 
+                condition.confidence, 
+                symbol
+            )
+        except Exception as e:
+            self.logger.warning(f"[{symbol}] Market Intelligence unavailable: {e}, using safe defaults")
+        
+        # Option 3: Fallback to safe CHOPPY defaults
+        self.logger.info(f"[{symbol}] Fallback: Using CHOPPY/NEUTRAL defaults")
+        return self.get_thresholds("choppy", "neutral", 50.0, symbol)
     
     def clear_cache(self):
         """Clear threshold cache (call when market conditions change significantly)"""

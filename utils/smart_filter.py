@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # utils/smart_filter.py
 """
-🎯 Smart 3-Stage Pre-Filter
+🎯 Smart 3-Stage Dynamic Pre-Filter
 Reduces AI costs by 95% through intelligent filtering BEFORE expensive AI calls
 
 Stage 1: Volume Spike Detection (0.01s, free)
@@ -9,6 +9,11 @@ Stage 2: Technical Quality Gate (0.1s, free)
 Stage 3: AI Consensus (3s, $$$ - only for high-quality setups)
 
 Goal: Filter out 90% of noise BEFORE calling AI
+
+DYNAMIC THRESHOLDS:
+- CHOPPY market → Lower thresholds (volume=0.1x, quality=2.0)
+- TRENDING market → Higher thresholds (volume=0.5x, quality=4.0)
+- VOLATILE market → Medium thresholds (volume=0.3x, quality=3.0)
 """
 import os
 import logging
@@ -16,17 +21,17 @@ from typing import Dict, Any, Optional, Tuple
 
 logger = logging.getLogger("algogpt.smart_filter")
 
-# Configurable thresholds
-# NOTE: Reduced to allow trading in CHOPPY/mean-reversion markets
-# GRID trades bypass this filter entirely (line 2124 in gpt_auto_suggest.py)
-VOLUME_SPIKE_MIN = float(os.getenv("VOLUME_SPIKE_MIN", "0.1"))  # 10% of average volume - ULTRA-LOW for choppy markets
+# Legacy fallback constants (used only if dynamic config fails)
 PRICE_CHANGE_MIN = float(os.getenv("PRICE_CHANGE_MIN", "2.0"))  # 2% move
-QUALITY_SCORE_MIN = float(os.getenv("QUALITY_SCORE_MIN", "2.5"))  # 2.5/10 allows counter-trend + BTC penalties (was 3.0 → 3.5 → 4.0 → 5.0)
 
-def stage1_volume_spike(ctx: Dict[str, Any]) -> Tuple[bool, str]:
+def stage1_volume_spike(ctx: Dict[str, Any], volume_min: float) -> Tuple[bool, str]:
     """
-    🔍 Stage 1: Volume Spike Detection
+    🔍 Stage 1: Volume Spike Detection (DYNAMIC)
     Check if there's unusual trading activity (volume spike)
+    
+    Args:
+        ctx: Market context
+        volume_min: Dynamic threshold from SmartFilterConfig
     
     Returns: (passed, reason)
     """
@@ -39,10 +44,10 @@ def stage1_volume_spike(ctx: Dict[str, Any]) -> Tuple[bool, str]:
         
         volume_ratio = current_volume / avg_volume
         
-        if volume_ratio < VOLUME_SPIKE_MIN:
+        if volume_ratio < volume_min:
             return False, f"low_volume_spike_{volume_ratio:.2f}x"
         
-        logger.info(f"✅ Stage 1 PASS: Volume spike {volume_ratio:.2f}x (>{VOLUME_SPIKE_MIN}x)")
+        logger.info(f"✅ Stage 1 PASS: Volume spike {volume_ratio:.2f}x (>{volume_min}x)")
         return True, f"volume_spike_{volume_ratio:.2f}x"
         
     except Exception as e:
@@ -132,20 +137,21 @@ def stage2_technical_quality(ctx: Dict[str, Any]) -> Tuple[bool, str, float]:
         return True, "technical_check_failed", 5.0  # Don't block on errors
 
 
-def stage3_market_direction(ctx: Dict[str, Any], proposed_side: str = "LONG") -> Tuple[bool, str, float]:
+def stage3_market_direction(ctx: Dict[str, Any], proposed_side: str = "LONG", direction_penalty: float = -1.5) -> Tuple[bool, str, float]:
     """
     🔍 Stage 3: Market Direction Filter (DYNAMIC PENALTY SYSTEM)
     Applies quality penalty for counter-trend trades instead of blocking
     
     Logic:
-    - BEARISH Market (price < EMA20 < EMA50): LONG trades get -1.5 penalty
-    - BULLISH Market (price > EMA20 > EMA50): SHORT trades get -1.5 penalty
+    - BEARISH Market (price < EMA20 < EMA50): LONG trades get penalty
+    - BULLISH Market (price > EMA20 > EMA50): SHORT trades get penalty
     - NEUTRAL/CHOPPY: No penalty (both directions welcome)
     - WITH-TREND trades: +0.5 bonus (encouraged)
     
     Args:
         ctx: Market context with price and EMAs
         proposed_side: Trade direction ("LONG" or "SHORT")
+        direction_penalty: Dynamic penalty from SmartFilterConfig (regime-based)
     
     Returns: (passed, reason, penalty_score)
     """
@@ -167,19 +173,19 @@ def stage3_market_direction(ctx: Dict[str, Any], proposed_side: str = "LONG") ->
         
         penalty = 0.0
         
-        # Counter-trend trades: Apply penalty (not blocking!)
+        # Counter-trend trades: Apply DYNAMIC penalty (not blocking!)
         if market_direction == "BEARISH" and proposed_side == "LONG":
-            penalty = -1.5
+            penalty = direction_penalty
             logger.warning(
-                f"⚠️ Stage 3 PENALTY: LONG in BEARISH market → -1.5 quality penalty "
+                f"⚠️ Stage 3 PENALTY: LONG in BEARISH market → {penalty:.2f} quality penalty "
                 f"(price={price:.2f} < EMA20={ema_20:.2f} < EMA50={ema_50:.2f})"
             )
             return True, "counter_trend_penalty_long", penalty
         
         if market_direction == "BULLISH" and proposed_side == "SHORT":
-            penalty = -1.5
+            penalty = direction_penalty
             logger.warning(
-                f"⚠️ Stage 3 PENALTY: SHORT in BULLISH market → -1.5 quality penalty "
+                f"⚠️ Stage 3 PENALTY: SHORT in BULLISH market → {penalty:.2f} quality penalty "
                 f"(price={price:.2f} > EMA20={ema_20:.2f} > EMA50={ema_50:.2f})"
             )
             return True, "counter_trend_penalty_short", penalty
@@ -205,19 +211,46 @@ def stage3_market_direction(ctx: Dict[str, Any], proposed_side: str = "LONG") ->
 
 def smart_pre_filter(symbol: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
     """
-    🎯 Smart 3-Stage Pre-Filter
+    🎯 Smart 3-Stage Dynamic Pre-Filter
     Filters out 90% of noise BEFORE expensive AI calls
+    
+    Thresholds adapt automatically based on market regime:
+    - CHOPPY → Lower thresholds (more opportunities)
+    - TRENDING → Higher thresholds (quality over quantity)
     
     Returns:
         {
             "passed": bool,
-            "stage": int (1-3),
+            "stage": int (1-4),
             "reason": str,
             "quality_score": float (0-10)
         }
     """
-    # Stage 1: Volume Spike
-    stage1_pass, stage1_reason = stage1_volume_spike(ctx)
+    # Get dynamic thresholds based on market regime
+    try:
+        from utils.smart_filter_config import get_thresholds_from_context
+        thresholds = get_thresholds_from_context(ctx)
+        
+        logger.debug(
+            f"[{symbol}] Dynamic thresholds: Vol≥{thresholds.volume_spike_min:.2f}x, "
+            f"Quality≥{thresholds.quality_score_min:.1f}, Regime={thresholds.regime}"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to get dynamic thresholds, using fallbacks: {e}")
+        # Fallback to safe defaults (CHOPPY-like)
+        from utils.smart_filter_config import SmartFilterThresholds
+        thresholds = SmartFilterThresholds(
+            volume_spike_min=0.1,
+            quality_score_min=2.0,
+            btc_penalty=-0.5,
+            direction_penalty=-1.0,
+            regime="choppy",
+            mood="neutral",
+            confidence=50.0
+        )
+    
+    # Stage 1: Volume Spike (DYNAMIC)
+    stage1_pass, stage1_reason = stage1_volume_spike(ctx, thresholds.volume_spike_min)
     if not stage1_pass:
         return {
             "passed": False,
@@ -236,9 +269,11 @@ def smart_pre_filter(symbol: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
             "quality_score": quality_score
         }
     
-    # Stage 3: Market Direction (Dynamic Penalty System - no blocking!)
+    # Stage 3: Market Direction (DYNAMIC Penalty System - no blocking!)
     proposed_side = ctx.get("side", "LONG")
-    stage3_pass, stage3_reason, direction_penalty = stage3_market_direction(ctx, proposed_side)
+    stage3_pass, stage3_reason, direction_penalty = stage3_market_direction(
+        ctx, proposed_side, thresholds.direction_penalty
+    )
     
     # Apply direction penalty to quality score
     adjusted_quality = quality_score + direction_penalty
@@ -249,10 +284,11 @@ def smart_pre_filter(symbol: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
             f"📊 Direction adjustment: {quality_score:.1f} {direction_penalty:+.1f} = {adjusted_quality:.1f}"
         )
     
-    # Check if adjusted quality still meets minimum threshold
-    if adjusted_quality < QUALITY_SCORE_MIN:
+    # Check if adjusted quality still meets DYNAMIC minimum threshold
+    if adjusted_quality < thresholds.quality_score_min:
         logger.warning(
-            f"❌ Quality too low after direction penalty: {adjusted_quality:.1f} < {QUALITY_SCORE_MIN}"
+            f"❌ Quality too low after direction penalty: {adjusted_quality:.1f} < {thresholds.quality_score_min:.1f} "
+            f"(regime={thresholds.regime})"
         )
         return {
             "passed": False,
@@ -261,25 +297,33 @@ def smart_pre_filter(symbol: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
             "quality_score": adjusted_quality
         }
     
-    # Stage 4: BTC Correlation Check (The Market Leader Factor)
+    # Stage 4: BTC Correlation Check (DYNAMIC penalty based on regime/mood)
     try:
         from utils.market_intelligence import get_market_intelligence
         mi = get_market_intelligence()
-        btc_direction, btc_penalty = mi.check_btc_correlation(symbol, proposed_side)
+        btc_direction, btc_penalty_raw = mi.check_btc_correlation(symbol, proposed_side)
+        
+        # Apply DYNAMIC BTC penalty (regime-aware)
+        # Scale raw penalty by threshold's btc_penalty factor
+        if btc_penalty_raw != 0:
+            btc_penalty = thresholds.btc_penalty
+        else:
+            btc_penalty = 0.0
         
         # Apply BTC correlation penalty
         final_quality = adjusted_quality + btc_penalty
         
         if btc_penalty != 0:
             logger.info(
-                f"🪙 BTC correlation: {btc_direction} → {btc_penalty:+.1f} | "
+                f"🪙 BTC correlation: {btc_direction} → {btc_penalty:+.1f} (regime-adjusted) | "
                 f"Final quality: {adjusted_quality:.1f} {btc_penalty:+.1f} = {final_quality:.1f}"
             )
         
-        # Final quality check after BTC correlation
-        if final_quality < QUALITY_SCORE_MIN:
+        # Final quality check after BTC correlation (DYNAMIC threshold)
+        if final_quality < thresholds.quality_score_min:
             logger.warning(
-                f"❌ Quality too low after BTC correlation: {final_quality:.1f} < {QUALITY_SCORE_MIN}"
+                f"❌ Quality too low after BTC correlation: {final_quality:.1f} < {thresholds.quality_score_min:.1f} "
+                f"(regime={thresholds.regime})"
             )
             return {
                 "passed": False,
@@ -296,7 +340,8 @@ def smart_pre_filter(symbol: str, ctx: Dict[str, Any]) -> Dict[str, Any]:
     # All stages passed → proceed to AI consensus
     logger.info(
         f"🎯 {symbol}: Smart filter PASSED - Final Quality={final_quality:.1f}/10 "
-        f"(technical={quality_score:.1f} {direction_penalty:+.1f} {btc_penalty:+.1f}), proceeding to AI consensus"
+        f"(technical={quality_score:.1f} {direction_penalty:+.1f} {btc_penalty:+.1f}) | "
+        f"Regime={thresholds.regime.upper()}, proceeding to AI consensus"
     )
     return {
         "passed": True,
