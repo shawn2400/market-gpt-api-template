@@ -1911,6 +1911,10 @@ async def _resolve_binance_endpoints() -> None:
 
 @app.on_event("startup")
 async def _on_startup():
+    logger.info("="*80)
+    logger.info("🚀 AlgoGPT Trading Platform - MetaBrain v9.1 - Production Startup")
+    logger.info("="*80)
+    
     try:
         _adjust_routes_autoload_filters()
         if os.getenv("ROUTES_AUTOLOAD", "0").lower() in ("1","true","yes","on") and (os.getenv("ROUTES_AUTOLOAD_MODE","eager").lower() == "eager"):
@@ -1929,13 +1933,16 @@ async def _on_startup():
         logger.warning("startup.telegram_webhook: %s", e)
     
     # ==================== N8N Security Check ====================
+    logger.info("📡 Initializing N8N Webhook Integration...")
     if not os.getenv("N8N_WEBHOOK_SECRET"):
         logger.critical("❌ N8N_WEBHOOK_SECRET not configured - System BLOCKED for production safety")
         raise RuntimeError("N8N_WEBHOOK_SECRET required for production - cannot start without webhook security")
     else:
         logger.info("✅ N8N_WEBHOOK_SECRET configured - webhook security enabled")
+        logger.info("✅ N8N Webhook Integration: READY")
     
     # ==================== Circuit Breaker Verification ====================
+    logger.info("="*80)
     daily_loss_cap = float(os.getenv("DAILY_HARD_LOSS_USD", "-150"))
     logger.info("🛡️ Circuit Breaker System Status:")
     logger.info(f"  ✅ Daily Loss Limit: ${abs(daily_loss_cap):.2f} USD")
@@ -1943,6 +1950,7 @@ async def _on_startup():
     logger.info(f"  ✅ Auto-Run Disable: Enabled (on circuit breaker trigger)")
     logger.info(f"  ✅ Health Killswitch: {os.getenv('KILLSWITCH_THRESHOLD', '3')} consecutive failures")
     logger.info("  ℹ️  Circuit breakers enforced in utils/trade_manager.py::manage_open_trades()")
+    logger.info("="*80)
     
     # ==================== Phase 3 AI Workers ====================
     # OPTIONAL: Legacy workers (disabled by default - requires worker files)
@@ -2033,6 +2041,10 @@ async def _on_startup():
         logger.info("ℹ️  WebSocket User Stream disabled (set USER_STREAM_ENABLE=1 to enable)")
     
     # ==================== Stage Engine System (MetaBrain v9.1 Auto-Deployment) ====================
+    logger.info("="*80)
+    logger.info("🎯 MetaBrain v9.1 - Stage Engine System - Auto-Deployment")
+    logger.info("="*80)
+    
     # FIX: Track tasks to prevent duplicates on hot reload
     global _stage_watcher_task, _auto_repair_task, _self_healing_task
     
@@ -2055,11 +2067,13 @@ async def _on_startup():
                 logger.info(f"  🎯 Auto-Promotion: {'Enabled' if os.getenv('STAGE_AUTO_PROMOTE', '1') == '1' else 'Disabled'}")
                 logger.info(f"  🥶 Auto-Freeze: {'Enabled' if os.getenv('STAGE_AUTO_FREEZE', '1') == '1' else 'Disabled'}")
                 logger.info(f"  ⏱️  Health Check Interval: {os.getenv('STAGE_HEALTH_INTERVAL', '60')}s")
+                logger.info("="*80)
             
         except Exception as e:
             logger.error(f"❌ Failed to start Stage Engine: {e}", exc_info=True)
     else:
         logger.info("ℹ️  Stage Engine disabled (set STAGE_ENGINE_ENABLE=1 to enable)")
+        logger.info("="*80)
     
     # ==================== Auto-Repair System (Self-Fixing Infrastructure) ====================
     if os.getenv("AUTO_REPAIR_ENABLE", "0").strip().lower() in ("1", "true", "yes", "on"):
