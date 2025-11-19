@@ -1,15 +1,16 @@
 # AlgoGPT - Render.com Reserved VM Configuration
-# Clean Production Build - BAN-Safe Version
+# Full Auto-Trading Mode (No Telegram Approval)
 
 services:
   - type: pserv
     name: algogpt-trading-vm
     env: docker
     region: frankfurt
-    plan: standard        # 2GB RAM - $25/month
+    plan: standard       # 2GB RAM
     dockerfilePath: ./Dockerfile
     dockerContext: .
     envVars:
+
       # Core
       - key: PORT
         value: 10000
@@ -18,7 +19,7 @@ services:
       - key: TZ
         value: Asia/Jerusalem
 
-      # ====== API Keys (set only in Render Dashboard) ======
+      # ===== API Keys (Set only in Render dashboard) =====
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
@@ -29,6 +30,7 @@ services:
         sync: false
       - key: TELEGRAM_ADMIN_IDS
         sync: false
+
       - key: OPENAI_API_KEY
         sync: false
       - key: DEEPSEEK_API_KEY
@@ -40,113 +42,101 @@ services:
       - key: XAI_API_KEY
         sync: false
 
-      # ====== Database (Neon) ======
+      # ===== Database / Redis =====
       - key: DATABASE_URL
         sync: false
-      - key: NEON_DATABASE_URL
-        sync: false
-      - key: NEON_API_KEY
-        sync: false
-      - key: NEON_PROJECT_ID
-        sync: false
-      - key: NEON_ENDPOINT_ID
-        sync: false
-
-      # ====== Redis (Redis Cloud) ======
       - key: REDIS_URL
         sync: false
 
-      # ====== Webhooks ======
+      # ===== Webhooks =====
       - key: N8N_WEBHOOK_SECRET
         sync: false
 
       # ======================================================
-      # Trading System Configuration
+      # Trading System – Full Auto Mode
       # ======================================================
 
-      # Disable everything during BAN
+      # Auto-trading ON
       - key: ENABLE_AUTO_TRADING
-        value: 0
-      - key: ALLOW_MANAGE_OPEN_TRADES
-        value: 0
-      - key: ENABLE_POSITION_MONITOR
-        value: 0
-      - key: ENABLE_INSURANCE_MONITOR
-        value: 0
-      - key: ENABLE_AUTO_PROTECT
-        value: 0
+        value: 1
       - key: AUTO_RUN
-        value: 0
-      - key: DYNAMIC_BUDGET_ENABLE
-        value: 0
+        value: 1
 
-      # Budget & Risk
+      # Full automation (NO TELEGRAM APPROVAL)
+      - key: REQUIRE_APPROVAL
+        value: 0
+      - key: TELEGRAM_SEND_ENABLE
+        value: 1
+
+      # Auto-management
+      - key: ALLOW_MANAGE_OPEN_TRADES
+        value: 1
+      - key: ENABLE_POSITION_MONITOR
+        value: 1
+      - key: ENABLE_AUTO_PROTECT
+        value: 1
+      - key: ENABLE_INSURANCE_MONITOR
+        value: 1
+
+      # Dynamic Quality Score
+      - key: MIN_QUALITY_SCORE
+        value: 5.5
+      - key: QUALITY_SCORE_DYNAMIC_ENABLE
+        value: 1
+
+      # Budget
       - key: MIN_BUDGET_USD
         value: 25
       - key: MAX_BUDGET_USD
         value: 150
-      - key: MIN_QUALITY_SCORE
-        value: 6.0
       - key: BUDGET_PCT_OF_EQUITY
         value: 20.0
 
-      # WebSocket – Allowed even in BAN
+      # WebSocket
       - key: USER_STREAM_ENABLE
         value: 1
       - key: STREAM_TP_BE
         value: true
 
-      # ===== Intervals (SAFE MODE) =====
+      # Intervals
       - key: HEALTH_CHECK_INTERVAL
-        value: 120
-      - key: OPTIMIZATION_INTERVAL_HOURS
-        value: 12
+        value: 60
       - key: POSITION_REPORT_INTERVAL_SEC
-        value: 3600
+        value: 600
       - key: AUTO_PROTECT_INTERVAL_SEC
-        value: 9999
+        value: 15
       - key: FILLS_WATCH_INTERVAL_SEC
-        value: 9999
+        value: 20
       - key: INSURANCE_CHECK_INTERVAL_SEC
-        value: 9999
+        value: 120
       - key: FILLS_WATCH_ENABLE
-        value: 0
-      - key: SUGGEST_GRID
-        value: 0
-
-      # Alerts / Logging
-      - key: TELEGRAM_SEND_ENABLE
         value: 1
-      - key: POSITION_ALERT_LEVEL
-        value: critical
-      - key: SENTINEL_ENABLED
-        value: 1
-      - key: SENTINEL_ALERT_LEVEL
-        value: critical
 
-      # ======================================================
-      # 🚨 Emergency Kill Switch (UPDATED)
-      # ======================================================
+      # SL/TP & Management
+      - key: TP_MODE
+        value: hybrid
+      - key: SL_MODE
+        value: atr
+      - key: ATR_MULTIPLIER
+        value: 1.4
 
+      # Emergency (OFF)
       - key: EMERGENCY_KILL_SWITCH
-        value: 0           # ✔️ UPDATED — FULL SYSTEM ENABLED
-
+        value: 0
       - key: SAFE_BOOT_MODE
-        value: 1           # ✔️ UPDATED — API+WS ONLY AT START
+        value: 0
 
-      # ======================================================
-      # Auto-Ban Shield v2.0
-      # ======================================================
+      # BAN shield – keep ON (safe)
       - key: BAN_SHIELD_ENABLE
         value: 1
       - key: BAN_SHIELD_MAX_RPM
-        value: 25
+        value: 24
       - key: BAN_SHIELD_GREEN_ZONE
         value: 18
       - key: BAN_SHIELD_YELLOW_ZONE
         value: 22
       - key: BAN_SHIELD_RED_ZONE
-        value: 25
+        value: 24
       - key: BAN_SHIELD_MONITOR_ENABLE
         value: 1
       - key: SHIELD_MONITOR_INTERVAL
