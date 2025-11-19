@@ -400,7 +400,7 @@ def auto_classify_priority(endpoint: str) -> Priority:
     Automatically classify API call priority based on endpoint
     
     CRITICAL: Trade execution, SL/TP, position closure, account info (balance/margin)
-    NORMAL: Market data, position monitoring
+    NORMAL: Market data, position monitoring, klines (gets CRITICAL boost when positions open)
     LOW: Scanners, background tasks
     """
     endpoint_lower = endpoint.lower()
@@ -414,9 +414,17 @@ def auto_classify_priority(endpoint: str) -> Priority:
     if any(kw in endpoint_lower for kw in critical_keywords):
         return "CRITICAL"
     
+    # NORMAL endpoints (get CRITICAL boost when positions are open)
+    # klines moved here from LOW - needed for Trailing SL/TP Extension when managing positions
+    normal_keywords = [
+        'klines'  # Position management uses klines for ATR/volatility → gets CRITICAL boost
+    ]
+    if any(kw in endpoint_lower for kw in normal_keywords):
+        return "NORMAL"
+    
     # LOW endpoints
     low_keywords = [
-        'klines', 'ticker', 'depth', 'aggTrades', 'scan'
+        'ticker', 'depth', 'aggTrades', 'scan'
     ]
     if any(kw in endpoint_lower for kw in low_keywords):
         return "LOW"

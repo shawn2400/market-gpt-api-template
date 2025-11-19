@@ -76,6 +76,10 @@ except Exception as _e:
     logger.warning(f"[Progressive Rollout] Import failed: {_e}")
     _PROGRESSIVE_ROLLOUT_AVAILABLE = False
 
+# TODO: Trailing SL + TP Extension integration
+# Currently handled by fills_watcher (workers/fills_watcher.py lines 773, 779)
+# Future: Create utils/trailing_tp_manager.py for shared state management (see Architect review)
+
 # Enable real-time Telegram notifications for all management actions
 TELEGRAM_NOTIFY_TRADES = os.getenv("TELEGRAM_SEND_ENABLE", "1").lower() in ("1", "true", "yes", "on")
 
