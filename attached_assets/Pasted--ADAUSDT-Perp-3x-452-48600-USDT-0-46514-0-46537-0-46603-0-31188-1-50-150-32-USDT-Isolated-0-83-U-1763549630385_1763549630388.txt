@@ -1,0 +1,75 @@
+
+ADAUSDT
+Perp
+3x
+452.48600 USDT
+0.46514
+0.46537
+0.46603
+0.31188
+1.50%
+150.32 USDT
+(Isolated)
++0.83 USDT
+(+0.55%)
+-0.02 USDT
+0.4647
+971
+-- / --
+ עדין לא רואים+הSL לא זז היה 2+% רווח וירד והטלגרם מודיע רק שהוא עולה לאיין זהו היה צריך  להתקדם +הניהול לא טוב בכלל בכלל או הקבצים לא נטענו או יש בעיה כול השינוים לא רואים בפועל כלום +אין פקודות הכול סטטי מאוד 🚀 Breakeven Activated
+
+Symbol: ADAUSDT
+SL moved to breakeven: 0.46514387
+
+Position now risk-free! Trailing SL will activate automatically. זה לא זז באמת +[2025-11-19 12:52:37 +0200] [28] [INFO] Booting worker with pid: 28
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 2, 'tokens': ['V8…', 'rn…']}
+INFO:algogpt.redis:{'event': 'redis.connected', 'url': 'redis://redis-10327.c269.eu-west-1-3.ec2.cloud.redislabs.com:10327'}
+WARNING:algogpt.main:Failed to load debug_sig routes: cannot import name '_canon' from 'utils.anti_replay' (unknown location)השגיאה מצביעה על בעיית ייבוא של פונקציה `_canon` מהמודול `utils.anti_replay`. זה קורה בדרך כלל כאשר:
+
+1. **הקוד לא עודכן בהתאם לשינויים בספריות** - יתכן שהייתה עדכון גרסה שגרם לשינוי במבנה המודול
+2. **בעיית caching** - קבצי קוד ישנים נשארו במערכת
+3. **חסרה תלות** - ספריית `anti_replay` לא מותקנת כראוי
+
+## פתרונות אפשריים:
+
+### 1. ניקוי cache והתקנה מחדש
+```bash
+# נקה cache של Python
+find . -name "*.pyc" -delete
+find . -name "__pycache__" -type d -exec rm -rf {} +
+rm -rf .pytest_cache
+rm -rf .coverage
+
+# התקן מחדש את התלויות
+pip uninstall utils-anti-replay -y
+pip install utils-anti-replay --upgrade
+```
+
+### 2. בדוק את מבנה המודול
+```python
+# בדוק אם המודול קיים ומה מכיל
+python -c "from utils import anti_replay; print(dir(anti_replay))"
+```
+
+### 3. עדכון קוד חלופי
+אם הפונקציה `_canon` אכן חסרה, נסה למצוא חלופה:
+```python
+# במקום:
+from utils.anti_replay import _canon
+
+# השתמש ב:
+from utils.anti_replay import [פונקציה אחרת זמינה]
+# או השתמש ב-implemention חלופי
+```
+
+### 4. בדוק את requirements
+וודא שב-`requirements.txt` או `setup.py` יש את הגרסה הנכונה של הספריות.
+
+### 5. Rollback
+אם הבעיה החלה אחרי דיפלוי, שקול חזרה לגרסה קודמת:
+```bash
+git log --oneline  # מצא את הקומיט הקודם
+git checkout <commit-hash>
+```
+
+**איזה מסלול תרצה לנסות קודם?**
