@@ -1,0 +1,259 @@
+~/workspace$ git add -A
+git commit -m "feat: Dynamic TP Extension + Trailing SL - complete automation
+
+- Add extend_tp_levels() to multi_target_tp.py for TP4/TP5/TP6 generation
+- Add _check_and_extend_tp() to fills_watcher.py for auto TP extension
+- Add _update_trailing_sl() for synchronized dynamic trailing SL
+- Support all trade types: MARKET/HYBRID/GRID
+- Read all 3 TPs (TP1/TP2/TP3) from DB for extension
+- ATR-based dynamic spacing (120-150% multipliers)
+- Volatility-based trailing distance (2-5%)
+- Progressive SL tightening at TP3/TP4 (80%/60%)
+- Telegram notifications for all updates
+- 30-second throttle to prevent API spam
+- Full precision with BinanceSymbolValidator"
+
+git push origin main
+[main d5d6842] feat: Dynamic TP Extension + Trailing SL - complete automation
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ git add -A
+git commit -m "feat: 100% Dynamic Leverage across all trade types (2-35x)
+
+- Increase PrecisionCalculator MAX_LEVERAGE from 10x to 35x
+- DynamicBudgetManager now uses DynamicLeverageCalculator
+- Grid Executor calculates dynamic leverage (was hardcoded 10x)
+- All trade types (MARKET/HYBRID/GRID) use unified dynamic system
+- No hardcoded leverage values remaining
+- Multi-factor confidence scoring (Quality/Market/Tier/WinRate/ATR)
+- Real-time adaptation to market conditions"
+
+git push origin main
+On branch main
+Your branch is ahead of 'origin/main' by 2 commits.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ # 1. משוך את השינויים מ-GitHub
+git pull origin main
+
+# 2. פתור conflicts אם יש (בדרך כלל אין)
+
+# 3. דחוף את כל השינויים שלך
+git push origin main
+remote: Enumerating objects: 5, done.
+remote: Counting objects: 100% (5/5), done.
+remote: Compressing objects: 100% (1/1), done.
+remote: Total 3 (delta 2), reused 3 (delta 2), pack-reused 0 (from 0)
+Unpacking objects: 100% (3/3), 303 bytes | 151.00 KiB/s, done.
+From https://github.com/shawn2400/market-gpt-api-template
+ * branch            main       -> FETCH_HEAD
+   a213e62..07e8839  main       -> origin/main
+Successfully rebased and updated refs/heads/main.
+Enumerating objects: 42, done.
+Counting objects: 100% (42/42), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (24/24), done.
+Writing objects: 100% (24/24), 5.53 KiB | 2.77 MiB/s, done.
+Total 24 (delta 20), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (20/20), completed with 10 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   07e8839..c019fa2  main -> main
+~/workspace$ git pull origin main --rebase
+git push origin main
+From https://github.com/shawn2400/market-gpt-api-template
+ * branch            main       -> FETCH_HEAD
+Current branch main is up to date.
+Enumerating objects: 13, done.
+Counting objects: 100% (13/13), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (5/5), done.
+Writing objects: 100% (5/5), 710 bytes | 710.00 KiB/s, done.
+Total 5 (delta 4), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (4/4), completed with 4 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   c019fa2..08fce12  main -> main
+~/workspace$ # 1. בדוק סטטוס
+git status
+
+# 2. אם יש lock file, מחק אותו
+rm -f /home/runner/workspace/.git/index.lock
+
+# 3. משוך שינויים מ-GitHub
+git pull origin main --rebase
+
+# 4. דחוף את כל השינויים
+git push origin main
+On branch main
+Your branch is ahead of 'origin/main' by 2 commits.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+From https://github.com/shawn2400/market-gpt-api-template
+ * branch            main       -> FETCH_HEAD
+Current branch main is up to date.
+Enumerating objects: 22, done.
+Counting objects: 100% (22/22), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (12/12), done.
+Writing objects: 100% (12/12), 3.00 KiB | 3.00 MiB/s, done.
+Total 12 (delta 10), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (10/10), completed with 5 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   08fce12..78b5635  main -> main
+~/workspace$ echo "static/cache/ws_prices.json" >> .gitignore
+git add .gitignore
+git commit -m "chore: ignore cache file from git"
+git push origin main
+[main e1acdda] chore: ignore cache file from git
+ 1 file changed, 1 insertion(+)
+Enumerating objects: 34, done.
+Counting objects: 100% (33/33), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (18/18), done.
+Writing objects: 100% (18/18), 3.70 KiB | 3.70 MiB/s, done.
+Total 18 (delta 15), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (15/15), completed with 9 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   78b5635..e1acdda  main -> main
+~/workspace$ # 1. מחק lock file אם קיים
+rm -f /home/runner/workspace/.git/index.lock
+
+# 2. משוך מ-GitHub (למקרה ויש שינויים)
+git pull origin main --rebase
+
+# 3. דחוף את כל השינויים
+git push origin main
+
+# 4. בדוק שהכל תקין
+git log --oneline -3
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+Everything up-to-date
+e1acdda (HEAD -> main, origin/main, origin/HEAD) chore: ignore cache file from git
+a60eaef Update trading position and cryptocurrency price data
+dab1c36 Update cryptocurrency prices and push code changes
+~/workspace$ echo "static/cache/ws_prices.json" >> .gitignore
+git add .gitignore
+git commit -m "chore: ignore cache file from git"
+git push origin main
+[main 19c8527] chore: ignore cache file from git
+ 1 file changed, 1 insertion(+)
+Enumerating objects: 7, done.
+Counting objects: 100% (7/7), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (3/3), done.
+Writing objects: 100% (3/3), 336 bytes | 336.00 KiB/s, done.
+Total 3 (delta 2), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (2/2), completed with 2 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   e1acdda..19c8527  main -> main
+~/workspace$ git add utils/ban_shield.py replit.md utils/trade_manager.py
+git commit -m "BanShield v2.2: futures_klines → CRITICAL priority (unblock Trailing SL/TP Extension)"
+git push origin main
+On branch main
+Your branch is ahead of 'origin/main' by 4 commits.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+    modified:   static/cache/ws_prices.json
+
+no changes added to commit (use "git add" and/or "git commit -a")
+Enumerating objects: 56, done.
+Counting objects: 100% (56/56), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (35/35), done.
+Writing objects: 100% (35/35), 8.45 KiB | 2.82 MiB/s, done.
+Total 35 (delta 31), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (31/31), completed with 12 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   19c8527..e05f36f  main -> main
+~/workspace$ # הוסף את הקבצים שהשתנו
+git add utils/smart_tiered_system.py utils/strategy_orchestrator.py replit.md
+
+# Commit עם הודעה ברורה
+git commit -m "Fix Tier 3 CHOPPY market logic - enable trades with scores 5.5-6.4
+
+- Changed Tier 3 min_quality: 6.0→4.5 (base threshold)
+- Changed WAIT strategy: 6.5→5.5 (total threshold)
+- CHOPPY markets now have LOWER thresholds (not higher)
+- Restores 100% dynamic autonomous trading across all market conditions"
+
+# דחף ל-main branch
+git push origin main
+On branch main
+Your branch is ahead of 'origin/main' by 6 commits.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+    modified:   static/cache/ws_prices.json
+
+no changes added to commit (use "git add" and/or "git commit -a")
+Enumerating objects: 64, done.
+Counting objects: 100% (64/64), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (43/43), done.
+Writing objects: 100% (43/43), 13.69 KiB | 4.56 MiB/s, done.
+Total 43 (delta 39), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (39/39), completed with 12 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   e05f36f..52d5341  main -> main
+~/workspace$ # 1. בדוק שהקבצים שלנו בסטטוס
+git status
+
+# 2. הוסף את הקבצים שלנו
+git add utils/smart_tiered_system.py utils/strategy_orchestrator.py replit.md
+
+# 3. Commit
+git commit -m "Fix Tier 3 CHOPPY market logic - enable trades 5.5-6.4
+
+- Tier 3 min_quality: 6.0→4.5
+- WAIT strategy: 6.5→5.5  
+- CHOPPY markets now LOWER thresholds
+- 100% dynamic autonomous trading"
+
+# 4. Pull + Push
+git pull origin main --rebase
+git push origin main
+On branch main
+Your branch is ahead of 'origin/main' by 1 commit.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+On branch main
+Your branch is ahead of 'origin/main' by 1 commit.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+From https://github.com/shawn2400/market-gpt-api-template
+ * branch            main       -> FETCH_HEAD
+Current branch main is up to date.
+Enumerating objects: 17, done.
+Counting objects: 100% (17/17), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (7/7), done.
+Writing objects: 100% (7/7), 3.56 KiB | 3.56 MiB/s, done.
+Total 7 (delta 5), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (5/5), completed with 5 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   52d5341..5a2f3cf  main -> main
+~/workspace$ 
