@@ -1339,30 +1339,56 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
     
     # Parse and validate proposal (handle multiple field name formats)
     # Some AIs return "side", others return "direction"
-    side = str(data.get("side") or data.get("direction", "")).upper()
+    # Support nested structures: trading_plan.direction, trade.direction, etc.
+    trading_plan = data.get("trading_plan") or data.get("trading_proposal") or data.get("trade") or {}
+    side = str(
+        data.get("side") or 
+        data.get("direction") or 
+        trading_plan.get("side") or 
+        trading_plan.get("direction") or 
+        ""
+    ).upper()
     if for_spot and side != "LONG":
         side = "LONG"
-    lev = _to_int(data.get("leverage"), default=10) or 10
+    
+    # Handle leverage from nested or top-level
+    lev = _to_int(
+        data.get("leverage") or trading_plan.get("leverage"), 
+        default=10
+    ) or 10
     lev = max(SUGGEST_MIN_LEVERAGE, min(SUGGEST_MAX_LEVERAGE, lev))
     
-    # Handle multiple field name formats for stop loss and take profit
-    sl = _to_float(data.get("sl") or data.get("stop_loss"))
-    tp1 = _to_float(data.get("tp1") or data.get("take_profit"))
+    # Handle multiple field name formats for stop loss and take profit (nested or top-level)
+    sl = _to_float(
+        data.get("sl") or data.get("stop_loss") or 
+        trading_plan.get("sl") or trading_plan.get("stop_loss")
+    )
+    tp1 = _to_float(
+        data.get("tp1") or data.get("take_profit") or 
+        trading_plan.get("tp1") or trading_plan.get("take_profit")
+    )
     
     prop = {
         "symbol": symbol,
         "side": side if side in ("LONG","SHORT") else None,
-        "entry": _to_float(data.get("entry")),
+        "entry": _to_float(data.get("entry") or trading_plan.get("entry")),
         "sl": sl,
         "tp1": tp1,
-        "tp2": _to_float(data.get("tp2")),
-        "tp3": _to_float(data.get("tp3")),
+        "tp2": _to_float(data.get("tp2") or trading_plan.get("tp2")),
+        "tp3": _to_float(data.get("tp3") or trading_plan.get("tp3")),
         "leverage": (1 if for_spot else lev),
-        "success_pct": _to_float(data.get("success_pct") or data.get("confidence")),
-        "reason": data.get("reason") or data.get("reasoning", ""),
+        "success_pct": _to_float(
+            data.get("success_pct") or data.get("confidence") or 
+            trading_plan.get("success_pct") or trading_plan.get("confidence")
+        ),
+        "reason": data.get("reason") or data.get("reasoning") or trading_plan.get("reason") or trading_plan.get("reasoning") or "",
     }
     if prop["side"] not in ("LONG","SHORT"):
-        LOGGER.warning(f"❌ {symbol} REJECTED: Invalid side '{prop['side']}' (raw: {data.get('side')})")
+        LOGGER.warning(
+            f"❌ {symbol} REJECTED: Invalid side '{prop['side']}' "
+            f"(raw side={data.get('side')}, direction={data.get('direction')}, "
+            f"nested={trading_plan.get('side') or trading_plan.get('direction')})"
+        )
         return None
     if prop["entry"] is None or prop["sl"] is None or prop["tp1"] is None:
         LOGGER.warning(f"❌ {symbol} REJECTED: Missing levels - entry={prop['entry']}, sl={prop['sl']}, tp1={prop['tp1']}")
