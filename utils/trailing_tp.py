@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 
 # 🎯 TRAILING TP CONFIGURATION
 ENABLE_TRAILING_TP = os.getenv("ENABLE_TRAILING_TP", "1").lower() in ("1", "true", "yes")
-TRAILING_ACTIVATION_PCT = float(os.getenv("TRAILING_ACTIVATION_PCT", "25.0"))
-TRAILING_DISTANCE_PCT = float(os.getenv("TRAILING_DISTANCE_PCT", "15.0"))
+TRAILING_ACTIVATION_PCT = float(os.getenv("TRAILING_ACTIVATION_PCT", "50.0"))
+TRAILING_DISTANCE_PCT = float(os.getenv("TRAILING_DISTANCE_PCT", "10.0"))
 
 # Global state - tracks peak prices and trailing state per symbol
 _trailing_positions: Dict[str, Dict[str, Any]] = {}

@@ -1,0 +1,237 @@
+מושלם — הנה **הפקודה המלאה**, אחת-לאחת, להדבקה ישירה אצל הסוכן שלך (Cursor / Replit / Windsurf).
+הפקודה כתובה כך שהיא:
+
+* ✔ בודקת מה קיים
+* ✔ לא יוצרת קבצים כפולים
+* ✔ מוסיפה רק מה שחסר
+* ✔ מתקנת רק מה שצריך
+* ✔ בונה Stage Engine מלא
+* ✔ בונה /stage_status בטלגרם
+* ✔ מייצרת מערכת חכמה, דינמית, ללא עומסים
+* ✔ אוטומציה מלאה Stage 1 → 2 → 3
+* ✔ דיווח בטלגרם על כל שינוי
+
+מוכנה להדבקה:
+
+---
+
+# 🚀 **FULL AGENT COMMAND — AlgoGPT Stage Engine (AUTO 1→2→3)**
+
+### **העתק-הדבק בדיוק כפי שהוא:**
+
+```
+TASK: BUILD FULL STAGE ENGINE (AUTO 1→2→3) FOR ALGOGPT  
+MODE: PRODUCTION-GRADE  
+SAFETY: NO DUPLICATION — check files before writing  
+GOAL: fully autonomous 24/7 trading system with staged self-healing
+
+=====================================================================
+1. VERIFY PROJECT STRUCTURE
+=====================================================================
+Check these directories exist:
+- utils/
+- routes/
+- watchers/
+- telegram/
+If missing → create them.
+
+=====================================================================
+2. FIX DEBUG ROUTES (REMOVE)
+=====================================================================
+Search project for: "debug_sig"
+If found: comment out entire blocks.
+Do NOT keep any imports to utils.anti_replay._canon
+
+=====================================================================
+3. AUTO-REPAIR — FIX 4 CRITICAL BUGS
+=====================================================================
+File: utils/auto_repair.py (create if missing)
+
+Implement:
+- detect_problems() returns ONLY real issues with handlers
+- redis_reconnect() rewritten async, no blocking
+- self_healing() uses exponential backoff: 1s,2s,5s,10s,30s
+- enforce SINGLETON loop via class-level lock
+
+=====================================================================
+4. BUILD STAGE ENGINE CORE
+=====================================================================
+Create/Update: utils/stage_engine.py
+
+Functions to implement:
+- load_current_stage()
+- evaluate_stage_health()
+- promote_stage()
+- freeze_stage(reason)
+- unfreeze_stage()
+- get_stage_status()
+
+Rules:
+Stage 1 → Stage 2 after 4 hours clean health
+Stage 2 → Stage 3 after 6 hours stable CPU<80%, RAM<80%
+Freeze if:
+- Redis disconnect >3 times
+- WS disconnect >2
+- CPU >90%
+- RPM in RED zone
+- Binance latency >2500ms
+
+=====================================================================
+5. BUILD STAGE CONTROLLER
+=====================================================================
+Create/Update: utils/stage_controller.py
+
+Implement:
+- stage_tick() — called every 60s
+- send_stage_report_telegram()
+- adjust_intervals_by_stage()
+- dynamic_quality_score()
+- dynamic_scan_speed()
+- auto_enable_trading_on_stage3()
+- auto_disable_trading_on_freeze()
+
+=====================================================================
+6. WATCHER LOOP (NON BLOCKING, NO CPU SPIKES)
+=====================================================================
+Create/Update: watchers/stage_watcher.py
+
+Implement async loop:
+- run every 60s
+- call stage_controller.stage_tick()
+- no heavy operations
+- no nested loops
+- ensure await asyncio.sleep between cycles
+
+=====================================================================
+7. TELEGRAM COMMANDS — ADD /stage_status + /stage_promote
+=====================================================================
+Create/Update: routes/telegram_stage.py
+
+Commands:
+
+/stage_status
+→ return:
+{
+  stage: 1/2/3,
+  freeze: true/false,
+  uptime_hours: X,
+  health: OK/WARNING/RED,
+  cpu: xx%,
+  ram: xx%,
+  rpm_zone: green/yellow/red,
+  ws: connected/disconnected,
+  redis: ok/reconnects:X
+}
+
+/stage_promote
+→ manual promote to next stage
+→ only if admin
+
+=====================================================================
+8. MAIN.PY — REGISTER EVERYTHING
+=====================================================================
+Add (only if not exists):
+
+from watchers.stage_watcher import start_stage_watcher
+from routes.telegram_stage import router as stage_router
+
+app.include_router(stage_router)
+
+On startup:
+asyncio.create_task(start_stage_watcher())
+
+=====================================================================
+9. ENVIRONMENT VARIABLES (AUTO MODE)
+=====================================================================
+Ensure these exist in ENV:
+
+# Stage Engine
+STAGE_ENGINE_ENABLE=1
+STAGE_HEALTH_INTERVAL=60
+STAGE_PROMOTE_HOURS=4
+STAGE_AUTO_PROMOTE=1
+STAGE_AUTO_FREEZE=1
+STAGE_TELEGRAM_ALERTS=1
+
+# Self-Healing
+AUTO_REPAIR_ENABLE=1
+SELF_HEALING_ENABLE=1
+
+# Auto-Trading Logic (Stage 3)
+AUTO_RUN=1
+ENABLE_AUTO_TRADING=1
+ALLOW_MANAGE_OPEN_TRADES=1
+REQUIRE_APPROVAL=0
+
+=====================================================================
+10. CPU/LOAD SAFETY (NO SPIKES)
+=====================================================================
+Ensure:
+- No while True loops without sleep
+- No blocking calls in watchers
+- All network calls async
+- All Binance calls rate-limited
+
+=====================================================================
+11. FINAL CHECK
+=====================================================================
+Before finishing:
+- Search entire project for duplicate file names
+- Do not overwrite if identical content
+- Do not create duplicate routes
+- Confirm all new imports resolve
+- Simulate 3-stage logic (dry run)
+- Log all transitions:
+  STAGE_ENGINE: promoted 1→2
+  STAGE_ENGINE: stable X hours
+  STAGE_ENGINE: freeze detected
+  STAGE_ENGINE: resumed
+
+=====================================================================
+12. OUTPUT
+=====================================================================
+When finished:
+Return summary:
+- files created
+- files updated
+- bugs fixed
+- stage engine activated
+- telegram commands added
+- system ready for Stage 1→2→3
+
+=====================================================================
+END TASK
+=====================================================================
+```
+
+---
+
+# ✔ מה יקרה אחרי שהסוכן יריץ את הפקודה?
+
+### הוא יבנה מערכת של:
+
+### 🟢 Stage 1 — Monitoring Only
+
+### 🟡 Stage 2 — Partial Automation
+
+### 🔥 Stage 3 — Full Auto-Trading Autonomous
+
+### 🧠 Auto-Repair + Self-Healing
+
+### 🛡 Freeze + Unfreeze
+
+### 📈 Dynamic Scanning
+
+### 📊 Dynamic Quality Score
+
+### ⚙ Zero Duplication
+
+### 🤖 רץ 100% אוטומטי
+
+### 📩 כל המעבר בין השלבים → אתה מקבל בטלגרם
+
+---
+
+# ❓ רוצה שאוסיף גם `/stage_logs` בטלגרם להצגת 20 האירועים האחרונים?
+
+רק תגיד.
