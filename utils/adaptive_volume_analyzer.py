@@ -24,10 +24,13 @@ class VolumeStats:
     p75_volume_ratio: float     # 75th percentile (conservative/strict - high threshold, only top 25% pass)
     sample_size: int             # Number of symbols analyzed
     timestamp: float             # When this was calculated
+    market_volume_regime: str    # LOW_VOLUME/NORMAL/HIGH_VOLUME
+    low_volume_pct: float        # % of market with volume < 0.5x
     
     def __repr__(self):
         return (f"VolumeStats(median={self.median_volume_ratio:.3f}x, "
                 f"p25={self.p25_volume_ratio:.3f}x, p75={self.p75_volume_ratio:.3f}x, "
+                f"regime={self.market_volume_regime}, low_vol={self.low_volume_pct:.0f}%, "
                 f"n={self.sample_size})")
 
 
@@ -53,6 +56,17 @@ class AdaptiveVolumeAnalyzer:
     # - median = BALANCED (medium threshold, ~50% of symbols pass)
     # - p25 = AGGRESSIVE (low threshold, ~75% of symbols pass)
     DEFAULT_PERCENTILE_STRATEGY = "p75"  # Conservative by default (strict filtering)
+    
+    # Market Volume Regime Detection Thresholds
+    LOW_VOLUME_MARKET_THRESHOLD = 0.60   # If >60% of symbols have volume < 0.5x
+    HIGH_VOLUME_MARKET_THRESHOLD = 0.30  # If <30% of symbols have volume < 0.5x
+    
+    # Market Regime Auto-Adjustment Multipliers
+    MARKET_REGIME_MULTIPLIERS = {
+        "LOW_VOLUME": 0.35,    # Reduce thresholds by 65% in low-volume markets
+        "NORMAL": 1.0,         # Standard thresholds
+        "HIGH_VOLUME": 1.5     # Increase thresholds by 50% in high-volume markets
+    }
     
     # Cache TTL (seconds)
     CACHE_TTL = 300  # 5 minutes - refresh market stats periodically
@@ -109,10 +123,15 @@ class AdaptiveVolumeAnalyzer:
             "trending": 1.0,
             "volatile": 1.2
         }
-        multiplier = regime_multipliers.get(regime.lower(), 1.0)
+        regime_multiplier = regime_multipliers.get(regime.lower(), 1.0)
         
-        # Calculate adaptive threshold
-        adaptive_threshold = raw_threshold * multiplier
+        # 🆕 APPLY MARKET VOLUME REGIME AUTO-ADJUSTMENT
+        # This is the KEY feature - automatically adjust thresholds based on market-wide volume
+        market_regime_multiplier = self.MARKET_REGIME_MULTIPLIERS.get(stats.market_volume_regime, 1.0)
+        
+        # Combine both multipliers (trading regime × market volume regime)
+        combined_multiplier = regime_multiplier * market_regime_multiplier
+        adaptive_threshold = raw_threshold * combined_multiplier
         
         # Apply safety guardrails
         final_threshold = max(
@@ -122,8 +141,9 @@ class AdaptiveVolumeAnalyzer:
         
         self.logger.info(
             f"📊 Adaptive Volume Threshold: {regime.upper()} @ {percentile_strategy} "
-            f"→ {final_threshold:.3f}x (market: {stats.median_volume_ratio:.3f}x, "
-            f"raw: {raw_threshold:.3f}x, multiplier: {multiplier:.2f}x)"
+            f"→ {final_threshold:.3f}x (raw: {raw_threshold:.3f}x, "
+            f"regime_mult: {regime_multiplier:.2f}x, market_mult: {market_regime_multiplier:.2f}x, "
+            f"market_regime: {stats.market_volume_regime})"
         )
         
         return final_threshold
@@ -224,12 +244,30 @@ class AdaptiveVolumeAnalyzer:
             p25 = market_p25_volume / market_median_volume  # < 1.0 (LOOSE - more symbols pass)
             p75 = market_p75_volume / market_median_volume  # > 1.0 (STRICT - fewer symbols pass)
             
+            # 🆕 MARKET VOLUME REGIME DETECTION
+            # Calculate % of market with low volume (< 0.5x median)
+            low_volume_threshold = market_median_volume * 0.5
+            low_volume_count = sum(1 for v in volumes if v < low_volume_threshold)
+            low_volume_pct = (low_volume_count / len(volumes)) * 100.0
+            
+            # Determine market regime
+            if low_volume_pct > self.LOW_VOLUME_MARKET_THRESHOLD * 100:
+                market_regime = "LOW_VOLUME"
+            elif low_volume_pct < self.HIGH_VOLUME_MARKET_THRESHOLD * 100:
+                market_regime = "HIGH_VOLUME"
+            else:
+                market_regime = "NORMAL"
+            
+            self.logger.info(f"📊 Market Volume Regime: {market_regime} ({low_volume_pct:.0f}% symbols < 0.5x median)")
+            
             return VolumeStats(
                 median_volume_ratio=median,
                 p25_volume_ratio=p25,
                 p75_volume_ratio=p75,
-                sample_size=len(volumes),  # Fixed: was volume_ratios (doesn't exist)
-                timestamp=time.time()
+                sample_size=len(volumes),
+                timestamp=time.time(),
+                market_volume_regime=market_regime,
+                low_volume_pct=low_volume_pct
             )
             
         except Exception as e:
