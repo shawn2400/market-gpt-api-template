@@ -348,10 +348,14 @@ async def attach_multi_target_protection(
         sl_side = "SELL" if side == "LONG" else "BUY"
         tp_side = "SELL" if side == "LONG" else "BUY"
         
-        # Get symbol filters for precision
+        # Get symbol filters for precision and BinanceSymbolValidator for rounding
         filters = get_symbol_filters(symbol) or {}
         price_precision = filters.get("pricePrecision", 2)
         qty_precision = filters.get("quantityPrecision", 3)
+        
+        # Import validator for proper quantity/price rounding
+        from utils.binance_symbol_validator import BinanceSymbolValidator
+        validator = BinanceSymbolValidator()
         
         # Place SL order (STOP_MARKET for guaranteed execution)
         try:
@@ -381,9 +385,13 @@ async def attach_multi_target_protection(
                 exit_percent = target["exit_percent"]
                 tp_quantity = total_quantity * exit_percent
                 
-                # Round to symbol precision
-                tp_quantity_str = f"{tp_quantity:.{qty_precision}f}"
-                tp_price_str = f"{tp_price:.{price_precision}f}"
+                # 🔧 CRITICAL: Use BinanceSymbolValidator to round quantity & price correctly
+                # This ensures compliance with Binance stepSize & tickSize filters
+                tp_quantity_rounded = validator.round_quantity(symbol, tp_quantity, is_market=False)
+                tp_price_rounded = validator.round_price(symbol, tp_price)
+                
+                tp_quantity_str = str(tp_quantity_rounded)
+                tp_price_str = str(tp_price_rounded)
                 
                 logger.info(
                     f"📤 Placing TP{i}: {symbol} {tp_side} @ {tp_price_str} "
