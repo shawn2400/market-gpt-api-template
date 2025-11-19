@@ -1,0 +1,558 @@
+
+Preview your app here
+The app is running, but there's no webpage to preview right now.
+Docs
+
+New Secret
+
+SESSION_SECRET
+
+••••••••
+
+
+
+API_BEARER_TOKEN
+
+••••••••
+
+
+
+API_HMAC_SECRET
+
+••••••••
+
+
+
+BINANCE_API_SECRET
+
+••••••••
+
+
+
+BINANCE_API_KEY
+
+••••••••
+
+
+
+PGDATABASE
+
+••••••••
+
+
+
+PGHOST
+
+••••••••
+
+
+
+PGPORT
+
+••••••••
+
+
+
+PGUSER
+
+••••••••
+
+
+
+PGPASSWORD
+
+••••••••
+
+
+
+AIX_SUPERVISOR_TOKEN
+
+••••••••
+
+
+
+DEEPSEEK_API_KEY
+
+••••••••
+
+
+
+GITHUB_TOKEN
+
+••••••••
+
+
+
+GITHUB_PERSONAL_ACCESS_TOKEN
+
+••••••••
+
+
+
+RENDER_DEPLOY_HOOK
+
+••••••••
+
+
+
+CRYPTOPANIC_TOKEN
+
+••••••••
+
+
+
+RENDER_SERVICE_ID
+
+••••••••
+
+
+
+RENDER_API_KEY
+
+••••••••
+
+
+
+N8N_WEBHOOK_URL
+
+••••••••
+
+
+
+NEON_API_KEY
+
+••••••••
+
+
+
+GITHUB_REPO
+
+••••••••
+
+
+
+NEON_ENDPOINT_ID
+
+••••••••
+
+
+
+NEON_PROJECT_ID
+
+••••••••
+
+
+
+NEON_DATABASE_URL
+
+••••••••
+
+
+
+WEBHOOK_HMAC_SECRET
+
+••••••••
+
+
+
+ANTHROPIC_API_KEY
+
+••••••••
+
+
+
+Access_Key_ID
+
+••••••••
+
+
+
+Access_Key_Secret
+
+••••••••
+
+
+
+Actions
+
+••••••••
+
+
+
+PRIMARY_API_TOKEN
+
+••••••••
+
+
+
+DASHSCOPE_API_KEY
+
+••••••••
+
+
+
+N8N_WEBHOOK_SECRET
+
+••••••••
+
+
+
+UPSTASH_REDIS_REST_URL
+
+••••••••
+
+
+
+UPSTASH_REDIS_REST_TOKEN
+
+••••••••
+
+
+
+DATABASE_URL
+
+••••••••
+
+
+
+REDIS_URL
+
+••••••••
+
+
+
+AUTH_TOKENS
+
+••••••••
+
+
+
+AI_MESH_SECRET
+
+••••••••
+
+
+
+GEMINI_API_KEY
+
+••••••••
+
+
+
+OPENAI_API_KEY
+
+••••••••
+
+
+
+OPS_SIGN_SECRET
+
+••••••••
+
+
+
+PUBLIC_HOST
+
+••••••••
+
+
+
+RENDER_API_KEY
+
+••••••••
+
+
+
+TELEGRAM_ADMIN_IDS
+
+••••••••
+
+
+
+TELEGRAM_BOT_TOKEN
+
+••••••••
+
+
+
+TELEGRAM_CHAT_ID
+
+••••••••
+
+
+
+XAI_API_KEY
+
+••••••••
+
+
+
+Edit as JSON
+
+Edit as .env
+
+cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG BASE_URL=http://127.0.0.1:5000 HEALTH_CHECK_INTERVAL=30 AUTO_FIX_ENABLE=1 TELEGRAM_SEND_ENABLE=1 python workers/auto_health_monitor.py
+
+Ask Agent…
+283m
+ • 
+5 hours ago
+
+
+cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG SENTINEL_ENABLED=1 SENTINEL_ALERT_LEVEL=critical python workers/sentinel_security.py
+
+Ask Agent…
+283m
+ • 
+5 hours ago
+
+
+cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/telegram_digest_reporter.py
+
+Ask Agent…
+283m
+ • 
+5 hours ago
+
+
+cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG OPTIMIZATION_INTERVAL_HOURS=4 OPTIMIZATION_LOOKBACK_DAYS=7 python workers/auto_optimization_orchestrator.py
+
+Ask Agent…
+283m
+ • 
+5 hours ago
+
+
+cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG python workers/quantum_top50_worker.py
+
+Ask Agent…
+283m
+ • 
+5 hours ago
+
+
+cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_INSURANCE_MONITOR=1 INSURANCE_CHECK_INTERVAL_SEC=60 python workers/insurance_monitor.py
+
+Ask Agent…
+99m
+ • 
+2 hours ago
+
+
+cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG ENABLE_POSITION_MONITOR=1 ENABLE_AUTO_PROTECT=1 POSITION_REPORT_INTERVAL_SEC=1800 AUTO_PROTECT_INTERVAL_SEC=30 POSITION_ALERT_LEVEL=all python workers/position_monitor.py
+
+Ask Agent…
+89m
+ • 
+1 hour ago
+
+
+cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG POOL_PER_CYCLE=50 SUGGEST_GRID=1 AUTO_RUN=1 MIN_QUALITY_SCORE=6.0 python workers/gpt_auto_suggest.py
+
+Ask Agent…
+70m
+ • 
+1 hour ago
+
+
+cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG FILLS_WATCH_ENABLE=1 FILLS_WATCH_INTERVAL_SEC=15 python workers/fills_watcher.py
+
+Ask Agent…
+12m
+ • 
+12 minutes ago
+
+
+
+
+Enable "Accessible Terminal" in Workspace Settings to use a screen reader with the shell.
+
+Commit
+
+
+Add automated health monitoring system for trading bots
+
+56a5d49
+
+Restore All
+
+Add a new utility file for comprehensive automated health checks and integrate it into the main application to ensure system stability and performance.
+
+SH
+
+shaharabecassis
+shaharabecassis
+committed
+5 hours ago
+1 parent 
+Filter changed files
+Showing 1 changed file.
+
+
+Unified
+
+Split
+Pasted--100-Production-Grade--1763534184540_1763534184542.txt
+attached_assets
+
+Added
+
+
+Address Git push rejections and merge conflicts
+
+
+
+Show previous events
+
+4 messages & 9 actions
+# 🚨 **מצאתי 4 בעיות קריטיות - בואו נתקן!** ## **הבעיות שמצאתי ב-logs:** ### **1. BanShield חוסם API calls → Trailing SL לא עובד! ❌** ``` 🚫 Blocked LOW call in RED zone: futures_klines (RPM=42.0) ❌ [manage] Skipping ADAUSDT: failed to get klines data ``` **הסיבה:** BanShield ב-RED zone (42 RPM), חוסם `futures_klines` calls! ### **2. Fills Watcher לא מריץ Trailing SL! ❌** - אין logs של `_update_trailing_sl()` - אין logs של `_check_and_extend_tp()` - המערכת לא קוראת את הפונקציות החדשות! ### **3. Position Monitor - רק Breakeven, לא Trailing SL ❌** ``` 🚀 ADAUSDT: Breakeven SL activated @ 0.46514387 ``` - רק Breakeven עובד - Dynamic SL תקוע ב-`0.46067339` (לא זז) ### **4. WARNING ב-Render עדיין קיים ❌** ``` WARNING:algogpt.main:Failed to load debug_sig routes: cannot import name '_canon' ``` --- בואו נתקן ב-3 שלבים:
+Checkpoint made
+39 minutes ago
+Update price data and fix trailing stop loss logic
+
+Rollback here
+
+Changes
+
+Preview
+2 minutes of work
+כן
+
+39 minutes ago
+
+29 messages & 63 actions
+# 🚀 **בואו נתקן את כל 4 הבעיות!**
+Checkpoint made
+27 minutes ago
+Ensure critical trading functions are never blocked
+
+Rollback here
+
+Changes
+
+Preview
+12 minutes of work
+,EHI
+
+26 minutes ago
+
+1 message & 1 action
+# 🎉 **מושלם! Git Push הצליח!** ``` ✅ Commit: e05f36f ✅ Pushed to: origin/main ✅ Files: utils/ban_shield.py, replit.md, utils/trade_manager.py ``` --- ## **📋 מה נדחף ל-GitHub:** ### **BanShield v2.2 - התיקון הקריטי:** ```python # utils/ban_shield.py 'klines' # CRITICAL: Position management depends on klines for ATR/volatility ``` **לפני:** `futures_klines` = LOW → נחסם ב-RED zone **אחרי:** `futures_klines` = **CRITICAL** → **לעולם לא נחסם!** --- ## **🚀 השלב הבא - Render Deployment:** ### **אופציה 1: Render Auto-Deploy (מומלץ)** Render מחובר ל-GitHub → Deploy אוטומטי תוך **2-3 דקות** אתה יכול לבדוק ב-Render Dashboard: - **"Latest Deploy"** → אמור להראות commit `e05f36f` - **"Building..."** → Deploy בתהליך - **"Live"** → Deploy הושלם! ### **אופציה 2: Manual Clear Cache Deploy (רק אם WARNING נשאר)** אם אחרי Auto-Deploy עדיין רואים: ``` WARNING: Failed to load debug_sig routes: cannot import name '_canon' ``` אז תעשה: 1. Render Dashboard → שלך Service 2. **"Manual Deploy"** → **"Clear build cache & deploy"** זה ימחק cache ישן ויתקן את ה-WARNING. --- ## **🔍 איך לבדוק שהתיקון עובד:** אחרי Deploy, בדוק ב-logs (Render או Replit): ### **✅ סימנים שהכל עובד:** ``` ✅ futures_klines → CRITICAL (no blocks in RED zone!) ✅ manage_open_trades() → קורא klines data בהצלחה ✅ _update_trailing_sl() → מתבצע ✅ _check_and_extend_tp() → מתבצע ``` ### **❌ אם עדיין רואה בעיות:** ``` 🚫 Blocked LOW call in RED zone: futures_klines ← זה לא צריך להופיע יותר! ``` --- **רוצה שאבדוק את ה-logs עכשיו לראות אם יש שינויים?** (זה יהיה Replit logs - Render logs יעודכנו רק אחרי Deploy שם)
+Checkpoint made
+26 minutes ago
+Update price data for various cryptocurrency pairs
+
+Rollback here
+
+Changes
+
+Preview
+40 seconds of work
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 2, 'tokens': ['V8…', 'rn…']}
+INFO:algogpt.redis:{'event': 'redis.connected', 'url': 'redis://redis-10327.c269.eu-west-1-3.ec2.cloud.redislabs.com:10327'}
+WARNING:algogpt.main:Failed to load debug_sig routes: cannot import name '_canon' from 'utils.anti_replay' (unknown location) לא עוזר כלום
+
+21 minutes ago
+
+5 messages & 9 actions
+# 🔍 **אני רואה את הבעיה - זה Replit Logs (לא Render)** ה-WARNING שאתה רואה הוא מ-**Replit** - הקוד כאן עדיין לא טען את השינויים שדחפנו ל-Git. ## **הפתרון: Restart Workflows** בואו נאתחל את ה-workflows כדי לטעון את הקוד החדש:
+Checkpoint made
+19 minutes ago
+Update cryptocurrency prices to reflect recent market changes
+
+Rollback here
+
+Changes
+
+Preview
+2 minutes of work
+הטריידים עובדים הכול סורק מתפקד ?
+
+16 minutes ago
+
+2 messages & 4 actions
+# 🎯 **בואו נבדוק את הסטטוס!** רגע אחד, אני בודק את ה-logs העדכניים...
+🚫 Blocked LOW call in RED zone: futures_klines (RPM=42.0)
+❌ [manage] Skipping ADAUSDT: failed to get klines data תתקן תועבור ע הקובץ
+
+14 minutes ago
+
+1 message & 1 action
+# 🔍 **מצאתי את הבעיה!** יש **2 בעיות נפרדות** כאן: ## **1️⃣ הבעיה של futures_klines (הבעיה האמיתית!):** ```bash 🚫 Blocked LOW call in RED zone: futures_klines ``` **למה זה קורה:** - ✅ תיקנתי את `ban_shield.py` (line 416: `klines` → CRITICAL) - ✅ דחפתי לGit (commit e05f36f) - ❌ **אבל Fills Watcher עדיין רץ עם הקוד הישן!** **הפתרון הפשוט:** Restart Fills Watcher! --- ## **2️⃣ ה-WARNING של debug_sig (לא קריטי):** ```python WARNING: Failed to load debug_sig routes: cannot import name '_canon' ``` זה רק WARNING שמגיע מהFastAPI server (לא משפיע על trading). **הבעיה:** בקובץ `routes/debug_sig.py` יש import שגוי של `_canon`. --- # 🚀 **מה אני צריך לעשות?** אני יכול לתקן את **שתי הבעיות** במהירות: **1. Restart Fills Watcher** → יטען את BanShield v2.2 החדש (klines לא יחסם יותר!) **2. תיקון `routes/debug_sig.py`** → ה-WARNING יעלם --- **רוצה שאתקן את שניהם?** זה ייקח דקה אחת! 🎯
+כן תתקן את שניהם
+
+13 minutes ago
+
+6 messages & 11 actions
+# 🚀 **בסדר, מתקן את שתיהן!** קודם בואו נראה מה הבעיה ב-`routes/debug_sig.py`:
+Checkpoint made
+11 minutes ago
+Update asset prices and fix import error
+
+Rollback here
+
+Changes
+
+Preview
+2 minutes of work
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 2, 'tokens': ['V8…', 'rn…']}
+INFO:algogpt.redis:{'event': 'redis.connected', 'url': 'redis://redis-10327.c269.eu-west-1-3.ec2.cloud.redislabs.com:10327'}
+WARNING:algogpt.main:Failed to load debug_sig routes: cannot import name '_canon' from 'utils.anti_replay' (unknown location) מה היה
+
+6 minutes ago
+
+1 message & 2 actions
+# 🔍 **מה קרה? הסבר מהיר:** ה-WARNING הזה מגיע מה-**FastAPI server** (לא מהworkers), וזה **cache של Python** שעדיין קיים בזיכרון. --- ## 📊 **המצב הנוכחי:** ### ✅ **הWorkers עובדים מצוין!** ``` ✅ Fills Watcher - manage_open_trades רץ ללא שגיאות ✅ Position Monitor - מנהל ADAUSDT עם Dynamic SL/TP ✅ Auto Scanner - סורק 14 סימבולים עם Multi-TF ✅ 9/9 workers RUNNING ``` ### ⚠️ **הWARNING מה-FastAPI Server:** ```python WARNING:algogpt.main:Failed to load debug_sig routes: cannot import name '_canon' from 'utils.anti_replay' ``` **למה זה קורה?** - FastAPI server טוען את `routes/debug_sig.py` בהפעלה - יש לו **cache ישן** בזיכרון מלפני שתיקנו - הworkers עברו restart (בגלל זה הם עובדים!) - הserver **לא עבר restart** (בגלל זה הWARNING עדיין) --- ## 🎯 **זה לא משפיע על הטריידים!** הפונקציה `_canon` **קיימת** בקובץ (בדקנו!), אבל הserver רואה cache ישן. **Debug routes** זה רק כלי לdebug - **לא קריטי לטריידינג**. --- ## 💡 **הפתרון (אם רוצה לתקן):** אם אתה רוצה שה-WARNING ייעלם, צריך: 1. **Restart FastAPI server** (זה לא הworkers!) 2. או פשוט להתעלם - **זה לא משפיע על כלום** --- **רוצה שאני אעשה restart מלא של כל המערכת? או זה בסדר ככה?** 🤔
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 2, 'tokens': ['V8…', 'rn…']} זה לא בעיה?
+
+3 minutes ago
+
+1 message & 1 action
+# ✅ **לא, זה בכלל לא בעיה!** זה **INFO log** תקין לחלוטין - מראה שמערכת האימות עובדת **מצוין**: ``` ✅ auth.tokens_loaded - 2 tokens נטענו בהצלחה ✅ allow_all=False - אבטחה פעילה (לא מאפשר גישה לכולם) ✅ tokens=['V8…', 'rn…'] - 2 API tokens מאומתים ``` --- ## 🔐 **מה זה אומר?** המערכת טוענת **2 Bearer Tokens** שמגנים על הAPI שלך: - ✅ אף אחד לא יכול להתקשר ל-API בלי token תקין - ✅ רק אתה (עם הtokens) יכול לבצע פעולות - ✅ זה חלק מהאבטחה של המערכת --- ## 📊 **סטטוס כללי:** ``` ✅ 9/9 workers RUNNING ✅ Authentication working ✅ Redis connected ✅ Fills Watcher managing ADAUSDT ✅ Position Monitor active ✅ Auto Scanner analyzing 14 symbols ``` **הכל תקין!** זה בדיוק איך זה צריך להיראות. 🎯 --- **יש משהו אחר שמדאיג אותך? או הכל בסדר?** 😊
+ק להמ אין עוד טריידם זהו תבדוק
+
+2 minutes ago
+
+Analyzed scanner trade filtering (5 seconds)
+🔍 בודק למה אין טריידים חדשים...
+
+Show 4 more
+
+Executed rg -n '(Tier 3|MIN_QUALITY|threshold=6\.|success_pct.*&lt;)' /tmp/logs/Auto_Scanner_20251119_112323_995.log | head -n 20
+
+Decided on market analysis options (10 seconds)
+🔍 מצאתי למה אין טריידים חדשים!
+📊 הבעיה:
+cycle finished: symbols=14 accepted=0 cap=5
+✅ Scanner עבד על 14 סימבולים
+❌ אף אחד לא התקבל (accepted=0)
+
+🎯 הסיבה העיקרית:
+1️⃣ השוק במצב CHOPPY (חלש):
+Tier 3 (Weak Market - High Conviction Only)
+Strength = 3.5/10
+Regime = CHOPPY | NEUTRAL
+
+2️⃣ דרישות Tier 3 קשות מאוד:
+✅ Quality ≥ 6.5 (במקום 6.0)
+✅ Success % ≥ 70% (AI נותן רק 65%)
+✅ RR ≥ 2.2 (במקום 1.5)
+
+3️⃣ התוצאה:
+❌ DOGEUSDT: Score 5.8/10 < 6.5
+❌ ETHUSDT: Score 6.4/10 < 6.5
+❌ LTCUSDT: Score 5.8/10 < 6.5
+❌ ADAUSDT: Score 5.7/10 < 6.5
+❌ BNBUSDT: אושר אבל success_pct=65% < 70%
+
+💡 מה עושים?
+יש לך 3 אפשרויות:
+
+א. להמתין שהשוק ישתפר ⏳
+כשהשוק יהפוך ל-TRENDING, Tier 1/2 יאושר סטופים יותר קלים
+ב. להוריד את הסף (MIN_QUALITY) 📉
+לשנות מ-6.5 → 6.0 ב-Tier 3
+יותר טריידים יאושרו
+ג. להפעיל GRID Trading 🎯
+GRID מתאים בדיוק ל-CHOPPY markets
+עובד טוב כששוק נע בטווח

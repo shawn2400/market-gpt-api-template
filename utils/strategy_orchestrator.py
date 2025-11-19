@@ -359,7 +359,7 @@ class StrategyOrchestrator:
             # WAIT strategy = ultra-conservative mode (dynamic quality based on tier)
             # Tier 1 (Strong): 4.4 + 0.6 = 5.0
             # Tier 2 (Normal): 4.5 + 1.0 = 5.5
-            # Tier 3 (Weak): 6.0 + 0.5 = 6.5
+            # Tier 3 (Weak): 4.5 + 1.0 = 5.5
             if active_tier:
                 base_quality = active_tier.min_quality
                 tier_num = active_tier.tier_number
@@ -368,9 +368,9 @@ class StrategyOrchestrator:
                 elif tier_num == 2:
                     wait_quality = base_quality + 1.0  # 4.5 + 1.0 = 5.5
                 else:  # tier_num == 3
-                    wait_quality = base_quality + 0.5  # 6.0 + 0.5 = 6.5
+                    wait_quality = base_quality + 1.0  # 4.5 + 1.0 = 5.5
             else:
-                wait_quality = 6.0  # Fallback when no tier available
+                wait_quality = 5.5  # Fallback when no tier available
             
             return StrategyConfig(
                 strategy_type="wait",

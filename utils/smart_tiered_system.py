@@ -86,7 +86,7 @@ class SmartTieredSystem:
             3: TierDefinition(
                 tier_name="Weak Market - High Conviction Only",
                 tier_number=3,
-                min_quality=6.0,
+                min_quality=4.5,
                 filters_required=["maximum_protection", "high_conviction_only"],
                 description="Only premium setups - weak market conditions",
                 leverage_range=(2.0, 5.0),
