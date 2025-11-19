@@ -23,7 +23,8 @@ async def telegram_stage_status(request: Request):
     """Handle /stage_status command"""
     try:
         # Get comprehensive status
-        summary = stage_controller.get_stage_summary()
+        # FIX: get_stage_summary() is now async
+        summary = await stage_controller.get_stage_summary()
         status = stage_engine.get_stage_status()
         
         # Build response message

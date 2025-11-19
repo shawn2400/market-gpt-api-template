@@ -1768,6 +1768,12 @@ try:
 except Exception as e:
     logger.warning("Failed to load executors_grid_export routes: %s", e)
 
+try:
+    from routes.telegram_stage import router as telegram_stage_router
+    app.include_router(telegram_stage_router)
+except Exception as e:
+    logger.warning("Failed to load telegram_stage routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():
@@ -2025,6 +2031,81 @@ async def _on_startup():
             logger.warning("  ℹ️  System will fallback to REST API polling")
     else:
         logger.info("ℹ️  WebSocket User Stream disabled (set USER_STREAM_ENABLE=1 to enable)")
+    
+    # ==================== Stage Engine System (MetaBrain v9.1 Auto-Deployment) ====================
+    # FIX: Track tasks to prevent duplicates on hot reload
+    global _stage_watcher_task, _auto_repair_task, _self_healing_task
+    
+    if os.getenv("STAGE_ENGINE_ENABLE", "1").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            logger.info("🎯 Starting Stage Engine System...")
+            from watchers import stage_watcher
+            
+            # Check if already running
+            if stage_watcher.is_running():
+                logger.warning("⚠️  Stage Watcher already running, skipping duplicate start")
+            else:
+                # Launch Stage Watcher (monitors health + auto-promotes/freezes)
+                _stage_watcher_task = asyncio.create_task(stage_watcher.start_stage_watcher())
+            
+                # Log initial stage status
+                from utils import stage_engine
+                status = stage_engine.get_stage_status()
+                logger.info(f"✅ Stage Engine started: Stage {status['stage']} ({status['stage_name']})")
+                logger.info(f"  🎯 Auto-Promotion: {'Enabled' if os.getenv('STAGE_AUTO_PROMOTE', '1') == '1' else 'Disabled'}")
+                logger.info(f"  🥶 Auto-Freeze: {'Enabled' if os.getenv('STAGE_AUTO_FREEZE', '1') == '1' else 'Disabled'}")
+                logger.info(f"  ⏱️  Health Check Interval: {os.getenv('STAGE_HEALTH_INTERVAL', '60')}s")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to start Stage Engine: {e}", exc_info=True)
+    else:
+        logger.info("ℹ️  Stage Engine disabled (set STAGE_ENGINE_ENABLE=1 to enable)")
+    
+    # ==================== Auto-Repair System (Self-Fixing Infrastructure) ====================
+    if os.getenv("AUTO_REPAIR_ENABLE", "0").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            logger.info("🛠️  Starting Auto-Repair System...")
+            from utils import auto_repair
+            
+            # Check if already running
+            if auto_repair.is_running():
+                logger.warning("⚠️  Auto-Repair already running, skipping duplicate start")
+            else:
+                # Launch Auto-Repair loop (detects + fixes Redis, Binance, WS issues)
+                _auto_repair_task = asyncio.create_task(auto_repair.auto_repair_loop())
+            
+                logger.info(f"✅ Auto-Repair started")
+                logger.info(f"  🔍 Check Interval: {os.getenv('AUTO_REPAIR_INTERVAL', '60')}s")
+                logger.info(f"  🔄 Max Attempts: {os.getenv('AUTO_REPAIR_MAX_ATTEMPTS', '3')}")
+                logger.info(f"  ⏱️  Backoff: Exponential (1s → 30s)")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to start Auto-Repair: {e}", exc_info=True)
+    else:
+        logger.info("ℹ️  Auto-Repair disabled (set AUTO_REPAIR_ENABLE=1 to enable)")
+    
+    # ==================== Self-Healing System (Ultimate Recovery) ====================
+    if os.getenv("SELF_HEALING_ENABLE", "0").strip().lower() in ("1", "true", "yes", "on"):
+        try:
+            logger.info("🔥 Starting Self-Healing System...")
+            from utils import self_healing
+            
+            # Check if already running
+            if self_healing.is_running():
+                logger.warning("⚠️  Self-Healing already running, skipping duplicate start")
+            else:
+                # Launch Self-Healing loop (monitors /readyz, freezes on critical failure)
+                _self_healing_task = asyncio.create_task(self_healing.self_healing_loop())
+            
+                logger.info(f"✅ Self-Healing started")
+                logger.info(f"  🔍 Cooldown: {os.getenv('SELF_HEALING_COOLDOWN', '300')}s")
+                logger.info(f"  🚨 Max Failures: {os.getenv('SELF_HEALING_MAX_FAILURES', '5')} (freeze trigger)")
+                logger.info(f"  ⏱️  Recovery Cooldown: 30 minutes")
+            
+        except Exception as e:
+            logger.error(f"❌ Failed to start Self-Healing: {e}", exc_info=True)
+    else:
+        logger.info("ℹ️  Self-Healing disabled (set SELF_HEALING_ENABLE=1 to enable)")
 
 # ============= Dashboard Route =============
 @app.get('/dashboard', response_class=HTMLResponse)

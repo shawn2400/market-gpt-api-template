@@ -42,7 +42,8 @@ async def start_stage_watcher():
     while True:
         try:
             # Run stage tick (evaluate health, take action)
-            result = stage_controller.stage_tick()
+            # FIX: stage_tick() is now async
+            result = await stage_controller.stage_tick()
             
             # Log action if taken
             if result.get("action_taken"):
@@ -56,7 +57,8 @@ async def start_stage_watcher():
                 start_stage_watcher._tick_count = 1
             
             if start_stage_watcher._tick_count % 10 == 0:
-                stage_controller.send_stage_report_telegram()
+                # FIX: send_stage_report_telegram() is now async
+                await stage_controller.send_stage_report_telegram()
             
         except Exception as e:
             logger.error(f"Stage watcher error: {e}", exc_info=True)

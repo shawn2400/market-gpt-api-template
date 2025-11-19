@@ -2,12 +2,14 @@
 """
 🎯 Stage Controller - Health Monitoring & Auto-Promotion Logic
 Evaluates system health and decides when to promote/demote/freeze stages
+FIX: Async-friendly - no blocking I/O in event loop
 """
 import os
 import logging
-import psutil
+import asyncio
 import time
 from typing import Dict, Any, List, Tuple
+from concurrent.futures import ThreadPoolExecutor
 from utils import stage_engine
 from utils.redis_client import get_redis
 
@@ -30,10 +32,77 @@ _consecutive_failures = 0
 _last_promotion_time = 0
 PROMOTION_COOLDOWN = 600  # 10 minutes between promotions
 
+# Thread pool for blocking operations
+_executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="stage_health")
 
-def evaluate_stage_health() -> Dict[str, Any]:
+
+def _get_cpu_percent() -> float:
+    """
+    Get CPU percent - BLOCKING operation (runs in executor)
+    Returns CPU usage as percentage
+    """
+    import psutil
+    return psutil.cpu_percent(interval=1)
+
+
+def _get_ram_percent() -> float:
+    """
+    Get RAM percent - BLOCKING operation (runs in executor)
+    Returns RAM usage as percentage
+    """
+    import psutil
+    ram = psutil.virtual_memory()
+    return ram.percent
+
+
+def _check_redis() -> str:
+    """
+    Check Redis connectivity - BLOCKING operation (runs in executor)
+    Returns "ok" or "error"
+    """
+    try:
+        r = get_redis()
+        r.ping()
+        return "ok"
+    except Exception as e:
+        logger.error(f"Redis check failed: {e}")
+        return "error"
+
+
+def _get_ban_shield_zone() -> str:
+    """
+    Get BanShield zone - BLOCKING operation (runs in executor)
+    Returns zone name or "unknown"
+    """
+    try:
+        r = get_redis()
+        ban_zone = r.get("ban_shield:zone")
+        if ban_zone:
+            return ban_zone.decode() if isinstance(ban_zone, bytes) else ban_zone
+        return "unknown"
+    except Exception as e:
+        logger.error(f"Failed to get BanShield zone: {e}")
+        return "unknown"
+
+
+def _get_error_count_10m() -> int:
+    """
+    Get error count in last 10 minutes - BLOCKING operation (runs in executor)
+    Returns error count
+    """
+    try:
+        r = get_redis()
+        error_count = r.llen("error_log:10m")
+        return error_count if error_count else 0
+    except Exception as e:
+        logger.error(f"Failed to get error count: {e}")
+        return 0
+
+
+async def evaluate_stage_health() -> Dict[str, Any]:
     """
     Evaluate current system health across all dimensions
+    FIX: Fully async - all blocking operations run in executor
     
     Returns:
         Dict with health status, metrics, and issues
@@ -48,99 +117,98 @@ def evaluate_stage_health() -> Dict[str, Any]:
         "should_demote": False
     }
     
-    # 1. CPU Check
+    # Run all blocking operations in parallel in executor
+    loop = asyncio.get_event_loop()
+    
     try:
-        cpu_percent = psutil.cpu_percent(interval=1)
-        health["metrics"]["cpu"] = cpu_percent
+        # FIX: Run all blocking I/O in thread pool executor
+        cpu_task = loop.run_in_executor(_executor, _get_cpu_percent)
+        ram_task = loop.run_in_executor(_executor, _get_ram_percent)
+        redis_task = loop.run_in_executor(_executor, _check_redis)
+        ban_zone_task = loop.run_in_executor(_executor, _get_ban_shield_zone)
+        error_count_task = loop.run_in_executor(_executor, _get_error_count_10m)
         
-        if cpu_percent > CPU_THRESHOLD:
-            health["issues"].append(f"CPU high: {cpu_percent:.1f}%")
-            health["overall"] = "YELLOW" if cpu_percent < 95 else "RED"
-    except Exception as e:
-        logger.error(f"Failed to get CPU: {e}")
-        health["metrics"]["cpu"] = 0
-    
-    # 2. RAM Check
-    try:
-        ram = psutil.virtual_memory()
-        ram_percent = ram.percent
-        health["metrics"]["ram"] = ram_percent
+        # Await all operations
+        cpu_percent, ram_percent, redis_status, ban_zone, error_count = await asyncio.gather(
+            cpu_task, ram_task, redis_task, ban_zone_task, error_count_task,
+            return_exceptions=True
+        )
         
-        if ram_percent > RAM_THRESHOLD:
-            health["issues"].append(f"RAM high: {ram_percent:.1f}%")
-            if health["overall"] == "GREEN":
-                health["overall"] = "YELLOW" if ram_percent < 90 else "RED"
-    except Exception as e:
-        logger.error(f"Failed to get RAM: {e}")
-        health["metrics"]["ram"] = 0
-    
-    # 3. Redis Check
-    try:
-        r = get_redis()
-        r.ping()
-        health["metrics"]["redis"] = "ok"
-    except Exception as e:
-        health["issues"].append(f"Redis error: {e}")
-        health["metrics"]["redis"] = "error"
-        health["overall"] = "RED"
-    
-    # 4. BanShield Zone Check
-    try:
-        r = get_redis()
-        ban_zone = r.get("ban_shield:zone")
-        if ban_zone:
-            ban_zone = ban_zone.decode() if isinstance(ban_zone, bytes) else ban_zone
+        # Process CPU
+        if isinstance(cpu_percent, Exception):
+            logger.error(f"Failed to get CPU: {cpu_percent}")
+            health["metrics"]["cpu"] = 0
         else:
-            ban_zone = "unknown"
+            health["metrics"]["cpu"] = cpu_percent
+            if cpu_percent > CPU_THRESHOLD:
+                health["issues"].append(f"CPU high: {cpu_percent:.1f}%")
+                health["overall"] = "YELLOW" if cpu_percent < 95 else "RED"
         
-        health["metrics"]["ban_shield_zone"] = ban_zone
-        
-        if ban_zone == "RED":
-            health["issues"].append("BanShield in RED zone")
-            if health["overall"] == "GREEN":
-                health["overall"] = "YELLOW"
-    except Exception as e:
-        logger.error(f"Failed to get BanShield zone: {e}")
-        health["metrics"]["ban_shield_zone"] = "unknown"
-    
-    # 5. WebSocket Check (if enabled)
-    try:
-        from utils import ws_user_stream
-        ws_status = ws_user_stream.status()
-        ws_running = ws_status.get("running", False)
-        health["metrics"]["ws"] = "connected" if ws_running else "disconnected"
-        
-        if not ws_running and os.getenv("USER_STREAM_ENABLE", "0") == "1":
-            health["issues"].append("WebSocket disconnected")
-            if health["overall"] == "GREEN":
-                health["overall"] = "YELLOW"
-    except Exception as e:
-        logger.debug(f"WS check skipped: {e}")
-        health["metrics"]["ws"] = "n/a"
-    
-    # 6. Error Count Check (last 10 minutes)
-    try:
-        r = get_redis()
-        error_count = r.get("health:error_count:10m")
-        if error_count:
-            error_count = int(error_count)
+        # Process RAM
+        if isinstance(ram_percent, Exception):
+            logger.error(f"Failed to get RAM: {ram_percent}")
+            health["metrics"]["ram"] = 0
         else:
-            error_count = 0
+            health["metrics"]["ram"] = ram_percent
+            if ram_percent > RAM_THRESHOLD:
+                health["issues"].append(f"RAM high: {ram_percent:.1f}%")
+                if health["overall"] == "GREEN":
+                    health["overall"] = "YELLOW" if ram_percent < 90 else "RED"
         
-        health["metrics"]["errors_10m"] = error_count
-        
-        if error_count > ERROR_THRESHOLD:
-            health["issues"].append(f"High error count: {error_count} errors in 10m")
+        # Process Redis
+        if isinstance(redis_status, Exception):
+            logger.error(f"Failed to check Redis: {redis_status}")
+            health["metrics"]["redis"] = "error"
             health["overall"] = "RED"
-        elif error_count > WARNING_THRESHOLD:
-            health["issues"].append(f"Warning: {error_count} errors in 10m")
-            if health["overall"] == "GREEN":
-                health["overall"] = "YELLOW"
-    except Exception as e:
-        logger.error(f"Failed to get error count: {e}")
-        health["metrics"]["errors_10m"] = 0
+        else:
+            health["metrics"]["redis"] = redis_status
+            if redis_status != "ok":
+                health["issues"].append(f"Redis error")
+                health["overall"] = "RED"
+        
+        # Process BanShield zone
+        if isinstance(ban_zone, Exception):
+            logger.error(f"Failed to get BanShield zone: {ban_zone}")
+            health["metrics"]["ban_shield_zone"] = "unknown"
+        else:
+            health["metrics"]["ban_shield_zone"] = ban_zone
+            if ban_zone == "RED":
+                health["issues"].append("BanShield in RED zone")
+                if health["overall"] == "GREEN":
+                    health["overall"] = "YELLOW"
+        
+        # Process WebSocket (quick, non-blocking check)
+        try:
+            if os.getenv("USER_STREAM_ENABLE", "0") == "1":
+                from utils import ws_user_stream
+                status = ws_user_stream.status()
+                health["metrics"]["ws"] = "connected" if status.get("running") else "disconnected"
+            else:
+                health["metrics"]["ws"] = "n/a"
+        except Exception as e:
+            logger.error(f"Failed to check WebSocket: {e}")
+            health["metrics"]["ws"] = "error"
+        
+        # Process error count
+        if isinstance(error_count, Exception):
+            logger.error(f"Failed to get error count: {error_count}")
+            health["metrics"]["errors_10m"] = 0
+        else:
+            health["metrics"]["errors_10m"] = error_count
+            if error_count > ERROR_THRESHOLD:
+                health["issues"].append(f"High error count: {error_count} errors in 10m")
+                health["overall"] = "RED"
+            elif error_count > WARNING_THRESHOLD:
+                health["issues"].append(f"Warning: {error_count} errors in 10m")
+                if health["overall"] == "GREEN":
+                    health["overall"] = "YELLOW"
     
-    # 7. Uptime Check
+    except Exception as e:
+        logger.error(f"Failed to evaluate health: {e}", exc_info=True)
+        health["overall"] = "RED"
+        health["issues"].append(f"Health check error: {e}")
+    
+    # Uptime Check (non-blocking)
     stage_uptime_hours = stage_engine.get_stage_uptime_hours()
     health["metrics"]["stage_uptime_hours"] = stage_uptime_hours
     
@@ -255,18 +323,19 @@ def _check_promotion_criteria(health: Dict[str, Any], criteria: Dict[str, Any]) 
     return True
 
 
-def stage_tick() -> Dict[str, Any]:
+async def stage_tick() -> Dict[str, Any]:
     """
     Main tick function - evaluate health and take action
     Called every 60 seconds by stage_watcher
+    FIX: Fully async - no blocking operations
     
     Returns:
         Dict with tick results
     """
     global _last_promotion_time
     
-    # Evaluate health
-    health = evaluate_stage_health()
+    # FIX: Await async health evaluation
+    health = await evaluate_stage_health()
     
     result = {
         "timestamp": time.time(),
@@ -300,14 +369,14 @@ def stage_tick() -> Dict[str, Any]:
     return result
 
 
-def send_stage_report_telegram() -> None:
+async def send_stage_report_telegram() -> None:
     """Send stage status report to Telegram"""
     try:
         from utils.telegram_notifier import notify_info
-        import asyncio
         
         status = stage_engine.get_stage_status()
-        health = evaluate_stage_health()
+        # FIX: Await async health evaluation
+        health = await evaluate_stage_health()
         
         # Build report
         report = (
@@ -329,15 +398,19 @@ def send_stage_report_telegram() -> None:
             for issue in health["issues"]:
                 report += f"  • {issue}\n"
         
-        asyncio.create_task(notify_info(report))
+        await notify_info(report)
     except Exception as e:
         logger.error(f"Failed to send stage report: {e}")
 
 
-def get_stage_summary() -> Dict[str, Any]:
-    """Get concise stage summary for API/Telegram"""
+async def get_stage_summary() -> Dict[str, Any]:
+    """
+    Get concise stage summary for API/Telegram
+    FIX: Fully async
+    """
     status = stage_engine.get_stage_status()
-    health = evaluate_stage_health()
+    # FIX: Await async health evaluation
+    health = await evaluate_stage_health()
     
     return {
         "stage": status["stage"],
