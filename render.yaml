@@ -47,13 +47,12 @@ services:
       # 🔥 Trading Engine – Full Automatic Mode
       # ======================================================
 
-      # Autopilot ON
       - key: ENABLE_AUTO_TRADING
         value: 1
       - key: AUTO_RUN
         value: 1
 
-      # No Telegram Approval
+      # Disable Telegram approvals → Full Auto
       - key: ENABLE_TELEGRAM_APPROVAL
         value: 0
       - key: APPROVAL_MODE
@@ -61,7 +60,7 @@ services:
       - key: CONFIRM_STORE_ENABLE
         value: 0
 
-      # Auto-Management
+      # Auto-management (Real-Time Position Control)
       - key: ALLOW_MANAGE_OPEN_TRADES
         value: 1
       - key: ENABLE_POSITION_MONITOR
@@ -71,13 +70,13 @@ services:
       - key: ENABLE_INSURANCE_MONITOR
         value: 1
 
-      # Quality Score (Dynamic)
+      # Quality Score Dynamic
       - key: MIN_QUALITY_SCORE
         value: 5.5
       - key: QUALITY_DYN_ENABLED
         value: 1
 
-      # Budget Settings
+      # Budget
       - key: MIN_BUDGET_USD
         value: 25
       - key: MAX_BUDGET_USD
@@ -95,7 +94,7 @@ services:
       - key: WEBSOCKET_BUFFER
         value: 200
 
-      # Smart SL/TP
+      # Smart SL/TP Logic
       - key: TP_MODE
         value: hybrid
       - key: SL_MODE
@@ -131,19 +130,22 @@ services:
       - key: FILLS_WATCH_ENABLE
         value: 1
 
-      # -----------------------------
+
+      # ======================================================
       # 🔒 Emergency Control
-      # -----------------------------
+      # ======================================================
       - key: EMERGENCY_KILL_SWITCH
         value: 0
 
-      # -----------------------------
-      # 🟦 Safe-Boot Mode (Enabled)
-      # -----------------------------
+
+      # ======================================================
+      # 🟦 Safe-Boot Mode
+      # ======================================================
       - key: SAFE_BOOT_MODE
         value: 1
       - key: SAFE_BOOT_STAGGER_DELAY
         value: 5
+
 
       # ======================================================
       # 🛡 Auto-Health Monitor (Enabled)
@@ -157,13 +159,43 @@ services:
       - key: AUTO_HEALTH_VERBOSE
         value: 0
 
+
       # ======================================================
-      # 🛠 Auto-Repair / Self-Healing (Disabled – has bugs)
+      # 🧠 Stage Engine (NEW - as requested)
+      # ======================================================
+      - key: STAGE_ENGINE_ENABLE
+        value: 1
+      - key: STAGE_AUTO_PROMOTE
+        value: 1
+      - key: STAGE_AUTO_FREEZE
+        value: 1
+      - key: STAGE_1_UPTIME_HOURS
+        value: 24
+      - key: STAGE_2_UPTIME_HOURS
+        value: 12
+
+
+      # ======================================================
+      # 🛠 Auto-Repair (Enabled)
       # ======================================================
       - key: AUTO_REPAIR_ENABLE
-        value: 0
+        value: 1
+      - key: AUTO_REPAIR_INTERVAL
+        value: 60
+      - key: AUTO_REPAIR_MAX_ATTEMPTS
+        value: 3
+
+
+      # ======================================================
+      # 🔁 Self-Healing (Enabled)
+      # ======================================================
       - key: SELF_HEALING_ENABLE
-        value: 0
+        value: 1
+      - key: SELF_HEALING_COOLDOWN
+        value: 300
+      - key: SELF_HEALING_MAX_FAILURES
+        value: 5
+
 
       # ======================================================
       # BAN Shield
@@ -184,6 +216,7 @@ services:
         value: 10
       - key: SHIELD_ALERT_COOLDOWN
         value: 300
+
 
 
 
