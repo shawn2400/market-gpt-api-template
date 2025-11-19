@@ -87,13 +87,8 @@ except Exception as e:
     logger.warning(f"⚠️ Advanced Risk Manager unavailable: {e}")
 
 # 🛡️ HEDGE POSITION MANAGER (Dual Position Detection)
-try:
-    from utils.hedge_position_manager import get_hedge_manager
-    hedge_manager = get_hedge_manager()
-    logger.info("✅ Hedge Position Manager loaded successfully")
-except Exception as e:
-    hedge_manager = None  # type: ignore
-    logger.warning(f"⚠️ Hedge Position Manager unavailable: {e}")
+# Note: hedge_position_manager module not available - feature disabled
+hedge_manager = None
 
 # 🧹 ORDER HYGIENE (Orphaned Orders Cleanup)
 ENABLE_ORDER_HYGIENE = os.getenv("ENABLE_ORDER_HYGIENE", "1") == "1"
@@ -117,6 +112,15 @@ try:
 except Exception as e:
     live_position_manager = None  # type: ignore
     logger.warning(f"⚠️ Live Position Manager unavailable: {e}")
+
+# 🎯 TRAILING SL STATE MANAGER (Prevents backwards movement)
+try:
+    from utils.trailing_sl_state import get_trailing_sl_state_manager
+    trailing_sl_state = get_trailing_sl_state_manager()
+    logger.info("✅ Trailing SL State Manager loaded successfully")
+except Exception as e:
+    trailing_sl_state = None  # type: ignore
+    logger.warning(f"⚠️ Trailing SL State Manager unavailable: {e}")
 
 async def calculate_symbol_atr(symbol: str, period: int = 14) -> float:
     """
@@ -195,6 +199,10 @@ def cleanup_orders_for_closed_positions(closed_symbols: List[str]) -> None:
             # 🧠 Cleanup breakeven state
             if breakeven_state:
                 breakeven_state.cleanup_symbol(symbol)
+            
+            # 🎯 Cleanup trailing SL state
+            if trailing_sl_state:
+                trailing_sl_state.cleanup_symbol(symbol)
             
             logger.info(f"✅ Cancelled all orders for {symbol}")
         except Exception as e:
@@ -569,70 +577,47 @@ async def ensure_positions_protected() -> None:
                     
                     # 🎯 LAYER 4: Trailing SL after Breakeven (Dynamic Protection)
                     # Only activate if BE was already triggered (BE is stored in breakeven_state)
-                    if breakeven_state and breakeven_state.is_be_activated(symbol):
+                    if breakeven_state and breakeven_state.is_be_activated(symbol) and trailing_sl_state:
                         try:
                             atr = await calculate_symbol_atr(symbol, period=14)
                             if atr > 0:
-                                from utils.binance_client import futures_create_order, futures_cancel_all_orders, futures_get_open_orders
+                                from utils.binance_client import futures_create_order, futures_cancel_all_orders
                                 
                                 # Calculate trailing distance (0.7x ATR for tighter trailing)
                                 trailing_distance = atr * 0.7
                                 
                                 # Calculate new SL based on current price
-                                if position_side == "LONG":
-                                    new_sl = mark_price - trailing_distance
-                                    # Only move SL up, never down
-                                    if new_sl > entry_price:
-                                        # Check if we need to update (significant move > 0.3 ATR from entry)
-                                        current_sl_distance_from_entry = new_sl - entry_price
-                                        if current_sl_distance_from_entry > (atr * 0.3):
-                                            logger.info(
-                                                f"🎯 {symbol} LONG Trailing SL: Mark={mark_price:.8f}, "
-                                                f"NewSL={new_sl:.8f} (+{((new_sl-entry_price)/entry_price)*100:.2f}% from entry)"
-                                            )
-                                            
-                                            # Cancel existing orders and place new trailing SL
-                                            futures_cancel_all_orders(symbol)
-                                            close_side = "SELL"
-                                            
-                                            sl_order = futures_create_order(
-                                                symbol=symbol,
-                                                side=close_side,
-                                                type="STOP_MARKET",
-                                                quantity=abs(amt),
-                                                stopPrice=new_sl,
-                                                reduceOnly=True,
-                                                positionSide=position_side
-                                            )
-                                            
-                                            logger.info(f"📈 {symbol}: Trailing SL moved to {new_sl:.8f} (was {entry_price:.8f})")
-                                else:  # SHORT
-                                    new_sl = mark_price + trailing_distance
-                                    # Only move SL down (better for SHORT), never up
-                                    if new_sl < entry_price:
-                                        # Check if we need to update
-                                        current_sl_distance_from_entry = entry_price - new_sl
-                                        if current_sl_distance_from_entry > (atr * 0.3):
-                                            logger.info(
-                                                f"🎯 {symbol} SHORT Trailing SL: Mark={mark_price:.8f}, "
-                                                f"NewSL={new_sl:.8f} (-{((entry_price-new_sl)/entry_price)*100:.2f}% from entry)"
-                                            )
-                                            
-                                            # Cancel existing orders and place new trailing SL
-                                            futures_cancel_all_orders(symbol)
-                                            close_side = "BUY"
-                                            
-                                            sl_order = futures_create_order(
-                                                symbol=symbol,
-                                                side=close_side,
-                                                type="STOP_MARKET",
-                                                quantity=abs(amt),
-                                                stopPrice=new_sl,
-                                                reduceOnly=True,
-                                                positionSide=position_side
-                                            )
-                                            
-                                            logger.info(f"📉 {symbol}: Trailing SL moved to {new_sl:.8f} (was {entry_price:.8f})")
+                                new_sl = mark_price - trailing_distance if position_side == "LONG" else mark_price + trailing_distance
+                                
+                                # Try to update SL using state manager (prevents backwards movement)
+                                success, reason = trailing_sl_state.update_sl(symbol, position_side, new_sl, entry_price)
+                                
+                                if success:
+                                    # Get the current SL from state (might be different than new_sl if rejected)
+                                    current_sl = trailing_sl_state.get_current_sl(symbol, position_side)
+                                    
+                                    # Place order on Binance
+                                    futures_cancel_all_orders(symbol)
+                                    close_side = "SELL" if position_side == "LONG" else "BUY"
+                                    
+                                    sl_order = futures_create_order(
+                                        symbol=symbol,
+                                        side=close_side,
+                                        type="STOP_MARKET",
+                                        quantity=abs(amt),
+                                        stopPrice=current_sl or new_sl,
+                                        reduceOnly=True,
+                                        positionSide=position_side
+                                    )
+                                    
+                                    profit_from_entry = ((current_sl or new_sl) - entry_price) / entry_price * 100 if position_side == "LONG" else (entry_price - (current_sl or new_sl)) / entry_price * 100
+                                    
+                                    logger.info(
+                                        f"📈 {symbol} {position_side}: Trailing SL @ {current_sl or new_sl:.8f} "
+                                        f"({profit_from_entry:+.2f}% from entry) | Mark={mark_price:.8f}"
+                                    )
+                                else:
+                                    logger.debug(f"⏸️ {symbol}: {reason}")
                         
                         except Exception as trail_err:
                             logger.error(f"❌ {symbol}: Trailing SL error: {trail_err}")
