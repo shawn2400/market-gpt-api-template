@@ -55,26 +55,28 @@ async def funding_bias_for_symbol(symbol: str) -> float:
     except Exception:
         return 0.0
 
-async def _fetch_real_indicators(symbol: str, interval: str = "15m", limit: int = 200) -> Dict[str, Any]:
+def _indicators_from_df(interval: str, df) -> Dict[str, Any]:
     """
-    🎯 LIVE BINANCE DATA - Fetch real klines and calculate all indicators
+    🎯 HELPER: Calculate all indicators from a DataFrame
+    
+    Args:
+        interval: Timeframe (e.g., "15m", "1h", "4h")
+        df: Pandas DataFrame with OHLCV data
+        
+    Returns:
+        Dict with all calculated indicators
     """
     try:
-        from utils.get_klines import get_klines
-        from utils.symbols import normalize_symbol
         from utils.indicators import rsi, adx, atr, macd, bollinger_bands, ema
         
-        # Fetch real klines from Binance (v3.0.0 - no caching, always fresh data)
-        df = await get_klines(symbol, interval=interval, limit=limit, market_type="futures")
-        
-        if df.empty or len(df) < 50:
-            LOGGER.warning(f"⚠️ {symbol}: Insufficient klines data ({len(df)} candles)")
+        if df is None or df.empty or len(df) < 50:
+            LOGGER.debug(f"⚠️ Insufficient data in DataFrame ({len(df) if df is not None else 0} candles)")
             return {}
         
         close = df["close"]
         price = float(close.iloc[-1])
         
-        # Calculate all indicators from REAL data
+        # Calculate all indicators from DataFrame
         rsi_val = rsi(close, period=14)
         adx_val = adx(df, period=14)
         atr_val = atr(df, period=14)
@@ -89,14 +91,14 @@ async def _fetch_real_indicators(symbol: str, interval: str = "15m", limit: int 
         # ATR as percentage of price
         atr_pct = (float(atr_val.iloc[-1]) / price * 100.0) if not atr_val.empty else 2.0
         
-        # 🎯 Calculate Bollinger Bands width percentage (critical for regime detection)
+        # Calculate Bollinger Bands width percentage (critical for regime detection)
         bb_upper_val = float(bb_upper.iloc[-1]) if not bb_upper.empty else price * 1.02
         bb_mid_val = float(bb_mid.iloc[-1]) if not bb_mid.empty else price
         bb_lower_val = float(bb_lower.iloc[-1]) if not bb_lower.empty else price * 0.98
         
         bb_width_pct = ((bb_upper_val - bb_lower_val) / bb_mid_val * 100.0) if bb_mid_val > 0 else 5.0
         
-        # 🎯 Calculate EMA slope (% change over last 10 periods) for trend strength
+        # Calculate EMA slope (% change over last 10 periods) for trend strength
         ema20_slope = 0.0
         ema50_slope = 0.0
         if len(ema20) >= 10:
@@ -109,7 +111,7 @@ async def _fetch_real_indicators(symbol: str, interval: str = "15m", limit: int 
             ema50_past = float(ema50.iloc[-10])
             ema50_slope = ((ema50_current - ema50_past) / ema50_past * 100.0) if ema50_past > 0 else 0.0
         
-        # 🎯 Calculate 24H high/low for AI Strategy Consensus
+        # Calculate 24H high/low for AI Strategy Consensus
         candles_24h = 96 if interval == "15m" else (24 if interval == "1h" else 6)
         recent_klines = df.tail(min(len(df), candles_24h))
         high_24h = float(recent_klines["high"].max()) if len(recent_klines) > 0 else price
@@ -139,16 +141,119 @@ async def _fetch_real_indicators(symbol: str, interval: str = "15m", limit: int 
             "volume_sma_20": round(float(volume_sma_20.iloc[-1]), 2) if not volume_sma_20.empty else 1000000
         }
         
-        LOGGER.info(
-            f"📊 LIVE Indicators [{symbol}]: "
-            f"RSI={indicators['rsi']:.1f}, ADX={indicators['adx']:.1f}, "
-            f"ATR={indicators['atr_percent']:.2f}%, MACD={indicators['macd']:.4f}"
-        )
+        return indicators
+        
+    except Exception as e:
+        LOGGER.error(f"❌ Failed to calculate indicators from DataFrame: {e}")
+        return {}
+
+async def _fetch_real_indicators(symbol: str, interval: str = "15m", limit: int = 200, df=None) -> Dict[str, Any]:
+    """
+    🎯 LIVE BINANCE DATA - Fetch real klines and calculate all indicators
+    
+    Args:
+        symbol: Trading symbol (e.g., BTCUSDT)
+        interval: Timeframe (e.g., "15m", "1h", "4h")
+        limit: Number of candles to fetch
+        df: Optional pre-fetched DataFrame (if provided, skips get_klines call)
+        
+    Returns:
+        Dict with all calculated indicators
+    """
+    try:
+        from utils.get_klines import get_klines
+        
+        # If DataFrame provided, use it directly; otherwise fetch from Binance
+        if df is None:
+            df = await get_klines(symbol, interval=interval, limit=limit, market_type="futures")
+        
+        if df is None or df.empty or len(df) < 50:
+            LOGGER.warning(f"⚠️ {symbol} [{interval}]: Insufficient klines data ({len(df) if df is not None else 0} candles)")
+            return {}
+        
+        # Use extracted helper function
+        indicators = _indicators_from_df(interval, df)
+        
+        if indicators:
+            LOGGER.info(
+                f"📊 LIVE Indicators [{symbol}] [{interval.upper()}]: "
+                f"RSI={indicators['rsi']:.1f}, ADX={indicators['adx']:.1f}, "
+                f"ATR={indicators['atr_percent']:.2f}%, MACD={indicators['macd']:.4f}"
+            )
         
         return indicators
         
     except Exception as e:
-        LOGGER.error(f"❌ Failed to fetch real indicators for {symbol}: {e}")
+        LOGGER.error(f"❌ Failed to fetch real indicators for {symbol} [{interval}]: {e}")
+        return {}
+
+async def _build_multi_tf_snapshot(symbol: str) -> Dict[str, Dict[str, Any]]:
+    """
+    🎯 MULTI-TIMEFRAME SNAPSHOT: Fetch and analyze 15M + 1H + 4H data
+    
+    Args:
+        symbol: Trading symbol (e.g., BTCUSDT)
+        
+    Returns:
+        Dict mapping timeframe -> indicators
+        Example: {"15m": {...}, "1h": {...}, "4h": {...}}
+    """
+    try:
+        # Get MultiTFContextManager instance
+        tf_manager = MultiTFContextManager()
+        
+        # Fetch all timeframes in parallel (optimized with caching)
+        intervals = ["15m", "1h", "4h"]
+        limit = 240  # Sufficient for all indicators across all timeframes
+        
+        LOGGER.info(f"🔄 Fetching multi-TF data for {symbol}: {intervals}")
+        
+        # Batch fetch all timeframes (single operation, parallelized internally)
+        multi_tf_data = await tf_manager.fetch_batch_multi_tf(
+            symbols=[symbol],
+            intervals=intervals,
+            limit=limit,
+            force_refresh=False  # Use cache when available
+        )
+        
+        # Extract data for this symbol
+        symbol_data = multi_tf_data.get(symbol.upper(), {})
+        
+        if not symbol_data:
+            LOGGER.warning(f"⚠️ No multi-TF data returned for {symbol}")
+            return {}
+        
+        # Calculate indicators for each timeframe
+        result = {}
+        for interval in intervals:
+            df = symbol_data.get(interval)
+            if df is not None and not df.empty:
+                indicators = _indicators_from_df(interval, df)
+                if indicators:
+                    result[interval] = indicators
+                    LOGGER.debug(
+                        f"✅ {symbol} [{interval.upper()}]: "
+                        f"Price={indicators.get('price', 0):.4f}, "
+                        f"RSI={indicators.get('rsi', 0):.1f}, "
+                        f"ADX={indicators.get('adx', 0):.1f}"
+                    )
+                else:
+                    LOGGER.warning(f"⚠️ {symbol} [{interval}]: Failed to calculate indicators")
+            else:
+                LOGGER.warning(f"⚠️ {symbol} [{interval}]: No DataFrame available")
+        
+        if result:
+            LOGGER.info(
+                f"✅ Multi-TF snapshot built for {symbol}: "
+                f"{len(result)}/{len(intervals)} timeframes ready"
+            )
+        else:
+            LOGGER.warning(f"⚠️ {symbol}: No valid timeframe data in multi-TF snapshot")
+        
+        return result
+        
+    except Exception as e:
+        LOGGER.error(f"❌ Failed to build multi-TF snapshot for {symbol}: {e}", exc_info=True)
         return {}
 
 # Liquidity gate — אם אין פונקציה ייעודית, נשתמש בהערכת סליפג' בסיסית
@@ -1695,64 +1800,104 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
     price = ctx.get("price") if ctx else None
     flags = (ctx.get("filters") or {}) if ctx else {}
     
-    # 🎯 Add EMA alignment and BTC correlation to flags for dynamic GRID side selection
+    # 🎯 MULTI-TF GRID SIDE SELECTION: Use 1H+4H trend (not 15M EMA)
     flags = dict(flags)  # Make copy to avoid mutating original
     
-    # Calculate EMA alignment from context indicators
-    ema_20 = ctx.get("ema_20") or ctx.get("ema21")
-    ema_50 = ctx.get("ema_50") or ctx.get("ema50")
+    # Extract multi-TF trend analysis from context (set by handle_symbol)
+    tf_trend = ctx.get("tf_trend", "NEUTRAL")
+    tf_alignment = ctx.get("tf_alignment", "WEAK")
+    tf_confidence = ctx.get("tf_confidence", 0.0)
+    multi_tf_data = ctx.get("multi_tf", {})
     
-    # If EMA data missing, fetch real indicators (fallback when Context API unavailable)
-    if not (ema_20 and ema_50):
-        try:
-            indicators = await _fetch_real_indicators(symbol, interval=DEFAULT_INTERVAL)
-            ema_20 = indicators.get("ema_20")
-            ema_50 = indicators.get("ema_50")
-            # Update context with fetched indicators for other uses
-            ctx.update(indicators)
-        except Exception as e:
-            LOGGER.debug(f"Failed to fetch real indicators for {symbol}: {e}")
+    # Determine GRID bias from multi-TF trend (4H=50%, 1H=30%, 15M=20%)
+    # LONG if 1H+4H both bullish, SHORT if both bearish, NEUTRAL if conflicting
+    grid_bias = tf_trend  # Will be "LONG", "SHORT", or "NEUTRAL"
     
-    if ema_20 and ema_50:
-        flags["ema_bullish"] = ema_20 > ema_50
-        flags["ema_bearish"] = ema_20 < ema_50
+    # Check if we have valid multi-TF data
+    if multi_tf_data and len(multi_tf_data) >= 2:
+        # Analyze 1H and 4H specifically for GRID direction
+        tf_1h = multi_tf_data.get("1h", {})
+        tf_4h = multi_tf_data.get("4h", {})
+        
+        # GRID criteria: Both 1H and 4H must agree (price > EMA20 and positive MACD)
+        h1_bullish = False
+        h4_bullish = False
+        h1_bearish = False
+        h4_bearish = False
+        
+        if tf_1h:
+            price_1h = tf_1h.get("close", 0)
+            ema20_1h = tf_1h.get("ema_20", 0)
+            macd_1h = tf_1h.get("macd", 0)
+            h1_bullish = price_1h > ema20_1h and macd_1h > 0
+            h1_bearish = price_1h < ema20_1h and macd_1h < 0
+        
+        if tf_4h:
+            price_4h = tf_4h.get("close", 0)
+            ema20_4h = tf_4h.get("ema_20", 0)
+            macd_4h = tf_4h.get("macd", 0)
+            h4_bullish = price_4h > ema20_4h and macd_4h > 0
+            h4_bearish = price_4h < ema20_4h and macd_4h < 0
+        
+        # GRID Side Logic (strict criteria - both TFs must agree)
+        if h1_bullish and h4_bullish:
+            grid_bias = "LONG"
+            LOGGER.info(f"✅ [{symbol}] GRID LONG: 1H+4H both bullish (price>EMA20, MACD>0)")
+        elif h1_bearish and h4_bearish:
+            grid_bias = "SHORT"
+            LOGGER.info(f"✅ [{symbol}] GRID SHORT: 1H+4H both bearish (price<EMA20, MACD<0)")
+        else:
+            grid_bias = "NEUTRAL"
+            LOGGER.info(
+                f"⚠️ [{symbol}] GRID NEUTRAL: 1H+4H conflicting "
+                f"(1H={'bullish' if h1_bullish else 'bearish'}, "
+                f"4H={'bullish' if h4_bullish else 'bearish'}) - skipping GRID"
+            )
+        
+        # Override flags with multi-TF decision
+        flags["grid_bias"] = grid_bias
+        flags["ema_bullish"] = (grid_bias == "LONG")
+        flags["ema_bearish"] = (grid_bias == "SHORT")
+    else:
+        # Fallback to single-TF if multi-TF unavailable (maintain backward compatibility)
+        LOGGER.warning(f"⚠️ [{symbol}] Multi-TF data unavailable, using 15M EMA fallback")
+        
+        ema_20 = ctx.get("ema_20") or ctx.get("ema21")
+        ema_50 = ctx.get("ema_50") or ctx.get("ema50")
+        
+        # Fetch real indicators if missing
+        if not (ema_20 and ema_50):
+            try:
+                indicators = await _fetch_real_indicators(symbol, interval=DEFAULT_INTERVAL)
+                ema_20 = indicators.get("ema_20")
+                ema_50 = indicators.get("ema_50")
+                ctx.update(indicators)
+            except Exception as e:
+                LOGGER.debug(f"Failed to fetch real indicators for {symbol}: {e}")
+        
+        if ema_20 and ema_50:
+            flags["ema_bullish"] = ema_20 > ema_50
+            flags["ema_bearish"] = ema_20 < ema_50
+            grid_bias = "LONG" if ema_20 > ema_50 else "SHORT"
+        else:
+            grid_bias = "NEUTRAL"
     
-    # Get BTC correlation for altcoins (from BTC context if available)
-    if symbol != "BTCUSDT":
-        # Try to get BTC EMA data
-        try:
-            btc_ctx = await _fetch_context_batch(["BTCUSDT"], interval=DEFAULT_INTERVAL)
-            btc_data = btc_ctx.get("BTCUSDT", {})
-            btc_ema_20 = btc_data.get("ema_20") or btc_data.get("ema21")
-            btc_ema_50 = btc_data.get("ema_50") or btc_data.get("ema50")
-            
-            # If BTC EMA missing, fetch real indicators
-            if not (btc_ema_20 and btc_ema_50):
-                try:
-                    btc_indicators = await _fetch_real_indicators("BTCUSDT", interval=DEFAULT_INTERVAL)
-                    btc_ema_20 = btc_indicators.get("ema_20")
-                    btc_ema_50 = btc_indicators.get("ema_50")
-                except Exception as e2:
-                    LOGGER.debug(f"Failed to fetch BTC real indicators: {e2}")
-            
-            if btc_ema_20 and btc_ema_50:
-                flags["btc_bullish"] = btc_ema_20 > btc_ema_50
-                flags["btc_bearish"] = btc_ema_20 < btc_ema_50
-        except Exception as e:
-            LOGGER.debug(f"Failed to fetch BTC correlation data: {e}")
+    # Skip GRID if trend is NEUTRAL (conflicting timeframes)
+    if grid_bias == "NEUTRAL":
+        LOGGER.info(f"propose_grid SKIPPED {symbol}: NEUTRAL multi-TF trend (no clear direction)")
+        return None
     
     plan = build_grid_plan(symbol=symbol, price=price, flags=flags, budget_usd=_calc_grid_budget(symbol, ctx))
     if not plan:
         LOGGER.info(f"propose_grid REJECTED {symbol}: build_grid_plan returned None (no range)")
         return None
     
-    # Log dynamic GRID side selection
-    grid_side = plan.get("grid_side", "LONG")
-    ema_status = "bullish" if flags.get("ema_bullish") else ("bearish" if flags.get("ema_bearish") else "neutral")
-    btc_status = "bullish" if flags.get("btc_bullish") else ("bearish" if flags.get("btc_bearish") else "neutral")
+    # 🎯 GRID Side Selection - Log multi-TF decision
+    grid_side = plan.get("grid_side", grid_bias)
     LOGGER.info(
-        f"🎯 GRID Side Selection: {symbol} → {grid_side} "
-        f"(EMA: {ema_status}, BTC: {btc_status})"
+        f"🎯 GRID Side Selection [{symbol}]: {grid_side} | "
+        f"Multi-TF: {tf_trend} (Alignment={tf_alignment}, Confidence={tf_confidence:.1f}%) | "
+        f"Decision: {'1H+4H both bullish' if grid_bias == 'LONG' else '1H+4H both bearish' if grid_bias == 'SHORT' else 'conflicting'}"
     )
 
     # 💰 DYNAMIC SIZING ENGINE: Calculate exact leverage and budget for GRID
@@ -2478,6 +2623,49 @@ async def process_cycle():
     async def handle_symbol(sym: str):
         ctx = ctx_map.get(sym) or {}
         success_floor = SUCCESS_PCT_MIN
+        
+        # 🎯 MULTI-TIMEFRAME ANALYSIS: Fetch 15M + 1H + 4H data
+        try:
+            LOGGER.info(f"🔄 [{sym}] Building multi-TF snapshot (15M+1H+4H)...")
+            multi_tf_data = await _build_multi_tf_snapshot(sym)
+            
+            if multi_tf_data and len(multi_tf_data) >= 2:
+                # Store in context for downstream use
+                ctx["multi_tf"] = multi_tf_data
+                
+                # Analyze weighted multi-TF trend
+                tf_analysis = analyze_multi_tf_weighted(multi_tf_data)
+                ctx["tf_trend"] = tf_analysis.trend_direction
+                ctx["tf_alignment"] = tf_analysis.alignment_status
+                ctx["tf_confidence"] = tf_analysis.weighted_confidence
+                
+                LOGGER.info(
+                    f"✅ [{sym}] Multi-TF Analysis: "
+                    f"Trend={tf_analysis.trend_direction}, "
+                    f"Alignment={tf_analysis.alignment_status}, "
+                    f"Confidence={tf_analysis.weighted_confidence:.1f}%, "
+                    f"Dominant={tf_analysis.dominant_timeframe.upper()}"
+                )
+                
+                # Store TF snapshots in database
+                try:
+                    for interval, indicators in multi_tf_data.items():
+                        insert_tf_snapshot({
+                            "symbol": sym,
+                            "interval": interval,
+                            "timestamp": time.time(),
+                            "indicators": indicators,
+                            "alignment_status": tf_analysis.alignment_status
+                        })
+                except Exception as e:
+                    LOGGER.debug(f"Failed to save TF snapshot: {e}")
+            else:
+                LOGGER.warning(
+                    f"⚠️ [{sym}] Multi-TF snapshot incomplete "
+                    f"({len(multi_tf_data)}/3 timeframes) - proceeding with single TF"
+                )
+        except Exception as e:
+            LOGGER.warning(f"⚠️ [{sym}] Multi-TF analysis failed: {e}, proceeding with single TF")
         
         # 🎯 MARKET INTELLIGENCE: Analyze market conditions (no AI call yet!)
         try:

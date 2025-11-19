@@ -231,25 +231,18 @@ async def run_order_hygiene_cleanup() -> None:
     logger.info("🧹 Running order hygiene cleanup...")
     
     try:
-        # Import cleanup logic from worker
-        import sys
-        worker_path = os.path.join(os.path.dirname(__file__), "order_hygiene_worker.py")
+        # Import cleanup logic from utils (not workers)
+        from utils.order_hygiene import get_orphaned_orders, cleanup_orphaned_orders
         
-        # Import functions dynamically
-        spec = __import__("importlib.util").util.spec_from_file_location("order_hygiene_worker", worker_path)
-        if spec and spec.loader:
-            module = __import__("importlib.util").util.module_from_spec(spec)
-            spec.loader.exec_module(module)
-            
-            # Run cleanup
-            orphaned = module.get_orphaned_orders()
-            if orphaned:
-                total = sum(len(orders) for orders in orphaned.values())
-                logger.warning(f"🚨 Found {total} orphaned order(s) across {len(orphaned)} symbol(s)")
-                result = await module.cleanup_orphaned_orders(orphaned)
-                logger.info(f"✅ Hygiene cleanup: {result['cancelled']} cancelled, {result['failed']} failed")
-            else:
-                logger.debug("✅ No orphaned orders found")
+        # Run cleanup
+        orphaned = await get_orphaned_orders()
+        if orphaned:
+            total = sum(len(orders) for orders in orphaned.values())
+            logger.warning(f"🚨 Found {total} orphaned order(s) across {len(orphaned)} symbol(s)")
+            result = await cleanup_orphaned_orders(orphaned)
+            logger.info(f"✅ Hygiene cleanup: {result['cancelled']} cancelled, {result['failed']} failed")
+        else:
+            logger.debug("✅ No orphaned orders found")
     
     except Exception as e:
         logger.error(f"❌ Order hygiene cleanup failed: {e}", exc_info=True)

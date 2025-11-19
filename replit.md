@@ -4,12 +4,14 @@
 AlgoGPT is an autonomous algorithmic trading platform for 24/7 Binance Futures, leveraging AI (DeepSeek Chat) to analyze 534 symbols and execute intelligent trades. It integrates 7 trading strategies, dynamic capital management, and aims for 4-10 high-quality daily trades. The platform features a MetaBrain v9.1 that eliminates hardcoded logic, with all trade parameters determined by AI. It includes intelligent brain management, auto-suspend/resume for failed providers, automatic Hedge Mode activation, and is designed for scalability and autonomous operation with a self-adaptive engine and complete data persistence.
 
 **Recent Critical Updates (November 2025):**
+- **Multi-Timeframe Analysis System (Nov 19)**: Complete 15M+1H+4H multi-timeframe analysis with weighted trend detection (4H:50%, 1H:30%, 15M:20%). Fixes SHORT-only bias by validating higher timeframe trends before GRID entries. LONG trades now possible when 1H+4H bullish.
+- **GRID Side Selection v2.0 (Nov 19)**: Uses 1H+4H trend consensus instead of 15M-only EMA analysis. LONG requires both 1H+4H bullish (price>EMA20, MACD>0), SHORT requires both bearish. Eliminates false signals from 15M noise.
+- **BanShield v2.1 (Nov 19)**: Relaxed RPM limits from 25→45 req/min, red zone 25→42 to prevent futures_account blocking. Zones now: Green<30, Yellow<38, Red<42 (previously Green<18, Yellow<22, Red<25).
+- **Insurance Monitor Extension (Nov 19)**: MAX_LOSS_CAP increased 2%→5% to allow longer trade holding times and reduce premature exits on valid setups aligned with higher timeframes.
+- **Order Hygiene Path Fix (Nov 19)**: Corrected import path from workers/order_hygiene_worker.py → utils/order_hygiene.py to eliminate FileNotFoundError crashes.
 - **Multi-Target TP System v2.0 (Nov 19)**: Complete 3-level Take Profit implementation (TP1/TP2/TP3) with dynamic exit percentages (25/40/35 default, adapts to volatility/regime). BinanceSymbolValidator integration ensures precision compliance. ExecutionBot auto-attaches to all new positions, Position Monitor Layer 0 backfills existing positions. Verified working in production.
 - **Hedge Mode Precision Fix (Nov 19)**: Resolved "Parameter 'reduceonly' sent when not required" error by removing reduceOnly flag in Hedge Mode. Fixed quantity/price rounding using BinanceSymbolValidator.round_quantity() and round_price() for exact stepSize/tickSize compliance.
 - **Telegram Stage Commands (Nov 19)**: Full Stage Engine control via Telegram: /stage_status (status & health), /stage_promote (manual promotion), /stage_freeze (emergency stop), /stage_unfreeze (resume), /stage_logs (history).
-- **Stage Engine System (MetaBrain v9.1)**: 3-stage auto-deployment with 100% dynamic automatic trading, health monitoring, auto-promotion, and Stage-aware approval bypass in ExecutionBot (10-12h to full automation).
-- **Trailing TP Early Exit Fix**: Activation threshold 25%→50%, trailing distance 15%→10% to allow TP2/TP3 execution (45% exit percentages).
-- **ExecutionBot Stage Integration**: Auto-bypass approvals when enable_auto_trading=True, enabling 100% automatic trading in all stages with auto-trading enabled.
 - **Auto-Ban-Shield v2.0**: Production-ready dynamic rate limiting system with 3-tier priority (CRITICAL/NORMAL/LOW), background event loop for async/sync compatibility, complete coverage of all Binance REST endpoints including fallbacks, preventing IP bans while maintaining trading performance.
 - **Emergency Kill-Switch**: Instant shutdown system with WebSocket-only mode for ban recovery, automated via GitHub-to-Render deployment.
 - **Production PYTHONPATH Fix**: Resolved "No module named 'utils'" errors in Render deployment with proper Docker environment configuration.
@@ -28,7 +30,7 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 **Core Features:**
 -   **Automated Trading Modes**: Supports MARKET, HYBRID, and FULL AUTO execution.
 -   **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, and ATR-based trailing stops.
--   **Market Scanner**: Autonomous multi-timeframe technical analysis across Binance Futures.
+-   **Market Scanner**: Autonomous multi-timeframe (15M+1H+4H) technical analysis across Binance Futures with weighted trend detection.
 -   **AI-Powered Proposals**: Uses DeepSeek Chat for trade decisions with adaptive Risk/Reward, intelligent brain management, and dynamic quality threshold enforcement.
 -   **GRID Trading**: Integrated FUTURES GRID trading with dynamic symbol selection, tiered strategies, dynamic sizing, and automatic SL/TP protection.
 -   **Risk Management**: Includes quality filters, dynamic filters, liquidity checks, cooldowns, daily trade caps, and a circuit breaker.
