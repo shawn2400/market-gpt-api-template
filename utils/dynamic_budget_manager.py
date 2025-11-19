@@ -245,7 +245,7 @@ class DynamicBudgetManager:
                 trade_quality=quality_score,
                 symbol="BTCUSDT",  # Fallback symbol (actual symbol from trade context)
                 atr_pct=volatility_atr_pct / 100.0,  # Convert to decimal
-                current_price=None  # Not needed for leverage calculation
+                current_price=50000.0  # Fallback price (not critical for leverage calc)
             )
             
             return int(leverage)

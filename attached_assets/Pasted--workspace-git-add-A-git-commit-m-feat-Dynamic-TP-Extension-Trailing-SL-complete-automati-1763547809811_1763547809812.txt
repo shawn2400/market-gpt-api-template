@@ -1,0 +1,52 @@
+~/workspace$ git add -A
+git commit -m "feat: Dynamic TP Extension + Trailing SL - complete automation
+
+- Add extend_tp_levels() to multi_target_tp.py for TP4/TP5/TP6 generation
+- Add _check_and_extend_tp() to fills_watcher.py for auto TP extension
+- Add _update_trailing_sl() for synchronized dynamic trailing SL
+- Support all trade types: MARKET/HYBRID/GRID
+- Read all 3 TPs (TP1/TP2/TP3) from DB for extension
+- ATR-based dynamic spacing (120-150% multipliers)
+- Volatility-based trailing distance (2-5%)
+- Progressive SL tightening at TP3/TP4 (80%/60%)
+- Telegram notifications for all updates
+- 30-second throttle to prevent API spam
+- Full precision with BinanceSymbolValidator"
+
+git push origin main
+[main d5d6842] feat: Dynamic TP Extension + Trailing SL - complete automation
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ git add -A
+git commit -m "feat: 100% Dynamic Leverage across all trade types (2-35x)
+
+- Increase PrecisionCalculator MAX_LEVERAGE from 10x to 35x
+- DynamicBudgetManager now uses DynamicLeverageCalculator
+- Grid Executor calculates dynamic leverage (was hardcoded 10x)
+- All trade types (MARKET/HYBRID/GRID) use unified dynamic system
+- No hardcoded leverage values remaining
+- Multi-factor confidence scoring (Quality/Market/Tier/WinRate/ATR)
+- Real-time adaptation to market conditions"
+
+git push origin main
+On branch main
+Your branch is ahead of 'origin/main' by 2 commits.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ 
