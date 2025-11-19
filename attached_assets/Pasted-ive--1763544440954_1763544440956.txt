@@ -1,0 +1,45 @@
+ive 🎉
+     ==> 
+     ==> ///////////////////////////////////////////////////////////
+     ==> 
+     ==> Available at your primary URL https://algogpt-trading-vm.onrender.com
+     ==> 
+     ==> ///////////////////////////////////////////////////////////
+[2025-11-19 10:39:01 +0200] [7] [INFO] Handling signal: term
+[2025-11-19 10:39:01 +0200] [10] [INFO] Shutting down
+[2025-11-19 10:39:01 +0200] [10] [INFO] Error while closing socket [Errno 9] Bad file descriptor
+[2025-11-19 10:39:01 +0200] [10] [INFO] Waiting for application shutdown.
+[2025-11-19 10:39:01 +0200] [10] [INFO] Application shutdown complete.
+[2025-11-19 10:39:01 +0200] [10] [INFO] Finished server process [10]
+[2025-11-19 10:39:01 +0200] [7] [ERROR] Worker (pid:10) was sent SIGTERM!
+[2025-11-19 10:39:01 +0200] [7] [INFO] Shutting down: Master
+     ==> Detected service running on port 10000
+     ==> Docs on specifying a port: https://render.com/docs/web-services#port-binding
+     ==> Deploying...
+[2025-11-19 10:48:52 +0200] [7] [INFO] Starting gunicorn 22.0.0
+[2025-11-19 10:48:52 +0200] [7] [INFO] Listening at: http://0.0.0.0:10000 (7)
+[2025-11-19 10:48:52 +0200] [7] [INFO] Using worker: uvicorn.workers.UvicornWorker
+[2025-11-19 10:48:52 +0200] [10] [INFO] Booting worker with pid: 10
+INFO:algogpt.auth:{'event': 'auth.tokens_loaded', 'allow_all': False, 'count': 2, 'tokens': ['V8…', 'rn…']}
+INFO:algogpt.redis:{'event': 'redis.connected', 'url': 'redis://redis-10327.c269.eu-west-1-3.ec2.cloud.redislabs.com:10327'}
+WARNING:algogpt.main:Failed to load debug_sig routes: cannot import name '_canon' from 'utils.anti_replay' (unknown location)
+[2025-11-19 10:48:55 +0200] [10] [INFO] Started server process [10]
+[2025-11-19 10:48:55 +0200] [10] [INFO] Waiting for application startup.
+[2025-11-19 10:48:55 +0200] [10] [INFO] Application startup complete.
+     ==> Your service is live 🎉
+     ==> 
+     ==> ///////////////////////////////////////////////////////////
+     ==> 
+     ==> Available at your primary URL https://algogpt-trading-vm.onrender.com
+     ==> 
+     ==> ///////////////////////////////////////////////////////////
+[2025-11-19 10:49:59 +0200] [6] [INFO] Handling signal: term
+[2025-11-19 10:49:59 +0200] [9] [INFO] Shutting down
+[2025-11-19 10:49:59 +0200] [9] [INFO] Error while closing socket [Errno 9] Bad file descriptor
+[2025-11-19 10:49:59 +0200] [9] [INFO] Waiting for application shutdown.
+[2025-11-19 10:49:59 +0200] [9] [INFO] Application shutdown complete.
+[2025-11-19 10:49:59 +0200] [9] [INFO] Finished server process [9]
+[2025-11-19 10:49:59 +0200] [6] [ERROR] Worker (pid:9) was sent SIGTERM!
+[2025-11-19 10:49:59 +0200] [6] [INFO] Shutting down: Master
+     ==> Detected service running on port 10000
+     ==> Docs on specifying a port: https://rende
