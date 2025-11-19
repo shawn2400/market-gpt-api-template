@@ -1,12 +1,11 @@
-# AlgoGPT - Render.com Reserved VM Configuration
-# Full Auto-Trading Mode (No Telegram Approval)
+# AlgoGPT - Full Auto-Trading (No Approval, Production Mode)
 
 services:
   - type: pserv
     name: algogpt-trading-vm
     env: docker
     region: frankfurt
-    plan: standard       # 2GB RAM
+    plan: standard
     dockerfilePath: ./Dockerfile
     dockerContext: .
     envVars:
@@ -19,7 +18,7 @@ services:
       - key: TZ
         value: Asia/Jerusalem
 
-      # ===== API Keys (Set only in Render dashboard) =====
+      # API Keys
       - key: BINANCE_API_KEY
         sync: false
       - key: BINANCE_API_SECRET
@@ -28,45 +27,34 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
-      - key: TELEGRAM_ADMIN_IDS
-        sync: false
-
       - key: OPENAI_API_KEY
         sync: false
       - key: DEEPSEEK_API_KEY
         sync: false
-      - key: ANTHROPIC_API_KEY
-        sync: false
-      - key: GEMINI_API_KEY
-        sync: false
-      - key: XAI_API_KEY
-        sync: false
 
-      # ===== Database / Redis =====
+      # Redis / DB
       - key: DATABASE_URL
         sync: false
       - key: REDIS_URL
         sync: false
 
-      # ===== Webhooks =====
-      - key: N8N_WEBHOOK_SECRET
-        sync: false
+      # -------------------------------------------------------
+      # Trading Engine - Full Automatic Mode
+      # -------------------------------------------------------
 
-      # ======================================================
-      # Trading System – Full Auto Mode
-      # ======================================================
-
-      # Auto-trading ON
+      # Autopilot ON
       - key: ENABLE_AUTO_TRADING
         value: 1
       - key: AUTO_RUN
         value: 1
 
-      # Full automation (NO TELEGRAM APPROVAL)
-      - key: REQUIRE_APPROVAL
+      # No Telegram Approval
+      - key: ENABLE_TELEGRAM_APPROVAL
         value: 0
-      - key: TELEGRAM_SEND_ENABLE
-        value: 1
+      - key: APPROVAL_MODE
+        value: none
+      - key: CONFIRM_STORE_ENABLE
+        value: 0
 
       # Auto-management
       - key: ALLOW_MANAGE_OPEN_TRADES
@@ -78,13 +66,13 @@ services:
       - key: ENABLE_INSURANCE_MONITOR
         value: 1
 
-      # Dynamic Quality Score
+      # Quality Score Dynamic
       - key: MIN_QUALITY_SCORE
         value: 5.5
-      - key: QUALITY_SCORE_DYNAMIC_ENABLE
+      - key: QUALITY_DYN_ENABLED
         value: 1
 
-      # Budget
+      # Budgets
       - key: MIN_BUDGET_USD
         value: 25
       - key: MAX_BUDGET_USD
@@ -97,6 +85,32 @@ services:
         value: 1
       - key: STREAM_TP_BE
         value: true
+      - key: USER_STREAM_RECONNECT
+        value: 1
+      - key: WEBSOCKET_BUFFER
+        value: 200
+
+      # SL/TP & Smart Management
+      - key: TP_MODE
+        value: hybrid
+      - key: SL_MODE
+        value: atr
+      - key: ATR_MULTIPLIER
+        value: 1.4
+      - key: TRAILING_SL_ENABLE
+        value: 1
+      - key: BREAKEVEN_ENABLE
+        value: 1
+      - key: DYNAMIC_TP_ENABLE
+        value: 1
+
+      # Safe Limits
+      - key: CIRCUIT_BREAKER_ENABLE
+        value: 1
+
+      # Fallback symbols (Avoid scan errors)
+      - key: FALLBACK_SYMBOLS
+        value: "BTCUSDT,ETHUSDT,BNBUSDT,SOLUSDT,XRPUSDT"
 
       # Intervals
       - key: HEALTH_CHECK_INTERVAL
@@ -112,21 +126,13 @@ services:
       - key: FILLS_WATCH_ENABLE
         value: 1
 
-      # SL/TP & Management
-      - key: TP_MODE
-        value: hybrid
-      - key: SL_MODE
-        value: atr
-      - key: ATR_MULTIPLIER
-        value: 1.4
-
-      # Emergency (OFF)
+      # Emergency
       - key: EMERGENCY_KILL_SWITCH
         value: 0
       - key: SAFE_BOOT_MODE
         value: 0
 
-      # BAN shield – keep ON (safe)
+      # BAN Shield
       - key: BAN_SHIELD_ENABLE
         value: 1
       - key: BAN_SHIELD_MAX_RPM
