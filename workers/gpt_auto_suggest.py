@@ -2690,6 +2690,53 @@ async def process_cycle():
             payload["consensus_score"] = consensus_result["final_score"]
             payload["consensus_votes"] = f"{consensus_result['approve_count']}/3"
             
+            # 📊 AI PERFORMANCE TRACKING: Log prediction for all strategies (MEAN_REVERSION, GRID, FUTURES)
+            try:
+                # Extract market regime (from ctx or payload)
+                regime_str = "UNKNOWN"
+                if ctx:
+                    market_condition = ctx.get("_market_condition")
+                    if market_condition and hasattr(market_condition, 'regime'):
+                        regime_str = market_condition.regime.upper()
+                    else:
+                        regime_str = ctx.get("filters", {}).get("regime", "UNKNOWN")
+                
+                if regime_str not in ("TRENDING", "RANGING", "VOLATILE", "UNKNOWN"):
+                    regime_str = "UNKNOWN"
+                regime: MarketRegime = regime_str  # type: ignore
+                
+                # Build features dict for tracking
+                features = {
+                    "rr": payload.get("rr"),
+                    "quality_score": payload.get("quality_score", final_score),
+                    "atr": ctx.get("atr") if ctx else None,
+                    "rsi": ctx.get("filters", {}).get("rsi") if ctx else None,
+                    "adx": ctx.get("filters", {}).get("adx") if ctx else None,
+                    "price": payload.get("entry"),
+                    "leverage": payload.get("leverage", 1),
+                }
+                
+                # Log prediction with ai_tracker (links to AI consensus metadata)
+                prediction_id = log_prediction(
+                    symbol=symbol,
+                    ai_model="gpt5",  # Multi-AI consensus (3 brains)
+                    confidence=float(payload.get("success_pct") or consensus_result["final_score"]*10) / 100.0,
+                    prediction=payload,
+                    regime=regime,
+                    features=features
+                )
+                
+                # Add to payload for /alerts/ingest schema compliance
+                payload["prediction_id"] = prediction_id
+                
+            except Exception as e:
+                LOGGER.warning(f"Failed to log AI prediction for {symbol} ({ttype}): {e}")
+                payload["prediction_id"] = ""
+            
+            # Ensure quality_score exists (fallback to consensus_score)
+            if "quality_score" not in payload or payload["quality_score"] is None:
+                payload["quality_score"] = final_score
+            
             LOGGER.info(f"✅ APPROVED by AI consensus: {symbol} ({ttype}) - {consensus_result['approve_count']}/3 votes, score={final_score:.1f}/10")
             
         except Exception as e:
