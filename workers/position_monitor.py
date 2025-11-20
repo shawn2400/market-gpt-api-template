@@ -766,6 +766,86 @@ async def ensure_positions_protected() -> None:
                     else:
                         logger.debug(f"⚠️ {symbol}: ATR=0, skipping dynamic SL")
                     
+                    # 🎯 LAYER 5: DYNAMIC TP UPDATE (MetaBrain v9.1 - Real-time TP Adjustment)
+                    # Update TP orders every 30s based on price movement and volatility
+                    try:
+                        from utils.multi_target_tp import MultiTargetTP
+                        from utils.binance_client import get_all_orders, futures_cancel_order
+                        
+                        mttp = MultiTargetTP()
+                        
+                        # Get current TP orders
+                        all_orders = get_all_orders(symbol) or []
+                        tp_orders = [
+                            o for o in all_orders
+                            if o.get("type") in ("TAKE_PROFIT", "TAKE_PROFIT_MARKET") or
+                               (o.get("type") == "LIMIT" and o.get("reduceOnly") == True)
+                        ]
+                        
+                        if tp_orders and atr > 0:
+                            # Recalculate TP levels based on current price
+                            pnl_pct = ((mark_price - entry_price) / entry_price * 100) if position_side == "LONG" else ((entry_price - mark_price) / entry_price * 100)
+                            
+                            # Skip update if position just opened (within 60s)
+                            if not risk_manager.is_within_hold_period(symbol):
+                                # Calculate new TP based on current market conditions
+                                tp_config = mttp.calculate_tp_levels(
+                                    entry_price=entry_price,
+                                    stop_loss=protected_sl,
+                                    strategy="grid",
+                                    volatility=volatility,
+                                    regime="neutral",
+                                    side=position_side
+                                )
+                                
+                                if tp_config and "targets" in tp_config and len(tp_config["targets"]) >= 3:
+                                    new_tp_prices = [t["price"] for t in tp_config["targets"][:3]]
+                                    old_tp_prices = [float(o.get("stopPrice", 0)) for o in tp_orders[:3]]
+                                    
+                                    # Check if TP prices changed significantly (> 0.01%)
+                                    prices_changed = any(
+                                        abs(new - old) / old > 0.0001 if old > 0 else True
+                                        for new, old in zip(new_tp_prices, old_tp_prices)
+                                    )
+                                    
+                                    if prices_changed:
+                                        try:
+                                            # Cancel old TP orders
+                                            for tp_order in tp_orders[:3]:
+                                                try:
+                                                    futures_cancel_order(symbol, tp_order.get("orderId"))
+                                                except:
+                                                    pass  # Order may already be filled
+                                            
+                                            # Place new TP orders
+                                            exit_side = "SELL" if position_side == "LONG" else "BUY"
+                                            for idx, tp_price in enumerate(new_tp_prices):
+                                                try:
+                                                    tp_qty = abs(amt) * tp_config["targets"][idx]["exit_percent"]
+                                                    
+                                                    if tp_qty > 0:
+                                                        futures_create_order(
+                                                            symbol=symbol,
+                                                            side=exit_side,
+                                                            type="TAKE_PROFIT_MARKET",
+                                                            quantity=tp_qty,
+                                                            stopPrice=tp_price,
+                                                            reduceOnly=True,
+                                                            positionSide=position_side
+                                                        )
+                                                except Exception as tp_place_err:
+                                                    logger.warning(f"⚠️ {symbol}: Failed to place TP{idx+1}: {tp_place_err}")
+                                            
+                                            logger.info(
+                                                f"🎯 {symbol}: Dynamic TP updated | "
+                                                f"TP1={new_tp_prices[0]:.8f}, TP2={new_tp_prices[1]:.8f}, TP3={new_tp_prices[2]:.8f} | "
+                                                f"PnL={pnl_pct:+.2f}%, Vol={volatility*100:.1f}%"
+                                            )
+                                        except Exception as tp_update_err:
+                                            logger.warning(f"⚠️ {symbol}: Dynamic TP update failed: {tp_update_err}")
+                    except Exception as dtp_err:
+                        logger.debug(f"⚠️ {symbol}: Dynamic TP check skipped: {dtp_err}")
+                    
                 except Exception as risk_err:
                     logger.error(f"❌ {symbol}: Risk Manager error: {risk_err}", exc_info=True)
         
