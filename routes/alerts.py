@@ -325,7 +325,7 @@ def _to_float(x):
 @router.post("/alerts/ingest")
 async def alerts_ingest(
     req: IngestReq = Body(...),
-    request: Request = None,
+    request: Request,
     x_api_key: Optional[str] = Header(None, alias="x-api-key"),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
@@ -342,7 +342,7 @@ async def alerts_ingest(
     # HMAC אופציונלי (לפי גוף המקורי)
     raw_body = b""
     with suppress(Exception):
-        raw_body = await request.body() if request else json.dumps(req.dict()).encode("utf-8")
+        raw_body = await request.body()
     if DEBUG_HMAC and INGEST_SEC:
         ok, why = _hmac_check("/alerts/ingest", raw_body, x_timestamp, x_nonce, x_signature)
         if not ok:
@@ -416,26 +416,9 @@ async def alerts_ingest(
         smart_lev = base_lev
         smart_budget = float(req.budget_usd or 0)
     
-    # קרא את מצב האישור מהמסד נתונים (או ENV כברירת מחדל)
-    require_approval_default = True
-    try:
-        import psycopg2
-        DATABASE_URL = os.getenv("DATABASE_URL")
-        if DATABASE_URL:
-            conn = psycopg2.connect(DATABASE_URL)
-            with conn.cursor() as cur:
-                cur.execute("SELECT value FROM system_settings WHERE key = 'approval_mode'")
-                row = cur.fetchone()
-                if row:
-                    require_approval_default = str(row[0]).lower() in ("true", "1", "yes", "on")
-                    logger.info(f"[APPROVAL MODE] DB value: {row[0]}, require_approval_default={require_approval_default}")
-            conn.close()
-        else:
-            raise Exception("DATABASE_URL not set")
-    except Exception as e:
-        # אם אין מסד נתונים או שגיאה - קרא מ-ENV
-        require_approval_default = os.getenv("APPROVAL_ENABLED", "0").lower() in ("1", "true", "yes", "on")
-        logger.info(f"[APPROVAL MODE] DB read failed ({e}), using ENV: require_approval_default={require_approval_default}")
+    # קרא את מצב האישור מ-ENV (פשוט וקל יותר מאשר DB)
+    require_approval_default = os.getenv("APPROVAL_ENABLED", "0").lower() in ("1", "true", "yes", "on")
+    logger.info(f"[APPROVAL MODE] Using ENV: APPROVAL_ENABLED={os.getenv('APPROVAL_ENABLED')}, require_approval_default={require_approval_default}")
     
     final_require_approval = bool(req.require_approval if req.require_approval is not None else require_approval_default)
     logger.info(f"[APPROVAL MODE] {sym} {side}: req.require_approval={req.require_approval}, require_approval_default={require_approval_default}, final={final_require_approval}")
