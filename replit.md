@@ -102,10 +102,11 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 **Position Mode Management (APIError -4061 Prevention):**
 -   **POSITION_MODE_OVERRIDE Environment Variable**: Forces ONE-WAY mode operation via `POSITION_MODE_OVERRIDE=ONEWAY`, bypassing Binance account settings and 5-minute cache.
 -   **Auto-Adaptation Logic**: `adapt_order_for_mode()` automatically removes `positionSide` parameter from all orders when in ONE-WAY mode.
+-   **Centralized Wrapper System**: ALL order creation in `execution_bot.py` uses `futures_create_order()` wrapper from `binance_client.py` (4 critical integration points: entry orders, retry orders, SL orders, TP orders).
 -   **Cache Invalidation + Re-Adaptation**: Position mode cache automatically invalidated on -4061 errors AND order is re-adapted before retry to ensure `positionSide` is properly removed.
 -   **Retry Logic Fix**: After -4061 error, system calls `adapt_order_for_mode()` again to strip `positionSide` before retrying order execution.
 -   **Startup Skip Logic**: `ensure_hedge_mode()` automatically skipped when `POSITION_MODE_OVERRIDE` is set, preventing conflicting mode enforcement.
--   **Zero APIError -4061**: Eliminates position mode mismatch errors by ensuring all orders comply with account's current position mode.
+-   **Zero APIError -4061**: Eliminates position mode mismatch errors by ensuring all orders comply with account's current position mode through centralized wrapper enforcement.
 
 **Trade Execution Pipeline:**
 -   Calculates quantity from budget if not provided.
