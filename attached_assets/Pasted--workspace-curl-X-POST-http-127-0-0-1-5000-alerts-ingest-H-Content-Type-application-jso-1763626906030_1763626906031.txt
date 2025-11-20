@@ -1,0 +1,50 @@
+~/workspace$ curl -X POST http://127.0.0.1:5000/alerts/ingest \
+  -H "Content-Type: application/json" \
+  -d '{"symbol": "BTCUSDT", "side": "LONG", "score": 8.0}'
+{"detail":"No# 1. בדיקת מצבkspace$ # 1. בדיקת מצב
+git status
+
+# 2. הוספת כל הקבצים שהשתנו
+git add main.py utils/auth.py routes/executor.py routes/executors_grid_export.py replit.md
+
+# 3. Commit עם הודעה
+git commit -m "Fix: Dashboard auth + Leverage decimal parsing
+
+- Fixed dashboard authentication (removed router dependencies)
+- Added /pnl/summary public endpoint  
+- Fixed leverage decimal parsing (int→round(float))
+- Updated routes/alerts.py leverage type to Optional[float]
+- All endpoints tested and working correctly"
+
+# 4. Push ל-GitHub
+git push origin main
+On branch main
+Your branch is ahead of 'origin/main' by 9 commits.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+    modified:   data/ai_tracking/predictions.jsonl
+
+no changes added to commit (use "git add" and/or "git commit -a")
+On branch main
+Your branch is ahead of 'origin/main' by 9 commits.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+    modified:   data/ai_tracking/predictions.jsonl
+
+no changes added to commit (use "git add" and/or "git commit -a")
+Enumerating objects: 125, done.
+Counting objects: 100% (123/123), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (82/82), done.
+Writing objects: 100% (91/91), 39.22 KiB | 2.45 MiB/s, done.
+Total 91 (delta 69), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (69/69), completed with 17 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   56632b1..44ad5b3  main -> main
+~/workspace$ 
