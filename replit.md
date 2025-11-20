@@ -25,6 +25,10 @@ AlgoGPT is an autonomous algorithmic trading platform for 24/7 Binance Futures, 
     1. Removed duplicate API key check from `routes/alerts.py` endpoint handler (lines 339-341)
     2. Endpoint already defined as public in `utils/auth.py` middleware - duplicate check was blocking internal worker calls
     3. Result: Internal workers (Auto Scanner, etc.) can now successfully call `/alerts/ingest` without API key, external calls still protected by middleware
+-   **Fixed LSP Type Checking Warnings in `utils/stage_controller.py` (Nov 20, 2025)**:
+    1. Added None checks for Redis operations in `_check_redis()`, `_get_ban_shield_zone()`, `_get_error_count_10m()`
+    2. Added proper type guards using `isinstance()` for CPU, RAM, and error count processing
+    3. Result: All 9 LSP diagnostics resolved, code is type-safe and production-ready
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.

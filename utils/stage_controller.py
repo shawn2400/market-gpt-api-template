@@ -62,6 +62,8 @@ def _check_redis() -> str:
     """
     try:
         r = get_redis()
+        if r is None:
+            return "error"
         r.ping()
         return "ok"
     except Exception as e:
@@ -76,6 +78,8 @@ def _get_ban_shield_zone() -> str:
     """
     try:
         r = get_redis()
+        if r is None:
+            return "unknown"
         ban_zone = r.get("ban_shield:zone")
         if ban_zone:
             return ban_zone.decode() if isinstance(ban_zone, bytes) else ban_zone
@@ -92,6 +96,8 @@ def _get_error_count_10m() -> int:
     """
     try:
         r = get_redis()
+        if r is None:
+            return 0
         error_count = r.llen("error_log:10m")
         return error_count if error_count else 0
     except Exception as e:
@@ -138,7 +144,7 @@ async def evaluate_stage_health() -> Dict[str, Any]:
         if isinstance(cpu_percent, Exception):
             logger.error(f"Failed to get CPU: {cpu_percent}")
             health["metrics"]["cpu"] = 0
-        else:
+        elif isinstance(cpu_percent, (int, float)):
             health["metrics"]["cpu"] = cpu_percent
             if cpu_percent > CPU_THRESHOLD:
                 health["issues"].append(f"CPU high: {cpu_percent:.1f}%")
@@ -148,7 +154,7 @@ async def evaluate_stage_health() -> Dict[str, Any]:
         if isinstance(ram_percent, Exception):
             logger.error(f"Failed to get RAM: {ram_percent}")
             health["metrics"]["ram"] = 0
-        else:
+        elif isinstance(ram_percent, (int, float)):
             health["metrics"]["ram"] = ram_percent
             if ram_percent > RAM_THRESHOLD:
                 health["issues"].append(f"RAM high: {ram_percent:.1f}%")
@@ -193,7 +199,7 @@ async def evaluate_stage_health() -> Dict[str, Any]:
         if isinstance(error_count, Exception):
             logger.error(f"Failed to get error count: {error_count}")
             health["metrics"]["errors_10m"] = 0
-        else:
+        elif isinstance(error_count, int):
             health["metrics"]["errors_10m"] = error_count
             if error_count > ERROR_THRESHOLD:
                 health["issues"].append(f"High error count: {error_count} errors in 10m")
