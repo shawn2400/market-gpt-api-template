@@ -18,16 +18,16 @@ logger = logging.getLogger("dynamic_filters")
 
 # ====== Base thresholds (ULTRA Aggressive - ACCEPT ALMOST ANYTHING!) ======
 BASE_SUCCESS_PCT = 45.0  # קבל כמעט הכל!
-BASE_RR_TOP10 = 1.01     # מינימום מוחלט!
-BASE_RR_ALT = 1.01       # מינימום מוחלט!
+BASE_RR_TOP10 = 0.9      # מינימום מוחלט - מותאם ל-CHOPPY markets!
+BASE_RR_ALT = 0.9        # מינימום מוחלט - מותאם ל-CHOPPY markets!
 BASE_QUALITY = 4.0       # קבל כמעט הכל!
 
 # ====== Adjustment ranges (ALLOW DYNAMIC RR for Auto-Optimization!) ======
 SUCCESS_MIN = 40.0       # מינימום מאוד נמוך
 SUCCESS_MAX = 60.0       # מקסימום נמוך
-RR_TOP10_MIN = 1.01      # מינימום מוחלט
+RR_TOP10_MIN = 0.9       # מינימום מוחלט - מותאם ל-CHOPPY markets!
 RR_TOP10_MAX = 3.0       # מקסימום - מאפשר auto-tuning!
-RR_ALT_MIN = 1.01        # מינימום מוחלט
+RR_ALT_MIN = 0.9         # מינימום מוחלט - מותאם ל-CHOPPY markets!
 RR_ALT_MAX = 3.0         # מקסימום - מאפשר auto-tuning!
 QUALITY_MIN = 4.0        # מינימום מאוד נמוך
 QUALITY_MAX = 8.0        # מקסימום ריאלי (טווח: 4.0-8.0)
