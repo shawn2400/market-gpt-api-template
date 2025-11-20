@@ -26,12 +26,13 @@ class VolumeStats:
     timestamp: float             # When this was calculated
     market_volume_regime: str    # LOW_VOLUME/NORMAL/HIGH_VOLUME
     low_volume_pct: float        # % of market with volume < 0.5x
+    market_median_volume: float  # Absolute median 24h volume in USDT (for threshold calculation)
     
     def __repr__(self):
         return (f"VolumeStats(median={self.median_volume_ratio:.3f}x, "
                 f"p25={self.p25_volume_ratio:.3f}x, p75={self.p75_volume_ratio:.3f}x, "
                 f"regime={self.market_volume_regime}, low_vol={self.low_volume_pct:.0f}%, "
-                f"n={self.sample_size})")
+                f"market_median=${self.market_median_volume:,.0f}, n={self.sample_size})")
 
 
 class AdaptiveVolumeAnalyzer:
@@ -279,7 +280,8 @@ class AdaptiveVolumeAnalyzer:
                 sample_size=len(volumes),
                 timestamp=time.time(),
                 market_volume_regime=market_regime,
-                low_volume_pct=low_volume_pct
+                low_volume_pct=low_volume_pct,
+                market_median_volume=market_median_volume
             )
             
         except Exception as e:

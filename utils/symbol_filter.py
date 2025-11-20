@@ -221,11 +221,10 @@ class SymbolFilterEngine:
                 
                 # Get market median volume for comparison
                 stats = analyzer._get_volume_stats()
-                if stats and hasattr(stats, 'median_volume_ratio'):
+                if stats and stats.market_median_volume:
                     # Calculate actual dollar threshold based on market median
                     # This is more intelligent than hardcoded $10M
-                    market_median_volume = self._estimate_market_median_volume()
-                    dynamic_min_volume = market_median_volume * dynamic_threshold_ratio
+                    dynamic_min_volume = stats.market_median_volume * dynamic_threshold_ratio
                     
                     logger.debug(
                         f"📊 {symbol}: Dynamic volume filter → "
@@ -254,7 +253,8 @@ class SymbolFilterEngine:
                     )
                 
             except Exception as e:
-                logger.debug(f"⚠️ {symbol}: Adaptive volume filter unavailable ({e}), using static fallback")
+                logger.warning(f"⚠️ {symbol}: Adaptive volume filter failed: {e}", exc_info=True)
+                logger.info(f"⚠️ {symbol}: Falling back to static $10M minimum")
             
             # FALLBACK: If adaptive filter fails, use static $10M minimum
             if volume_24h >= FILTER_MIN_24H_VOLUME:
@@ -336,49 +336,6 @@ class SymbolFilterEngine:
                 symbol=symbol,
                 reason=f"Liquidity check failed (allowed): {e}"
             )
-    
-    def _estimate_market_median_volume(self) -> float:
-        """
-        Estimate market median 24H volume.
-        Used as baseline for adaptive filtering.
-        
-        Returns:
-            Estimated median volume in USDT (default: $5M if unavailable)
-        """
-        try:
-            from utils.binance_client import get_client
-            client = get_client()
-            if not client:
-                return 5_000_000  # Safe fallback
-            
-            # Get 24h stats for all symbols
-            tickers = client.futures_ticker()
-            if not tickers:
-                return 5_000_000
-            
-            # Extract volumes
-            volumes = []
-            for ticker in tickers:
-                try:
-                    vol = float(ticker.get('quoteVolume', 0))
-                    if vol > 0:  # Skip zero-volume symbols
-                        volumes.append(vol)
-                except (ValueError, TypeError):
-                    continue
-            
-            if not volumes:
-                return 5_000_000
-            
-            # Calculate median
-            import statistics
-            median_vol = statistics.median(volumes)
-            
-            logger.debug(f"📊 Market median volume: ${median_vol:,.0f} (from {len(volumes)} symbols)")
-            return median_vol
-            
-        except Exception as e:
-            logger.debug(f"⚠️ Failed to estimate market median volume: {e}")
-            return 5_000_000  # Safe fallback
     
     def _fetch_24h_volume(self, symbol: str) -> float:
         """Fetch 24H volume from Binance"""
