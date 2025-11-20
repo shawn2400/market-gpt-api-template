@@ -12,6 +12,15 @@ AlgoGPT is an autonomous algorithmic trading platform for 24/7 Binance Futures, 
     2. Added `/alerts/ingest` to public authentication paths (internal localhost-only endpoint)
     3. Removed problematic database connection that caused handler failures
     - Result: Endpoint now responds correctly (GET: 200 OK, POST: requires API key as designed)
+-   **Fixed Dashboard Authentication (Nov 20, 2025)**:
+    1. Removed router-level `dependencies=[Depends(require_api_key)]` from `routes/executor.py` and `routes/executors_grid_export.py`
+    2. Added `/export/pnl` and `/pnl/summary` to public paths in `utils/auth.py`
+    3. Added `/pnl/summary` alias endpoint in `main.py` for frontend compatibility
+    4. Dashboard now loads without authentication errors (all endpoints: `/readyz`, `/executor/positions`, `/pnl/summary`, `/export/pnl` work correctly)
+-   **Fixed Leverage Decimal Parsing Bug (Nov 20, 2025)**:
+    1. Changed leverage parsing in `utils/auto_executor.py` line 1236 from `int(leverage or 0)` to `round(float(leverage or 0))`
+    2. Updated `routes/alerts.py` line 266 to accept `Optional[float]` instead of `Optional[int]` for leverage field
+    3. System now correctly handles AI Precision Calculator decimal leverage values (e.g., 3.82x, 4.15x)
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.

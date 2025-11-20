@@ -40,7 +40,6 @@ except Exception:
 router = APIRouter(
     prefix="/executor",
     tags=["Executor"],
-    dependencies=[Depends(require_api_key)],
 )
 
 # ---------- ENV helpers ----------

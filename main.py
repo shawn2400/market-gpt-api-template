@@ -1820,6 +1820,17 @@ async def api_info():
         "workflows_active": workflows_active,
     }
 
+@app.get("/pnl/summary")
+async def pnl_summary_alias():
+    """Alias for /export/pnl for frontend compatibility"""
+    from utils.pnl_summary import get_pnl_summary
+    try:
+        summary = get_pnl_summary()
+        return {"ok": True, "summary": summary}
+    except Exception as e:
+        logger.exception("[pnl] PnL summary error: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/health")
 async def health():
     ok_redis = False

@@ -13,7 +13,6 @@ logger = logging.getLogger("algogpt.export")
 router = APIRouter(
     prefix="/export",
     tags=["Export"],
-    dependencies=[Depends(require_api_key)],
 )
 
 
@@ -44,7 +43,7 @@ async def export_pdf(
 
 
 @router.get("/pnl", summary="PnL Summary")
-async def pnl_summary(_: Any = Depends(require_api_key)) -> Dict[str, Any]:
+async def pnl_summary() -> Dict[str, Any]:
     try:
         summary = get_pnl_summary()
         return {"ok": True, "summary": summary}
