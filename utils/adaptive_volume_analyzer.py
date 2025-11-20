@@ -62,10 +62,11 @@ class AdaptiveVolumeAnalyzer:
     HIGH_VOLUME_MARKET_THRESHOLD = 0.30  # If <30% of symbols have volume < 0.5x
     
     # Market Regime Auto-Adjustment Multipliers
+    # LOGIC: Lower multiplier = LOWER threshold = MORE symbols pass filtering
     MARKET_REGIME_MULTIPLIERS = {
-        "LOW_VOLUME": 0.15,    # Reduce thresholds by 85% in low-volume markets (aggressive adaptation)
-        "NORMAL": 1.0,         # Standard thresholds
-        "HIGH_VOLUME": 1.5     # Increase thresholds by 50% in high-volume markets
+        "LOW_VOLUME": 0.15,    # Reduce thresholds by 85% in low-volume markets (aggressive - enable trades)
+        "NORMAL": 1.0,         # Standard thresholds (balanced)
+        "HIGH_VOLUME": 0.67    # Reduce thresholds by 33% in high-volume markets (moderate - enable trades)
     }
     
     # Cache TTL (seconds)
