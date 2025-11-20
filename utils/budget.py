@@ -221,10 +221,16 @@ def get_trade_budget_usdt(
 
     raw = base * q_mult * v_mult * risk_mult
 
-    # רצפה/תקרה
+    # רצפה/תקרה דינמיים לפי הארנק
     floor_usdt = _f("BUDGET_MIN_USDT", 25.0)  # מינימום $25 per trade (before leverage)
-    ceil_usdt  = _f("BUDGET_MAX_USDT", 150.0)  # מקסימום $150 per trade (before leverage)
-    hard_cap   = _f("BUDGET_HARD_CAP_USDT", 0.0)  # 0=כבוי
+    
+    # 🚀 DYNAMIC CEILING: Based on equity percentage (not fixed $150)
+    # ENV: BUDGET_MAX_PCT_OF_EQUITY (default 30% of equity)
+    # Example: $500 equity → 30% = $150 max per trade
+    max_pct_of_equity = _f("BUDGET_MAX_PCT_OF_EQUITY", 30.0)  # % של ההון
+    ceil_usdt = equity * (max_pct_of_equity / 100.0)  # דינמי לפי גודל הארנק
+    
+    hard_cap = _f("BUDGET_HARD_CAP_USDT", 0.0)  # 0=כבוי
     if hard_cap > 0:
         ceil_usdt = min(ceil_usdt, hard_cap)
 
@@ -247,6 +253,7 @@ def get_trade_budget_usdt(
             "event": "budget.calc",
             "equity": equity,
             "base_pct": base_pct,
+            "max_pct_of_equity": max_pct_of_equity,
             "quality": quality,
             "q_mult": q_mult,
             "v_mult": v_mult,

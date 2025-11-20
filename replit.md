@@ -4,7 +4,7 @@
 AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/7 operation on Binance Futures. It analyzes 534 symbols, executing intelligent trades based on 7 integrated strategies and dynamic capital management. The platform's core is an AI-driven MetaBrain that eliminates hardcoded logic, ensuring all trade parameters are AI-determined. It aims for 4-10 high-quality daily trades, focusing on scalability, autonomous operation through a self-adaptive engine, and complete data persistence, optimized for diverse market conditions.
 
 ## User Preferences
-I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
+I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
 ## System Architecture
 
@@ -21,7 +21,12 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **AI-Powered Proposals**: Uses DeepSeek Chat for trade decisions with adaptive Risk/Reward, intelligent brain management, and dynamic quality threshold enforcement.
 -   **GRID Trading**: Integrated FUTURES GRID trading with dynamic symbol selection, tiered strategies, dynamic sizing, and automatic SL/TP protection.
 -   **Risk Management**: Includes quality filters, dynamic filters, liquidity checks, cooldowns, daily trade caps, and a circuit breaker.
--   **Dynamic Budget System**: Real-time trade budget calculation based on available wallet balance, trade quality, volatility, and market regime.
+-   **Dynamic Budget System**: 100% dynamic trade budget calculation based on:
+    - **Equity-Tied Ceiling**: Max budget = % of total wallet equity (BUDGET_MAX_PCT_OF_EQUITY, default 30%)
+    - **Quality Multiplier**: Trade quality scales budget up/down (quality 10 = 2.0x, quality 0 = 0.8x)
+    - **Volatility Adjustment**: High ATR reduces budget, low ATR increases it
+    - **Floor/Cap**: Always $25 minimum, max scales with wallet growth
+    - **Auto-Scaling**: As account grows, all trade sizes automatically scale proportionally
 -   **Dynamic SL/TP Calculation**: ATR-based Stop Loss and RR-based Take Profit.
 -   **Complete Data Persistence**: All critical data is saved to a PostgreSQL database.
 
