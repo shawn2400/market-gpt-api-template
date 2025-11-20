@@ -583,7 +583,10 @@ class ExecutionBot:
                 from utils.binance_client import get_price
                 from utils.sltp import calc_sl_tp_for_symbol
                 
+                # 🔧 DEBUG: Log entry_price before conversion
+                self.log.info(f"🔍 DEBUG: entry_price={entry_price}, type={type(entry_price)}")
                 current_price = float(entry_price) if entry_price and float(entry_price) > 0 else get_price(symbol)
+                self.log.info(f"🔍 DEBUG: current_price={current_price}, symbol={symbol}")
                 if not current_price or current_price <= 0:
                     self.log.error(f"🚨 CRITICAL: Could not determine price for {symbol} - CANNOT TRADE")
                     return {"ok": False, "error": "price_unavailable"}
@@ -603,19 +606,22 @@ class ExecutionBot:
                 # Fallback if ATR missing - use 2% SL, 3% TP
                 # 🔧 Import validator early for precision correction
                 from utils.binance_symbol_validator import get_symbol_validator
+                from utils.trade_execution_core import _q_price as quantize_price
                 validator = get_symbol_validator()
                 
                 if not sl_price or sl_price <= 0:
                     fallback_sl_pct = 0.02
                     sl_price_raw = current_price * (1 - fallback_sl_pct) if position_side == "LONG" else current_price * (1 + fallback_sl_pct)
+                    # 🔧 FIX: Use validator.round_price which returns float
                     sl_price = validator.round_price(symbol, sl_price_raw)
-                    self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 2% SL @ {sl_price}")
+                    self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 2% SL @ {sl_price} (raw={sl_price_raw}, current_price={current_price})")
                 
                 if not tp_price or tp_price <= 0:
                     fallback_tp_pct = 0.03
                     tp_price_raw = current_price * (1 + fallback_tp_pct) if position_side == "LONG" else current_price * (1 - fallback_tp_pct)
+                    # 🔧 FIX: Use validator.round_price which returns float
                     tp_price = validator.round_price(symbol, tp_price_raw)
-                    self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 3% TP @ {tp_price}")
+                    self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 3% TP @ {tp_price} (raw={tp_price_raw}, current_price={current_price})")
                 
                 # 🛡️ Save metadata BEFORE order placement
                 metadata_saved = save_order_metadata(
