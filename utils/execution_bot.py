@@ -674,7 +674,10 @@ class ExecutionBot:
                 self.log.warning(f"⚠️ Symbol validation failed (proceeding anyway): {val_err}")
             
             try:
-                order = client.futures_create_order(**attempt_order)
+                # 🔧 CRITICAL FIX: Use binance_client.futures_create_order wrapper instead of direct client call
+                # This ensures position mode adaptation and precision validation
+                from utils.binance_client import futures_create_order
+                order = futures_create_order(**attempt_order)
                 
                 # ⏱️ Track LIMIT orders for timeout monitoring
                 if order_type == "LIMIT" and self._timeout_monitor and order:
@@ -841,7 +844,10 @@ class ExecutionBot:
                     else:
                         retry_kwargs = dict(base_kwargs)
                         retry_kwargs["positionSide"] = "LONG" if side == "BUY" else "SHORT"
-                    order = client.futures_create_order(**retry_kwargs)
+                    
+                    # 🔧 CRITICAL FIX: Use futures_create_order wrapper for retry
+                    from utils.binance_client import futures_create_order as futures_create
+                    order = futures_create(**retry_kwargs)
                     
                     # 🛡️ CRITICAL: Send SL/TP orders after retry entry
                     sl_order = None
@@ -892,7 +898,9 @@ class ExecutionBot:
                             close_side = "SELL" if side == "BUY" else "BUY"
                             
                             try:
-                                sl_order = client.futures_create_order(
+                                # 🔧 CRITICAL FIX: Use futures_create_order wrapper for SL/TP
+                                from utils.binance_client import futures_create_order as futures_create
+                                sl_order = futures_create(
                                     symbol=symbol, side=close_side, type="STOP_MARKET",
                                     quantity=qty, stopPrice=_q_price(symbol, sl_price),
                                     positionSide=position_side,
@@ -904,7 +912,9 @@ class ExecutionBot:
                                 sltp_failed = True
                             
                             try:
-                                tp_order = client.futures_create_order(
+                                # 🔧 CRITICAL FIX: Use futures_create_order wrapper for TP
+                                from utils.binance_client import futures_create_order as futures_create
+                                tp_order = futures_create(
                                     symbol=symbol, side=close_side, type="TAKE_PROFIT_MARKET",
                                     quantity=qty, stopPrice=_q_price(symbol, tp_price),
                                     positionSide=position_side,
