@@ -161,14 +161,9 @@ class BinanceSymbolValidator:
         decimal_step = Decimal(str(step_size))
         
         # Calculate how many steps fit into quantity
+        # CRITICAL: Always ROUND_DOWN to avoid exceeding budget/notional limits
         steps = (decimal_qty / decimal_step).quantize(Decimal('1'), rounding=ROUND_DOWN)
         rounded = steps * decimal_step
-        
-        # 🔧 FIX: If original quantity > rounded, round UP to next step
-        # This prevents precision errors (3025.8 → 3026 instead of 3025)
-        if decimal_qty > rounded:
-            steps += Decimal('1')
-            rounded = steps * decimal_step
         
         # Determine decimal places from step size (e.g., 0.1 = 1 place, 0.01 = 2 places)
         step_str = str(step_size).rstrip('0').rstrip('.')

@@ -1308,6 +1308,7 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
             max_tokens=400
         )
         
+        LOGGER.info(f"🔍 DEBUG: DeepSeek response type={type(response)}, keys={list(response.keys()) if isinstance(response, dict) else 'NOT_DICT'}")
         if response and "choices" in response:
             content = response["choices"][0]["message"]["content"]
             LOGGER.info(f"📝 DeepSeek raw response for {symbol}: {content[:300]}...")
