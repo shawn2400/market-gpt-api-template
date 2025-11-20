@@ -1,0 +1,105 @@
+מצוין.
+אני מכין לך עכשיו **3 קבצים מלאים ומוכנים להעתקה 1:1** — Production-Grade — בלי קיצורים, בלי חוסר, בלי “continue…”.
+כל קובץ **מלא, סגור, תקין**, כולל כל התיקונים שיפתרו 100% את בעיית:
+
+### ❌ EXECUTION FAILED (Auto Mode)
+
+### ❌ אי־תמיכה ב־quantity
+
+### ❌ Approval Gate שננעל בטעות
+
+### ❌ Silent Errors (שגיאה בלי לוג)
+
+### ❌ טריידים שלא מגיעים לבינאנס
+
+---
+
+# ⚠️ לפני שאני שולח — שאלה קריטית
+
+יש לך פרויקט עם קבצים דומים אבל שמם *אינו תמיד אחיד*:
+
+* חלק מהמערכות קוראות לו `utils/trade_executor.py`
+* חלק קוראות לו `utils/execution_bot.py`
+* חלק `routes/trade.py`
+* חלקים קיימים אצלך גם בנתיבים `routes/executor.py` או `routes/manager.py`
+
+כדי שאספק **3 קבצים כתובים 100% נכון**, אני חייב שאשר לי *בדיוק* איך הם נקראים אצלך:
+
+---
+
+## ❓ **מהם שמות שלושת הקבצים אצלך?**
+
+(תבחר *אחד* מכל אפשרות)
+
+### 1. trade executor
+
+איזה מהם הקובץ הנכון אצלך?
+
+* `utils/trade_executor.py`
+* `utils/binance_trader.py`
+* `utils/execution.py`
+* משהו אחר → כתוב לי את השם
+
+### 2. execution bot
+
+הקובץ שמטפל בפתיחת פוזיציה דרך AutoExecutor:
+
+* `utils/execution_bot.py`
+* `utils/executor.py`
+* `utils/trade_manager.py`
+* משהו אחר?
+
+### 3. route של ביצוע טרייד
+
+הנתיב `/trade/execute` נמצא ב:
+
+* `routes/trade.py`
+* `routes/executor.py`
+* `routes/auto.py`
+* משהו אחר?
+
+---
+
+# 🔥 **ברגע שתכתוב לי 3 שמות מדויקים — אני שולח לך:**
+
+### 💎  קובץ ראשון — trade_executor.py (מלא 1:1)
+
+כולל:
+
+* תמיכה מלאה ב־quantity
+* לוגים
+* routing לסוג הפקודה
+* ביצוע בפועל בבינאנס
+* טיפול מלא בכל שגיאות Binance
+* תמיכה ב־Spot + Futures
+* Execution Mode חכם
+
+### 💎  קובץ שני — execution_bot.py (מלא 1:1)
+
+כולל:
+
+* FULL AUTO MODE ללא Approval
+* חיתוך כפילויות
+* ניהול gates
+* ניתוב טריידים
+* תמיכה מלאה ב־quantity
+* לוגים מפורטים (לפי תקן שלך)
+
+### 💎  קובץ שלישי — routes/trade.py (מלא 1:1)
+
+כולל:
+
+* מודל Pydantic מלא
+* מסלול `/trade/execute`
+* `/trade/approve`
+* תמיכה ב־quantity
+* טיפול במנוע אישורים
+* התממשקות מלאה ל־ExecutionBot
+
+---
+
+רק תן לי עכשיו:
+
+### ✔ השם המדויק לכל אחד מ־3 הקבצים
+
+ואני שולח לך **3 קבצי פרודקשן מלאים** — להדבקה ישירה.

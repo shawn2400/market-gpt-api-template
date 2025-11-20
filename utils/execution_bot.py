@@ -386,6 +386,7 @@ class ExecutionBot:
             "telegram_callback",
             "auto_trade",
             "autopilot",
+            "auto_scanner_standalone",  # 🔧 FIX: Auto Scanner must execute immediately without approval
         ):
             return False
 
