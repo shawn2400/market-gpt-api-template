@@ -63,7 +63,7 @@ class AdaptiveVolumeAnalyzer:
     
     # Market Regime Auto-Adjustment Multipliers
     MARKET_REGIME_MULTIPLIERS = {
-        "LOW_VOLUME": 0.35,    # Reduce thresholds by 65% in low-volume markets
+        "LOW_VOLUME": 0.15,    # Reduce thresholds by 85% in low-volume markets (aggressive adaptation)
         "NORMAL": 1.0,         # Standard thresholds
         "HIGH_VOLUME": 1.5     # Increase thresholds by 50% in high-volume markets
     }

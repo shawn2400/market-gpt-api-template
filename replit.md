@@ -79,7 +79,7 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 **Dynamic Smart Filter v2.0 (100% Regime-Aware + Adaptive Volume):**
 -   **🆕 Adaptive Volume Analyzer (v2.0)**: Measures real-time market-wide volume distribution and auto-adjusts thresholds based on actual conditions, not assumptions. Compares each symbol's volume against market median to determine relative strength.
 -   **🆕 Market-Wide Volume Regime Detection**: Automatically detects LOW_VOLUME/NORMAL/HIGH_VOLUME market conditions by analyzing % of symbols below median volume.
-    -   **LOW_VOLUME Market** (>60% symbols < 0.5x median): Auto-reduces thresholds by 65% to enable trading in weak markets
+    -   **LOW_VOLUME Market** (>60% symbols < 0.5x median): Auto-reduces thresholds by 85% to aggressively enable trading in weak markets
     -   **NORMAL Market** (30-60% symbols < 0.5x median): Standard thresholds
     -   **HIGH_VOLUME Market** (<30% symbols < 0.5x median): Auto-increases thresholds by 50% for stricter filtering
 -   **Adaptive Volume Thresholds**: Volume requirements adapt automatically to market conditions using percentile strategies. Safety guardrails prevent extreme values (0.03x - 0.50x range).
