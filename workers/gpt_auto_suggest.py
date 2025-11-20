@@ -1527,7 +1527,16 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
             LOGGER.info(f"AI_REJECTED {symbol}: unrealistic success_pct={prop['success_pct']}")
             return None
     
-    LOGGER.info(f"✅ Trade proposal generated for {symbol}: {prop['side']} @ {prop['entry']}, SL={prop['sl']}, TP={prop['tp1']}")
+    # Add quality scores to log
+    quality = prop.get("quality_score", 0) or prop.get("consensus_score", 0) or 0
+    confidence = prop.get("success_pct", 0) or 0
+    rr_ratio = rr_check if rr_check else 0
+    
+    LOGGER.info(
+        f"✅ Trade proposal: {symbol} {prop['side']} @ {prop['entry']:.8f} | "
+        f"Q={quality:.1f} | Conf={confidence:.0f}% | RR={rr_ratio:.2f} | "
+        f"Win%={confidence:.0f}% | SL={prop['sl']:.8f} | TP={prop['tp1']:.8f}"
+    )
     return prop
 
 
