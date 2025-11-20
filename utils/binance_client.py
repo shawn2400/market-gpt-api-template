@@ -355,7 +355,7 @@ def _quantize_price(symbol: str, price: float) -> str:
         decs = _decs(str(f.get("tickSize") or DEFAULT_PRICE_TICK_STR))
         return f"{adj:.{decs}f}"
 
-def _quantize_qty(symbol: str, qty: float) -> str | int:
+def _quantize_qty(symbol: str, qty: float) -> str:
     """Quantize quantity using BinanceSymbolValidator for 100% precision compliance"""
     try:
         from utils.binance_symbol_validator import get_symbol_validator
@@ -363,9 +363,11 @@ def _quantize_qty(symbol: str, qty: float) -> str | int:
         # Always use LIMIT mode (stricter) for quantity validation
         rounded = validator.round_quantity(symbol, qty, is_market=False)
         
-        # Return int for whole numbers to avoid Binance precision errors
+        # CRITICAL FIX: Always return string, never int
+        # Binance API expects string representation even for whole numbers
+        # Returning int causes -1111 precision errors in JSON serialization
         if rounded == int(rounded):
-            return int(rounded)
+            return str(int(rounded))  # "2285" not 2285
         return str(rounded)
     except Exception as e:
         # Fallback to old method if validator unavailable
@@ -378,9 +380,9 @@ def _quantize_qty(symbol: str, qty: float) -> str | int:
         adj = max(step, steps * step)
         decs = _decs(str(f.get("stepSize") or DEFAULT_QTY_STEP_STR))
         
-        # CRITICAL FIX: Return int for whole numbers (stepSize >= 1.0) to avoid Binance precision errors
+        # CRITICAL FIX: Return string for whole numbers (stepSize >= 1.0)
         if step >= 1.0:
-            return int(adj)
+            return str(int(adj))  # "2285" not 2285
         
         return f"{adj:.{decs}f}"
 
