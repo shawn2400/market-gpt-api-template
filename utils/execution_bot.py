@@ -623,6 +623,17 @@ class ExecutionBot:
                     tp_price = validator.round_price(symbol, tp_price_raw)
                     self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 3% TP @ {tp_price} (raw={tp_price_raw}, current_price={current_price})")
                 
+                # 🚨 CRITICAL SAFETY CHECK: Verify SL/TP are valid before trading
+                if not sl_price or sl_price <= 0:
+                    self.log.error(f"🚨 CRITICAL SAFETY VIOLATION: SL price is 0 or invalid for {symbol} - CANNOT TRADE WITHOUT PROTECTION")
+                    return {"ok": False, "error": "sl_calculation_failed", "detail": f"SL={sl_price}"}
+                
+                if not tp_price or tp_price <= 0:
+                    self.log.error(f"🚨 CRITICAL SAFETY VIOLATION: TP price is 0 or invalid for {symbol} - CANNOT TRADE WITHOUT PROTECTION")
+                    return {"ok": False, "error": "tp_calculation_failed", "detail": f"TP={tp_price}"}
+                
+                self.log.info(f"✅ SL/TP calculated successfully for {symbol}: SL={sl_price}, TP={tp_price}")
+                
                 # 🛡️ Save metadata BEFORE order placement
                 metadata_saved = save_order_metadata(
                     client_order_id=client_order_id,
