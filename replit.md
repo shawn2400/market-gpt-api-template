@@ -71,7 +71,9 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   100% dynamic leverage (2-35x) adapting in real-time based on market conditions, trade quality, and multi-factor confidence scoring.
 
 **Trading Policy Filters (System-Wide Protection):**
--   **Symbol Filter Engine**: Validates symbols based on volume, liquidity, Binance whitelist, and blacklist management.
+-   **Symbol Filter Engine**: Validates symbols based on **100% dynamic volume filtering** (measures market median volume across 591 symbols), liquidity, Binance whitelist, and blacklist management.
+-   **Adaptive Volume Filter Integration**: Replaces hardcoded $10M volume minimum with intelligent relative filtering - compares each symbol against market median using auto-selected percentile strategy (p25/median/p75).
+-   **Market-Aware Threshold Selection**: Automatically adjusts volume requirements based on real-time market conditions (LOW_VOLUME/NORMAL/HIGH_VOLUME regimes).
 -   **Order Quality Monitor**: Tracks fill rate, slippage, and execution speed.
 -   **Position Limits Manager**: Sets max positions per symbol, total open orders, and correlation exposure limits.
 -   **Trading Gatekeeper**: Unified pre-trade validation integrating all filters and Dynamic Leverage.
@@ -100,7 +102,8 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 **Position Mode Management (APIError -4061 Prevention):**
 -   **POSITION_MODE_OVERRIDE Environment Variable**: Forces ONE-WAY mode operation via `POSITION_MODE_OVERRIDE=ONEWAY`, bypassing Binance account settings and 5-minute cache.
 -   **Auto-Adaptation Logic**: `adapt_order_for_mode()` automatically removes `positionSide` parameter from all orders when in ONE-WAY mode.
--   **Cache Invalidation**: Position mode cache automatically invalidated on -4061 errors to prevent stale mode data.
+-   **Cache Invalidation + Re-Adaptation**: Position mode cache automatically invalidated on -4061 errors AND order is re-adapted before retry to ensure `positionSide` is properly removed.
+-   **Retry Logic Fix**: After -4061 error, system calls `adapt_order_for_mode()` again to strip `positionSide` before retrying order execution.
 -   **Startup Skip Logic**: `ensure_hedge_mode()` automatically skipped when `POSITION_MODE_OVERRIDE` is set, preventing conflicting mode enforcement.
 -   **Zero APIError -4061**: Eliminates position mode mismatch errors by ensuring all orders comply with account's current position mode.
 
