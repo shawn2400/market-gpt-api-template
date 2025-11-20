@@ -1,0 +1,99 @@
+~/workspace$ git pull --rebase origin main
+git push origin main
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ git pull --rebase origin main
+error: cannot pull with rebase: You have unstaged changes.
+error: Please commit or stash them.
+~/workspace$ git push origin main
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ git status
+On branch main
+Your branch is ahead of 'origin/main' by 9 commits.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+    modified:   data/ai_tracking/predictions.jsonl
+
+no changes added to commit (use "git add" and/or "git commit -a")
+~/workspace$ git add -A
+git commit -m "Fix MinRR hardcoded 1.01→0.9 to enable CHOPPY market trades"
+git pull --rebase origin main
+git push origin main
+[main e379315] Fix MinRR hardcoded 1.01→0.9 to enable CHOPPY market trades
+ 1 file changed, 1 insertion(+)
+remote: Enumerating objects: 5, done.
+remote: Counting objects: 100% (5/5), done.
+remote: Compressing objects: 100% (1/1), done.
+remote: Total 3 (delta 2), reused 3 (delta 2), pack-reused 0 (from 0)
+Unpacking objects: 100% (3/3), 309 bytes | 154.00 KiB/s, done.
+From https://github.com/shawn2400/market-gpt-api-template
+ * branch            main       -> FETCH_HEAD
+   96a1607..bfc7309  main       -> origin/main
+Successfully rebased and updated refs/heads/main.
+Enumerating objects: 64, done.
+Counting objects: 100% (63/63), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (41/41), done.
+Writing objects: 100% (48/48), 9.71 KiB | 2.43 MiB/s, done.
+Total 48 (delta 29), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (29/29), completed with 8 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   bfc7309..a40ad99  main -> main
+~/workspace$ git stash
+git pull --rebase origin main
+git stash pop
+git add -A
+git commit -m "Fix MinRR hardcoded 1.01→0.9 to enable CHOPPY market trades"
+git push origin main
+No local changes to save
+From https://github.com/shawn2400/market-gpt-api-template
+ * branch            main       -> FETCH_HEAD
+Already up to date.
+Auto-merging .replit
+CONFLICT (content): Merge conflict in .replit
+Auto-merging routes/context.py
+Auto-merging utils/funding_bias.py
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+    modified:   routes/context.py
+    modified:   utils/funding_bias.py
+
+Unmerged paths:
+  (use "git restore --staged <file>..." to unstage)
+  (use "git add <file>..." to mark resolution)
+    both modified:   .replit
+
+The stash entry is kept in case you need it again.
+[main a59f8fe] Fix MinRR hardcoded 1.01→0.9 to enable CHOPPY market trades
+ 3 files changed, 12 insertions(+), 1 deletion(-)
+Enumerating objects: 19, done.
+Counting objects: 100% (18/18), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (7/7), done.
+Writing objects: 100% (7/7), 894 bytes | 894.00 KiB/s, done.
+Total 7 (delta 6), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (6/6), completed with 6 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   a40ad99..a59f8fe  main -> main
+~/workspace$ 
