@@ -260,7 +260,7 @@ class IngestReq(BaseModel):
     # אחת מהאפשרויות: qty או budget_usd (+ leverage)
     qty: Optional[float] = None
     budget_usd: Optional[float] = None
-    leverage: Optional[int] = None
+    leverage: Optional[float] = None  # Float to support AI Precision Calculator (e.g. 3.87x)
     # מידע נוסף (לא חובה)
     ticket_id: Optional[str] = None
     timeframe: Optional[str] = "15m"

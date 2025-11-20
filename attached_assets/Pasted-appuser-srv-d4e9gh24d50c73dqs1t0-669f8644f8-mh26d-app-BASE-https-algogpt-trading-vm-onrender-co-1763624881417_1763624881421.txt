@@ -1,0 +1,98 @@
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ BASE="https://algogpt-trading-vm.onrender.com"
+
+echo -e "\n== READY =="
+curl -fsS "$BASE/readyz" >/dev/null && echo "🟩 READY OK" || echo "🟥 READY FAIL"
+
+echo -e "\n== API PING =="
+curl -fsS "$BASE/status/ping" >/dev/null && echo "🟩 API OK" || echo "🟥 API DOWN"
+
+== READY ==
+🟩 READY OK
+
+== API PING ==
+curl: (22) The requested URL returned error: 404
+🟥 API DOWN
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== EXECUTOR =="
+curl -fsS "$BASE/executor/status" >/dev/null && echo "🟩 EXECUTOR OK" || echo "🟥 EXECUTOR FAIL"
+
+== EXECUTOR ==
+curl: (22) The requested URL returned error: 404
+🟥 EXECUTOR FAIL
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== TRADE MANAGER =="
+curl -fsS "$BASE/manager/health" >/dev/null && echo "🟩 MANAGER OK" || echo "🟥 MANAGER FAIL"
+
+== TRADE MANAGER ==
+curl: (22) The requested URL returned error: 404
+🟥 MANAGER FAIL
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== USER STREAM =="
+curl -fsS "$BASE/userstream/status" >/dev/null && echo "🟩 STREAM OK" || echo "🟥 STREAM FAIL"
+
+== USER STREAM ==
+curl: (22) The requested URL returned error: 404
+🟥 STREAM FAIL
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== BAN SHIELD =="
+curl -fsS "$BASE/shield/status" >/dev/null && echo "🟩 SHIELD OK" || echo "🟥 SHIELD ALERT"
+
+== BAN SHIELD ==
+curl: (22) The requested URL returned error: 404
+🟥 SHIELD ALERT
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== POSITION PROTECTION =="
+curl -fsS "$BASE/protect/status" >/dev/null && echo "🟩 PROTECT OK" || echo "🟥 PROTECT FAIL"
+
+== POSITION PROTECTION ==
+curl: (22) The requested URL returned error: 404
+🟥 PROTECT FAIL
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/readyz" && echo "🟩 READY OK"
+ok🟩 READY OK
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/api/ping" && echo "🟩 API OK"
+curl: (22) The requested URL returned error: 404
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/health/executor" && echo "🟩 EXECUTOR OK"
+curl: (22) The requested URL returned error: 404
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/health/trade_manager" && echo " 🟩 MANAGER OK"
+curl: (22) The requested URL returned error: 404
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/health/userstream" && echo "🟩 STREAM OK"
+curl: (22) The requested URL returned error: 404
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/health/banshield" && echo "🟩 SHIELD OK"
+curl: (22) The requested URL returned error: 404
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/health/protect" && echo "🟩 PROTECT OK"
+curl: (22) The requested URL returned error: 404
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ BASE="https://algogpt-trading-vm.onrender.com"
+
+echo -e "\n== READY ==" 
+curl -fsS "$BASE/readyz" >/dev/null && echo "🟩 READY OK" || echo "🟥 READY FAIL"
+
+echo -e "\n== API ==" 
+curl -fsS "$BASE/api/ping" >/dev/null && echo "🟩 API OK" || echo "🟥 API FAIL"
+
+echo -e "\n== EXECUTOR ==" 
+curl -fsS "$BASE/health/executor" >/dev/null && echo "🟩 EXECUTOR OK" || echo "🟥 EXECUTOR FAIL"
+
+curl -fsS "$BASE/health/protect" >/dev/null && echo "🟩 PROTECT OK" || echo "🟥 PROTECT FAIL""FAIL"
+
+== READY ==
+🟩 READY OK
+
+== API ==
+curl: (22) The requested URL returned error: 404
+🟥 API FAIL
+
+== EXECUTOR ==
+curl: (22) The requested URL returned error: 404
+🟥 EXECUTOR FAIL
+
+== TRADE MANAGER ==
+curl: (22) The requested URL returned error: 404
+🟥 MANAGER FAIL
+
+== USERSTREAM ==
+curl: (22) The requested URL returned error: 404
+🟥 STREAM FAIL
+
+== BAN SHIELD ==
+curl: (22) The requested URL returned error: 404
+🟥 SHIELD FAIL
+
+== AUTO PROTECT ==
+curl: (22) The requested URL returned error: 404
+🟥 PROTECT FAIL
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ 
