@@ -757,14 +757,17 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
             return res or {}
         except BinanceAPIException as e:
             last = e
-            # If -4061 error (position side mismatch), invalidate position mode cache
+            # If -4061 error (position side mismatch), invalidate position mode cache and re-adapt
             if e.code == -4061:
-                print(f"[ERROR] -4061 Position side mismatch! Invalidating cache and refreshing...")
+                print(f"[ERROR] -4061 Position side mismatch! Invalidating cache and re-adapting order...")
                 try:
                     from utils.position_mode import invalidate_cache
                     invalidate_cache()
-                except Exception:
-                    pass
+                    # Re-adapt order after cache invalidation
+                    kwargs = adapt_order_for_mode(kwargs, side)
+                    print(f"[DEBUG] Re-adapted: positionSide={kwargs.get('positionSide')!r}")
+                except Exception as adapt_err:
+                    print(f"[WARN] Failed to re-adapt after -4061: {adapt_err}")
             time.sleep(min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * attempt) / 1000.0)
             continue
         except Exception as e:
