@@ -322,6 +322,17 @@ class AdvancedRiskManager:
         else:  # SHORT
             final_sl = min(dynamic_sl, max_loss_sl)  # Lower SL = tighter for SHORT
         
+        # 🛡️ CRITICAL FIX: Prevent negative SL prices (ACHUSDT bug fix)
+        # SL prices must ALWAYS be positive for Binance API compliance
+        if final_sl <= 0:
+            logger.error(
+                f"❌ CRITICAL: Calculated SL={final_sl:.8f} is ≤ 0! "
+                f"Entry={entry_price:.8f}, ATR={atr:.8f}, Side={position_side}"
+            )
+            # Fallback: Use 2% SL from entry as emergency protection
+            final_sl = entry_price * 0.98 if position_side == "LONG" else entry_price * 1.02
+            logger.warning(f"🛡️ Using fallback SL={final_sl:.8f} (2% from entry)")
+        
         logger.info(
             f"🛡️ Protected SL: dynamic={dynamic_sl:.8f}, "
             f"cap={max_loss_sl:.8f}, final={final_sl:.8f} ({position_side})"
