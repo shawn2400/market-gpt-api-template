@@ -324,8 +324,8 @@ def _to_float(x):
 # ===== Endpoints =====
 @router.post("/alerts/ingest")
 async def alerts_ingest(
-    req: IngestReq = Body(...),
     request: Request,
+    req: IngestReq = Body(...),
     x_api_key: Optional[str] = Header(None, alias="x-api-key"),
     x_timestamp: Optional[str] = Header(None, alias="X-Timestamp"),
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
