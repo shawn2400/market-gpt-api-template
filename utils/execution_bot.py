@@ -1123,8 +1123,17 @@ class ExecutionBot:
         
         symbol = str(ticket.get("symbol", "")).upper()
         side = str(ticket.get("side", "")).upper()
-        leverage = round(float(ticket.get("leverage") or 2))  # Round 4.95 → 5 instead of int() truncating to 4
-        budget_usd = float(ticket.get("budget_usd") or ticket.get("budget") or 100.0)
+        
+        # 🚀 DYNAMIC LEVERAGE: Get from ticket (AI-calculated) or fallback to 5x
+        leverage = round(float(ticket.get("leverage") or 5))  # Changed fallback from 2 to 5
+        if leverage < 2:
+            self.log.warning(f"⚠️ Leverage {leverage}x too low, using minimum 2x")
+            leverage = 2
+        elif leverage > 35:
+            self.log.warning(f"⚠️ Leverage {leverage}x too high, capping at 35x")
+            leverage = 35
+        
+        budget_usd = float(ticket.get("budget_usd") or ticket.get("budget") or 25.0)  # Changed fallback from 100 to 25
         
         # Extract GRID parameters
         metadata = ticket.get("metadata") or {}
