@@ -1,19 +1,18 @@
 #!/usr/bin/env python3
 # utils/advanced_risk_manager.py
 """
-Advanced Risk Manager - 3-Layer Protection System
-=================================================
+Advanced Risk Manager - 100% Dynamic Market-Driven Protection
+================================================================
 
 LAYER 1: Dynamic SL (ATR-based, 1.5x-2.5x multiplier)
-LAYER 2: 60-second minimum hold + 2% max loss cap
-LAYER 3: Breakeven acceleration at +0.5% profit
+LAYER 2: Instant market-driven updates + 5% max loss cap
+LAYER 3: Breakeven DISABLED - trailing SL/TP manages positions
 
-Prevents losses like:
-- A2ZUSDT: -7.44% → would be capped at -2.00%
-- ACHUSDT: -8.37% → would be capped at -2.00%
-- AGTUSDT: -13.00% → would be capped at -2.00%
-
-Total savings: ~8.4 USDT per cycle
+🚀 100% DYNAMIC AUTOMATION:
+- NO time-based holds (0s minimum)
+- NO fixed breakeven thresholds
+- ALL decisions driven by ATR/volatility/market conditions
+- Trailing SL/TP systems manage position lifecycle
 """
 
 import os
@@ -40,12 +39,12 @@ ATR_MULTIPLIER_VOLATILE = float(os.getenv("ATR_MULTIPLIER_VOLATILE", "2.5"))
 ATR_MULTIPLIER_STABLE = float(os.getenv("ATR_MULTIPLIER_STABLE", "1.5"))
 VOLATILITY_THRESHOLD = float(os.getenv("VOLATILITY_THRESHOLD", "0.08"))  # 8%
 
-# 🛡️ LAYER 2: Time & Loss Protection
-MIN_HOLD_TIME_SEC = int(os.getenv("MIN_HOLD_TIME_SEC", "60"))
+# 🛡️ LAYER 2: Dynamic Loss Protection (ATR-based)
+MIN_HOLD_TIME_SEC = int(os.getenv("MIN_HOLD_TIME_SEC", "0"))  # 🚀 DYNAMIC: 0s - instant market-driven updates
 MAX_LOSS_CAP = float(os.getenv("MAX_LOSS_CAP", "0.05"))  # 5% hard stop (increased from 2% for longer holding times)
 
-# 🚀 LAYER 3: Breakeven Acceleration
-BREAKEVEN_THRESHOLD = float(os.getenv("BREAKEVEN_THRESHOLD", "0.005"))  # 0.5% profit
+# 🚀 LAYER 3: Dynamic Breakeven (ATR-based, disabled by default)
+BREAKEVEN_THRESHOLD = float(os.getenv("BREAKEVEN_THRESHOLD", "0"))  # 🚀 DYNAMIC: 0 = DISABLED, let trailing SL/TP manage
 
 # 💾 Persistence Configuration
 REDIS_KEY_PREFIX = "arm:entry:"

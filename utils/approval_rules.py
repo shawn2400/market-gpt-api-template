@@ -41,11 +41,12 @@ def _in_ranges(hour: int, ranges: List[tuple[int,int]]) -> bool:
 
 def should_auto_approve(req: Dict) -> Tuple[bool, str]:
     """
-    כללים (כולם כבויים כברירת מחדל):
-    - TELEGRAM_AUTO_APPROVE=1 => תמיד
-    - AUTO_APPROVE_BUDGET_MAX_USD: אם budget_usd <= סף => כן
-    - AUTO_APPROVE_NIGHT=1 + NIGHT_HOURS="00-06,22-23": אם בשעות האלה => כן
-    - AUTO_APPROVE_TIER="trusted"/"gold" => כן
+    🚀 100% DYNAMIC Market-Driven Auto-Approval Rules:
+    - TELEGRAM_AUTO_APPROVE=1 => Always approve
+    - AUTO_APPROVE_BUDGET_MAX_USD: If budget_usd <= threshold => Approve
+    - AUTO_APPROVE_TIER="trusted"/"gold" => Approve
+    
+    ❌ REMOVED: AUTO_APPROVE_NIGHT (time-based logic eliminated)
     """
     if _bool("TELEGRAM_AUTO_APPROVE"):
         return True, "env_auto_approve"
@@ -54,13 +55,6 @@ def should_auto_approve(req: Dict) -> Tuple[bool, str]:
     thr = _float("AUTO_APPROVE_BUDGET_MAX_USD", None)
     if (thr is not None) and (budget <= thr):
         return True, f"budget_le_{thr}"
-
-    if _bool("AUTO_APPROVE_NIGHT"):
-        spec = os.getenv("NIGHT_HOURS", "00-06")
-        ranges = _parse_ranges(spec)
-        h = time.localtime().tm_hour
-        if _in_ranges(h, ranges):
-            return True, f"night_hours_{spec}"
 
     tier = os.getenv("AUTO_APPROVE_TIER", "").strip().lower()
     if tier in ("trusted", "gold"):

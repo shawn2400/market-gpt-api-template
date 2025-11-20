@@ -139,15 +139,14 @@ async def notify_tp_hit(symbol: str, leg: int | str, price: float | str, qty: fl
         if not _tp_task or _tp_task.done():
             _tp_task = asyncio.create_task(_tp_timer())
 
-# ===================== Auto-Approval (TRADES) =====================
+# ===================== Auto-Approval (TRADES) - 100% DYNAMIC =====================
 TELEGRAM_AUTO_APPROVE = os.getenv("TELEGRAM_AUTO_APPROVE", "0").lower() in ("1","true","yes","on")
 try:
     AUTO_APPROVE_BUDGET_MAX_USD = float(os.getenv("AUTO_APPROVE_BUDGET_MAX_USD", "0") or 0.0)
 except Exception:
     AUTO_APPROVE_BUDGET_MAX_USD = 0.0
-AUTO_APPROVE_NIGHT = os.getenv("AUTO_APPROVE_NIGHT","0").lower() in ("1","true","yes","on")
-NIGHT_HOURS_SPEC   = os.getenv("NIGHT_HOURS","").strip()
 AUTO_APPROVE_TIER  = (os.getenv("AUTO_APPROVE_TIER","") or "").strip().lower()
+# ❌ REMOVED: AUTO_APPROVE_NIGHT + NIGHT_HOURS_SPEC (time-based logic eliminated)
 
 # ===================== SL/TP defaults =====================
 def _csv_floats(s: str) -> List[float]:
@@ -463,25 +462,12 @@ async def _bundle_add(text: str) -> None:
         if not _bundle_task or _bundle_task.done():
             _bundle_task = asyncio.create_task(_bundle_timer())
 
-# ===================== Auto-approve policy =====================
-def _in_night_hours_il() -> bool:
-    if not NIGHT_HOURS_SPEC:
-        return False
-    try:
-        rng = NIGHT_HOURS_SPEC.replace(" ", "")
-        if "-" not in rng:
-            return False
-        a, b = rng.split("-", 1)
-        a = int(a); b = int(b)
-        now_il = datetime.now(timezone.utc).astimezone(_TZ_IL)
-        h = now_il.hour
-        if a <= b:
-            return a <= h < b
-        return h >= a or h < b
-    except Exception:
-        return False
-
+# ===================== Auto-approve policy - 100% DYNAMIC =====================
 def should_auto_approve_trade(plan: Dict[str, Any]) -> bool:
+    """
+    🚀 100% DYNAMIC Market-Driven Auto-Approval Policy
+    ❌ REMOVED: _in_night_hours_il() and AUTO_APPROVE_NIGHT (time-based logic eliminated)
+    """
     if not TELEGRAM_AUTO_APPROVE:
         return False
     try:
@@ -489,8 +475,6 @@ def should_auto_approve_trade(plan: Dict[str, Any]) -> bool:
     except Exception:
         budget = 0.0
     if AUTO_APPROVE_BUDGET_MAX_USD and budget > AUTO_APPROVE_BUDGET_MAX_USD:
-        return False
-    if AUTO_APPROVE_NIGHT and not _in_night_hours_il():
         return False
     return True
 

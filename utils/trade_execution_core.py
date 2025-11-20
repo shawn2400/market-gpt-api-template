@@ -421,9 +421,16 @@ def _compute_tp_sl_targets(
                 q_str = _q_qty(symbol, alloc)
                 qf = float(q_str)
                 remain = max(0.0, remain - qf)
-                if qf > 0:
-                    out["tp"].append({"price": float(_q_price(symbol, target)), "qty": qf})
-        except Exception:
+                # 🛡️ QUANTIZATION FIX: Validate minNotional for each TP ladder leg
+                target_price = float(_q_price(symbol, target))
+                min_not = _min_notional(symbol)
+                notional = qf * target_price
+                if qf > 0 and notional >= min_not:
+                    out["tp"].append({"price": target_price, "qty": qf})
+                elif qf > 0:
+                    log.warning(f"⚠️ TP leg {i} skipped: qty={qf:.4f} @ {target_price:.8f} = ${notional:.2f} < minNotional ${min_not:.2f}")
+        except Exception as e:
+            log.warning(f"⚠️ TP ladder calculation failed: {e}")
             pass
 
     sl_given = plan.get("sl") or None
