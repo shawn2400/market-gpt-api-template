@@ -334,11 +334,11 @@ def validate_rr_smart(rr_ratio: float, min_rr: float, consensus_result: Optional
         (is_valid, reason_message)
     
     Logic:
-        1. HARD FLOOR (0.8): Absolute safety net - reject if RR < 0.8
+        1. HARD FLOOR (0.9): Absolute safety net - reject if RR < 0.9
         2. AUTO APPROVE (≥min_rr): Meets regime-specific requirement
-        3. CONSENSUS ZONE (0.8 to min_rr): Requires 2/3 AI consensus (66%)
+        3. CONSENSUS ZONE (0.9 to min_rr): Requires 2/3 AI consensus (66%)
     """
-    HARD_FLOOR = 0.8
+    HARD_FLOOR = 0.9
     
     # 1. HARD FLOOR - absolute minimum safety net
     if rr_ratio < HARD_FLOOR:
@@ -1686,11 +1686,10 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     )
     
     # דרישת RR + funding bias
+    # NOTE: RR validation already done by validate_rr_smart() in _ai_consensus_suggest_v2
+    # No need to re-validate here - just apply funding bias adjustments
     rr = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
     min_rr, success_req, fb_note = await _apply_funding_bias_req(prop["side"], symbol, min_rr, success_req)
-    if rr is None or rr < min_rr:
-        LOGGER.info(f"REJECTED {symbol}: rr={rr} < {min_rr}")
-        return None
 
     # גייטינג כללי
     vol_reg = ((ctx.get("filters") or {}).get("vol_regime","mid")) if ctx else "mid"
