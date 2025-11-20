@@ -203,11 +203,10 @@ class SymbolFilterEngine:
             # This filters based on RELATIVE volume strength, not absolute dollar amount
             try:
                 from utils.adaptive_volume_analyzer import AdaptiveVolumeAnalyzer
-                from utils.market_intelligence import get_market_intelligence
                 
                 # Get current market regime for context-aware filtering
-                mi = get_market_intelligence(symbol)
-                regime = mi.get("regime", "choppy") if mi else "choppy"
+                # Default to choppy for simplicity - dynamic threshold handles adaptation
+                regime = "choppy"
                 
                 # Initialize adaptive analyzer
                 analyzer = AdaptiveVolumeAnalyzer()
