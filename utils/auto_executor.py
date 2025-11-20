@@ -9,6 +9,7 @@ from utils.binance_client import (
     get_price, futures_mark_price, set_leverage, futures_create_order,
     get_symbol_filters, get_all_orders, futures_cancel_order, get_futures_client
 )
+from utils.binance_symbol_validator import get_symbol_validator
 
 # ✅ Dynamic budget (תאימות לשמות שונים במודול התקציב)
 try:
@@ -263,16 +264,22 @@ def _filters(symbol: str) -> Dict[str, Any]:
     return get_symbol_filters(symbol) or {}
 
 def _q_price(symbol: str, price: float) -> Tuple[str, float]:
-    f = _filters(symbol); tick = float(f.get("tickSize") or DEFAULT_TICK) or DEFAULT_TICK
+    """Round price using BinanceSymbolValidator for Binance-compliant precision"""
+    validator = get_symbol_validator()
+    p = validator.round_price(symbol, price)
+    f = _filters(symbol)
     decs = _decimals(str(f.get("tickSize") or DEFAULT_TICK))
-    steps = round(price / tick); p = steps * tick
-    s = f"{p:.{decs}f}"; return s, float(s)
+    s = f"{p:.{decs}f}"
+    return s, float(s)
 
 def _q_qty(symbol: str, qty: float) -> Tuple[str, float]:
-    f = _filters(symbol); step = float(f.get("stepSize") or DEFAULT_QTY_STEP) or DEFAULT_QTY_STEP
+    """Round quantity using BinanceSymbolValidator for Binance-compliant precision"""
+    validator = get_symbol_validator()
+    q = validator.round_quantity(symbol, qty, is_market=False)
+    f = _filters(symbol)
     decs = _decimals(str(f.get("stepSize") or DEFAULT_QTY_STEP))
-    steps = math.floor(qty / step); q = max(step, steps * step)
-    s = f"{q:.{decs}f}"; return s, float(s)
+    s = f"{q:.{decs}f}"
+    return s, float(s)
 
 def _min_notional(symbol: str) -> float:
     f = _filters(symbol); mn = f.get("minNotional")

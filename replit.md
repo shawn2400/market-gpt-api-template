@@ -4,6 +4,11 @@
 AlgoGPT is an autonomous algorithmic trading platform for 24/7 Binance Futures, leveraging AI to analyze 534 symbols and execute intelligent trades. It integrates 7 trading strategies, dynamic capital management, and aims for 4-10 high-quality daily trades. The platform features an AI-driven MetaBrain that eliminates hardcoded logic, with all trade parameters determined by AI. It focuses on scalability, autonomous operation with a self-adaptive engine, and complete data persistence, designed for optimal performance across all market conditions.
 
 ## Recent Changes (Nov 20, 2025)
+-   **🔧 CRITICAL FIX: Binance Precision Validator Integration (Nov 20, 2025)**:
+    1. **Root Cause**: SL/TP orders sent to Binance with incorrect precision, causing APIError -1111 "Precision is over the maximum defined for this asset"
+    2. **Solution**: Refactored `_q_price()` and `_q_qty()` in `utils/auto_executor.py` to use `BinanceSymbolValidator` instead of manual `round()`/`floor()` 
+    3. **Impact**: ALL prices (entry/SL/TP) now validated through `BinanceSymbolValidator.round_price()` with Decimal precision + ROUND_DOWN
+    4. **Result**: Ensures 100% Binance-compliant tickSize/stepSize alignment, eliminating precision errors on protective orders
 -   **Fixed All RR Validation Issues**: Changed HARD_FLOOR from 0.8 to 0.9 in `gpt_auto_suggest.py`, removed duplicate RR validation check that blocked trades after AI consensus approval, and aligned all MinRR thresholds to 0.9 for CHOPPY markets.
 -   **Fixed Smart Filter Volume Threshold**: Reduced MAX_VOLUME_THRESHOLD from 0.5x to 0.15x in `adaptive_volume_analyzer.py` to allow low-volume quality setups to pass filtering (was blocking all trades with volume <0.5x median).
 -   **100% Dynamic RR Validation**: validate_rr_smart() now handles all RR checks with regime-aware thresholds, AI consensus support, and no duplicate validations.
