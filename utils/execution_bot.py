@@ -661,11 +661,13 @@ class ExecutionBot:
                 if corrected.get("quantity"):
                     qty = corrected["quantity"]
                     attempt_order["quantity"] = qty
+                    base_kwargs["quantity"] = qty  # 🔧 FIX: Update base_kwargs too!
                     self.log.info(f"✅ Corrected quantity for {symbol}: {qty}")
                 
                 if corrected.get("price") and order_type == "LIMIT":
                     entry_price = corrected["price"]
                     attempt_order["price"] = entry_price
+                    base_kwargs["price"] = entry_price  # 🔧 FIX: Update base_kwargs too!
                     self.log.info(f"✅ Corrected price for {symbol}: {entry_price}")
                     
             except Exception as val_err:

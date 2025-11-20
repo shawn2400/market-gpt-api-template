@@ -768,6 +768,15 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
                     # Re-adapt order after cache invalidation
                     kwargs = adapt_order_for_mode(kwargs, side)
                     print(f"[DEBUG] Re-adapted: positionSide={kwargs.get('positionSide')!r}")
+                    
+                    # 🔧 CRITICAL FIX: Re-quantize price and quantity after adaptation
+                    # Adaptation may have changed parameters, so we need to re-validate precision
+                    if "quantity" in kwargs:
+                        kwargs["quantity"] = _quantize_qty(sym, kwargs["quantity"])
+                        print(f"[DEBUG] Re-quantized quantity: {kwargs['quantity']}")
+                    if "price" in kwargs:
+                        kwargs["price"] = _quantize_price(sym, kwargs["price"])
+                        print(f"[DEBUG] Re-quantized price: {kwargs['price']}")
                 except Exception as adapt_err:
                     print(f"[WARN] Failed to re-adapt after -4061: {adapt_err}")
             time.sleep(min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * attempt) / 1000.0)
