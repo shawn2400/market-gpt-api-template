@@ -302,7 +302,7 @@ async def get_context_batch(payload: BatchIn = Body(...)):
     # Multi-timeframe mode
     multi_tf_data = await manager.fetch_batch_multi_tf(
         symbols=payload.symbols,
-        intervals=payload.intervals,
+        intervals=list(payload.intervals) if payload.intervals else [],
         limit=180,
         force_refresh=not payload.use_cache
     )

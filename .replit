@@ -164,10 +164,13 @@ localPort = 43087
 externalPort = 3000
 
 [[ports]]
+<<<<<<< Updated upstream
 localPort = 43365
 externalPort = 4200
 
 [[ports]]
+=======
+>>>>>>> Stashed changes
 localPort = 43433
 externalPort = 3002
 

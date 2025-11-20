@@ -132,3 +132,11 @@ async def funding_bias(symbol: str, side: Optional[str] = None) -> Dict[str, Any
         "enabled": FUNDING_ENABLED,
     }
 
+def funding_bias_for_symbol(symbol: str) -> float:
+    """
+    Sync version for context API - returns neutral bias (0.0) since we can't async fetch.
+    For real-time bias, use the async funding_bias() function instead.
+    Returns: float in range [-1.0, +1.0] representing funding bias
+    """
+    return 0.0
+
