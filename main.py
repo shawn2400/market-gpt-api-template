@@ -74,7 +74,12 @@ except Exception as e:
 try:
     from utils.position_mode import ensure_hedge_mode
     BINANCE_FORCE_HEDGE_MODE = os.getenv("BINANCE_FORCE_HEDGE_MODE", "1") == "1"
-    if BINANCE_FORCE_HEDGE_MODE:
+    POSITION_MODE_OVERRIDE = os.getenv("POSITION_MODE_OVERRIDE", "").upper()
+    
+    if POSITION_MODE_OVERRIDE == "ONEWAY":
+        logging.info(f"🔧 POSITION_MODE_OVERRIDE=ONEWAY detected - skipping Hedge Mode enforcement")
+        logging.info(f"✅ System will operate in ONE-WAY mode (positionSide will be removed from all orders)")
+    elif BINANCE_FORCE_HEDGE_MODE:
         _hedge_success = ensure_hedge_mode()
         if _hedge_success:
             logging.info("✅ Binance Hedge Mode enforced")
