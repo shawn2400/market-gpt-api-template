@@ -1,0 +1,142 @@
+הנה **פקודה אחת**, נקייה, חדה, מוכנה לקופי–פייסט לסוכן שלך.
+היא מכסה בדיוק את כל הסעיפים **1–7** בצורה מקצועית וברורה כדי שהוא ייתן לך סקירה מלאה מה יש ומה חסר — ואתה ואני נדע *בדיוק* מה לתקן היום.
+
+---
+
+# ✅ **פקודה מלאה לסוכן — Copy/Paste**
+
+**TASK: Full System Audit (AlgoGPT v2.16.0 Production)**
+**PRIORITY: CRITICAL — Before new trading session**
+
+בצע עכשיו בדיקה מלאה של מערכת AlgoGPT לפי 7 תחומים.
+תן דוח: מה קיים, מה עובד, מה חלקי, מה חסר, ומה דורש תיקון מיידי.
+
+---
+
+## **1️⃣ BUGS & STABILITY**
+
+* סרוק את כל הלוגים האחרונים
+* בדוק Exceptions, Retry Failures, Throttling
+* בדוק שלא נוצרות קריאות כפולות
+* ודא שה-ConfirmStore עובד 100% Idempotent
+* בדוק שכל הפונקציות async/await מנוהלות נכון
+
+**ספק: רשימת באגים + עדיפות.**
+
+---
+
+## **2️⃣ TRADE MANAGEMENT (Live Engine)**
+
+בדוק:
+
+* SL/TP Placement
+* BE Logic
+* Trailing SL
+* Reverse Position
+* Chop Zone
+* ATR-based exits
+* MACD+ADX decision engine
+* manage_once / manage_open_trades
+
+**האם כל טרייד מנוהל עד הסוף ללא חורים?**
+ספק דוח + נקודות תורפה.
+
+---
+
+## **3️⃣ AUTO EXECUTOR & QUALITY GATE**
+
+בדוק:
+
+* Quality Score ≥ 8.5 enforce
+* Symbol Scheduler
+* Fallback list
+* מניעת עומס
+* Symbol skip logic
+* Stop conditions (kill switch)
+* Daily Loss Cap
+
+**האם מתחיל טרייד רק בתנאים נכונים?**
+
+---
+
+## **4️⃣ SL/TP ACCURACY**
+
+בדוק:
+
+* Stop-Limit trigger accuracy (Mark/Last)
+* Price deviation limit
+* Cancel/Replace SL logic
+* Immediate Trigger Errors
+* Multi-TP Ladder
+
+**האם ה-SL/TP בטוחים ב-100%?**
+
+---
+
+## **5️⃣ SERVER LOAD & RESOURCE BALANCE**
+
+בדוק:
+
+* CPU load
+* Memory usage
+* Thread count
+* Request-per-minute
+* Binance rate-limit proximity
+* האם מצב “אין תקציב” מפנה משאבים נכון?
+
+**ספק גרף עומס + המלצות אופטימיזציה.**
+
+---
+
+## **6️⃣ INDICATORS ACCURACY**
+
+בדוק חישובים של:
+
+* EMA21 / EMA50
+* RSI
+* MACD
+* ATR
+* ADX
+* Bollinger
+* OBV
+* Volume Spike
+
+**השווה מול TradingView.
+ספק דוח סטיות.**
+
+---
+
+## **7️⃣ BINANCE INTEGRATION**
+
+בדוק:
+
+* REST
+* WebSocket
+* userStream
+* Precision rules
+* Order accuracy
+* Retry logic
+* Spot + Futures
+* Multi-Account Support
+
+**האם יש בעיות חיבור, Timeout, או Rejects לא מוסברים?**
+
+---
+
+# 📦 **OUTPUT REQUIRED (CRITICAL):**
+
+שלח דוח מסכם ל-ChatGPT:
+
+* ✔ מה קיים
+* ✔ מה תקין
+* ✔ מה שבור
+* ✔ מה חסר
+* ✔ מה דורש תיקון מיידי
+* ✔ רשימת באגים לפי עדיפות
+* ✔ המלצות לפעולה
+
+---
+
+# 🟩 **הדבק את זה עכשיו לסוכן — והוא יחזור אלינו עם תמונת מצב מלאה.**
+
+אחרי שהוא מחזיר — אני נכנס איתך, סוגר את הפינות, ומתאים בדיוק את מה שצריך לתקן.
