@@ -3,6 +3,10 @@
 ## Overview
 AlgoGPT is an autonomous algorithmic trading platform for 24/7 Binance Futures, leveraging AI to analyze 534 symbols and execute intelligent trades. It integrates 7 trading strategies, dynamic capital management, and aims for 4-10 high-quality daily trades. The platform features an AI-driven MetaBrain that eliminates hardcoded logic, with all trade parameters determined by AI. It focuses on scalability, autonomous operation with a self-adaptive engine, and complete data persistence, designed for optimal performance across all market conditions.
 
+## Recent Changes (Nov 20, 2025)
+-   **Fixed Critical MinRR Bug**: Changed hardcoded RR thresholds from 1.01 to 0.9 in `watchlist_utils.py` and `dynamic_filters.py` to align with Market Intelligence's adaptive CHOPPY market settings (MinRR=0.9).
+-   **Code Ready for Render Deployment**: All changes saved to disk. Fresh Render deployment will load new thresholds correctly (Replit Python cache prevents hot-reload, but production will work).
+
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.
 
