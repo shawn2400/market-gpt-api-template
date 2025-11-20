@@ -90,20 +90,22 @@ class SmartFilterConfigProvider:
         
         # Adaptive volume configuration
         self.adaptive_volume_enabled = os.getenv("ADAPTIVE_VOLUME_ENABLED", "1") == "1"
-        raw_strategy = os.getenv("VOLUME_PERCENTILE_STRATEGY", "p75")
+        raw_strategy = os.getenv("VOLUME_PERCENTILE_STRATEGY", "auto")
         
+        # 🆕 v3.0: AUTO strategy dynamically selects percentile based on market volume
         # Validate and normalize percentile strategy
-        VALID_STRATEGIES = ["p25", "median", "p75"]
+        VALID_STRATEGIES = ["auto", "p25", "median", "p75"]
         strategy_normalized = raw_strategy.lower()
         
         if strategy_normalized not in VALID_STRATEGIES:
-            self.logger.error(f"❌ Invalid VOLUME_PERCENTILE_STRATEGY '{raw_strategy}', defaulting to p75 (conservative)")
-            self.volume_percentile_strategy = "p75"
+            self.logger.error(f"❌ Invalid VOLUME_PERCENTILE_STRATEGY '{raw_strategy}', defaulting to auto")
+            self.volume_percentile_strategy = "auto"
         else:
             self.volume_percentile_strategy = strategy_normalized
-            if strategy_normalized != "p75":
-                self.logger.info(f"📊 Volume Percentile Strategy: {strategy_normalized.upper()}")
-            # No log for p75 (default/conservative - expected)
+            if strategy_normalized == "auto":
+                self.logger.info(f"🤖 Volume Strategy: AUTO (adapts to market conditions)")
+            elif strategy_normalized != "p75":
+                self.logger.info(f"📊 Volume Percentile Strategy: {strategy_normalized.upper()} (manual override)")
     
     def get_thresholds(self, 
                       regime: str, 

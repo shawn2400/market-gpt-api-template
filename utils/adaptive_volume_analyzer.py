@@ -61,12 +61,13 @@ class AdaptiveVolumeAnalyzer:
     LOW_VOLUME_MARKET_THRESHOLD = 0.60   # If >60% of symbols have volume < 0.5x
     HIGH_VOLUME_MARKET_THRESHOLD = 0.30  # If <30% of symbols have volume < 0.5x
     
-    # Market Regime Auto-Adjustment Multipliers
-    # LOGIC: Lower multiplier = LOWER threshold = MORE symbols pass filtering
-    MARKET_REGIME_MULTIPLIERS = {
-        "LOW_VOLUME": 0.15,    # Reduce thresholds by 85% in low-volume markets (aggressive - enable trades)
-        "NORMAL": 1.0,         # Standard thresholds (balanced)
-        "HIGH_VOLUME": 0.67    # Reduce thresholds by 33% in high-volume markets (moderate - enable trades)
+    # 🆕 AUTO PERCENTILE STRATEGY SELECTION (v3.0)
+    # Instead of multipliers, CHANGE THE PERCENTILE STRATEGY based on market volume
+    # This is more intelligent than just capping - it fundamentally changes the filtering approach
+    MARKET_REGIME_PERCENTILE_STRATEGY = {
+        "LOW_VOLUME": "p25",    # LOW threshold → ~75% symbols pass (aggressive - enable trades)
+        "NORMAL": "median",     # MEDIUM threshold → ~50% symbols pass (balanced)
+        "HIGH_VOLUME": "p75"    # HIGH threshold → ~25% symbols pass (conservative - quality focus)
     }
     
     # Cache TTL (seconds)
@@ -79,14 +80,21 @@ class AdaptiveVolumeAnalyzer:
     
     def get_adaptive_volume_threshold(self, 
                                       regime: str,
-                                      percentile_strategy: str = DEFAULT_PERCENTILE_STRATEGY,
+                                      percentile_strategy: str = "auto",
                                       force_refresh: bool = False) -> float:
         """
         Get volume threshold adapted to current market conditions.
         
+        🆕 v3.0 AUTO STRATEGY SELECTION:
+        - When percentile_strategy="auto" (default), the system automatically selects
+          the optimal strategy based on market-wide volume conditions:
+          * LOW_VOLUME market → p25 (aggressive - enable more trades)
+          * NORMAL market → median (balanced)
+          * HIGH_VOLUME market → p75 (conservative - quality focus)
+        
         Args:
             regime: Market regime (choppy, trending, sideways, volatile)
-            percentile_strategy: "p75" (conservative/strict), "median" (balanced), "p25" (aggressive/loose)
+            percentile_strategy: "auto" (smart selection), "p75" (conservative), "median" (balanced), "p25" (aggressive)
             force_refresh: Force cache refresh (default: False)
         
         Returns:
@@ -99,14 +107,26 @@ class AdaptiveVolumeAnalyzer:
             self.logger.warning(f"Volume stats unavailable, using safe fallback")
             return self._get_fallback_threshold(regime)
         
-        # Select threshold based on strategy (validate and normalize)
-        VALID_STRATEGIES = ["p25", "median", "p75"]
-        strategy_normalized = percentile_strategy.lower()
+        # 🆕 AUTO STRATEGY SELECTION based on market volume regime
+        if percentile_strategy == "auto":
+            strategy_normalized = self.MARKET_REGIME_PERCENTILE_STRATEGY.get(
+                stats.market_volume_regime, 
+                "median"  # Safe fallback
+            )
+            self.logger.info(
+                f"🤖 AUTO Strategy Selection: {stats.market_volume_regime} market → {strategy_normalized.upper()} "
+                f"({stats.low_volume_pct:.0f}% symbols < 0.5x median)"
+            )
+        else:
+            # Manual override (for testing/debugging)
+            VALID_STRATEGIES = ["p25", "median", "p75"]
+            strategy_normalized = percentile_strategy.lower()
+            
+            if strategy_normalized not in VALID_STRATEGIES:
+                self.logger.error(f"❌ Invalid percentile strategy '{percentile_strategy}', defaulting to median")
+                strategy_normalized = "median"
         
-        if strategy_normalized not in VALID_STRATEGIES:
-            self.logger.error(f"❌ Invalid percentile strategy '{percentile_strategy}', defaulting to p75 (conservative)")
-            strategy_normalized = "p75"
-        
+        # Select threshold based on final strategy
         if strategy_normalized == "p25":
             raw_threshold = stats.p25_volume_ratio
         elif strategy_normalized == "median":
@@ -114,25 +134,17 @@ class AdaptiveVolumeAnalyzer:
         else:  # p75
             raw_threshold = stats.p75_volume_ratio
         
-        # Apply regime-based multiplier
-        # CHOPPY: 0.6x (more permissive)
-        # TRENDING: 1.0x (standard)
-        # VOLATILE: 1.2x (more selective)
+        # Apply regime-based multiplier (CHOPPY less strict, VOLATILE more strict)
         regime_multipliers = {
-            "choppy": 0.6,
-            "sideways": 0.8,
-            "trending": 1.0,
-            "volatile": 1.2
+            "choppy": 0.6,      # More permissive in choppy markets
+            "sideways": 0.8,    # Slightly permissive
+            "trending": 1.0,    # Standard
+            "volatile": 1.2     # More selective in volatile markets
         }
         regime_multiplier = regime_multipliers.get(regime.lower(), 1.0)
         
-        # 🆕 APPLY MARKET VOLUME REGIME AUTO-ADJUSTMENT
-        # This is the KEY feature - automatically adjust thresholds based on market-wide volume
-        market_regime_multiplier = self.MARKET_REGIME_MULTIPLIERS.get(stats.market_volume_regime, 1.0)
-        
-        # Combine both multipliers (trading regime × market volume regime)
-        combined_multiplier = regime_multiplier * market_regime_multiplier
-        adaptive_threshold = raw_threshold * combined_multiplier
+        # Calculate final threshold
+        adaptive_threshold = raw_threshold * regime_multiplier
         
         # Apply safety guardrails
         final_threshold = max(
@@ -141,10 +153,9 @@ class AdaptiveVolumeAnalyzer:
         )
         
         self.logger.info(
-            f"📊 Adaptive Volume Threshold: {regime.upper()} @ {percentile_strategy} "
+            f"📊 Adaptive Volume: {regime.upper()} @ {strategy_normalized.upper()} "
             f"→ {final_threshold:.3f}x (raw: {raw_threshold:.3f}x, "
-            f"regime_mult: {regime_multiplier:.2f}x, market_mult: {market_regime_multiplier:.2f}x, "
-            f"market_regime: {stats.market_volume_regime})"
+            f"regime_mult: {regime_multiplier:.2f}x, market_regime: {stats.market_volume_regime})"
         )
         
         return final_threshold
@@ -315,23 +326,31 @@ class AdaptiveVolumeAnalyzer:
 _analyzer = None
 
 def get_adaptive_volume_threshold(regime: str, 
-                                  percentile_strategy: str = "p75",
+                                  percentile_strategy: str = "auto",
                                   force_refresh: bool = False) -> float:
     """
     Get adaptive volume threshold for given regime.
     
+    🆕 v3.0 AUTO STRATEGY (default):
+    The system automatically selects the optimal percentile strategy based on
+    real-time market-wide volume conditions:
+    - LOW_VOLUME market (>60% symbols < 0.5x median) → p25 (aggressive - enable trades)
+    - NORMAL market (30-60%) → median (balanced)
+    - HIGH_VOLUME market (<30%) → p75 (conservative - quality focus)
+    
     Usage:
-        threshold = get_adaptive_volume_threshold("trending", "p75")  # Conservative (default)
+        threshold = get_adaptive_volume_threshold("trending")  # AUTO (default)
+        threshold = get_adaptive_volume_threshold("trending", "p75")  # Manual override
         if volume_ratio >= threshold:
             # Pass Stage 1
     
     Args:
         regime: Market regime (choppy, trending, sideways, volatile)
-        percentile_strategy: "p75" (conservative/strict - default), "median" (balanced), "p25" (aggressive/loose)
+        percentile_strategy: "auto" (smart selection - default), "p75" (conservative), "median" (balanced), "p25" (aggressive)
         force_refresh: Force fresh calculation (default: False)
     
     Returns:
-        Adaptive volume threshold (0.03 - 0.50)
+        Adaptive volume threshold (0.03 - 0.15)
     """
     global _analyzer
     if _analyzer is None:

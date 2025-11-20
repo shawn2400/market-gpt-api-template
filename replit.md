@@ -81,21 +81,18 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Position Limits Manager**: Sets max positions per symbol, total open orders, and correlation exposure limits.
 -   **Trading Gatekeeper**: Unified pre-trade validation integrating all filters and Dynamic Leverage.
 
-**Dynamic Smart Filter v2.0 (100% Regime-Aware + Adaptive Volume):**
--   **🆕 Adaptive Volume Analyzer (v2.0)**: Measures real-time market-wide volume distribution and auto-adjusts thresholds based on actual conditions, not assumptions. Compares each symbol's volume against market median to determine relative strength.
--   **🆕 Market-Wide Volume Regime Detection (v3.0)**: Automatically detects LOW_VOLUME/NORMAL/HIGH_VOLUME market conditions by analyzing % of symbols below median volume.
-    -   **LOW_VOLUME Market** (>60% symbols < 0.5x median): Auto-reduces thresholds by 85% (0.15x) to aggressively enable trading in weak markets
-    -   **NORMAL Market** (30-60% symbols < 0.5x median): Standard thresholds (1.0x)
-    -   **HIGH_VOLUME Market** (<30% symbols < 0.5x median): Auto-reduces thresholds by 33% (0.67x) to moderately enable trading in strong markets
--   **Adaptive Volume Thresholds**: Volume requirements adapt automatically to market conditions using percentile strategies. Safety guardrails prevent extreme values (0.03x - 0.50x range).
-    -   **p75 (Conservative/Default)**: High threshold (~3.5x median), only top 25% volume symbols pass - strict filtering for quality
-    -   **median (Balanced)**: Medium threshold (~1.0x median), ~50% of symbols pass - balanced approach
-    -   **p25 (Aggressive)**: Low threshold (~0.4x median), ~75% of symbols pass - loose filtering for more opportunities
+**Dynamic Smart Filter v3.0 (100% Regime-Aware + AUTO Percentile Strategy):**
+-   **🆕 Adaptive Volume Analyzer (v3.0)**: Measures real-time market-wide volume distribution and auto-adjusts thresholds based on actual conditions, not assumptions. Compares each symbol's volume against market median to determine relative strength.
+-   **🆕 AUTO Percentile Strategy Selection (v3.0)**: System automatically selects optimal filtering strategy based on market-wide volume conditions - **zero manual intervention required**:
+    -   **LOW_VOLUME Market** (>60% symbols < 0.5x median) → p25 strategy (aggressive - ~75% symbols pass, enable trades)
+    -   **NORMAL Market** (30-60% symbols < 0.5x median) → median strategy (balanced - ~50% symbols pass)
+    -   **HIGH_VOLUME Market** (<30% symbols < 0.5x median) → p75 strategy (conservative - only top 25% pass, quality focus)
+-   **Adaptive Volume Thresholds**: Volume requirements dynamically calculated from live market data using selected percentile strategy. Safety guardrails prevent extreme values (0.03x - 0.15x range).
 -   **Regime-Based RR & Quality Thresholds**: Automatically adjusts thresholds - CHOPPY (RR≥0.9, quality≥4.0), TRENDING (RR≥1.1, quality≥4.5), VOLATILE (RR≥1.15, quality≥5.0).
 -   **Dynamic BTC Correlation Penalty**: Scales BTC penalty based on regime/mood/confidence (e.g., CHOPPY+BEARISH=-0.4 instead of fixed -1.0).
 -   **Adaptive Direction Penalty**: Counter-trend penalties adjust by regime strength - CHOPPY (-0.8), TRENDING (-1.0), VOLATILE (-1.2).
 -   **Market Intelligence Integration**: Queries Market Intelligence in real-time for regime/mood analysis before filtering.
--   **100% Dynamic Operation**: Zero hard-coded thresholds - all parameters measured from live market data across 591 symbols. Automatically adjusts to market-wide volume conditions without manual intervention.
+-   **100% Dynamic Operation**: Zero hard-coded thresholds - all parameters measured from live market data across 591 symbols. Automatically adjusts percentile strategy AND thresholds to market-wide volume conditions without manual intervention.
 -   **Smart Caching**: 5-minute TTL on volume stats to balance freshness vs API efficiency.
 
 **Dynamic TOP 100 Symbol Filter (Musical Chairs System):**
