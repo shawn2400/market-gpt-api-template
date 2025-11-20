@@ -158,7 +158,7 @@ localPort = 5000
 externalPort = 80
 
 [[ports]]
-localPort = 44973
+localPort = 40495
 externalPort = 3000
 
 # === Deployment (VM Target) ===

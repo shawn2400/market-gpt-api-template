@@ -8,12 +8,11 @@ Hybrid Dynamic Leverage System v2.0
 
 Features:
 - Multi-factor confidence scoring (Quality, Market, Tier, WinRate, ATR)
-- 3-Layer safety guards (Emergency, Volatility, Symbol)
+- 4-Layer safety guards (Emergency, Volatility, Symbol, Portfolio)
 - Market regime detection (TRENDING/VOLATILE/CHOPPY/CRASH)
 - Portfolio-level protection
 - Dynamic blacklist management
 - Recovery mode after losses
-- Time-based protection
 - Real-time performance tracking
 
 Usage:
@@ -56,12 +55,6 @@ MAX_CORRELATED_POSITIONS = int(os.getenv("MAX_CORRELATED_POSITIONS", "2"))
 # Recovery Mode
 RECOVERY_MODE_LOSS_TRIGGER = float(os.getenv("RECOVERY_LOSS_TRIGGER", "200.0"))
 RECOVERY_STEPS = [5, 8, 12, 15, 20, 25, 30]  # Gradual recovery
-
-# Time-based Protection
-NIGHT_HOURS_START = int(os.getenv("NIGHT_HOURS_START", "22"))
-NIGHT_HOURS_END = int(os.getenv("NIGHT_HOURS_END", "6"))
-NIGHT_MAX_LEVERAGE = int(os.getenv("NIGHT_MAX_LEVERAGE", "15"))
-WEEKEND_MAX_LEVERAGE = int(os.getenv("WEEKEND_MAX_LEVERAGE", "10"))
 
 
 class MarketRegime(Enum):
@@ -113,10 +106,6 @@ class SafetyStatus:
     symbol_protection_active: bool
     symbol_reason: Optional[str]
     symbol_max_leverage: int
-    
-    time_protection_active: bool
-    time_reason: Optional[str]
-    time_max_leverage: int
     
     portfolio_protection_active: bool
     portfolio_reason: Optional[str]
@@ -182,7 +171,7 @@ class DynamicLeverageCalculator:
                 "safety_status": SafetyStatus,
                 "base_leverage_range": (min, max),
                 "reasoning": str,
-                "guards_applied": List[str]
+                "guards_applied": List[str] - guards that were applied
             }
         """
         if not self.enabled:
@@ -473,9 +462,6 @@ class DynamicLeverageCalculator:
             symbol_protection_active=False,
             symbol_reason=None,
             symbol_max_leverage=base_max,
-            time_protection_active=False,
-            time_reason=None,
-            time_max_leverage=base_max,
             portfolio_protection_active=False,
             portfolio_reason=None,
             portfolio_max_leverage=base_max
@@ -530,22 +516,7 @@ class DynamicLeverageCalculator:
             safety.symbol_reason = "Very poor symbol performance (Tier D)"
             safety.symbol_max_leverage = 5
         
-        # 4. Time-based Protection
-        now = datetime.now(timezone.utc)
-        hour = now.hour
-        is_weekend = now.weekday() >= 5  # Saturday=5, Sunday=6
-        
-        if NIGHT_HOURS_START <= hour or hour < NIGHT_HOURS_END:
-            safety.time_protection_active = True
-            safety.time_reason = f"Night hours ({hour}:00 UTC)"
-            safety.time_max_leverage = NIGHT_MAX_LEVERAGE
-        
-        if is_weekend:
-            safety.time_protection_active = True
-            safety.time_reason = "Weekend trading"
-            safety.time_max_leverage = WEEKEND_MAX_LEVERAGE
-        
-        # 5. Portfolio Protection
+        # 4. Portfolio Protection
         portfolio_exposure = kwargs.get("portfolio_exposure", 0.0)
         correlated_positions = kwargs.get("correlated_positions", 0)
         
@@ -584,9 +555,6 @@ class DynamicLeverageCalculator:
         
         if safety.symbol_protection_active:
             final = min(final, safety.symbol_max_leverage)
-        
-        if safety.time_protection_active:
-            final = min(final, safety.time_max_leverage)
         
         if safety.portfolio_protection_active:
             final = min(final, safety.portfolio_max_leverage)
@@ -645,10 +613,6 @@ class DynamicLeverageCalculator:
         if safety.symbol_protection_active:
             lines.append(f"🛡️  SYMBOL PROTECTION: {safety.symbol_reason} → Max {safety.symbol_max_leverage}x")
             guards.append("symbol_protection")
-        
-        if safety.time_protection_active:
-            lines.append(f"⏰ TIME PROTECTION: {safety.time_reason} → Max {safety.time_max_leverage}x")
-            guards.append("time_protection")
         
         if safety.portfolio_protection_active:
             lines.append(f"📊 PORTFOLIO PROTECTION: {safety.portfolio_reason} → Max {safety.portfolio_max_leverage}x")
