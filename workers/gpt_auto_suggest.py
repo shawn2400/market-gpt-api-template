@@ -2225,8 +2225,9 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
             market_mood=market_condition.mood if market_condition else "neutral"
         )
         
-        # 🛡️ Apply risk profile leverage cap
-        leverage = min(sizing.leverage, max_leverage_by_balance)
+        # 🚀 NO MAX LIMIT: Let AI choose leverage dynamically (2-35x)
+        # REMOVED: leverage cap from balance tiers - system is 100% dynamic
+        leverage = sizing.leverage  # AI-calculated leverage (uncapped)
         dynamic_budget = sizing.size_usd / leverage
         notional = sizing.size_usd
         
@@ -2238,8 +2239,8 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
         )
         LOGGER.info(
             f"💰 Dynamic Sizing: {symbol} {levels['side']} → "
-            f"Leverage={leverage}x (cap={max_leverage_by_balance}x by {risk_profile.name}), "
-            f"Budget=${dynamic_budget:.2f}, Position=${notional:.2f}"
+            f"Leverage={leverage:.2f}x (AI-calculated, no cap), "
+            f"Budget=${dynamic_budget:.2f}, Position=${notional:.2f}, Tier={risk_profile.name}"
         )
         
         # 🎯 MetaBrain v9.1: Multi-Target TP System (100% Dynamic)
