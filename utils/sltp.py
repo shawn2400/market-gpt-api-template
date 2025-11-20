@@ -98,14 +98,35 @@ def calc_sl_tp_with_tick(entry: float, side: str,
 def calc_sl_tp_for_symbol(symbol: str, entry: float, side: str,
                           sl: Optional[float] = None, tp: Optional[float] = None,
                           atr: Optional[float] = None, atr_mult: float = 1.5) -> Tuple[Optional[float], Optional[float]]:
-    tick_size = None
+    """Calculate SL/TP with Binance-compliant precision using BinanceSymbolValidator"""
+    # Calculate raw SL/TP prices
+    sl_price, tp_price = calc_sl_tp(entry, side, sl=sl, tp=tp, atr=atr, atr_mult=atr_mult)
+    
+    # Apply BinanceSymbolValidator precision correction
     try:
-        from utils.binance_client import get_symbol_filters
-        f = get_symbol_filters(symbol)
-        tick_size = float(f.get("tickSizeStr")) if f and f.get("tickSizeStr") else None
-    except Exception:
-        tick_size = None
-    return calc_sl_tp_with_tick(entry, side, sl=sl, tp=tp, atr=atr, atr_mult=atr_mult, tick_size=tick_size)
+        from utils.binance_symbol_validator import get_symbol_validator
+        validator = get_symbol_validator()
+        
+        if sl_price is not None:
+            sl_price = validator.round_price(symbol, sl_price)
+        if tp_price is not None:
+            tp_price = validator.round_price(symbol, tp_price)
+    except Exception as e:
+        # Fallback: use old tick_size method if validator unavailable
+        try:
+            from utils.binance_client import get_symbol_filters
+            f = get_symbol_filters(symbol)
+            tick_size = float(f.get("tickSizeStr")) if f and f.get("tickSizeStr") else None
+            if tick_size and float(tick_size) > 0:
+                side_u = (side or "").upper()
+                if sl_price is not None:
+                    sl_price = _round_to_tick(sl_price, tick_size, direction=("UP" if side_u == "LONG" else "DOWN"))
+                if tp_price is not None:
+                    tp_price = _round_to_tick(tp_price, tick_size, direction=("DOWN" if side_u == "LONG" else "UP"))
+        except Exception:
+            pass
+    
+    return sl_price, tp_price
 
 
 

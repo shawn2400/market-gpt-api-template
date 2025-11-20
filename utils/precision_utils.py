@@ -113,48 +113,95 @@ def _step_or_default(info: dict) -> str:
 
 # ===================== Price & Qty Appliers =====================
 def apply_price_tick(price: float, symbol: str) -> Tuple[float, str]:
-    info = _find_symbol_info(symbol) or {}
-    price_precision = info.get("pricePrecision", 8)
-    tick_size = _tick_or_default(info)
+    """Round price using BinanceSymbolValidator for precision"""
+    try:
+        from utils.binance_symbol_validator import get_symbol_validator
+        validator = get_symbol_validator()
+        rounded = validator.round_price(symbol, price)
+        return rounded, str(rounded)
+    except Exception:
+        # Fallback to old method if validator unavailable
+        info = _find_symbol_info(symbol) or {}
+        price_precision = info.get("pricePrecision", 8)
+        tick_size = _tick_or_default(info)
 
-    v = Decimal(str(price))
-    t = Decimal(str(tick_size)) if tick_size else Decimal("0")
-    dec = _decimal_step_round(v, t) if t > 0 else v
+        v = Decimal(str(price))
+        t = Decimal(str(tick_size)) if tick_size else Decimal("0")
+        dec = _decimal_step_round(v, t) if t > 0 else v
 
-    q = Decimal(1).scaleb(-int(price_precision))
-    s = format(dec.quantize(q, rounding=ROUND_DOWN).normalize(), "f")
-    return float(dec), s
+        q = Decimal(1).scaleb(-int(price_precision))
+        s = format(dec.quantize(q, rounding=ROUND_DOWN).normalize(), "f")
+        return float(dec), s
 
 def apply_price_tick_side(price: float, symbol: str, side: str) -> Tuple[float, str]:
-    info = _find_symbol_info(symbol) or {}
-    price_precision = info.get("pricePrecision", 8)
-    tick_size = _tick_or_default(info)
+    """Round price using BinanceSymbolValidator with side-aware behavior (round up for SELL, down for BUY)"""
+    try:
+        from utils.binance_symbol_validator import get_symbol_validator
+        from decimal import Decimal, ROUND_DOWN, ROUND_UP
+        
+        validator = get_symbol_validator()
+        info = validator.get_symbol_info(symbol)
+        if not info:
+            # Fallback if symbol not found
+            rounded = validator.round_price(symbol, price)
+            return rounded, str(rounded)
+        
+        tick_size = info["tickSize"]
+        is_sell = (str(side or "").upper() == "SELL")
+        
+        # Apply side-specific rounding: SELL rounds up (favorable), BUY rounds down (favorable)
+        decimal_price = Decimal(str(price))
+        decimal_tick = Decimal(str(tick_size))
+        
+        if decimal_tick > 0:
+            # Calculate how many ticks fit into price
+            ticks = decimal_price / decimal_tick
+            # Round up for SELL (higher price = better for seller), down for BUY
+            rounded_ticks = ticks.quantize(Decimal('1'), rounding=ROUND_UP if is_sell else ROUND_DOWN)
+            rounded_price = rounded_ticks * decimal_tick
+        else:
+            rounded_price = decimal_price
+        
+        return float(rounded_price), str(float(rounded_price))
+    except Exception:
+        # Fallback to old method if validator unavailable
+        info = _find_symbol_info(symbol) or {}
+        price_precision = info.get("pricePrecision", 8)
+        tick_size = _tick_or_default(info)
 
-    v = Decimal(str(price))
-    t = Decimal(str(tick_size)) if tick_size else Decimal("0")
-    is_sell = (str(side or "").upper() == "SELL")
+        v = Decimal(str(price))
+        t = Decimal(str(tick_size)) if tick_size else Decimal("0")
+        is_sell = (str(side or "").upper() == "SELL")
 
-    if t > 0:
-        dec = _decimal_step_round_up(v, t) if is_sell else _decimal_step_round(v, t)
-    else:
-        dec = v
+        if t > 0:
+            dec = _decimal_step_round_up(v, t) if is_sell else _decimal_step_round(v, t)
+        else:
+            dec = v
 
-    q = Decimal(1).scaleb(-int(price_precision))
-    s = format(dec.quantize(q, rounding=ROUND_DOWN).normalize(), "f")
-    return float(dec), s
+        q = Decimal(1).scaleb(-int(price_precision))
+        s = format(dec.quantize(q, rounding=ROUND_DOWN).normalize(), "f")
+        return float(dec), s
 
 def apply_qty_step(qty: float, symbol: str) -> Tuple[float, str]:
-    info = _find_symbol_info(symbol) or {}
-    qty_precision = info.get("quantityPrecision", 8)
-    step_size = _step_or_default(info)
+    """Round quantity using BinanceSymbolValidator for precision"""
+    try:
+        from utils.binance_symbol_validator import get_symbol_validator
+        validator = get_symbol_validator()
+        rounded = validator.round_quantity(symbol, qty, is_market=False)
+        return rounded, str(rounded)
+    except Exception:
+        # Fallback to old method if validator unavailable
+        info = _find_symbol_info(symbol) or {}
+        qty_precision = info.get("quantityPrecision", 8)
+        step_size = _step_or_default(info)
 
-    v = Decimal(str(qty))
-    s = Decimal(str(step_size)) if step_size else Decimal("0")
-    dec = _decimal_step_round(v, s) if s > 0 else v
+        v = Decimal(str(qty))
+        s = Decimal(str(step_size)) if step_size else Decimal("0")
+        dec = _decimal_step_round(v, s) if s > 0 else v
 
-    q = Decimal(1).scaleb(-int(qty_precision))
-    out = format(dec.quantize(q, rounding=ROUND_DOWN).normalize(), "f")
-    return float(dec), out
+        q = Decimal(1).scaleb(-int(qty_precision))
+        out = format(dec.quantize(q, rounding=ROUND_DOWN).normalize(), "f")
+        return float(dec), out
 
 # ===================== Filters + Quantity =====================
 def _symbol_filters(symbol: str) -> Dict[str, Any]:

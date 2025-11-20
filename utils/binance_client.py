@@ -338,28 +338,51 @@ def _decs(step: str) -> int:
     return len(frac)
 
 def _quantize_price(symbol: str, price: float) -> str:
-    f = get_symbol_filters(symbol) or {}
-    tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
-    if tick <= 0: tick = float(DEFAULT_PRICE_TICK_STR)
-    steps = round(price / tick)
-    adj = steps * tick
-    decs = _decs(str(f.get("tickSize") or DEFAULT_PRICE_TICK_STR))
-    return f"{adj:.{decs}f}"
+    """Quantize price using BinanceSymbolValidator for 100% precision compliance"""
+    try:
+        from utils.binance_symbol_validator import get_symbol_validator
+        validator = get_symbol_validator()
+        rounded = validator.round_price(symbol, price)
+        return str(rounded)
+    except Exception as e:
+        # Fallback to old method if validator unavailable
+        logger.warning(f"BinanceSymbolValidator unavailable for {symbol}, using fallback: {e}")
+        f = get_symbol_filters(symbol) or {}
+        tick = float(f.get("tickSize") or DEFAULT_PRICE_TICK_STR)
+        if tick <= 0: tick = float(DEFAULT_PRICE_TICK_STR)
+        steps = round(price / tick)
+        adj = steps * tick
+        decs = _decs(str(f.get("tickSize") or DEFAULT_PRICE_TICK_STR))
+        return f"{adj:.{decs}f}"
 
 def _quantize_qty(symbol: str, qty: float) -> str | int:
-    f = get_symbol_filters(symbol) or {}
-    step = float(f.get("stepSize") or DEFAULT_QTY_STEP_STR)
-    if step <= 0: step = float(DEFAULT_QTY_STEP_STR)
-    if qty <= 0: return "0"
-    steps = math.floor(max(qty, 0.0) / step)
-    adj = max(step, steps * step)
-    decs = _decs(str(f.get("stepSize") or DEFAULT_QTY_STEP_STR))
-    
-    # CRITICAL FIX: Return int for whole numbers (stepSize >= 1.0) to avoid Binance precision errors
-    if step >= 1.0:
-        return int(adj)
-    
-    return f"{adj:.{decs}f}"
+    """Quantize quantity using BinanceSymbolValidator for 100% precision compliance"""
+    try:
+        from utils.binance_symbol_validator import get_symbol_validator
+        validator = get_symbol_validator()
+        # Always use LIMIT mode (stricter) for quantity validation
+        rounded = validator.round_quantity(symbol, qty, is_market=False)
+        
+        # Return int for whole numbers to avoid Binance precision errors
+        if rounded == int(rounded):
+            return int(rounded)
+        return str(rounded)
+    except Exception as e:
+        # Fallback to old method if validator unavailable
+        logger.warning(f"BinanceSymbolValidator unavailable for {symbol}, using fallback: {e}")
+        f = get_symbol_filters(symbol) or {}
+        step = float(f.get("stepSize") or DEFAULT_QTY_STEP_STR)
+        if step <= 0: step = float(DEFAULT_QTY_STEP_STR)
+        if qty <= 0: return "0"
+        steps = math.floor(max(qty, 0.0) / step)
+        adj = max(step, steps * step)
+        decs = _decs(str(f.get("stepSize") or DEFAULT_QTY_STEP_STR))
+        
+        # CRITICAL FIX: Return int for whole numbers (stepSize >= 1.0) to avoid Binance precision errors
+        if step >= 1.0:
+            return int(adj)
+        
+        return f"{adj:.{decs}f}"
 
 def _ensure_min_notional_qty(symbol: str, price: float, qty_str: str) -> str:
     try:

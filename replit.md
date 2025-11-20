@@ -90,8 +90,12 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 **Dynamic TOP 100 Symbol Filter (Musical Chairs System):**
 -   Blocks trades for symbols outside the TOP 100, with dynamic scheduling for continuous ranking.
 
-**Binance Symbol Validator:**
--   Real-time symbol precision validation against Binance exchange info, with automatic quantity/price rounding.
+**Binance Symbol Validator (100% Precision Coverage):**
+-   **Universal Coverage**: ALL order creation paths (entry, SL, TP, grid, manual, guards) automatically validated via centralized `_quantize_price()` / `_quantize_qty()` functions.
+-   **Side-Aware Rounding**: SELL prices round up (favorable to seller), BUY prices round down (favorable to buyer).
+-   **Real-Time Sync**: Fetches live exchange info from Binance (tickSize, stepSize, minQty, minNotional) with 1-hour cache.
+-   **Graceful Fallback**: If validator unavailable, falls back to legacy filter-based rounding with logging.
+-   **Zero APIError -1111**: Eliminates precision errors by enforcing tick/step compliance at source.
 
 **Trade Execution Pipeline:**
 -   Calculates quantity from budget if not provided.
