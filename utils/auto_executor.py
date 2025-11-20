@@ -1233,7 +1233,7 @@ async def auto_execute_plan(plan: Dict[str, Any]) -> Dict[str, Any]:
             return {"ok": False, "error": "invalid_symbol_or_side"}
         
         # חלץ פרמטרים
-        leverage = int(plan.get("leverage", 5))
+        leverage = round(float(plan.get("leverage") or 5))  # Use round() instead of int() to handle 3.82 → 4
         budget = float(plan.get("budget_usd") or 0) or None
         qty = float(plan.get("qty") or 0) or None
         entry = float(plan.get("entry") or 0) or None

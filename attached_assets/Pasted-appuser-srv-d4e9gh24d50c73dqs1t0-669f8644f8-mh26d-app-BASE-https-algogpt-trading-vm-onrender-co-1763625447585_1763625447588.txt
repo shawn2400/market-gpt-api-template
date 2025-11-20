@@ -1,0 +1,145 @@
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ BASE="https://algogpt-trading-vm.onrender.com"
+
+echo -e "\n== READY =="
+curl -fsS "$BASE/readyz" >/dev/null && echo "🟩 READY OK" || echo "🟥 READY FAIL"
+
+echo -e "\n== API PING =="
+curl -fsS "$BASE/status/ping" >/dev/null && echo "🟩 API OK" || echo "🟥 API DOWN"
+
+== READY ==
+🟩 READY OK
+
+== API PING ==
+curl: (22) The requested URL returned error: 404
+🟥 API DOWN
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== EXECUTOR =="
+curl -fsS "$BASE/executor/status" >/dev/null && echo "🟩 EXECUTOR OK" || echo "🟥 EXECUTOR FAIL"
+
+== EXECUTOR ==
+curl: (22) The requested URL returned error: 404
+🟥 EXECUTOR FAIL
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== TRADE MANAGER =="
+curl -fsS "$BASE/manager/health" >/dev/null && echo "🟩 MANAGER OK" || echo "🟥 MANAGER FAIL"
+
+== TRADE MANAGER ==
+curl: (22) The requested URL returned error: 404
+🟥 MANAGER FAIL
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== USER STREAM =="
+curl -fsS "$BASE/userstream/status" >/dev/null && echo "🟩 STREAM OK" || echo "🟥 STREAM FAIL"
+
+== USER STREAM ==
+curl: (22) The requested URL returned error: 404
+🟥 STREAM FAIL
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== BAN SHIELD =="
+curl -fsS "$BASE/shield/status" >/dev/null && echo "🟩 SHIELD OK" || echo "🟥 SHIELD ALERT"
+
+== BAN SHIELD ==
+curl: (22) The requested URL returned error: 404
+🟥 SHIELD ALERT
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== POSITION PROTECTION =="
+curl -fsS "$BASE/protect/status" >/dev/null && echo "🟩 PROTECT OK" || echo "🟥 PROTECT FAIL"
+
+== POSITION PROTECTION ==
+curl: (22) The requested URL returned error: 404
+🟥 PROTECT FAIL
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/readyz" && echo "🟩 READY OK"
+ok🟩 READY OK
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/api/ping" && echo "🟩 API OK"
+curl: (22) The requested URL returned error: 404
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/health/executor" && echo "🟩 EXECUTOR OK"
+curl: (22) The requested URL returned error: 404
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/health/trade_manager" && echo " 🟩 MANAGER OK"
+curl: (22) The requested URL returned error: 404
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/health/userstream" && echo "🟩 STREAM OK"
+curl: (22) The requested URL returned error: 404
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/health/banshield" && echo "🟩 SHIELD OK"
+curl: (22) The requested URL returned error: 404
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -fsS "$BASE/health/protect" && echo "🟩 PROTECT OK"
+curl: (22) The requested URL returned error: 404
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ BASE="https://algogpt-trading-vm.onrender.com"
+
+echo -e "\n== READY ==" 
+curl -fsS "$BASE/readyz" >/dev/null && echo "🟩 READY OK" || echo "🟥 READY FAIL"
+
+echo -e "\n== API ==" 
+curl -fsS "$BASE/api/ping" >/dev/null && echo "🟩 API OK" || echo "🟥 API FAIL"
+
+echo -e "\n== EXECUTOR ==" 
+curl -fsS "$BASE/health/executor" >/dev/null && echo "🟩 EXECUTOR OK" || echo "🟥 EXECUTOR FAIL"
+
+curl -fsS "$BASE/health/protect" >/dev/null && echo "🟩 PROTECT OK" || echo "🟥 PROTECT FAIL""FAIL"
+
+== READY ==
+🟩 READY OK
+
+== API ==
+curl: (22) The requested URL returned error: 404
+🟥 API FAIL
+
+== EXECUTOR ==
+curl: (22) The requested URL returned error: 404
+🟥 EXECUTOR FAIL
+
+== TRADE MANAGER ==
+curl: (22) The requested URL returned error: 404
+🟥 MANAGER FAIL
+
+== USERSTREAM ==
+curl: (22) The requested URL returned error: 404
+🟥 STREAM FAIL
+
+== BAN SHIELD ==
+curl: (22) The requested URL returned error: 404
+🟥 SHIELD FAIL
+
+== AUTO PROTECT ==
+curl: (22) The requested URL returned error: 404
+🟥 PROTECT FAIL
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -s https://algogpt-trading-vm.onrender.com/openapi.json \
+ | jq '.paths'
+bash: jq: command not found
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ curl -s https://algogpt-trading-vm.onrender.com/openapi.json
+{"openapi":"3.1.0","info":{"title":"AlgoGPT Service","version":"2.18.0"},"paths":{"/readyz":{"get":{"summary":"Readyz","operationId":"readyz_readyz_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/healthz":{"get":{"summary":"Healthz","operationId":"healthz_healthz_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}},"post":{"summary":"Healthz","operationId":"healthz_healthz_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/version":{"get":{"summary":"Version Public","operationId":"version_public_version_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/manage-once/signed":{"get":{"summary":"Manage Once Signed","operationId":"manage_once_signed_manage_once_signed_get","parameters":[{"name":"ticket_id","in":"query","required":true,"schema":{"type":"string","title":"Ticket Id"}},{"name":"exp","in":"query","required":true,"schema":{"type":"string","title":"Exp"}},{"name":"sig","in":"query","required":true,"schema":{"type":"string","title":"Sig"}},{"name":"symbol","in":"query","required":true,"schema":{"type":"string","title":"Symbol"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/webhook/whatever":{"post":{"tags":["ops-approval"],"summary":"Webhook Whatever","operationId":"webhook_whatever_webhook_whatever_post","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/ops/ticket":{"post":{"tags":["ops-approval"],"summary":"Create Ticket","operationId":"create_ticket_ops_ticket_post","requestBody":{"content":{"application/json":{"schema":{"type":"object","title":"Payload"}}},"required":true},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/ops/ui/ticket":{"get":{"tags":["ops-approval"],"summary":"Ui Ticket","operationId":"ui_ticket_ops_ui_ticket_get","parameters":[{"name":"ticket_id","in":"query","required":true,"schema":{"type":"string","title":"Ticket Id"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/ops/ui/ticket/signed":{"get":{"tags":["ops-approval"],"summary":"Ui Ticket Signed","operationId":"ui_ticket_signed_ops_ui_ticket_signed_get","parameters":[{"name":"ticket_id","in":"query","required":true,"schema":{"type":"string","title":"Ticket Id"}},{"name":"exp","in":"query","required":true,"schema":{"type":"string","title":"Exp"}},{"name":"sig","in":"query","required":true,"schema":{"type":"string","title":"Sig"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/ops/approve":{"get":{"tags":["ops-approval"],"summary":"Approve","operationId":"approve_ops_approve_get","parameters":[{"name":"ticket_id","in":"query","required":true,"schema":{"type":"string","description":"ticket_id","title":"Ticket Id"},"description":"ticket_id"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/ops/reject":{"get":{"tags":["ops-approval"],"summary":"Reject","operationId":"reject_ops_reject_get","parameters":[{"name":"ticket_id","in":"query","required":true,"schema":{"type":"string","description":"ticket_id","title":"Ticket Id"},"description":"ticket_id"}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/ops/approve/signed":{"get":{"tags":["ops-approval"],"summary":"Approve Signed","operationId":"approve_signed_ops_approve_signed_get","parameters":[{"name":"ticket_id","in":"query","required":true,"schema":{"type":"string","title":"Ticket Id"}},{"name":"exp","in":"query","required":true,"schema":{"type":"string","title":"Exp"}},{"name":"sig","in":"query","required":true,"schema":{"type":"string","title":"Sig"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}},"post":{"tags":["ops-approval"],"summary":"Approve Signed Post","operationId":"approve_signed_post_ops_approve_signed_post","requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","title":"Payload"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/ops/reject/signed":{"get":{"tags":["ops-approval"],"summary":"Reject Signed","operationId":"reject_signed_ops_reject_signed_get","parameters":[{"name":"ticket_id","in":"query","required":true,"schema":{"type":"string","title":"Ticket Id"}},{"name":"exp","in":"query","required":true,"schema":{"type":"string","title":"Exp"}},{"name":"sig","in":"query","required":true,"schema":{"type":"string","title":"Sig"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}},"post":{"tags":["ops-approval"],"summary":"Reject Signed Post","operationId":"reject_signed_post_ops_reject_signed_post","requestBody":{"required":true,"content":{"application/json":{"schema":{"type":"object","title":"Payload"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/context":{"get":{"tags":["Context"],"summary":"Get Context","operationId":"get_context_context_get","parameters":[{"name":"symbol","in":"query","required":true,"schema":{"type":"string","description":"e.g. BTCUSDT","title":"Symbol"},"description":"e.g. BTCUSDT"},{"name":"interval","in":"query","required":false,"schema":{"enum":["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d"],"type":"string","default":"15m","title":"Interval"}},{"name":"compact","in":"query","required":false,"schema":{"type":"boolean","default":true,"title":"Compact"}},{"name":"Authorization","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Authorization"}},{"name":"X-API-Key","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"X-Api-Key"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/ContextItem"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/context/batch":{"post":{"tags":["Context"],"summary":"Get Context Batch","description":"Batch context endpoint with multi-timeframe support.\n\nBackward compatible:\n- Default behavior (single interval): Returns items list as before\n- Multi-TF mode (intervals=[...]): Returns both items and multi_tf_items\n\nUses MultiTFContextManager for smart caching and rate limit protection.","operationId":"get_context_batch_context_batch_post","parameters":[{"name":"Authorization","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Authorization"}},{"name":"X-API-Key","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"X-Api-Key"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/BatchIn"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/BatchOut"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/alerts/ingest":{"post":{"tags":["alerts"],"summary":"Alerts Ingest","operationId":"alerts_ingest_alerts_ingest_post","parameters":[{"name":"x-api-key","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"X-Api-Key"}},{"name":"X-Timestamp","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"X-Timestamp"}},{"name":"X-Nonce","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"X-Nonce"}},{"name":"X-Signature","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"X-Signature"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/IngestReq"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}},"get":{"tags":["alerts"],"summary":"Alerts Ingest Health","operationId":"alerts_ingest_health_alerts_ingest_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/telegram/webhook":{"post":{"tags":["Telegram"],"summary":"Callback Handler","operationId":"callback_handler_telegram_webhook_post","parameters":[{"name":"x-telegram-bot-api-secret-token","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"X-Telegram-Bot-Api-Secret-Token"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/metrics":{"get":{"tags":["metrics"],"summary":"Prometheus metrics (text exposition format)","operationId":"metrics_metrics_get","parameters":[{"name":"authorization","in":"header","required":false,"schema":{"type":"string","default":"","title":"Authorization"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/grid/status":{"get":{"tags":["Grid"],"summary":"Grid Status","operationId":"grid_status_grid_status_get","parameters":[{"name":"Authorization","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Authorization"}},{"name":"X-API-Key","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"X-Api-Key"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"type":"object","title":"Response Grid Status Grid Status Get"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/grid/active":{"get":{"tags":["Grid"],"summary":"Grid Active","operationId":"grid_active_grid_active_get","parameters":[{"name":"Authorization","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Authorization"}},{"name":"X-API-Key","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"X-Api-Key"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"type":"object","title":"Response Grid Active Grid Active Get"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/grid/dashboard":{"get":{"tags":["Grid"],"summary":"Grid Dashboard Info","operationId":"grid_dashboard_info_grid_dashboard_get","parameters":[{"name":"Authorization","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Authorization"}},{"name":"X-API-Key","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"X-Api-Key"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"type":"object","title":"Response Grid Dashboard Info Grid Dashboard Get"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/grid/dashboard/data":{"get":{"tags":["Grid"],"summary":"Grid Dashboard Data","operationId":"grid_dashboard_data_grid_dashboard_data_get","parameters":[{"name":"path","in":"query","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"description":"קובץ JSON לטעינה, ברירת מחדל trades_log.json","title":"Path"},"description":"קובץ JSON לטעינה, ברירת מחדל trades_log.json"},{"name":"Authorization","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Authorization"}},{"name":"X-API-Key","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"X-Api-Key"}}],"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/grid/trade":{"post":{"tags":["Grid"],"summary":"Trade Grid","operationId":"trade_grid_grid_trade_post","parameters":[{"name":"Authorization","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Authorization"}},{"name":"X-API-Key","in":"header","required":false,"schema":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"X-Api-Key"}}],"requestBody":{"required":true,"content":{"application/json":{"schema":{"$ref":"#/components/schemas/GridTradeRequest"}}}},"responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{"$ref":"#/components/schemas/GridTradeResponse"}}}},"422":{"description":"Validation Error","content":{"application/json":{"schema":{"$ref":"#/components/schemas/HTTPValidationError"}}}}}}},"/":{"get":{"summary":"Root","operationId":"root__get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/health":{"get":{"summary":"Health","operationId":"health_health_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/readyz/strict":{"get":{"summary":"Readyz Strict","operationId":"readyz_strict_readyz_strict_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/ai/test":{"post":{"summary":"Ai Test Post","operationId":"ai_test_post_ai_test_post","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}},"/ai/ping":{"get":{"summary":"Ai Ping","operationId":"ai_ping_ai_ping_get","responses":{"200":{"description":"Successful Response","content":{"application/json":{"schema":{}}}}}}}},"components":{"schemas":{"BatchIn":{"properties":{"symbols":{"items":{"type":"string"},"type":"array","title":"Symbols","description":"Symbols like BTCUSDT,ETHUSDT"},"interval":{"type":"string","enum":["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d"],"title":"Interval","default":"15m"},"compact":{"type":"boolean","title":"Compact","default":true},"intervals":{"anyOf":[{"items":{"type":"string","enum":["1m","3m","5m","15m","30m","1h","2h","4h","6h","8h","12h","1d"]},"type":"array"},{"type":"null"}],"title":"Intervals","description":"Multi-timeframe support (e.g., ['15m', '1h', '4h'])"},"use_cache":{"type":"boolean","title":"Use Cache","description":"Use cached data if available","default":true}},"type":"object","required":["symbols"],"title":"BatchIn"},"BatchOut":{"properties":{"interval":{"type":"string","title":"Interval"},"items":{"items":{"$ref":"#/components/schemas/ContextItem"},"type":"array","title":"Items"},"multi_tf_items":{"anyOf":[{"items":{"$ref":"#/components/schemas/MultiTFContextItem"},"type":"array"},{"type":"null"}],"title":"Multi Tf Items"}},"type":"object","required":["interval","items"],"title":"BatchOut"},"ContextItem":{"properties":{"symbol":{"type":"string","title":"Symbol"},"price":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Price"},"indicators":{"type":"object","title":"Indicators","default":{}},"filters":{"type":"object","title":"Filters","default":{}}},"type":"object","required":["symbol"],"title":"ContextItem"},"GridTradeRequest":{"properties":{"symbol":{"type":"string","title":"Symbol","example":"BTCUSDT"},"side":{"type":"string","pattern":"^(LONG|SHORT|BUY|SELL)$","title":"Side","example":"LONG"},"budget":{"type":"number","exclusiveMinimum":0.0,"title":"Budget","example":100},"leverage":{"type":"integer","maximum":125.0,"minimum":1.0,"title":"Leverage","default":10,"example":10},"grids":{"type":"integer","maximum":20.0,"minimum":1.0,"title":"Grids","default":3,"example":3},"dry_run":{"type":"boolean","title":"Dry Run","description":"אם True → לא מציב פקודות אמיתיות","default":true},"market":{"type":"string","pattern":"^(futures|spot)$","title":"Market","default":"futures","example":"futures"},"account_id":{"type":"string","title":"Account Id","description":"ID מה־accounts_config.json","default":"main"}},"type":"object","required":["symbol","side","budget"],"title":"GridTradeRequest"},"GridTradeResponse":{"properties":{"ok":{"type":"boolean","title":"Ok"},"mode":{"type":"string","title":"Mode"},"symbol":{"type":"string","title":"Symbol"},"side":{"type":"string","title":"Side"},"market":{"type":"string","title":"Market"},"account_id":{"type":"string","title":"Account Id"},"base_price":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Base Price"},"budget":{"type":"number","title":"Budget"},"leverage":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Leverage"},"levels":{"anyOf":[{"items":{"type":"number"},"type":"array"},{"type":"null"}],"title":"Levels"},"allocations":{"anyOf":[{"items":{"type":"number"},"type":"array"},{"type":"null"}],"title":"Allocations"},"orders":{"anyOf":[{},{"type":"null"}],"title":"Orders"},"error":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Error"}},"type":"object","required":["ok","mode","symbol","side","market","account_id","base_price","budget"],"title":"GridTradeResponse"},"HTTPValidationError":{"properties":{"detail":{"items":{"$ref":"#/components/schemas/ValidationError"},"type":"array","title":"Detail"}},"type":"object","title":"HTTPValidationError"},"IngestReq":{"properties":{"symbol":{"type":"string","title":"Symbol"},"side":{"type":"string","title":"Side"},"market":{"type":"string","title":"Market","default":"futures"},"qty":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Qty"},"budget_usd":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Budget Usd"},"leverage":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Leverage"},"ticket_id":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Ticket Id"},"timeframe":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Timeframe","default":"15m"},"score":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Score","default":0.0},"reason":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Reason","default":""},"require_approval":{"anyOf":[{"type":"boolean"},{"type":"null"}],"title":"Require Approval","default":true},"tp1":{"anyOf":[{"type":"object"},{"type":"number"},{"type":"null"}],"title":"Tp1"},"tp2":{"anyOf":[{"type":"object"},{"type":"number"},{"type":"null"}],"title":"Tp2"},"tp3":{"anyOf":[{"type":"object"},{"type":"number"},{"type":"null"}],"title":"Tp3"},"sl":{"anyOf":[{"type":"object"},{"type":"number"},{"type":"null"}],"title":"Sl"},"entry":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Entry"},"success_pct":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Success Pct"},"current_price":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Current Price"},"note":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Note"},"is_grid":{"anyOf":[{"type":"boolean"},{"type":"null"}],"title":"Is Grid","default":false},"grid_min":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Grid Min"},"grid_max":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Grid Max"},"grid_levels":{"anyOf":[{"type":"integer"},{"type":"null"}],"title":"Grid Levels"},"grid_side":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Grid Side"},"grid_step_pct":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Grid Step Pct"},"grid_take_profit_pct":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Grid Take Profit Pct"},"trade_type":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Trade Type"},"trade_id":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Trade Id"},"notional_usd":{"anyOf":[{"type":"number"},{"type":"null"}],"title":"Notional Usd"},"chat_id":{"anyOf":[{"type":"string"},{"type":"null"}],"title":"Chat Id"}},"type":"object","required":["symbol","side"],"title":"IngestReq"},"MultiTFContextItem":{"properties":{"symbol":{"type":"string","title":"Symbol"},"multi_tf":{"additionalProperties":{"type":"object"},"type":"object","title":"Multi Tf","default":{}}},"type":"object","required":["symbol"],"title":"MultiTFContextItem"},"ValidationError":{"properties":{"loc":{"items":{"anyOf":[{"type":"string"},{"type":"integer"}]},"type":"array","title":"Location"},"msg":{"type":"string","title":"Message"},"type":{"type":"string","title":"Error Type"}},"type":"object","required":["loc","msg","type"],"title":"ValidationError"}}}}appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ BASE="httpBASE="https://algogpt-trading-vm.onrender.com"
+
+echo -e "\n== READY =="
+curl -fsS "$BASE/readyz" >/dev/null && echo "🟩 READY OK" || echo "🟥 READY FAIL"
+
+== READY ==
+🟩 READY OK
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== API =="
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/api/ping")
+[[ "$CODE" = "200" ]] && echo "🟩 API OK" || echo "🟥 API FAIL ($CODE)"
+
+== API ==
+🟥 API FAIL (404)
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== EXECUTOR =="
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/health/executor")
+[[ "$CODE" = "200" ]] && echo "🟩 EXECUTOR OK" || echo "🟥 EXECUTOR FAIL ($CODE)"
+
+== EXECUTOR ==
+🟥 EXECUTOR FAIL (404)
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== TRADE MANAGER =="
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/health/trade_manager")
+[[ "$CODE" = "200" ]] && echo "🟩 MANAGER OK" || echo "🟥 MANAGER FAIL ($CODE)"
+
+== TRADE MANAGER ==
+🟥 MANAGER FAIL (404)
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== USERSTREAM =="
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/health/userstream")
+[[ "$CODE" = "200" ]] && echo "🟩 STREAM OK" || echo "🟥 STREAM FAIL ($CODE)"
+
+== USERSTREAM ==
+🟥 STREAM FAIL (404)
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== BAN SHIELD =="
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/health/banshield")
+[[ "$CODE" = "200" ]] && echo "🟩 SHIELD OK" || echo "🟥 SHIELD FAIL ($CODE)"
+
+== BAN SHIELD ==
+🟥 SHIELD FAIL (404)
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ echo -e "\n== POSITION PROTECTION =="
+CODE=$(curl -s -o /dev/null -w "%{http_code}" "$BASE/health/protect")
+[[ "$CODE" = "200" ]] && echo "🟩 PROTECT OK" || echo "🟥 PROTECT FAIL ($CODE)"
+
+== POSITION PROTECTION ==
+🟥 PROTECT FAIL (404)
+appuser@srv-d4e9gh24d50c73dqs1t0-669f8644f8-mh26d:/app$ 
