@@ -1,0 +1,112 @@
+AlgoGPT_AlertsBot, [20/11/2025 11:21]
+🤖 FULL AUTO - EXECUTED
+🕐 שעון ישראל: 20/11/2025 11:21:19
+
+🟢 1000RATSUSDT
+📊 Direction: BUY (Leverage: x0)
+💰 Quantity: 792.929288
+💵 Budget: $34.82
+🎯 Entry: 0.04
+🛑 Stop Loss: 0.04
+🎯 Take Profit:
+   TP1: 0.04
+   TP2: 0.05
+   TP3: 0.05
+
+❌ Status: EXECUTION FAILED
+
+🤖 Auto-executed without approval
+
+AlgoGPT_AlertsBot, [20/11/2025 11:21]
+🤖 FULL AUTO - EXECUTED
+🕐 שעון ישראל: 20/11/2025 11:21:50
+
+🔴 AERGOUSDT
+📊 Direction: SELL (Leverage: x2)
+💰 Quantity: 10811.627099
+💵 Budget: $248.96
+🎯 Entry: 0.07
+🛑 Stop Loss: 0.07
+🎯 Take Profit:
+   TP1: 0.07
+   TP2: 0.07
+   TP3: 0.07
+
+❌ Status: EXECUTION FAILED
+
+🤖 Auto-executed without approval
+
+AlgoGPT_AlertsBot, [20/11/2025 11:30]
+🤖 FULL AUTO - EXECUTED
+🕐 שעון ישראל: 20/11/2025 11:29:57
+
+🟢 ETHUSDT
+📊 Direction: BUY (Leverage: x2)
+💰 Quantity: 0.039427
+💵 Budget: $39.59
+🎯 Entry: 3008.00
+🛑 Stop Loss: 2985.00
+🎯 Take Profit:
+   TP1: 3035.00
+   TP2: 3055.00
+   TP3: 3075.00
+
+❌ Status: EXECUTION FAILED
+
+🤖 Auto-executed without approval
+
+AlgoGPT_AlertsBot, [20/11/2025 11:30]
+🤖 FULL AUTO - EXECUTED
+🕐 שעון ישראל: 20/11/2025 11:30:04
+
+🟢 TRXUSDT
+📊 Direction: BUY (Leverage: x2)
+💰 Quantity: 927.426396
+💵 Budget: $88.52
+🎯 Entry: 0.29
+🛑 Stop Loss: 0.29
+🎯 Take Profit:
+   TP1: 0.29
+   TP2: 0.29
+   TP3: 0.29
+
+❌ Status: EXECUTION FAILED
+
+🤖 Auto-executed without approval
+
+AlgoGPT_AlertsBot, [20/11/2025 11:30]
+🤖 FULL AUTO - EXECUTED
+🕐 שעון ישראל: 20/11/2025 11:30:33
+
+🟢 0GUSDT
+📊 Direction: BUY (Leverage: x2)
+💰 Quantity: 98.612339
+💵 Budget: $37.19
+🎯 Entry: 1.13
+🛑 Stop Loss: 1.10
+🎯 Take Profit:
+   TP1: 1.16
+   TP2: 1.18
+   TP3: 1.20
+
+❌ Status: EXECUTION FAILED
+
+🤖 Auto-executed without approval
+
+AlgoGPT_AlertsBot, [20/11/2025 11:31]
+בס"ד
+ℹ️ 📊 **AlgoGPT Stage Report**
+
+**Stage 1: Stable-Health**
+Monitoring only, no trading
+
+⏱️ Uptime: 2.9h
+✅ Active
+
+**Health: GREEN**
+CPU: 35.7%
+RAM: 49.0%
+Redis: ok
+BanShield: unknown
+Errors (10m): 0
+בעזרת השם נעשה ונצליח 🙏

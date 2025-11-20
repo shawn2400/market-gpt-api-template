@@ -719,9 +719,11 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
     # Adapt order parameters based on detected position mode (HEDGE vs ONE-WAY)
     # This prevents -4061 errors when position mode doesn't match order params
     try:
-        from utils.position_mode import adapt_order_for_mode
+        from utils.position_mode import adapt_order_for_mode, detect_position_mode
+        detected_mode = detect_position_mode()
         side = str(kwargs.get("side", "BUY")).upper()
         kwargs = adapt_order_for_mode(kwargs, side)
+        print(f"[DEBUG] Position mode={detected_mode}, positionSide={kwargs.get('positionSide')!r} (side={side})")
     except Exception as e:
         # Don't crash on adaptation failure - just log and proceed
         print(f"[WARN] Position mode adaptation failed: {e}")
@@ -755,6 +757,14 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:
             return res or {}
         except BinanceAPIException as e:
             last = e
+            # If -4061 error (position side mismatch), invalidate position mode cache
+            if e.code == -4061:
+                print(f"[ERROR] -4061 Position side mismatch! Invalidating cache and refreshing...")
+                try:
+                    from utils.position_mode import invalidate_cache
+                    invalidate_cache()
+                except Exception:
+                    pass
             time.sleep(min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * attempt) / 1000.0)
             continue
         except Exception as e:

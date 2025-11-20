@@ -34,6 +34,7 @@ BINANCE_FAPI = os.getenv("BINANCE_FAPI", "https://fapi.binance.com")
 API_KEY = os.getenv("BINANCE_API_KEY", "")
 API_SECRET = os.getenv("BINANCE_API_SECRET", "")
 FORCE_HEDGE = os.getenv("BINANCE_FORCE_HEDGE_MODE", "1") == "1"
+POSITION_MODE_OVERRIDE = os.getenv("POSITION_MODE_OVERRIDE", "").upper()  # "HEDGE" or "ONEWAY" to force
 
 # Cache for position mode to avoid excessive API calls
 _position_mode_cache: Optional[Dict[str, Any]] = None
@@ -91,11 +92,16 @@ def detect_position_mode(force_refresh: bool = False) -> PositionMode:
     """
     global _position_mode_cache, _cache_timestamp
     
+    # Allow env override to force specific mode (prevents cache issues)
+    if POSITION_MODE_OVERRIDE in ("HEDGE", "ONEWAY"):
+        logger.debug(f"🔧 Using POSITION_MODE_OVERRIDE: {POSITION_MODE_OVERRIDE}")
+        return POSITION_MODE_OVERRIDE  # type: ignore
+    
     # Check cache validity
     current_time = time.time()
     if not force_refresh and _position_mode_cache and (current_time - _cache_timestamp) < CACHE_TTL_SECONDS:
         mode = _position_mode_cache.get("mode", "ONEWAY")
-        logger.debug(f"Using cached position mode: {mode}")
+        logger.debug(f"📦 Using cached position mode: {mode} (cached {int(current_time - _cache_timestamp)}s ago)")
         return mode
     
     # Fetch from API
@@ -158,6 +164,20 @@ def adapt_order_for_mode(order_params: Dict[str, Any], side: str, position_mode:
     return adapted
 
 
+def invalidate_cache() -> None:
+    """
+    Invalidate position mode cache, forcing fresh detection on next call.
+    
+    Use when:
+    - Receiving -4061 errors (position side mismatch)
+    - User manually changed position mode on Binance
+    - Cache suspected to be stale
+    """
+    global _cache_timestamp
+    _cache_timestamp = 0
+    logger.info("🔄 Position mode cache invalidated - will refresh on next detection")
+
+
 def ensure_hedge_mode() -> bool:
     """
     DEPRECATED: Smart compatibility mode replaces forced Hedge Mode.
@@ -205,8 +225,7 @@ def ensure_hedge_mode() -> bool:
         
         logger.info(f"✅ Hedge Mode enabled: {result}")
         # Invalidate cache
-        global _cache_timestamp
-        _cache_timestamp = 0
+        invalidate_cache()
         return True
         
     except Exception as e:
