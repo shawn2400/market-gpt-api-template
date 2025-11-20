@@ -81,6 +81,11 @@ class EnhancedTradeNotifier:
         expected_duration = trade_data.get("expected_duration_hours", 0)
         rr_ratio = trade_data.get("rr", 0)
         
+        # Quality metrics (MetaBrain v9.1)
+        quality_score = trade_data.get("quality_score") or trade_data.get("consensus_score", 0)
+        confidence_pct = trade_data.get("success_pct", 0)
+        win_rate = trade_data.get("win_rate_expected", confidence_pct)
+        
         # Wallet %
         wallet_balance = trade_data.get("wallet_balance", 0)
         wallet_pct = (investment_usd / wallet_balance * 100) if wallet_balance > 0 else 0
@@ -96,6 +101,15 @@ class EnhancedTradeNotifier:
 <b>Strategy:</b> {self._translate_strategy(strategy)}
 <b>Side:</b> {self._format_side(side)}
 <b>Order Type:</b> {order_type}
+
+━━━━━━━━━━━━━━━━━━━━
+🎯 <b>AI QUALITY SCORES</b>
+━━━━━━━━━━━━━━━━━━━━
+
+<b>Quality Score:</b> {quality_score:.1f}/10
+<b>Confidence:</b> {confidence_pct:.0f}%
+<b>Risk/Reward:</b> {rr_ratio:.2f}x
+<b>Success Rate:</b> {win_rate:.0f}%
 """
         
         # Auto-Flip notice

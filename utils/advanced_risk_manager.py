@@ -329,9 +329,9 @@ class AdvancedRiskManager:
                 f"❌ CRITICAL: Calculated SL={final_sl:.8f} is ≤ 0! "
                 f"Entry={entry_price:.8f}, ATR={atr:.8f}, Side={position_side}"
             )
-            # Fallback: Use 2% SL from entry as emergency protection
-            final_sl = entry_price * 0.98 if position_side == "LONG" else entry_price * 1.02
-            logger.warning(f"🛡️ Using fallback SL={final_sl:.8f} (2% from entry)")
+            # Fallback: Use MAX_LOSS_CAP as emergency protection (respects configured limit)
+            final_sl = self.calculate_max_loss_sl(entry_price, position_side)
+            logger.warning(f"🛡️ Using fallback SL={final_sl:.8f} (MAX_LOSS_CAP={self.max_loss_cap*100:.0f}%)")
         
         logger.info(
             f"🛡️ Protected SL: dynamic={dynamic_sl:.8f}, "
