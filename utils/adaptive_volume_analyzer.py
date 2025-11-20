@@ -48,7 +48,7 @@ class AdaptiveVolumeAnalyzer:
     
     # Safety Guardrails (Absolute Limits)
     MIN_VOLUME_THRESHOLD = 0.03  # Never go below 3% (prevent garbage)
-    MAX_VOLUME_THRESHOLD = 0.50  # Never go above 50% (prevent missing all trades)
+    MAX_VOLUME_THRESHOLD = 0.15  # Never go above 15% (allow low-volume quality setups)
     
     # Percentile Selection Strategy
     # IMPORTANT: Percentiles work INVERSELY to threshold strictness!
