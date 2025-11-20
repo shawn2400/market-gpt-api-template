@@ -288,6 +288,10 @@ class IngestReq(BaseModel):
     trade_id: Optional[str] = None
     notional_usd: Optional[float] = None
     chat_id: Optional[str] = None
+    prediction_id: Optional[str] = None
+    quality_score: Optional[float] = None
+    consensus_score: Optional[float] = None
+    consensus_votes: Optional[int] = None
     consensus: Optional[dict] = None  # 🧠 5 AI Brains consensus data
 
 def _ticket_id_for(req: IngestReq) -> str:

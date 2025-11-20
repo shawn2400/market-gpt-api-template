@@ -891,6 +891,12 @@ async def _emit(payload: Dict[str, Any]) -> bool:
             idempotency_key=generate_idempotency_key(),
             extra_headers={"Content-Type":"application/json"},
         )
+        
+        # 🔑 Add internal API key for authentication
+        api_token = os.getenv("API_TOKEN") or os.getenv("PRIMARY_API_TOKEN") or ""
+        if api_token:
+            headers["x-api-key"] = api_token.strip()
+        
         async with httpx.AsyncClient(timeout=15) as client:
             r = await client.post(ALERT_INGEST_URL, content=body, headers=headers)
             r.raise_for_status()
