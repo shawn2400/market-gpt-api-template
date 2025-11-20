@@ -357,7 +357,7 @@ class MarketIntelligence:
         # 🎯 SINGLE-BRAIN OPTIMIZED THRESHOLDS - Relaxed for 1-brain consensus
         if regime == "choppy":
             # CHOPPY = Scalping & range trades (low RR acceptable)
-            base_rr = 1.05
+            base_rr = 0.9  # Lowered to 0.9 to enable more trades in choppy markets
             base_quality = 4.0  # Lowered from 6.0 for single-brain config
         elif regime == "sideways":
             # SIDEWAYS = GRID trading + range bounces
@@ -392,7 +392,7 @@ class MarketIntelligence:
             base_rr -= 0.05  # Tighter stops possible
         
         # 🎯 SINGLE-BRAIN CONFIG: Lowered floor for 1-brain consensus system
-        min_rr = max(1.05, base_rr)  # Lowered from 1.1 to 1.05 for single-brain
+        min_rr = max(0.9, base_rr)  # Lowered to 0.9 to enable choppy market trades
         quality = max(3.5, base_quality)  # Lowered from 6.0 to 3.5 for single-brain
         
         return (min_rr, quality)

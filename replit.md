@@ -86,7 +86,7 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
     -   **p75 (Conservative/Default)**: High threshold (~3.5x median), only top 25% volume symbols pass - strict filtering for quality
     -   **median (Balanced)**: Medium threshold (~1.0x median), ~50% of symbols pass - balanced approach
     -   **p25 (Aggressive)**: Low threshold (~0.4x median), ~75% of symbols pass - loose filtering for more opportunities
--   **Regime-Based Quality Thresholds**: Automatically adjusts quality thresholds - CHOPPY (quality≥1.8), TRENDING (quality≥2.0), VOLATILE (quality≥2.2).
+-   **Regime-Based RR & Quality Thresholds**: Automatically adjusts thresholds - CHOPPY (RR≥0.9, quality≥4.0), TRENDING (RR≥1.1, quality≥4.5), VOLATILE (RR≥1.15, quality≥5.0).
 -   **Dynamic BTC Correlation Penalty**: Scales BTC penalty based on regime/mood/confidence (e.g., CHOPPY+BEARISH=-0.4 instead of fixed -1.0).
 -   **Adaptive Direction Penalty**: Counter-trend penalties adjust by regime strength - CHOPPY (-0.8), TRENDING (-1.0), VOLATILE (-1.2).
 -   **Market Intelligence Integration**: Queries Market Intelligence in real-time for regime/mood analysis before filtering.
