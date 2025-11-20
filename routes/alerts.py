@@ -82,19 +82,32 @@ async def _tg_send_auto_notification(plan: Dict[str, Any], result: Dict[str, Any
         if plan.get("budget_usd"):
             lines.append(f"💵 Budget: <code>${plan['budget_usd']:.2f}</code>")
         
-        # הוסף Entry/SL/TP
+        # הוסף Entry/SL/TP עם פורמט דינמי
+        def _format_price(price: float) -> str:
+            """Format price with dynamic decimal places based on value"""
+            if price >= 1000:
+                return f"{price:.0f}"  # 95800
+            elif price >= 10:
+                return f"{price:.2f}"  # 45.67
+            elif price >= 1:
+                return f"{price:.3f}"  # 1.234
+            elif price >= 0.01:
+                return f"{price:.4f}"  # 0.1712
+            else:
+                return f"{price:.6f}"  # 0.004790
+        
         entry = plan.get("entry")
         if entry:
-            lines.append(f"🎯 Entry: <code>{entry:.2f}</code>")
+            lines.append(f"🎯 Entry: <code>{_format_price(entry)}</code>")
         
         if sl_dict and sl_dict.get("stopPrice"):
-            lines.append(f"🛑 Stop Loss: <code>{sl_dict['stopPrice']:.2f}</code>")
+            lines.append(f"🛑 Stop Loss: <code>{_format_price(sl_dict['stopPrice'])}</code>")
         
         if tp_list:
             lines.append(f"🎯 Take Profit:")
             for i, tp in enumerate(tp_list[:3], 1):
                 if isinstance(tp, dict) and tp.get("price"):
-                    lines.append(f"   TP{i}: <code>{tp['price']:.2f}</code>")
+                    lines.append(f"   TP{i}: <code>{_format_price(tp['price'])}</code>")
         
         # Quality Score
         if plan.get("score"):
@@ -179,19 +192,32 @@ async def _tg_send_plan(plan: Dict[str, Any]) -> None:
         if plan.get("budget_usd"):
             lines.append(f"💵 Budget: <code>${plan['budget_usd']:.2f}</code>")
         
-        # הוסף Entry/SL/TP אם קיימים
+        # הוסף Entry/SL/TP אם קיימים - פורמט דינמי
+        def _format_price(price: float) -> str:
+            """Format price with dynamic decimal places based on value"""
+            if price >= 1000:
+                return f"{price:.0f}"  # 95800
+            elif price >= 10:
+                return f"{price:.2f}"  # 45.67
+            elif price >= 1:
+                return f"{price:.3f}"  # 1.234
+            elif price >= 0.01:
+                return f"{price:.4f}"  # 0.1712
+            else:
+                return f"{price:.6f}"  # 0.004790
+        
         entry = plan.get("entry")
         if entry:
-            lines.append(f"🎯 Entry: <code>{entry:.2f}</code>")
+            lines.append(f"🎯 Entry: <code>{_format_price(entry)}</code>")
         
         if sl_dict and sl_dict.get("stopPrice"):
-            lines.append(f"🛑 Stop Loss: <code>{sl_dict['stopPrice']:.2f}</code>")
+            lines.append(f"🛑 Stop Loss: <code>{_format_price(sl_dict['stopPrice'])}</code>")
         
         if tp_list:
             lines.append(f"🎯 Take Profit:")
             for i, tp in enumerate(tp_list[:3], 1):
                 if isinstance(tp, dict) and tp.get("price"):
-                    lines.append(f"   TP{i}: <code>{tp['price']:.2f}</code>")
+                    lines.append(f"   TP{i}: <code>{_format_price(tp['price'])}</code>")
         
         # חישובי RR ו-Success
         if plan.get("score"):
