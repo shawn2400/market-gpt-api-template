@@ -97,6 +97,13 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Graceful Fallback**: If validator unavailable, falls back to legacy filter-based rounding with logging.
 -   **Zero APIError -1111**: Eliminates precision errors by enforcing tick/step compliance at source.
 
+**Position Mode Management (APIError -4061 Prevention):**
+-   **POSITION_MODE_OVERRIDE Environment Variable**: Forces ONE-WAY mode operation via `POSITION_MODE_OVERRIDE=ONEWAY`, bypassing Binance account settings and 5-minute cache.
+-   **Auto-Adaptation Logic**: `adapt_order_for_mode()` automatically removes `positionSide` parameter from all orders when in ONE-WAY mode.
+-   **Cache Invalidation**: Position mode cache automatically invalidated on -4061 errors to prevent stale mode data.
+-   **Startup Skip Logic**: `ensure_hedge_mode()` automatically skipped when `POSITION_MODE_OVERRIDE` is set, preventing conflicting mode enforcement.
+-   **Zero APIError -4061**: Eliminates position mode mismatch errors by ensuring all orders comply with account's current position mode.
+
 **Trade Execution Pipeline:**
 -   Calculates quantity from budget if not provided.
 -   Supports HYBRID flow by passing budget instead of quantity.
