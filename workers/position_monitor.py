@@ -29,10 +29,11 @@ except Exception:
 try:
     from utils.telegram_digest import get_digest
 except Exception:
+    class MockDigest:
+        def add_health_alert(self, *args, **kwargs):  # type: ignore
+            pass
+    
     def get_digest():  # type: ignore[return]
-        class MockDigest:
-            def add_health_alert(self, *args, **kwargs):  # type: ignore
-                pass
         return MockDigest()
 
 logging.basicConfig(
@@ -258,7 +259,7 @@ async def ensure_positions_protected() -> None:
         if hedge_manager:
             try:
                 dual_positions = hedge_manager.detect_dual_positions(positions)
-                if dual_positions:
+                if dual_positions and isinstance(dual_positions, dict):
                     logger.warning(f"🚨 Detected {len(dual_positions)} dual position(s): {', '.join(dual_positions.keys())}")
                     
                     for symbol, sides in dual_positions.items():
@@ -397,7 +398,8 @@ async def ensure_positions_protected() -> None:
                 
                 # Check if position already has TP orders
                 try:
-                    open_orders = get_all_orders(symbol) or []
+                    all_orders_result = get_all_orders(symbol)
+                    open_orders = all_orders_result if isinstance(all_orders_result, list) else []
                     
                     # Filter for TP orders (TAKE_PROFIT, TAKE_PROFIT_MARKET, or LIMIT with reduceOnly)
                     tp_orders = [
@@ -443,23 +445,28 @@ async def ensure_positions_protected() -> None:
                         tp_orders_placed = protection_result.get("tp_orders", [])
                         tp_config = protection_result.get("tp_config")
                         
-                        logger.info(
-                            f"✅ {symbol}: Multi-Target TP added: "
-                            f"{len(tp_orders_placed)} orders (TP1/TP2/TP3), "
-                            f"RR={tp_config['risk_reward_ratio']:.1f}"
-                        )
-                        
-                        # Send Telegram notification
-                        await send_telegram_message(
-                            f"🎯 *Multi-Target TP Added*\n\n"
-                            f"Symbol: `{symbol}`\n"
-                            f"Side: {position_side}\n"
-                            f"Entry: {entry_price:.6f}\n\n"
-                            f"TP1: {tp_config['targets'][0]['price']:.6f} ({tp_config['targets'][0]['exit_percent']*100:.0f}%)\n"
-                            f"TP2: {tp_config['targets'][1]['price']:.6f} ({tp_config['targets'][1]['exit_percent']*100:.0f}%)\n"
-                            f"TP3: {tp_config['targets'][2]['price']:.6f} ({tp_config['targets'][2]['exit_percent']*100:.0f}%)\n\n"
-                            f"Risk/Reward: {tp_config['risk_reward_ratio']:.1f}x"
-                        )
+                        if tp_config and isinstance(tp_config, dict):
+                            logger.info(
+                                f"✅ {symbol}: Multi-Target TP added: "
+                                f"{len(tp_orders_placed)} orders (TP1/TP2/TP3), "
+                                f"RR={tp_config.get('risk_reward_ratio', 0):.1f}"
+                            )
+                            
+                            # Send Telegram notification if targets exist
+                            targets = tp_config.get('targets', [])
+                            if len(targets) >= 3:
+                                await send_telegram_message(
+                                    f"🎯 *Multi-Target TP Added*\n\n"
+                                    f"Symbol: `{symbol}`\n"
+                                    f"Side: {position_side}\n"
+                                    f"Entry: {entry_price:.6f}\n\n"
+                                    f"TP1: {targets[0]['price']:.6f} ({targets[0]['exit_percent']*100:.0f}%)\n"
+                                    f"TP2: {targets[1]['price']:.6f} ({targets[1]['exit_percent']*100:.0f}%)\n"
+                                    f"TP3: {targets[2]['price']:.6f} ({targets[2]['exit_percent']*100:.0f}%)\n\n"
+                                    f"Risk/Reward: {tp_config.get('risk_reward_ratio', 0):.1f}x"
+                                )
+                        else:
+                            logger.info(f"✅ {symbol}: Multi-Target TP added: {len(tp_orders_placed)} orders")
                     else:
                         logger.error(f"❌ {symbol}: Failed to add Multi-Target TP: {protection_result.get('errors')}")
                 
@@ -710,6 +717,11 @@ async def ensure_positions_protected() -> None:
                         continue
                     
                     atr = await calculate_symbol_atr(symbol, period=14)
+                    
+                    # Initialize variables to avoid unbound errors
+                    volatility = 0.02  # Default 2% volatility
+                    protected_sl = entry_price * 0.98 if position_side == "LONG" else entry_price * 1.02
+                    
                     if atr > 0:
                         from utils.binance_client import futures_create_order, futures_cancel_all_orders
                         
@@ -775,7 +787,8 @@ async def ensure_positions_protected() -> None:
                         mttp = MultiTargetTP()
                         
                         # Get current TP orders
-                        all_orders = get_all_orders(symbol) or []
+                        all_orders_result = get_all_orders(symbol)
+                        all_orders = all_orders_result if isinstance(all_orders_result, list) else []
                         tp_orders = [
                             o for o in all_orders
                             if o.get("type") in ("TAKE_PROFIT", "TAKE_PROFIT_MARKET") or
@@ -810,6 +823,9 @@ async def ensure_positions_protected() -> None:
                                     
                                     if prices_changed:
                                         try:
+                                            # Import required function
+                                            from utils.binance_client import futures_create_order
+                                            
                                             # Cancel old TP orders
                                             for tp_order in tp_orders[:3]:
                                                 try:
