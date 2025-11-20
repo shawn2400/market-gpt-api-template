@@ -600,15 +600,21 @@ class ExecutionBot:
                 )
                 
                 # Fallback if ATR missing - use 2% SL, 3% TP
+                # 🔧 Import validator early for precision correction
+                from utils.binance_symbol_validator import get_symbol_validator
+                validator = get_symbol_validator()
+                
                 if not sl_price or sl_price <= 0:
                     fallback_sl_pct = 0.02
-                    sl_price = current_price * (1 - fallback_sl_pct) if position_side == "LONG" else current_price * (1 + fallback_sl_pct)
-                    self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 2% SL @ {sl_price:.6f}")
+                    sl_price_raw = current_price * (1 - fallback_sl_pct) if position_side == "LONG" else current_price * (1 + fallback_sl_pct)
+                    sl_price = validator.round_price(symbol, sl_price_raw)
+                    self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 2% SL @ {sl_price}")
                 
                 if not tp_price or tp_price <= 0:
                     fallback_tp_pct = 0.03
-                    tp_price = current_price * (1 + fallback_tp_pct) if position_side == "LONG" else current_price * (1 - fallback_tp_pct)
-                    self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 3% TP @ {tp_price:.6f}")
+                    tp_price_raw = current_price * (1 + fallback_tp_pct) if position_side == "LONG" else current_price * (1 - fallback_tp_pct)
+                    tp_price = validator.round_price(symbol, tp_price_raw)
+                    self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 3% TP @ {tp_price}")
                 
                 # 🛡️ Save metadata BEFORE order placement
                 metadata_saved = save_order_metadata(
@@ -626,7 +632,7 @@ class ExecutionBot:
                 if not metadata_saved:
                     self.log.warning(f"⚠️ Failed to save metadata for {symbol} - proceeding anyway")
                 else:
-                    self.log.info(f"✅ Metadata saved for {client_order_id}: SL={sl_price:.6f}, TP={tp_price:.6f}")
+                    self.log.info(f"✅ Metadata saved for {client_order_id}: SL={sl_price}, TP={tp_price}")
                     
             except Exception as pre_err:
                 self.log.error(f"🚨 Pre-order validation failed for {symbol}: {pre_err}")
