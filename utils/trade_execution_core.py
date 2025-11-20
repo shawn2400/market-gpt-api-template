@@ -64,8 +64,8 @@ REDIS_URL = os.getenv("REDIS_URL", "").strip()
 SL_KIND = (os.getenv("SL_KIND", "STOP_MARKET") or "STOP_MARKET").upper()
 
 # 🛡️ Time-based Trade Protection: Prevent ultra-short trades (8-second exits)
-MIN_TRADE_HOLD_TIME_SEC = int(os.getenv("MIN_TRADE_HOLD_TIME_SEC", "60"))  # 60s minimum before SL can trigger
-GRID_MIN_HOLD_TIME_SEC = int(os.getenv("GRID_MIN_HOLD_TIME_SEC", "1800"))  # 30 min minimum for GRID trades
+MIN_TRADE_HOLD_TIME_SEC = int(os.getenv("MIN_TRADE_HOLD_TIME_SEC", "0"))  # 🚀 DYNAMIC: 0s - instant updates based on market
+GRID_MIN_HOLD_TIME_SEC = int(os.getenv("GRID_MIN_HOLD_TIME_SEC", "0"))  # 🚀 DYNAMIC: 0s - instant GRID updates too
 
 try:
     import redis

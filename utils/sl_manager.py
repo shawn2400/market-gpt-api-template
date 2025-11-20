@@ -27,8 +27,8 @@ log = logging.getLogger(__name__)
 try:
     from utils.trade_execution_core import MIN_TRADE_HOLD_TIME_SEC, GRID_MIN_HOLD_TIME_SEC
 except ImportError:
-    MIN_TRADE_HOLD_TIME_SEC = 60  # 60s minimum
-    GRID_MIN_HOLD_TIME_SEC = 1800  # 30 min for GRID
+    MIN_TRADE_HOLD_TIME_SEC = 0  # 🚀 DYNAMIC: No time delay - instant updates based on market conditions
+    GRID_MIN_HOLD_TIME_SEC = 0  # 🚀 DYNAMIC: No time delay for GRID either
 
 
 def _get_position_entry_time(symbol: str, position_side: Optional[str] = None) -> Optional[float]:
