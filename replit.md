@@ -21,6 +21,10 @@ AlgoGPT is an autonomous algorithmic trading platform for 24/7 Binance Futures, 
     1. Changed leverage parsing in `utils/auto_executor.py` line 1236 from `int(leverage or 0)` to `round(float(leverage or 0))`
     2. Updated `routes/alerts.py` line 266 to accept `Optional[float]` instead of `Optional[int]` for leverage field
     3. System now correctly handles AI Precision Calculator decimal leverage values (e.g., 3.82x, 4.15x)
+-   **Fixed `/alerts/ingest` Duplicate Authentication Bug (Nov 20, 2025)**:
+    1. Removed duplicate API key check from `routes/alerts.py` endpoint handler (lines 339-341)
+    2. Endpoint already defined as public in `utils/auth.py` middleware - duplicate check was blocking internal worker calls
+    3. Result: Internal workers (Auto Scanner, etc.) can now successfully call `/alerts/ingest` without API key, external calls still protected by middleware
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations.

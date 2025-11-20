@@ -335,14 +335,9 @@ async def alerts_ingest(
     x_nonce: Optional[str] = Header(None, alias="X-Nonce"),
     x_signature: Optional[str] = Header(None, alias="X-Signature"),
 ):
-    try:
-        # API key (רך): אם הוגדר, נדרוש אותו
-        if not _api_key_ok(x_api_key):
-            return {"ok": False, "error": "unauthorized"}
-    except Exception as e:
-        logger.error(f"alerts_ingest ERROR: {e}", exc_info=True)
-        return {"ok": False, "error": str(e)}
-
+    # NOTE: This endpoint is PUBLIC (defined in utils/auth.py)
+    # No API key check here - middleware handles it via public paths list
+    
     # HMAC אופציונלי (לפי גוף המקורי)
     raw_body = b""
     with suppress(Exception):
