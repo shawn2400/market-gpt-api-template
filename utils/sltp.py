@@ -54,8 +54,11 @@ def calc_sl_tp(entry: float, side: str,
     side_u = (side or "").upper()
     sl_price: Optional[float] = None
     tp_price: Optional[float] = None
+    
+    sl_is_placeholder = isinstance(sl, dict) or sl is None or (isinstance(sl, (int, float)) and sl <= 0)
+    tp_is_placeholder = isinstance(tp, dict) or tp is None or (isinstance(tp, list)) or (isinstance(tp, (int, float)) and tp <= 0)
 
-    if atr and (sl is None and tp is None):
+    if atr and sl_is_placeholder and tp_is_placeholder:
         if side_u == "LONG":
             sl_price = float(_to_dec(entry) - _to_dec(atr_mult) * _to_dec(atr))
             tp_price = float(_to_dec(entry) + _to_dec(atr_mult) * _to_dec(atr))
@@ -66,14 +69,14 @@ def calc_sl_tp(entry: float, side: str,
         tp_price = _coerce_direction(entry, tp_price, side=side_u, is_sl=False, was_percent_or_atr=True)
         return sl_price, tp_price
 
-    if sl is not None:
+    if sl is not None and not sl_is_placeholder:
         if _is_percent(sl):
             sl_price = float(_to_dec(entry) * (Decimal(1) - _to_dec(sl))) if side_u == "LONG" else float(_to_dec(entry) * (Decimal(1) + _to_dec(sl)))
             sl_price = _coerce_direction(entry, sl_price, side=side_u, is_sl=True, was_percent_or_atr=True)
         else:
             sl_price = float(sl)
 
-    if tp is not None:
+    if tp is not None and not tp_is_placeholder:
         if _is_percent(tp):
             tp_price = float(_to_dec(entry) * (Decimal(1) + _to_dec(tp))) if side_u == "LONG" else float(_to_dec(entry) * (Decimal(1) - _to_dec(tp)))
             tp_price = _coerce_direction(entry, tp_price, side=side_u, is_sl=False, was_percent_or_atr=True)
