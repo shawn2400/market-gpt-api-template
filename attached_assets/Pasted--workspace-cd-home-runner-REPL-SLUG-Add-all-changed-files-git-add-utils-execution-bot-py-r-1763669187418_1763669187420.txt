@@ -1,0 +1,322 @@
+~/workspace$ cd /home/runner/$REPL_SLUG
+
+# Add all changed files
+git add utils/execution_bot.py routes/alerts.py utils/dynamic_budget_manager.py workers/gpt_auto_suggest.py
+
+# Commit with detailed message
+git commit -m "feat: Critical fixes - SL/TP protection + 100% dynamic leverage
+
+✅ CRITICAL: Added SL/TP=0 safety check - trade aborted if SL/TP cannot be calculated
+✅ Fixed Telegram price formatting - dynamic precision (0.004790 instead of 0.05)
+✅ Raised budget minimum from \$5 to \$25 (BUDGET_MIN_USDT consistency)
+✅ Changed leverage fallback from 2x to 5x (middle of 2-35x range)
+✅ REMOVED leverage cap from Balance-Tiered System - AI chooses 2-35x freely
+✅ Changed budget fallback from \$100 to \$25 (align with minimum)
+
+Impact:
+- System is now 100% dynamic (no hard caps on leverage)
+- All trades protected with SL/TP before execution
+- Accurate Telegram notifications with full precision
+- Budget respects wallet balance (\$174 → \$25-100 per trade)
+- No MAX limit on leverage - AI determines based on quality/volatility/regime
+
+Files modified:
+- utils/execution_bot.py
+- routes/alerts.py
+- utils/dynamic_budget_manager.py
+- workers/gpt_auto_suggest.py
+git push origin main
+On branch main
+Your branch is ahead of 'origin/main' by 7 commits.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+Enumerating objects: 69, done.
+Counting objects: 100% (69/69), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (42/42), done.
+Writing objects: 100% (49/49), 39.83 KiB | 849.00 KiB/s, done.
+Total 49 (delta 34), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (34/34), completed with 10 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   04081bd..f8dd239  main -> main
+~/workspace$ # בדוק מה השתנה
+git diff HEAD~1 --stat
+
+# צפה בהשוואה מלאה
+git diff HEAD~1
+ data/ai_tracking/predictions.jsonl | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+diff --git a/data/ai_tracking/predictions.jsonl b/data/ai_tracking/predictions.jsonl
+index 0880e30..a7862ee 100644
+--- a/data/ai_tracking/predictions.jsonl
++++ b/data/ai_tracking/predictions.jsonl
+@@ -2732,3 +2732,15 @@
+ {"prediction_id": "LTCUSDT_gpt5_1763666986", "timestamp": "2025-11-20T19:29:46.921462", "symbol": "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "LTCUSDT", "side": "LONG", "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "leverage": 3, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 31.6 indicating potential bounce. Tight stop below recent low provides excellent risk management. Clear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick mean-reversion scalp in ranging conditions."}, "regime": "UNKNOWN", "features": {"rr": 1.111111111111104, "quality_score": 5.0, "volatility": "medium", "atr": 0.7951494307815873, "rsi": null, "adx": null, "volume_regime": "mid", "price": 86.72, "leverage": 3.89}}
+ {"prediction_id": "1000BONKUSDT_gpt5_1763666988", "timestamp": "2025-11-20T19:29:48.574251", "symbol": "1000BONKUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666983825", "trade_type": "FUTURES", "symbol": "1000BONKUSDT", "side": "LONG", "current_price": 0.009448, "entry": 0.00935, "sl": 0.0092, "tp1": 0.00965, "tp2": 0.0098, "tp3": 0.00995, "success_pct": 65.0, "reason": "EXCELLENT CHOPPY MARKET OPPORTUNITY - Price near 24h low support at 0.009304 with RSI oversold at 28.4. Multiple quality factors: 1) Strong support bounce setup with tight 1.6% stop below recent low, 2) Clear resistance targets at 0.00965 (3.2% gain) and 0.00980 (4.8% gain), 3) RR = 2.0 (EXCELLENT for choppy market), 4) Mean-reversion setup from oversold conditions. Perfect scalping opportunity in sideways market with tight risk management. [funding_aligned(+0.04)]", "leverage": 4.42, "budget_usd": 55.87, "notional_usd": 246.94539999999998, "qty": null, "chat_id": "449087907", "prediction_id": "1000BONKUSDT_gpt5_1763666983", "consensus": {"final_vote": "APPROVE", "final_score": 4.2, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensus_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 4.2, "reasoning": "[Auto-approved by dynamic threshold] \u05d4\u05d0\u05d9\u05db\u05d5\u05ea \u05d4\u05db\u05dc\u05
+dc\u05d9\u05ea \u05e0\u05de\u05d5\u05db\u05d4 \u05de\u05d3\u05d9 - Position Score 6.4 \u05d6\u05d4 \u05d1\u05e1\u05d9\u05e1\u05d9 \u05de\u05d3\u05d9 \u05d1\u05e9\u05d5\u05e7 CHOPPY. Volume $0M \u05d6\u05d4 red flag \u05e8\u05e6\u05d9\u05e0\u05d9 \u05dc-liquidity, \u05d5-Market Scanner 5.0 \u05de\u05e8\u05d0\u05d4 weak setup. No edge clear here for mean reversion", "confidence": "MEDIUM"}], "scouts": {"market_scanner": {"score": 5.0, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral", "quality_score": 5.0}, "technical_analyst": {"score": 6.1, "strategy": "mean_reversion", "reasoning": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "consensus_score": 5.5, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "quality_score": 4.25, "atr": 0.00013630397488485456, "rsi": null, "adx": null, "price": 0.00935, "leverage": 4.42}}
+ {"prediction_id": "LTCUSDT_gpt5_1763666991", "timestamp": "2025-11-20T19:29:51.767662", "symbol": "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666986779", "trade_type": "FUTURES", "symbol": "LTCUSDT", "side": "LONG", "current_price": 86.72, "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 31.6 indicating potential bounce. T
+ight stop below recent low provides excellent risk management. Clear targets at logical resistance
+ levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick mean-reversion scalp in ranging con
+ditions. [funding_aligned(+0.10)]", "leverage": 3.89, "budget_usd": 38.37, "notional_usd": 149.259
+3, "qty": null, "chat_id": "449087907", "prediction_id": "LTCUSDT_gpt5_1763666986", "consensus": {
+"final_vote": "APPROVE", "final_score": 5.8, "approve_count": 1, "total_brains": 1, "consensus_thr
+eshold": 1, "consensus_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "scor
+e": 5.8, "reasoning": "[Auto-approved by dynamic threshold] REJECT\n\nPosition Score 6.1 barely me
+ets minimum threshold, but market context is problematic - CHOPPY regime with NEUTRAL mood creates
+ poor environment for mean reversion strategy. ADX 45.9 shows strong trend presence, contradicting
+ the choppy classification and making mean reversion risky. Volume data \"$0M\" appears corrupted 
+or insufficient, lacking confidence in liquidity assessment.", "confidence": "MEDIUM"}], "scouts":
+ {"market_scanner": {"score": 4.5, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral",
+ "quality_score": 4.5}, "technical_analyst": {"score": 5.6, "strategy": "mean_reversion", "reasoni
+ng": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "
+consensus_score": 6.8, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "q
+uality_score": 4.25, "atr": 0.7951494307815873, "rsi": null, "adx": null, "price": 86.7, "leverage
+": 3.89}}
++{"prediction_id": "ADAUSDT_gpt5_1763667155", "timestamp": "2025-11-20T19:32:35.953393", "symbol":
+ "ADAUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "ADAUSDT", "side": "L
+ONG", "entry": 0.4327, "sl": 0.428, "tp1": 0.438, "tp2": 0.441, "tp3": 0.444, "leverage": 3, "succ
+ess_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price at RSI 31 (oversold), near 24h low s
+upport at 0.4285. Tight SL below support at 0.4280 (1.09% risk). Quick targets at 0.4380 (1.23%), 
+0.4410 (1.92%), and 0.4440 (2.61%). RR = 1.13 (exceeds 0.90 minimum). Perfect mean-reversion setup
+ in choppy conditions with clear support bounce potential."}, "regime": "UNKNOWN", "features": {"r
+r": 1.127659574468095, "quality_score": 5.0, "volatility": "medium", "atr": 0.00472984890686813, "
+rsi": null, "adx": null, "volume_regime": "mid", "price": 0.4327, "leverage": 3.9}}
++{"prediction_id": "AINUSDT_gpt5_1763667158", "timestamp": "2025-11-20T19:32:38.507059", "symbol":
+ "AINUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "AINUSDT", "side": "L
+ONG", "entry": 0.0845, "sl": 0.0828, "tp1": 0.0862, "tp2": 0.087, "tp3": 0.0876, "leverage": 3, "s
+! tage all changes
+sh: 1: tage: not found
+#done  (press RETURN)
+...skipping...
+diff --git a/data/ai_tracking/predictions.jsonl b/data/ai_tracking/predictions.jsonl
+index 0880e30..a7862ee 100644
+--- a/data/ai_tracking/predictions.jsonl
++++ b/data/ai_tracking/predictions.jsonl
+@@ -2732,3 +2732,15 @@
+ {"prediction_id": "LTCUSDT_gpt5_1763666986", "timestamp": "2025-11-20T19:29:46.921462", "symbol": "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "LTCUSDT", "side": "LONG", "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "leverage": 3, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 31.6 indicating potential bounce. Tight stop below recent low provides excellent risk management. Clear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick mean-reversion scalp in ranging conditions."}, "regime": "UNKNOWN", "features": {"rr": 1.111111111111104, "quality_score": 5.0, "volatility": "medium", "atr": 0.7951494307815873, "rsi": null, "adx": null, "volume_regime": "mid", "price": 86.72, "leverage": 3.89}}
+ {"prediction_id": "1000BONKUSDT_gpt5_1763666988", "timestamp": "2025-11-20T19:29:48.574251", "symbol": "1000BONKUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666983825", "trade_type": "FUTURES", "symbol": "1000BONKUSDT", "side": "LONG", "current_price": 0.009448, "entry": 0.00935, "sl": 0.0092, "tp1": 0.00965, "tp2": 0.0098, "tp3": 0.00995, "success_pct": 65.0, "reason": "EXCELLENT CHOPPY MARKET OPPORTUNITY - Price near 24h low support at 0.009304 with RSI oversold at 28.4. Multiple quality factors: 1) Strong support bounce setup with tight 1.6% stop below recent low, 2) Clear resistance targets at 0.00965 (3.2% gain) and 0.00980 (4.8% gain), 3) RR = 2.0 (EXCELLENT for choppy market), 4) Mean-reversion setup from oversold conditions. Perfect scalping opportunity in sideways market with tight risk management. [funding_aligned(+0.04)]", "leverage": 4.42, "budget_usd": 55.87, "notional_usd": 246.94539999999998, "qty": null, "chat_id": "449087907", "prediction_id": "1000BONKUSDT_gpt5_1763666983", "consensus": {"final_vote": "APPROVE", "final_score": 4.2, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensus_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 4.2, "reasoning": "[Auto-approved by dynamic threshold] \u05d4\u05d0\u05d9\u05db\u05d5\u05ea \u05d4\u05db\u05dc\u05
+dc\u05d9\u05ea \u05e0\u05de\u05d5\u05db\u05d4 \u05de\u05d3\u05d9 - Position Score 6.4 \u05d6\u05d4 \u05d1\u05e1\u05d9\u05e1\u05d9 \u05de\u05d3\u05d9 \u05d1\u05e9\u05d5\u05e7 CHOPPY. Volume $0M \u05d6\u05d4 red flag \u05e8\u05e6\u05d9\u05e0\u05d9 \u05dc-liquidity, \u05d5-Market Scanner 5.0 \u05de\u05e8\u05d0\u05d4 weak setup. No edge clear here for mean reversion", "confidence": "MEDIUM"}], "scouts": {"market_scanner": {"score": 5.0, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral", "quality_score": 5.0}, "technical_analyst": {"score": 6.1, "strategy": "mean_reversion", "reasoning": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "consensus_score": 5.5, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "quality_score": 4.25, "atr": 0.00013630397488485456, "rsi": null, "adx": null, "price": 0.00935, "leverage": 4.42}}
+ {"prediction_id": "LTCUSDT_gpt5_1763666991", "timestamp": "2025-11-20T19:29:51.767662", "symbol": "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666986779", "trade_type": "FUTURES", "symbol": "LTCUSDT", "side": "LONG", "current_price": 86.72, "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 31.6 indicating potential bounce. T
+ight stop below recent low provides excellent risk management. Clear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick mean-reversion scalp in ranging conditions. [funding_aligned(+0.10)]", "leverage": 3.89, "budget_usd": 38.37, "notional_usd": 149.2593, "qty": null, "chat_id": "449087907", "prediction_id": "LTCUSDT_gpt5_1763666986", "consensus": {"final_vote": "APPROVE", "final_score": 5.8, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensus_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 5.8, "reasoning": "[Auto-approved by dynamic threshold] REJECT\n\nPosition Score 6.1 barely meets minimum threshold, but market context is problematic - CHOPPY regime with NEUTRAL mood creates poor environment for mean reversion strategy. ADX 45.9 shows strong trend presence, contradicting the choppy classification and making mean reversion risky. Volume data \"$0M\" appears corrupted or insufficient, lacking confidence in liquidity assessment.", "confidence": "MEDIUM"}], "scouts": {"market_scanner": {"score": 4.5, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral", "quality_score": 4.5}, "technical_analyst": {"score": 5.6, "strategy": "mean_reversion", "reasoning": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "consensus_score": 6.8, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "q
+5d6\u05d4 red flag \u05e8\u05e6\u05d9\u05e0\u05d9 \u05dc-liquidity, \u05d5-Market Scanner 5.0 \u05
+de\u05e8\u05d0\u05d4 weak setup. No edge clear here for mean reversion", "confidence": "MEDIUM"}],
+ "scouts": {"market_scanner": {"score": 5.0, "regime": "choppy", "reasoning": "Regime=choppy, Mood
+=neutral", "quality_score": 5.0}, "technical_analyst": {"score": 6.1, "strategy": "mean_reversion"
+, "reasoning": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score
+": 4.25, "consensus_score": 5.5, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr"
+: null, "quality_score": 4.25, "atr": 0.00013630397488485456, "rsi": null, "adx": null, "price": 0
+.00935, "leverage": 4.42}}
+ {"prediction_id": "LTCUSDT_gpt5_1763666991", "timestamp": "2025-11-20T19:29:51.767662", "symbol":
+ "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666986779", "
+trade_type": "FUTURES", "symbol": "LTCUSDT", "side": "LONG", "current_price": 86.72, "entry": 86.7
+, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "success_pct": 65.0, "reason": "QUALITY CHOPP
+Y MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 31.6 indicating potential bounce. T
+ight stop below recent low provides excellent risk management. Clear targets at logical resistance
+ levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick mean-reversion scalp in ranging con
+ditions. [funding_aligned(+0.10)]", "leverage": 3.89, "budget_usd": 38.37, "notional_usd": 149.259
+3, "qty": null, "chat_id": "449087907", "prediction_id": "LTCUSDT_gpt5_1763666986", "consensus": {
+"final_vote": "APPROVE", "final_score": 5.8, "approve_count": 1, "total_brains": 1, "consensus_thr
+eshold": 1, "consensus_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "scor
+e": 5.8, "reasoning": "[Auto-approved by dynamic threshold] REJECT\n\nPosition Score 6.1 barely me
+ets minimum threshold, but market context is problematic - CHOPPY regime with NEUTRAL mood creates
+ poor environment for mean reversion strategy. ADX 45.9 shows strong trend presence, contradicting
+ the choppy classification and making mean reversion risky. Volume data \"$0M\" appears corrupted 
+or insufficient, lacking confidence in liquidity assessment.", "confidence": "MEDIUM"}], "scouts":
+ {"market_scanner": {"score": 4.5, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral",
+ "quality_score": 4.5}, "technical_analyst": {"score": 5.6, "strategy": "mean_reversion", "reasoni
+ng": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "
+consensus_score": 6.8, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "q
+...skipping...
+ \u05d1\u05e1\u05d9\u05e1\u05d9 \u05de\u05d3\u05d9 \u05d1\u05e9\u05d5\u05e7 CHOPPY. Volume $0M \u0
+5d6\u05d4 red flag \u05e8\u05e6\u05d9\u05e0\u05d9 \u05dc-liquidity, \u05d5-Market Scanner 5.0 \u05de\u05e8\u05d0\u05d4 weak setup. No edge clear here for mean reversion", "confidence": "MEDIUM"}], "scouts": {"market_scanner": {"score": 5.0, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral", "quality_score": 5.0}, "technical_analyst": {"score": 6.1, "strategy": "mean_reversion", "reasoning": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "consensus_score": 5.5, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "quality_score": 4.25, "atr": 0.00013630397488485456, "rsi": null, "adx": null, "price": 0.00935, "leverage": 4.42}}
+ {"prediction_id": "LTCUSDT_gpt5_1763666991", "timestamp": "2025-11-20T19:29:51.767662", "symbol": "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666986779", "trade_type": "FUTURES", "symbol": "LTCUSDT", "side": "LONG", "current_price": 86.72, "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 31.6 indicating potential bounce. Tight stop below recent low provides excellent risk management. Clear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick mean-reversion scalp in ranging conditions. [funding_aligned(+0.10)]", "leverage": 3.89, "budget_usd": 38.37, "notional_usd": 149.2593, "qty": null, "chat_id": "449087907", "prediction_id": "LTCUSDT_gpt5_1763666986", "consensus": {"final_vote": "APPROVE", "final_score": 5.8, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensus_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 5.8, "reasoning": "[Auto-approved by dynamic threshold] REJECT\n\nPosition Score 6.1 barely meets minimum threshold, but market context is problematic - CHOPPY regime with NEUTRAL mood creates poor environment for mean reversion strategy. ADX 45.9 shows strong trend presence, contradicting the choppy classification and making mean reversion risky. Volume data \"$0M\" appears corrupted or insufficient, lacking confidence in liquidity assessment.", "confidence": "MEDIUM"}], "scouts": {"market_scanner": {"score": 4.5, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral", "quality_score": 4.5}, "technical_analyst": {"score": 5.6, "strategy": "mean_reversion", "reasoning": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "
+consensus_score": 6.8, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "q
+...skipping...
+diff --git a/data/ai_tracking/predictions.jsonl b/data/ai_tracking/predictions.jsonl
+index 0880e30..a7862ee 100644
+--- a/data/ai_tracking/predictions.jsonl
++++ b/data/ai_tracking/predictions.jsonl
+@@ -2732,3 +2732,15 @@
+ {"prediction_id": "LTCUSDT_gpt5_1763666986", "timestamp": "2025-11-20T19:29:46.921462", "symbol":
+ "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "LTCUSDT", "side": "L
+ONG", "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "leverage": 3, "success_pc
+t": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 3
+1.6 indicating potential bounce. Tight stop below recent low provides excellent risk management. C
+lear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick m
+ean-reversion scalp in ranging conditions."}, "regime": "UNKNOWN", "features": {"rr": 1.1111111111
+11104, "quality_score": 5.0, "volatility": "medium", "atr": 0.7951494307815873, "rsi": null, "adx"
+: null, "volume_regime": "mid", "price": 86.72, "leverage": 3.89}}
+ {"prediction_id": "1000BONKUSDT_gpt5_1763666988", "timestamp": "2025-11-20T19:29:48.574251", "sym
+bol": "1000BONKUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666
+983825", "trade_type": "FUTURES", "symbol": "1000BONKUSDT", "side": "LONG", "current_price": 0.009
+448, "entry": 0.00935, "sl": 0.0092, "tp1": 0.00965, "tp2": 0.0098, "tp3": 0.00995, "success_pct":
+ 65.0, "reason": "EXCELLENT CHOPPY MARKET OPPORTUNITY - Price near 24h low support at 0.009304 wit
+h RSI oversold at 28.4. Multiple quality factors: 1) Strong support bounce setup with tight 1.6% s
+top below recent low, 2) Clear resistance targets at 0.00965 (3.2% gain) and 0.00980 (4.8% gain), 
+3) RR = 2.0 (EXCELLENT for choppy market), 4) Mean-reversion setup from oversold conditions. Perfe
+ct scalping opportunity in sideways market with tight risk management. [funding_aligned(+0.04)]", 
+"leverage": 4.42, "budget_usd": 55.87, "notional_usd": 246.94539999999998, "qty": null, "chat_id":
+ "449087907", "prediction_id": "1000BONKUSDT_gpt5_1763666983", "consensus": {"final_vote": "APPROV
+E", "final_score": 4.2, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensu
+s_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 4.2, "reasoning":
+ "[Auto-approved by dynamic threshold] \u05d4\u05d0\u05d9\u05db\u05d5\u05ea \u05d4\u05db\u05dc\u05
+dc\u05d9\u05ea \u05e0\u05de\u05d5\u05db\u05d4 \u05de\u05d3\u05d9 - Position Score 6.4 \u05d6\u05d4 \u05d1\u05e1\u05d9\u05e1\u05d9 \u05de\u05d3\u05d9 \u05d1\u05e9\u05d5\u05e7 CHOPPY. Volume $0M \u05d6\u05d4 red flag \u05e8\u05e6\u05d9\u05e0\u05d9 \u05dc-liquidity, \u05d5-Market Scanner 5.0 \u05de\u05e8\u05d0\u05d4 weak setup. No edge clear here for mean reversion", "confidence": "MEDIUM"}], "scouts": {"market_scanner": {"score": 5.0, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral", "quality_score": 5.0}, "technical_analyst": {"score": 6.1, "strategy": "mean_reversion", "reasoning": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "consensus_score": 5.5, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "quality_score": 4.25, "atr": 0.00013630397488485456, "rsi": null, "adx": null, "price": 0.00935, "leverage": 4.42}}
+ {"prediction_id": "LTCUSDT_gpt5_1763666991", "timestamp": "2025-11-20T19:29:51.767662", "symbol": "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666986779", "trade_type": "FUTURES", "symbol": "LTCUSDT", "side": "LONG", "current_price": 86.72, "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 31.6 indicating potential bounce. T
+ight stop below recent low provides excellent risk management. Clear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick mean-reversion scalp in ranging conditions. [funding_aligned(+0.10)]", "leverage": 3.89, "budget_usd": 38.37, "notional_usd": 149.2593, "qty": null, "chat_id": "449087907", "prediction_id": "LTCUSDT_gpt5_1763666986", "consensus": {"final_vote": "APPROVE", "final_score": 5.8, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensus_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 5.8, "reasoning": "[Auto-approved by dynamic threshold] REJECT\n\nPosition Score 6.1 barely meets minimum threshold, but market context is problematic - CHOPPY regime with NEUTRAL mood creates poor environment for mean reversion strategy. ADX 45.9 shows strong trend presence, contradicting the choppy classification and making mean reversion risky. Volume data \"$0M\" appears corrupted or insufficient, lacking confidence in liquidity assessment.", "confidence": "MEDIUM"}], "scouts": {"market_scanner": {"score": 4.5, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral", "quality_score": 4.5}, "technical_analyst": {"score": 5.6, "strategy": "mean_reversion", "reasoning": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "consensus_score": 6.8, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "q
+diff --git a/data/ai_tracking/predictions.jsonl b/data/ai_tracking/predictions.jsonl
+index 0880e30..a7862ee 100644
+--- a/data/ai_tracking/predictions.jsonl
++++ b/data/ai_tracking/predictions.jsonl
+@@ -2732,3 +2732,15 @@
+ {"prediction_id": "LTCUSDT_gpt5_1763666986", "timestamp": "2025-11-20T19:29:46.921462", "symbol":
+ "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "LTCUSDT", "side": "L
+ONG", "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "leverage": 3, "success_pc
+t": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 3
+1.6 indicating potential bounce. Tight stop below recent low provides excellent risk management. C
+lear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick m
+ean-reversion scalp in ranging conditions."}, "regime": "UNKNOWN", "features": {"rr": 1.1111111111
+11104, "quality_score": 5.0, "volatility": "medium", "atr": 0.7951494307815873, "rsi": null, "adx"
+: null, "volume_regime": "mid", "price": 86.72, "leverage": 3.89}}
+ {"prediction_id": "1000BONKUSDT_gpt5_1763666988", "timestamp": "2025-11-20T19:29:48.574251", "sym
+bol": "1000BONKUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666
+983825", "trade_type": "FUTURES", "symbol": "1000BONKUSDT", "side": "LONG", "current_price": 0.009
+448, "entry": 0.00935, "sl": 0.0092, "tp1": 0.00965, "tp2": 0.0098, "tp3": 0.00995, "success_pct":
+ 65.0, "reason": "EXCELLENT CHOPPY MARKET OPPORTUNITY - Price near 24h low support at 0.009304 wit
+h RSI oversold at 28.4. Multiple quality factors: 1) Strong support bounce setup with tight 1.6% s
+top below recent low, 2) Clear resistance targets at 0.00965 (3.2% gain) and 0.00980 (4.8% gain), 
+3) RR = 2.0 (EXCELLENT for choppy market), 4) Mean-reversion setup from oversold conditions. Perfe
+ct scalping opportunity in sideways market with tight risk management. [funding_aligned(+0.04)]", 
+"leverage": 4.42, "budget_usd": 55.87, "notional_usd": 246.94539999999998, "qty": null, "chat_id":
+ "449087907", "prediction_id": "1000BONKUSDT_gpt5_1763666983", "consensus": {"final_vote": "APPROV
+E", "final_score": 4.2, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensu
+s_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 4.2, "reasoning":
+ "[Auto-approved by dynamic threshold] \u05d4\u05d0\u05d9\u05db\u05d5\u05ea \u05d4\u05db\u05dc\u05
+dc\u05d9\u05ea \u05e0\u05de\u05d5\u05db\u05d4 \u05de\u05d3\u05d9 - Position Score 6.4 \u05d6\u05d4 \u05d1\u05e1\u05d9\u05e1\u05d9 \u05de\u05d3\u05d9 \u05d1\u05e9\u05d5\u05e7 CHOPPY. Volume $0M \u05d6\u05d4 red flag \u05e8\u05e6\u05d9\u05e0\u05d9 \u05dc-liquidity, \u05d5-Market Scanner 5.0 \u05de\u05e8\u05d0\u05d4 weak setup. No edge clear here for mean reversion", "confidence": "MEDIUM"}], "scouts": {"market_scanner": {"score": 5.0, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral", "quality_score": 5.0}, "technical_analyst": {"score": 6.1, "strategy": "mean_reversion", "reasoning": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "consensus_score": 5.5, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "quality_score": 4.25, "atr": 0.00013630397488485456, "rsi": null, "adx": null, "price": 0.00935, "leverage": 4.42}}
+ {"prediction_id": "LTCUSDT_gpt5_1763666991", "timestamp": "2025-11-20T19:29:51.767662", "symbol": "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666986779", "trade_type": "FUTURES", "symbol": "LTCUSDT", "side": "LONG", "current_price": 86.72, "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 31.6 indicating potential bounce. T
+ight stop below recent low provides excellent risk management. Clear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick mean-reversion scalp in ranging conditions. [funding_aligned(+0.10)]", "leverage": 3.89, "budget_usd": 38.37, "notional_usd": 149.2593, "qty": null, "chat_id": "449087907", "prediction_id": "LTCUSDT_gpt5_1763666986", "consensus": {"final_vote": "APPROVE", "final_score": 5.8, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensus_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 5.8, "reasoning": "[Auto-approved by dynamic threshold] REJECT\n\nPosition Score 6.1 barely meets minimum threshold, but market context is problematic - CHOPPY regime with NEUTRAL mood creates poor environment for mean reversion strategy. ADX 45.9 shows strong trend presence, contradicting the choppy classification and making mean reversion risky. Volume data \"$0M\" appears corrupted or insufficient, lacking confidence in liquidity assessment.", "confidence": "MEDIUM"}], "scouts": {"market_scanner": {"score": 4.5, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral", "quality_score": 4.5}, "technical_analyst": {"score": 5.6, "strategy": "mean_reversion", "reasoning": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "consensus_score": 6.8, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "q
+uality_score": 4.25, "atr": 0.7951494307815873, "rsi": null, "adx": null, "price": 86.7, "leverage": 3.89}}
++{"prediction_id": "ADAUSDT_gpt5_1763667155", "timestamp": "2025-11-20T19:32:35.953393", "symbol": "ADAUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "ADAUSDT", "side": "LONG", "entry": 0.4327, "sl": 0.428, "tp1": 0.438, "tp2": 0.441, "tp3": 0.444, "leverage": 3, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price at RSI 31 (oversold), near 24h low support at 0.4285. Tight SL below support at 0.4280 (1.09% risk). Quick targets at 0.4380 (1.23%), 0.4410 (1.92%), and 0.4440 (2.61%). RR = 1.13 (exceeds 0.90 minimum). Perfect mean-reversion setup in choppy conditions with clear support bounce potential."}, "regime": "UNKNOWN", "features": {"rr": 1.127659574468095, "quality_score": 5.0, "volatility": "medium", "atr": 0.00472984890686813, "rsi": null, "adx": null, "volume_regime": "mid", "price": 0.4327, "leverage": 3.9}}
++{"prediction_id": "AINUSDT_gpt5_1763667158", "timestamp": "2025-11-20T19:32:38.507059", "symbol": "AINUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "AINUSDT", "side": "LONG", "entry": 0.0845, "sl": 0.0828, "tp1": 0.0862, "tp2": 0.087, "tp3": 0.0876, "leverage": 3, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP - Price near 24h low support zone (0.07924-0.085), RSI neutral at 56 suggesting room for bounce, tight 2% stop below recent lows, clear targets at resistance levels. RR = 1.13 (exceeds 0.90 minimum). Perfect choppy market scalp setup with defined risk/reward."}, "regime": "UNKNOWN", "features": {"rr": 0.9999999999999918, "quality_score": 5.0, "volatility": "medium", "atr": 0.0016778732206548313, "rsi": null, "adx": null, "volume_regime": "mid", "price": 0.08532, "leverage": 3.82}}
++{"prediction_id": "1000PEPEUSDT_gpt5_1763667160", "timestamp": "2025-11-20T19:32:40.525721", "symbol": "1000PEPEUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "1000PEPEUSDT", "side": "LONG", "entry": 0.00451, "sl": 0.004434, "tp1": 0.0046, "tp2": 0.00465, "tp3": 0.0047, "leverage": 3, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP - Price at 24h low support level with RSI oversold (30.8), creating excellent mean-reversion setup. Tight stop below recent low provides 1.6% risk with clear targets at resistance levels. RR = 1.41 (exceeds 0.90 minimum). Perfect choppy market bounce play."}, "regime": "UNKNOWN", "features": {"rr": 1.1842105263157783, "quality_score": 5.0, "volatility": "medium", "atr": 5.659535352259396e-05, "rsi": null, "ad
+...skipping...
+ight stop below recent low provides excellent risk management. Clear targets at logical resistance
+diff --git a/data/ai_tracking/predictions.jsonl b/data/ai_tracking/predictions.jsonl
+index 0880e30..a7862ee 100644
+--- a/data/ai_tracking/predictions.jsonl
++++ b/data/ai_tracking/predictions.jsonl
+@@ -2732,3 +2732,15 @@
+ {"prediction_id": "LTCUSDT_gpt5_1763666986", "timestamp": "2025-11-20T19:29:46.921462", "symbol":
+ "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "LTCUSDT", "side": "L
+ONG", "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "leverage": 3, "success_pc
+t": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 3
+1.6 indicating potential bounce. Tight stop below recent low provides excellent risk management. C
+lear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick m
+ean-reversion scalp in ranging conditions."}, "regime": "UNKNOWN", "features": {"rr": 1.1111111111
+11104, "quality_score": 5.0, "volatility": "medium", "atr": 0.7951494307815873, "rsi": null, "adx"
+: null, "volume_regime": "mid", "price": 86.72, "leverage": 3.89}}
+ {"prediction_id": "1000BONKUSDT_gpt5_1763666988", "timestamp": "2025-11-20T19:29:48.574251", "sym
+bol": "1000BONKUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666
+983825", "trade_type": "FUTURES", "symbol": "1000BONKUSDT", "side": "LONG", "current_price": 0.009
+448, "entry": 0.00935, "sl": 0.0092, "tp1": 0.00965, "tp2": 0.0098, "tp3": 0.00995, "success_pct":
+ 65.0, "reason": "EXCELLENT CHOPPY MARKET OPPORTUNITY - Price near 24h low support at 0.009304 wit
+h RSI oversold at 28.4. Multiple quality factors: 1) Strong support bounce setup with tight 1.6% s
+top below recent low, 2) Clear resistance targets at 0.00965 (3.2% gain) and 0.00980 (4.8% gain), 
+3) RR = 2.0 (EXCELLENT for choppy market), 4) Mean-reversion setup from oversold conditions. Perfe
+ct scalping opportunity in sideways market with tight risk management. [funding_aligned(+0.04)]", 
+"leverage": 4.42, "budget_usd": 55.87, "notional_usd": 246.94539999999998, "qty": null, "chat_id":
+ "449087907", "prediction_id": "1000BONKUSDT_gpt5_1763666983", "consensus": {"final_vote": "APPROV
+E", "final_score": 4.2, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensu
+s_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 4.2, "reasoning":
+ "[Auto-approved by dynamic threshold] \u05d4\u05d0\u05d9\u05db\u05d5\u05ea \u05d4\u05db\u05dc\u05
+dc\u05d9\u05ea \u05e0\u05de\u05d5\u05db\u05d4 \u05de\u05d3\u05d9 - Position Score 6.4 \u05d6\u05d4 \u05d1\u05e1\u05d9\u05e1\u05d9 \u05de\u05d3\u05d9 \u05d1\u05e9\u05d5\u05e7 CHOPPY. Volume $0M \u05d6\u05d4 red flag \u05e8\u05e6\u05d9\u05e0\u05d9 \u05dc-liquidity, \u05d5-Market Scanner 5.0 \u05de\u05e8\u05d0\u05d4 weak setup. No edge clear here for mean reversion", "confidence": "MEDIUM"}], "scouts": {"market_scanner": {"score": 5.0, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral", "quality_score": 5.0}, "technical_analyst": {"score": 6.1, "strategy": "mean_reversion", "reasoning": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "consensus_score": 5.5, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "quality_score": 4.25, "atr": 0.00013630397488485456, "rsi": null, "adx": null, "price": 0.00935, "leverage": 4.42}}
+ {"prediction_id": "LTCUSDT_gpt5_1763666991", "timestamp": "2025-11-20T19:29:51.767662", "symbol": "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666986779", "trade_type": "FUTURES", "symbol": "LTCUSDT", "side": "LONG", "current_price": 86.72, "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 31.6 indicating potential bounce. T
+ight stop below recent low provides excellent risk management. Clear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick mean-reversion scalp in ranging conditions. [funding_aligned(+0.10)]", "leverage": 3.89, "budget_usd": 38.37, "notional_usd": 149.2593, "qty": null, "chat_id": "449087907", "prediction_id": "LTCUSDT_gpt5_1763666986", "consensus": {"final_vote": "APPROVE", "final_score": 5.8, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensus_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 5.8, "reasoning": "[Auto-approved by dynamic threshold] REJECT\n\nPosition Score 6.1 barely meets minimum threshold, but market context is problematic - CHOPPY regime with NEUTRAL mood creates poor environment for mean reversion strategy. ADX 45.9 shows strong trend presence, contradicting the choppy classification and making mean reversion risky. Volume data \"$0M\" appears corrupted or insufficient, lacking confidence in liquidity assessment.", "confidence": "MEDIUM"}], "scouts": {"market_scanner": {"score": 4.5, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral", "quality_score": 4.5}, "technical_analyst": {"score": 5.6, "strategy": "mean_reversion", "reasoning": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "consensus_score": 6.8, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "q
+ight stop below recent low provides excellent risk management. Clear targets at logical resistance
+ levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick mean-reversion scalp in ranging con
+ditions. [funding_aligned(+0.10)]", "leverage": 3.89, "budget_usd": 38.37, "notional_usd": 149.259
+3, "qty": null, "chat_id": "449087907", "prediction_id": "LTCUSDT_gpt5_1763666986", "consensus": {
+"final_vote": "APPROVE", "final_score": 5.8, "approve_count": 1, "total_brains": 1, "consensus_thr
+eshold": 1, "consensus_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "scor
+e": 5.8, "reasoning": "[Auto-approved by dynamic threshold] REJECT\n\nPosition Score 6.1 barely me
+ets minimum threshold, but market context is problematic - CHOPPY regime with NEUTRAL mood creates
+ poor environment for mean reversion strategy. ADX 45.9 shows strong trend presence, contradicting
+ the choppy classification and making mean reversion risky. Volume data \"$0M\" appears corrupted 
+or insufficient, lacking confidence in liquidity assessment.", "confidence": "MEDIUM"}], "scouts":
+ {"market_scanner": {"score": 4.5, "regime": "choppy", "reasoning": "Regime=choppy, Mood=neutral",
+ "quality_score": 4.5}, "technical_analyst": {"score": 5.6, "strategy": "mean_reversion", "reasoni
+ng": "Mean-Reversion - VWAP deviation trades (Tier 3)", "signals": []}}}, "quality_score": 4.25, "
+consensus_score": 6.8, "consensus_votes": "1/3"}, "regime": "UNKNOWN", "features": {"rr": null, "q
+uality_score": 4.25, "atr": 0.7951494307815873, "rsi": null, "adx": null, "price": 86.7, "leverage": 3.89}}
++{"prediction_id": "ADAUSDT_gpt5_1763667155", "timestamp": "2025-11-20T19:32:35.953393", "symbol": "ADAUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "ADAUSDT", "side": "LONG", "entry": 0.4327, "sl": 0.428, "tp1": 0.438, "tp2": 0.441, "tp3": 0.444, "leverage": 3, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price at RSI 31 (oversold), near 24h low support at 0.4285. Tight SL below support at 0.4280 (1.09% risk). Quick targets at 0.4380 (1.23%), 0.4410 (1.92%), and 0.4440 (2.61%). RR = 1.13 (exceeds 0.90 minimum). Perfect mean-reversion setup in choppy conditions with clear support bounce potential."}, "regime": "UNKNOWN", "features": {"rr": 1.127659574468095, "quality_score": 5.0, "volatility": "medium", "atr": 0.00472984890686813, "rsi": null, "adx": null, "volume_regime": "mid", "price": 0.4327, "leverage": 3.9}}
++{"prediction_id": "AINUSDT_gpt5_1763667158", "timestamp": "2025-11-20T19:32:38.507059", "symbol": "AINUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "AINUSDT", "side": "L
+! Commit with detailed message
+sh: 1: Commit: not found
+#done  (press RETURN)
+...skipping...
+diff --git a/data/ai_tracking/predictions.jsonl b/data/ai_tracking/predictions.jsonl
+index 0880e30..a7862ee 100644
+--- a/data/ai_tracking/predictions.jsonl
++++ b/data/ai_tracking/predictions.jsonl
+@@ -2732,3 +2732,15 @@
+ {"prediction_id": "LTCUSDT_gpt5_1763666986", "timestamp": "2025-11-20T19:29:46.921462", "symbol": "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "LTCUSDT", "side": "LONG", "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "leverage": 3, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 31.6 indicating potential bounce. Tight stop below recent low provides excellent risk management. Clear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick mean-reversion scalp in ranging conditions."}, "regime": "UNKNOWN", "features": {"rr": 1.111111111111104, "quality_score": 5.0, "volatility": "medium", "atr": 0.7951494307815873, "rsi": null, "adx": null, "volume_regime": "mid", "price": 86.72, "leverage": 3.89}}
+ {"prediction_id": "1000BONKUSDT_gpt5_1763666988", "timestamp": "2025-11-20T19:29:48.574251", "symbol": "1000BONKUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666983825", "trade_type": "FUTURES", "symbol": "1000BONKUSDT", "side": "LONG", "current_price": 0.009448, "entry": 0.00935, "sl": 0.0092, "tp1": 0.00965, "tp2": 0.0098, "tp3": 0.00995, "success_pct": 65.0, "reason": "EXCELLENT CHOPPY MARKET OPPORTUNITY - Price near 24h low support at 0.009304 with RSI oversold at 28.4. Multiple quality factors: 1) Strong support bounce setup with tight 1.6% stop below recent low, 2) Clear resistance targets at 0.00965 (3.2% gain) and 0.00980 (4.8% gain), 3) RR = 2.0 (EXCELLENT for choppy market), 4) Mean-reversion setup from oversold conditions. Perfect scalping opportunity in sideways market with tight risk management. [funding_aligned(+0.04)]", "leverage": 4.42, "budget_usd": 55.87, "notional_usd": 246.94539999999998, "qty": null, "chat_id": "449087907", "prediction_id": "1000BONKUSDT_gpt5_1763666983", "consensus": {"final_vote": "APPROVE", "final_score": 4.2, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensus_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 4.2, "reasoning": "[Auto-approved by dynamic threshold] \u05d4\u05d0\u05d9\u05db\u05d5\u05ea \u05d4\u05db\u05dc\u05
+set mark: ...skipping...
+diff --git a/data/ai_tracking/predictions.jsonl b/data/ai_tracking/predictions.jsonl
+index 0880e30..a7862ee 100644
+--- a/data/ai_tracking/predictions.jsonl
++++ b/data/ai_tracking/predictions.jsonl
+@@ -2732,3 +2732,15 @@
+ {"prediction_id": "LTCUSDT_gpt5_1763666986", "timestamp": "2025-11-20T19:29:46.921462", "symbol":
+ "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "LTCUSDT", "side": "L
+ONG", "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "leverage": 3, "success_pc
+t": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 3
+1.6 indicating potential bounce. Tight stop below recent low provides excellent risk management. C
+lear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick m
+ean-reversion scalp in ranging conditions."}, "regime": "UNKNOWN", "features": {"rr": 1.1111111111
+11104, "quality_score": 5.0, "volatility": "medium", "atr": 0.7951494307815873, "rsi": null, "adx"
+: null, "volume_regime": "mid", "price": 86.72, "leverage": 3.89}}
+ {"prediction_id": "1000BONKUSDT_gpt5_1763666988", "timestamp": "2025-11-20T19:29:48.574251", "sym
+bol": "1000BONKUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666
+983825", "trade_type": "FUTURES", "symbol": "1000BONKUSDT", "side": "LONG", "current_price": 0.009
+448, "entry": 0.00935, "sl": 0.0092, "tp1": 0.00965, "tp2": 0.0098, "tp3": 0.00995, "success_pct":
+ 65.0, "reason": "EXCELLENT CHOPPY MARKET OPPORTUNITY - Price near 24h low support at 0.009304 wit
+h RSI oversold at 28.4. Multiple quality factors: 1) Strong support bounce setup with tight 1.6% s
+top below recent low, 2) Clear resistance targets at 0.00965 (3.2% gain) and 0.00980 (4.8% gain), 
+3) RR = 2.0 (EXCELLENT for choppy market), 4) Mean-reversion setup from oversold conditions. Perfe
+ct scalping opportunity in sideways market with tight risk management. [funding_aligned(+0.04)]", 
+"leverage": 4.42, "budget_usd": 55.87, "notional_usd": 246.94539999999998, "qty": null, "chat_id":
+ "449087907", "prediction_id": "1000BONKUSDT_gpt5_1763666983", "consensus": {"final_vote": "APPROV
+E", "final_score": 4.2, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensu
+s_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 4.2, "reasoning":
+ "[Auto-approved by dynamic threshold] \u05d4\u05d0\u05d9\u05db\u05d5\u05ea \u05d4\u05db\u05dc\u05
+! Push to GitHub
+sh: 1: Push: not found
+#done  (press RETURN)
+...skipping...
+diff --git a/data/ai_tracking/predictions.jsonl b/data/ai_tracking/predictions.jsonl
+index 0880e30..a7862ee 100644
+--- a/data/ai_tracking/predictions.jsonl
++++ b/data/ai_tracking/predictions.jsonl
+@@ -2732,3 +2732,15 @@
+ {"prediction_id": "LTCUSDT_gpt5_1763666986", "timestamp": "2025-11-20T19:29:46.921462", "symbol": "LTCUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"symbol": "LTCUSDT", "side": "LONG", "entry": 86.7, "sl": 85.8, "tp1": 87.7, "tp2": 88.5, "tp3": 89.2, "leverage": 3, "success_pct": 65.0, "reason": "QUALITY CHOPPY MARKET SCALP: Price near 24h low (85.9) with RSI oversold at 31.6 indicating potential bounce. Tight stop below recent low provides excellent risk management. Clear targets at logical resistance levels with RR=1.11 (exceeds 0.90 minimum). Perfect for quick mean-reversion scalp in ranging conditions."}, "regime": "UNKNOWN", "features": {"rr": 1.111111111111104, "quality_score": 5.0, "volatility": "medium", "atr": 0.7951494307815873, "rsi": null, "adx": null, "volume_regime": "mid", "price": 86.72, "leverage": 3.89}}
+ {"prediction_id": "1000BONKUSDT_gpt5_1763666988", "timestamp": "2025-11-20T19:29:48.574251", "symbol": "1000BONKUSDT", "ai_model": "gpt5", "confidence": 0.65, "prediction": {"trade_id": "f1763666983825", "trade_type": "FUTURES", "symbol": "1000BONKUSDT", "side": "LONG", "current_price": 0.009448, "entry": 0.00935, "sl": 0.0092, "tp1": 0.00965, "tp2": 0.0098, "tp3": 0.00995, "success_pct": 65.0, "reason": "EXCELLENT CHOPPY MARKET OPPORTUNITY - Price near 24h low support at 0.009304 with RSI oversold at 28.4. Multiple quality factors: 1) Strong support bounce setup with tight 1.6% stop below recent low, 2) Clear resistance targets at 0.00965 (3.2% gain) and 0.00980 (4.8% gain), 3) RR = 2.0 (EXCELLENT for choppy market), 4) Mean-reversion setup from oversold conditions. Perfect scalping opportunity in sideways market with tight risk management. [funding_aligned(+0.04)]", "leverage": 4.42, "budget_usd": 55.87, "notional_usd": 246.94539999999998, "qty": null, "chat_id": "449087907", "prediction_id": "1000BONKUSDT_gpt5_1763666983", "consensus": {"final_vote": "APPROVE", "final_score": 4.2, "approve_count": 1, "total_brains": 1, "consensus_threshold": 1, "consensus_pct": 100.0, "brain_votes": [{"brain": "DeepSeek", "vote": "APPROVE", "score": 4.2, "reasoning": "[Auto-approved by dynamic threshold] \u05d4\u05d0\u05d9\u05db\u05d5\u05ea \u05d4\u05db\u05dc\u05
+log file: h origin mainKilled
+[200~cd /home/runner/$REPL_SLUG
+bash: [200~cd: command not found
+~/workspace$ 
+~/workspace$ # הסר lock אם יש
+~/workspace$ rm -f .git/index.lock
+~/workspace$ 
+~/workspace$ # Add כל הקבצים
+~/workspace$ git add utils/sltp.py
+~/workspace$ git add utils/execution_bot.py  
+~/workspace$ git add routes/alerts.py
+~/workspace$ git add utils/dynamic_budget_manager.py
+~/workspace$ git add workers/gpt_auto_suggest.py
+~/workspace$ 
+~/workspace$ # Commit עם הודעה מפורטת
+~/workspace$ git commit -m "🔥 MetaBrain v9.1 - 100% Dynamic System Complete
+> 
+> ✅ CRITICAL FIX: SL=0 Bug Resolved
+> - utils/sltp.py: Detect dict~
