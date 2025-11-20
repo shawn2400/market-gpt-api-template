@@ -637,6 +637,8 @@ def _tick_symbol(symbol: str):
             else:
                 msg_lines.append(f"  🛡️ Stop Loss: <code>Not set</code> ⚠️")
             
+            # Use first TP from list (TP1) if available
+            tp_price_from_db = tp_prices_from_db[0] if tp_prices_from_db and len(tp_prices_from_db) > 0 else None
             if tp_price_from_db and tp_price_from_db > 0:
                 tp_pct = abs((tp_price_from_db - ep) / ep * 100)
                 msg_lines.append(f"  🎯 Take Profit: <code>{tp_price_from_db:.6f}</code> (+{tp_pct:.2f}%)")

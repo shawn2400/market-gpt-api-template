@@ -53,6 +53,9 @@ def _get_position_entry_time(symbol: str, position_side: Optional[str] = None) -
         is_pg = _is_postgres(DB_URL)
         
         with _conn() as con:
+            if con is None:
+                log.warning(f"[TimeProtection] Failed to get database connection")
+                return None
             cursor = con.cursor()
             
             if is_pg:
