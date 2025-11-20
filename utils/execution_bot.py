@@ -592,7 +592,15 @@ class ExecutionBot:
                     return {"ok": False, "error": "price_unavailable"}
                 
                 # Calculate SL/TP using ATR-based logic
+                # 🔧 FIX: Support both atr (absolute) and atr_pct (percentage) from payload
                 atr = ticket.get("atr") or ticket.get("atr_value")
+                atr_pct = ticket.get("atr_pct")  # Get ATR percentage from Auto Scanner payload
+                
+                # Convert atr_pct to absolute ATR value if available
+                if not atr and atr_pct:
+                    atr = current_price * float(atr_pct)
+                    self.log.info(f"✅ Calculated ATR from atr_pct: {atr:.6f} ({atr_pct*100:.2f}%)")
+                
                 atr_mult = float(os.getenv("SL_ATR_MULT", "1.5"))
                 
                 sl_price, tp_price = calc_sl_tp_for_symbol(

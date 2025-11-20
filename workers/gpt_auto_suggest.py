@@ -2298,6 +2298,9 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
             f"TP3={tp3:.4f} ({tp3_pct*100:.0f}%), Trailing@TP1"
         )
         
+        # Calculate consensus score from scouts
+        consensus_score = (float(mi_score) + float(so_score)) / 2.0
+        
         payload = {
             "trade_id": f"mr{int(time.time())}{random.randint(100,999)}",
             "trade_type": "MEAN_REVERSION",
@@ -2313,7 +2316,7 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
             "rr": float(levels["rr"]),
             "success_pct": float(levels.get("win_rate_expected", 70.0)),
             "reason": levels.get("reason", "Mean-Reversion VWAP Strategy"),
-            "leverage": leverage,  # ✅ DYNAMIC LEVERAGE (was hardcoded 6x)
+            "leverage": leverage,  # ✅ DYNAMIC LEVERAGE (AI-calculated, no cap)
             "budget_usd": float(dynamic_budget),
             "notional_usd": float(notional),
             "strategy": "mean_reversion",
@@ -2321,6 +2324,9 @@ async def propose_mean_reversion(symbol: str, ctx: Dict[str, Any]) -> Optional[D
             "win_rate_expected": float(levels.get("win_rate_expected", 70.0)),
             "mi_score": float(mi_score),
             "so_score": float(so_score),
+            "consensus_score": float(consensus_score),  # ✅ CONSENSUS SCORE for Telegram notifications
+            "quality_score": float(consensus_score),  # ✅ Same as consensus_score
+            "atr_pct": float(atr_pct),  # ✅ ADD ATR for SL/TP calculations
             "chat_id": TELEGRAM_CHAT_ID or None,
         }
         return payload
