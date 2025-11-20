@@ -291,7 +291,7 @@ class IngestReq(BaseModel):
     prediction_id: Optional[str] = None
     quality_score: Optional[float] = None
     consensus_score: Optional[float] = None
-    consensus_votes: Optional[int] = None
+    consensus_votes: Optional[str] = None  # Format: "2/3" (approve_count/total)
     consensus: Optional[dict] = None  # 🧠 5 AI Brains consensus data
 
 def _ticket_id_for(req: IngestReq) -> str:
