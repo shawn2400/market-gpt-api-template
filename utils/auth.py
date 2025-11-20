@@ -133,7 +133,8 @@ def _is_public(path: str) -> bool:
     prefixes = tuple(cfg["prefixes"])
     always = {"/", "/health", "/readyz", "/status/ping", "/debug/health",
               "/metrics", "/metrics-json", "/openapi.json", "/docs", "/redoc",
-              "/api/info", "/scan/public-topk", "/scan/public", "/alerts/ingest"}
+              "/api/info", "/scan/public-topk", "/scan/public", "/alerts/ingest",
+              "/executor/positions", "/pnl/summary"}
     if path in always or path in paths:
         return True
     # Check prefixes (for /static/, etc.)
