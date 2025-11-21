@@ -123,6 +123,15 @@ except Exception as e:
     trailing_sl_state = None  # type: ignore
     logger.warning(f"⚠️ Trailing SL State Manager unavailable: {e}")
 
+# 🎯 PROGRESSIVE SL LOCKER (Lock profits at each TP level)
+try:
+    from utils.progressive_sl_locker import get_progressive_sl_locker
+    progressive_sl_locker = get_progressive_sl_locker()
+    logger.info("✅ Progressive SL Locker loaded successfully")
+except Exception as e:
+    progressive_sl_locker = None  # type: ignore
+    logger.warning(f"⚠️ Progressive SL Locker unavailable: {e}")
+
 async def calculate_symbol_atr(symbol: str, period: int = 14) -> float:
     """
     Calculate ATR (Average True Range) for a symbol
@@ -466,6 +475,15 @@ async def ensure_positions_protected() -> None:
                                     f"TP3: {targets[2]['price']:.6f} ({targets[2]['exit_percent']*100:.0f}%)\n\n"
                                     f"Risk/Reward: {tp_config.get('risk_reward_ratio', 0):.1f}x"
                                 )
+                                
+                                # 🎯 INITIALIZE PROGRESSIVE SL LOCKER
+                                if progressive_sl_locker:
+                                    try:
+                                        tp_prices = [t['price'] for t in targets[:3]]
+                                        progressive_sl_locker.init_tp_tracking(symbol, tp_prices[0], tp_prices[1], tp_prices[2])
+                                        logger.info(f"🎯 {symbol}: Progressive SL tracking initialized")
+                                    except Exception as psl_err:
+                                        logger.warning(f"⚠️ Progressive SL initialization failed for {symbol}: {psl_err}")
                         else:
                             logger.info(f"✅ {symbol}: Multi-Target TP added: {len(tp_orders_placed)} orders")
                     else:
@@ -486,6 +504,63 @@ async def ensure_positions_protected() -> None:
             
             # ⚠️ LEGACY SL/TP MANAGEMENT DISABLED - Trailing TP handles all protection
             # add_sl_tp_protection is now superseded by Trailing TP system below
+            
+            # 🎯 PROGRESSIVE SL LOCKER (Lock profits at each TP level - NEW MetaBrain v9.1)
+            if progressive_sl_locker:
+                try:
+                    mark_price = float(pos.get("markPrice", 0))
+                    position_side = "LONG" if amt > 0 else "SHORT"
+                    
+                    if mark_price > 0:
+                        # Check if SL should move to next TP level
+                        sl_update = progressive_sl_locker.get_next_sl_lock_level(symbol, mark_price, position_side)
+                        
+                        if sl_update:
+                            tp_level, new_sl_price = sl_update
+                            
+                            # Update SL to lock profit at this TP level
+                            try:
+                                from utils.binance_client import futures_create_order, futures_cancel_all_orders
+                                
+                                close_side = "SELL" if position_side == "LONG" else "BUY"
+                                entry_price = float(pos.get("entryPrice", 0))
+                                
+                                # Cancel existing SL orders
+                                futures_cancel_all_orders(symbol)
+                                
+                                # Place new STOP_MARKET at TP level (lock profit)
+                                if new_sl_price and new_sl_price > 0:
+                                    sl_order = futures_create_order(
+                                        symbol=symbol,
+                                        side=close_side,
+                                        type="STOP_MARKET",
+                                        quantity=abs(amt),
+                                        stopPrice=new_sl_price,
+                                        reduceOnly=True,
+                                        positionSide=position_side
+                                    )
+                                    
+                                    await send_telegram_message(
+                                        f"📈 *{tp_level} Hit - Profit Locked!*\n\n"
+                                        f"Symbol: `{symbol}`\n"
+                                        f"Current: {mark_price:.6f}\n"
+                                        f"Entry: {entry_price:.6f}\n"
+                                        f"SL moved to: {new_sl_price:.6f}\n"
+                                        f"Status: ✅ Protecting gains"
+                                    )
+                                    
+                                    logger.info(
+                                        f"✅ {symbol} {position_side}: {tp_level} profit locked | "
+                                        f"SL → {new_sl_price:.8f} | Price @ {mark_price:.8f}"
+                                    )
+                                else:
+                                    logger.warning(f"⚠️ {symbol}: {tp_level} SL price invalid ({new_sl_price})")
+                            
+                            except Exception as psl_update_err:
+                                logger.warning(f"⚠️ {symbol}: Failed to move SL to {tp_level}: {psl_update_err}")
+                
+                except Exception as psl_err:
+                    logger.debug(f"Progressive SL check skipped for {symbol}: {psl_err}")
             
             # 🎯 TRAILING TP CHECK (after SL/TP protection)
             if trailing_tp and ENABLE_TRAILING_TP:
@@ -887,6 +962,17 @@ async def ensure_positions_protected() -> None:
                     logger.info(f"🧹 Trailing TP cleanup: removed {stale}")
             except Exception as cleanup_err:
                 logger.error(f"❌ Trailing TP cleanup failed: {cleanup_err}")
+        
+        # 🎯 PROGRESSIVE SL CLEANUP: Remove stale symbols
+        if progressive_sl_locker:
+            try:
+                open_syms = {p.get("symbol") for p in positions if abs(float(p.get("positionAmt", 0))) > 0}
+                cached_symbols = list(_tp_state_cache.keys()) if '_tp_state_cache' in globals() else []
+                for stale in set(cached_symbols) - open_syms:
+                    progressive_sl_locker.cleanup_symbol(stale)
+                    logger.debug(f"🧹 Progressive SL cleanup: removed {stale}")
+            except Exception as cleanup_err:
+                logger.debug(f"Progressive SL cleanup warning: {cleanup_err}")
         
     except Exception as e:
         logger.error(f"❌ ensure_positions_protected failed: {e}")

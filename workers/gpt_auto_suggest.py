@@ -2529,7 +2529,7 @@ async def process_cycle():
             from utils.binance_client import futures_balance
             bals = futures_balance() or []  # type: ignore
             bals = bals if not asyncio.iscoroutine(bals) else await bals  # type: ignore
-            for a in bals or []:  # type: ignore  # type: ignore
+            for a in bals or []:  # type: ignore
                 if str(a.get("asset", "")).upper() == "USDT":
                     available = float(a.get("availableBalance") or a.get("available") or 0.0)
                     break
