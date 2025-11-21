@@ -733,15 +733,15 @@ async def manage_open_trades():
                                     "macd_slope", "rsi", "tick_size", "step_size", "position_qty", "last_market_update_ts"]
                         
                         if any(k not in context for k in required):
-                            dyn_skips.labels(reason="missing_context").inc()
+                            if dyn_skips is not None: dyn_skips.labels(reason="missing_context").inc()
                         elif (now - float(context["last_market_update_ts"])) > DYN_SAFE_STALE_SEC:
-                            age_guard_hit.inc()
-                            dyn_skips.labels(reason="stale_data").inc()
+                            if age_guard_hit is not None: age_guard_hit.inc()
+                            if dyn_skips is not None: dyn_skips.labels(reason="stale_data").inc()
                         elif BTC_GATE_ENABLE and not bool(context.get("btc_gate_ok", True)):
-                            dyn_skips.labels(reason="btc_gate").inc()
+                            if dyn_skips is not None: dyn_skips.labels(reason="btc_gate").inc()
                         elif not cb_allow():
-                            cb_blocks.inc()
-                            dyn_skips.labels(reason="circuit_block").inc()
+                            if cb_blocks is not None: cb_blocks.inc()
+                            if dyn_skips is not None: dyn_skips.labels(reason="circuit_block").inc()
                         else:
                             # Detect regime
                             feats = {
@@ -753,8 +753,8 @@ async def manage_open_trades():
                             r = detect_market_regime_v2(feats)
                             
                             if r.confidence < DYN_MIN_CONF:
-                                conf_low_hit.inc()
-                                dyn_skips.labels(reason="low_conf").inc()
+                                if conf_low_hit is not None: conf_low_hit.inc()
+                                if dyn_skips is not None: dyn_skips.labels(reason="low_conf").inc()
                             else:
                                 # Adaptive parameter mixing
                                 mix = adaptive_mix(
@@ -796,15 +796,15 @@ async def manage_open_trades():
                                 idem_key = make_key("manage_dyn", payload)
                                 
                                 if seen(idem_key):
-                                    dyn_skips.labels(reason="idem_dup").inc()
+                                    if dyn_skips is not None: dyn_skips.labels(reason="idem_dup").inc()
                                 else:
                                     # Progressive rollout: check if symbol is allowed for enforce
                                     enforce_now = (DYN_ENFORCE and not DYN_SHADOW and _enforce_allowed(context["symbol"]))
                                     
                                     if not enforce_now:
                                         # SHADOW MODE
-                                        dyn_decisions.labels(symbol=context["symbol"], regime=r.regime).inc()
-                                        regime_confidence.labels(symbol=sym, regime=r.regime).set(r.confidence)
+                                        if dyn_decisions is not None: dyn_decisions.labels(symbol=context["symbol"], regime=r.regime).inc()
+                                        if regime_confidence is not None: regime_confidence.labels(symbol=sym, regime=r.regime).set(r.confidence)
                                         logger.debug(json.dumps({
                                             "evt": "dyn_shadow",
                                             "sym": context["symbol"],
@@ -823,7 +823,7 @@ async def manage_open_trades():
                                         
                                         # Execute Zero-Gap SL update
                                         # For hedge mode, we must send positionSide=side
-                                        ok1 = await _sl_manager.safe_replace_sl_async(
+                                        if _sl_manager: ok1 = await _sl_manager.safe_replace_sl_async(
                                             symbol=context["symbol"],
                                             new_stop_price=sl_p,
                                             qty=qtz,
@@ -831,7 +831,7 @@ async def manage_open_trades():
                                             position_side=side  # For hedge mode: LONG/SHORT
                                         )
                                         if ok1:
-                                            sl_changes.labels(symbol=context["symbol"]).inc()
+                                            if sl_changes is not None: sl_changes.labels(symbol=context["symbol"]).inc()
                                         
                                         # Execute TP Ladder
                                         tp_ladder_levels = mix.get("tp_ladder", [tp_p])
@@ -844,7 +844,7 @@ async def manage_open_trades():
                                                 tp_level = entry - (sl_dist * mult)
                                             tp_prices.append(quantize_price(tp_level, tick_size))
                                         
-                                        ok2 = await _tp_ladder.set_tp_ladder_async(
+                                        if _tp_ladder: ok2 = await _tp_ladder.set_tp_ladder_async(
                                             context["symbol"],
                                             entry,
                                             qtz,
@@ -853,10 +853,10 @@ async def manage_open_trades():
                                             position_side=side  # For hedge mode: LONG/SHORT
                                         )
                                         if ok2:
-                                            tp_sets.labels(symbol=context["symbol"]).inc()
+                                            if tp_sets is not None: tp_sets.labels(symbol=context["symbol"]).inc()
                                         
-                                        dyn_decisions.labels(symbol=context["symbol"], regime=r.regime).inc()
-                                        regime_confidence.labels(symbol=sym, regime=r.regime).set(r.confidence)
+                                        if dyn_decisions is not None: dyn_decisions.labels(symbol=context["symbol"], regime=r.regime).inc()
+                                        if regime_confidence is not None: regime_confidence.labels(symbol=sym, regime=r.regime).set(r.confidence)
                                         cb_track(ok=(ok1 and ok2))
                                         
                                         # Skip legacy path if enforce successful
@@ -865,7 +865,7 @@ async def manage_open_trades():
                                             continue
                     
                     except Exception as e:
-                        dyn_errors.labels(stage="manage_dyn").inc()
+                        if dyn_errors is not None: dyn_errors.labels(stage="manage_dyn").inc()
                         cb_track(ok=False)
                         logger.error(f"[DynPath] Error for {sym}: {e}", exc_info=True)
                 
