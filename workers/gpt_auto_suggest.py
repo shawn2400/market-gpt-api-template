@@ -1734,34 +1734,46 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     rr = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
     min_rr, success_req, fb_note = await _apply_funding_bias_req(prop["side"], symbol, min_rr, success_req)
 
-    # 💎 DYNAMIC LEVERAGE CALCULATION (force 2-35x scaling)
+    # 💎 DYNAMIC LEVERAGE CALCULATION (force 2-35x scaling via AI Precision)
     try:
         from utils.dynamic_sizing import get_dynamic_sizing_engine
         sizing_engine = get_dynamic_sizing_engine()
         
         # Get quality score for leverage calculation
         quality = quality_score or _quality_from_ctx(ctx) or 5.0
+        ai_confidence = prop.get("success_pct", 60.0)
+        rr_ratio = rr or 1.5
         
-        # Calculate dynamic leverage based on market regime, quality, and wallet
-        dynamic_lev = sizing_engine.calculate_leverage(
+        # Get market context
+        volatility = "high" if (ctx.get("filters", {}).get("atr_pct", 1.5) > 3) else "low" if (ctx.get("filters", {}).get("atr_pct", 1.5) < 1) else "medium"
+        market_regime = market_condition.regime.lower() if market_condition and hasattr(market_condition, 'regime') else "neutral"
+        
+        # Calculate dynamic leverage & position sizing (AI Precision Engine)
+        sizing_result = sizing_engine.calculate_position(
+            quality_score=quality,
+            risk_reward=rr_ratio,
+            ai_confidence=ai_confidence,
+            volatility=volatility,
+            account_equity=1000.0,  # Placeholder, actual used by precision calculator
+            market_regime=market_regime,
+            market_mood="neutral",
             symbol=symbol,
-            quality=quality,
-            regime=market_condition.regime if market_condition else "neutral",
-            context=ctx
+            market_ctx=ctx
         )
         
-        # Override AI leverage with dynamic calculation (force 2-35x range)
-        if dynamic_lev and 2 <= dynamic_lev <= 35:
+        # Extract and apply dynamic leverage (clamp to 2-35x range as safety)
+        if sizing_result and sizing_result.leverage:
+            dynamic_lev = max(2.0, min(35.0, float(sizing_result.leverage)))
             prop["leverage"] = dynamic_lev
-            LOGGER.info(f"💎 {symbol}: Dynamic Leverage={dynamic_lev:.1f}x (quality={quality:.1f}, regime={market_condition.regime if market_condition else 'neutral'})")
+            LOGGER.info(f"💎 {symbol}: Dynamic Leverage={dynamic_lev:.2f}x (quality={quality:.1f}, confidence={ai_confidence:.0f}%, regime={market_regime})")
         else:
-            # Fallback if calculation failed
-            prop["leverage"] = max(2, min(35, prop.get("leverage", 5)))
-            LOGGER.debug(f"Dynamic leverage calc returned invalid value {dynamic_lev}, using {prop.get('leverage', 5)}x")
+            # Fallback: use AI default or 5x
+            prop["leverage"] = max(2.0, min(35.0, prop.get("leverage", 5.0)))
+            LOGGER.debug(f"Dynamic sizing returned no result, using {prop['leverage']:.1f}x")
     except Exception as e:
-        # Safe fallback: use AI leverage or default 5x
-        prop["leverage"] = max(2, min(35, prop.get("leverage", 5)))
-        LOGGER.debug(f"Dynamic leverage calc failed: {e}, using {prop.get('leverage', 5)}x")
+        # Fallback: use AI leverage or default 5x (fail-safe)
+        prop["leverage"] = max(2.0, min(35.0, prop.get("leverage", 5.0)))
+        LOGGER.debug(f"Dynamic leverage calc failed: {e}, using {prop['leverage']:.1f}x (fallback)")
 
     # גייטינג כללי
     vol_reg = ((ctx.get("filters") or {}).get("vol_regime","mid")) if ctx else "mid"
