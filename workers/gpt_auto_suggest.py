@@ -1735,9 +1735,10 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     min_rr, success_req, fb_note = await _apply_funding_bias_req(prop["side"], symbol, min_rr, success_req)
 
     # 💎 DYNAMIC LEVERAGE CALCULATION (force 2-35x scaling via AI Precision)
+    sizing_engine = None
     try:
-        from utils.dynamic_sizing import get_dynamic_sizing_engine
-        sizing_engine = get_dynamic_sizing_engine()
+        from utils.dynamic_sizing import get_dynamic_sizing_engine as get_sizing_engine
+        sizing_engine = get_sizing_engine()
         
         # Get quality score for leverage calculation
         quality = quality_score or _quality_from_ctx(ctx) or 5.0
