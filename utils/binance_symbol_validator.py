@@ -7,7 +7,7 @@ Fetches and caches exchange info to validate orders before submission
 import logging
 import time
 from typing import Dict, Optional, Tuple
-from decimal import Decimal, ROUND_DOWN
+from decimal import Decimal, ROUND_DOWN, ROUND_UP
 import requests
 
 logger = logging.getLogger("algogpt.symbol_validator")
