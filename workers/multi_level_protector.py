@@ -243,6 +243,6 @@ def check_protections(days: int = 7) -> Dict:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=os.getenv("LOG_LEVEL","WARNING").upper())
     result = check_protections(days=7)
     print(f"Protection Status: {result}")

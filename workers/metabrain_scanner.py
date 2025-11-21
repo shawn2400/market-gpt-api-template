@@ -31,7 +31,7 @@ from utils.telegram_digest import send_alert_immediate
 
 logger = logging.getLogger("metabrain_scanner")
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL","WARNING").upper(),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 

@@ -268,6 +268,6 @@ def run_auto_tuning(days: int = 7) -> Dict:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=os.getenv("LOG_LEVEL","WARNING").upper())
     result = run_auto_tuning(days=7)
     print(f"Tuning Result: {result}")

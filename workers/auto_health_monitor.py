@@ -11,7 +11,7 @@ from typing import Dict, Any, List, Optional, Protocol
 # Add project to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=os.getenv("LOG_LEVEL","WARNING").upper(), format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger("auto_health_monitor")
 
 # Digest protocol for type safety

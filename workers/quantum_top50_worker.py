@@ -22,7 +22,7 @@ import asyncio
 from datetime import datetime
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL","WARNING").upper(),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("quantum_top50_worker")

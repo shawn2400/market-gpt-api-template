@@ -24,7 +24,7 @@ from utils.telegram_utils import send_telegram_alert
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL","WARNING").upper(),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 

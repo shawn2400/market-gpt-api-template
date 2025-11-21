@@ -24,7 +24,7 @@ from typing import Dict, Any, List
 import pytz
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL","WARNING").upper(),
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s'
 )
 logger = logging.getLogger("algogpt.daily_meeting")

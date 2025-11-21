@@ -37,7 +37,7 @@ except Exception:
         return TelegramDigest()
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL","WARNING").upper(),
     format='%(levelname)s:%(name)s:%(message)s'
 )
 logger = logging.getLogger("position_monitor")

@@ -45,7 +45,7 @@ from utils.live_position_manager import LivePositionManager
 from utils.position_manager import _bn_round, _get_filters
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL","WARNING").upper(),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("trade_guardian")

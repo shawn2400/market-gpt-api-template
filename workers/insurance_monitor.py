@@ -28,7 +28,7 @@ from utils.binance_client import _init_client as get_client
 from utils.alerts import send_telegram_message
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL","WARNING").upper(),
     format='%(levelname)s:%(name)s:%(message)s'
 )
 logger = logging.getLogger("insurance_monitor")

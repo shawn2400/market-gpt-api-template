@@ -18,7 +18,7 @@ from utils.telegram_digest import send_health_digest, send_trade_digest
 from utils.digest_scheduler import DigestScheduler
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL","WARNING").upper(),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("telegram_digest_reporter")

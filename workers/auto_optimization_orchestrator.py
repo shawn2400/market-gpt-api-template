@@ -327,7 +327,7 @@ class AutoOptimizationOrchestrator:
 async def main():
     """Main entry point for the worker"""
     logging.basicConfig(
-        level=logging.INFO,
+        level=os.getenv("LOG_LEVEL","WARNING").upper(),
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     

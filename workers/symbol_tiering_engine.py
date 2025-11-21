@@ -255,6 +255,6 @@ def update_symbol_tiers(days: int = 30) -> Dict:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(level=os.getenv("LOG_LEVEL","WARNING").upper())
     tiers = update_symbol_tiers(days=30)
     print(f"Tier Assignments: {len(tiers)} symbols classified")
