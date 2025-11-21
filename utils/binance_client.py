@@ -1225,6 +1225,8 @@ __all__ = [
 
 
 
+from typing import Tuple
+
 # 🛡️ ============= CRITICAL PRICE VALIDATION WRAPPER =============
 def _validate_order_price(symbol: str, price: Optional[float], order_type: str, side: str) -> Optional[float]:
     """

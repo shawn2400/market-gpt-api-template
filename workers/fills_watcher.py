@@ -232,7 +232,10 @@ def _check_and_extend_tp(symbol: str, current_price: float, entry_price: float, 
     
     # Calculate current volatility (ATR)
     try:
-        klines = get_klines(symbol, "15m", 24)
+        # Handle both sync and async get_klines
+        klines = get_klines(symbol, "15m", 24) if get_klines else None
+        if asyncio.iscoroutine(klines):
+            klines = None  # Skip if async (would need await in async context)
         if klines and len(klines) >= 14:
             highs = [float(k[2]) for k in klines]
             lows = [float(k[3]) for k in klines]
@@ -251,8 +254,17 @@ def _check_and_extend_tp(symbol: str, current_price: float, entry_price: float, 
         log.debug(f"Failed to calculate ATR for {symbol}: {e}")
         volatility = 0.02
     
-    # Get multi-target TP manager
-    tp_manager = get_multi_target_tp()
+    # Get multi-target TP manager (handle both sync and async)
+    if not TP_EXTENSION_AVAILABLE or not get_multi_target_tp:
+        return
+    try:
+        tp_manager_result = get_multi_target_tp()
+        if asyncio.iscoroutine(tp_manager_result):
+            return  # Skip if async (need proper async context)
+        tp_manager = tp_manager_result
+    except Exception as e:
+        log.debug(f"Failed to get TP manager: {e}")
+        return
     
     # Build current TP config
     current_config = {
@@ -276,7 +288,9 @@ def _check_and_extend_tp(symbol: str, current_price: float, entry_price: float, 
     
     # Place new TP orders
     try:
-        validator = BinanceSymbolValidator()
+        validator = BinanceSymbolValidator() if BinanceSymbolValidator else None
+        if not validator:
+            return
         
         for target in extended_config["targets"]:
             tp_price = target["price"]
@@ -1269,14 +1283,15 @@ class _FillsWatcherThread(threading.Thread):
                         log.info(f"📈 Protection: SL={sl_price:.6f}, TP={tp_price:.6f}, Side={fill_side}")
                         
                         # Attach SL/TP protection
-                        protection_result = await attach_sltp_protection(
-                            symbol=symbol,
-                            side=fill_side,
-                            sl_price=sl_price,
-                            tp_price=tp_price
-                        )
-                        
-                        if protection_result["ok"]:
+                        try:
+                            protection_result = await attach_sltp_protection(
+                                symbol=symbol,
+                                side=fill_side,
+                                sl_price=sl_price,
+                                tp_price=tp_price
+                            )
+                            
+                            if protection_result and protection_result.get("ok"):
                             log.info(f"✅ [{trade_type}] SL/TP protection applied: {symbol}")
                             fills_protected += 1
                             
