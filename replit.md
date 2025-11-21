@@ -6,6 +6,14 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
+## Recent Critical Fixes (Nov 21, 2025)
+- ✅ **Runtime Bug #1**: ATR Fallback (2% default) - prevents Stop Price < 0 when ATR missing
+- ✅ **Runtime Bug #2**: SL Price Validation - skips placement if price ≤ 0 (prevents APIError -4006)
+- ✅ **Runtime Bug #3**: TP Price Validation - skips placement if price ≤ 0 (prevents APIError -4001)
+- ✅ **Quality Threshold Raised**: MIN_QUALITY_SCORE 4.0 → 7.0 (prevents low-quality disasters)
+- ✅ **Meme Coin Blacklist**: Added high-volatility token filtering (1000BOB: -30.93% → BLOCKED)
+- 📊 **Trade Analysis**: Win rate 40% (4/10) → Target 70%+ after quality gating
+
 ## System Architecture
 
 ### UI/UX
