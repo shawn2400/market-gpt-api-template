@@ -967,7 +967,8 @@ async def ensure_positions_protected() -> None:
         if progressive_sl_locker:
             try:
                 open_syms = {p.get("symbol") for p in positions if abs(float(p.get("positionAmt", 0))) > 0}
-                cached_symbols = list(_tp_state_cache.keys()) if '_tp_state_cache' in globals() else []
+                state_summary = progressive_sl_locker.get_state_summary()  # type: ignore
+                cached_symbols = state_summary.get("symbols", [])
                 for stale in set(cached_symbols) - open_syms:
                     progressive_sl_locker.cleanup_symbol(stale)
                     logger.debug(f"🧹 Progressive SL cleanup: removed {stale}")
