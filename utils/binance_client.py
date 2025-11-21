@@ -523,8 +523,8 @@ def futures_index_price(symbol: str) -> Optional[float]:
         if data:
             if isinstance(data, list) and data:
                 data = data[0]
-            p = data.get("indexPrice")
-            if p is not None:
+            p = data.get("indexPrice") if not isinstance(data, list) else None  # type: ignore
+            if p is not None:  # type: ignore
                 val = float(p)
                 _cache_put(_index_cache, sym, val)
                 return val
@@ -540,7 +540,7 @@ def get_price(symbol: str) -> Optional[float]:
                 return float(v)
     except Exception:
         pass
-    return futures_mark_price(symbol)
+    return futures_mark_price(symbol)  # type: ignore
 
 @observe_http(name="binance_balance")
 def futures_balance() -> List[Dict[str, Any]]:  # type: ignore
@@ -577,10 +577,11 @@ def get_open_positions(symbol: Optional[str] = None) -> List[Dict[str, Any]]:  #
         return []
 
 def futures_open_positions_safe(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
-    return get_open_positions(symbol)
+    return get_open_positions(symbol)  # type: ignore
 
 def get_single_position(symbol: str) -> Optional[Dict[str, Any]]:
-    for p in get_open_positions(symbol):
+    positions = get_open_positions(symbol) or []  # type: ignore
+    for p in positions:  # type: ignore
         return p
     return None
 
@@ -610,7 +611,7 @@ def get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
 # Alias for fills_watcher compatibility
 def futures_get_open_orders(symbol: Optional[str] = None) -> List[Dict[str, Any]]:
     """Alias for get_open_orders - used by fills_watcher and position_manager"""
-    return get_open_orders(symbol)
+    return get_open_orders(symbol)  # type: ignore
 
 @observe_http(name="binance_all_orders", include_labels=["symbol"])
 def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, Any]]:
@@ -775,10 +776,10 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:  # type: ignore
                     # 🔧 CRITICAL FIX: Re-quantize price and quantity after adaptation
                     # Adaptation may have changed parameters, so we need to re-validate precision
                     if "quantity" in kwargs:
-                        kwargs["quantity"] = _quantize_qty(sym, kwargs["quantity"])
+                        kwargs["quantity"] = _quantize_qty(sym, float(kwargs["quantity"]))  # type: ignore
                         print(f"[DEBUG] Re-quantized quantity: {kwargs['quantity']}")
                     if "price" in kwargs:
-                        kwargs["price"] = _quantize_price(sym, kwargs["price"])
+                        kwargs["price"] = _quantize_price(sym, float(kwargs["price"]))  # type: ignore
                         print(f"[DEBUG] Re-quantized price: {kwargs['price']}")
                 except Exception as adapt_err:
                     print(f"[WARN] Failed to re-adapt after -4061: {adapt_err}")
@@ -813,7 +814,7 @@ def place_stop_market(
     }
     if positionSide and HEDGE_MODE_OVERRIDE not in ("0", "false", "no", "off", "oneway"):
         args["positionSide"] = positionSide.upper()
-    return futures_create_order(**args)
+    return futures_create_order(**args)  # type: ignore
 
 # ✔ עטיפת תאימות לשם שהראוטים מחפשים
 def place_stop_market_order(
@@ -857,7 +858,7 @@ def place_take_profit_market(
     }
     if position_side and HEDGE_MODE_OVERRIDE not in ("0", "false", "no", "off", "oneway"):
         args["positionSide"] = position_side.upper()
-    return futures_create_order(**args)
+    return futures_create_order(**args)  # type: ignore
 
 def set_breakeven_stop(
     symbol: str,
@@ -871,8 +872,9 @@ def set_breakeven_stop(
     try:
         q = qty_hint
         if not q or q <= 0:
-            for p in get_open_positions(symbol):
-                amt = float(p.get("positionAmt") or 0.0)
+            positions = get_open_positions(symbol) or []  # type: ignore
+            for p in positions:  # type: ignore
+                amt = float(p.get("positionAmt") or 0.0)  # type: ignore
                 if abs(amt) > 0:
                     q = abs(amt)
                     break
