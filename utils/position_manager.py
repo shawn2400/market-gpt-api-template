@@ -536,7 +536,10 @@ async def manage_once(
                         # יעד למעלה: אם ה-high היה קרוב מספיק אבל לא מילא — נקרב טיק אחד מטה
                         if _ticks_between(last_h, px, tick) <= TP_REARM_TICK and last_h < px:
                             new_px = _bn_round(max(px - tick, tick), tick)
-                            client.futures_cancel_order(symbol=symbol, orderId=oid)
+                            try:
+                                client.futures_cancel_order(symbol=symbol, orderId=oid)
+                            except Exception:
+                                pass  # Order may already be filled
                             with suppress(Exception):
                                 client.futures_create_order(
                                     symbol=symbol,
@@ -552,7 +555,10 @@ async def manage_once(
                         # יעד למטה: אם ה-low היה קרוב מספיק אבל לא מילא — נקרב טיק אחד מעלה
                         if _ticks_between(last_l, px, tick) <= TP_REARM_TICK and last_l > px:
                             new_px = _round_tick_dir(px + tick, tick, "up")
-                            client.futures_cancel_order(symbol=symbol, orderId=oid)
+                            try:
+                                client.futures_cancel_order(symbol=symbol, orderId=oid)
+                            except Exception:
+                                pass  # Order may already be filled
                             with suppress(Exception):
                                 client.futures_create_order(
                                     symbol=symbol,

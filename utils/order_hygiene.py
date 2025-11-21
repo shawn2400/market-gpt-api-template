@@ -83,7 +83,7 @@ def place_limit_order_safe(
     *, symbol: str, side: str, quantity: str, price: str, reduce_only: bool = False, position_side: str = "BOTH"
 ) -> Dict[str, Any]:
     try:
-        return futures_create_order(
+        result = futures_create_order(
             symbol=symbol.upper(),
             side=side.upper(),
             type="LIMIT",
@@ -93,6 +93,10 @@ def place_limit_order_safe(
             reduceOnly=bool(reduce_only),
             positionSide=position_side,
         )
+        # Handle async result if needed
+        if result is None:
+            return {"ok": False, "error": "futures_create_order returned None"}
+        return result if isinstance(result, dict) else {"ok": True, "result": result}
     except Exception as e:
         logger.error("[order_hygiene] limit order failed: %s", e)
         return {"ok": False, "error": str(e)}
@@ -103,7 +107,7 @@ def place_stop_market_safe(
 ) -> Dict[str, Any]:
     try:
         # ב־Futures עדיף STOP רגיל עם price=stopPrice (חלק מהספריות)
-        return futures_create_order(
+        result = futures_create_order(
             symbol=symbol.upper(),
             side=side.upper(),
             type="STOP",
@@ -114,6 +118,10 @@ def place_stop_market_safe(
             reduceOnly=bool(reduce_only),
             positionSide=position_side,
         )
+        # Handle async result if needed
+        if result is None:
+            return {"ok": False, "error": "futures_create_order returned None"}
+        return result if isinstance(result, dict) else {"ok": True, "result": result}
     except Exception as e:
         logger.error("[order_hygiene] stop-market failed: %s", e)
         return {"ok": False, "error": str(e)}
@@ -123,7 +131,7 @@ def place_take_profit_safe(
     *, symbol: str, side: str, quantity: str, tp_price: str, reduce_only: bool = True, position_side: str = "BOTH"
 ) -> Dict[str, Any]:
     try:
-        return futures_create_order(
+        result = futures_create_order(
             symbol=symbol.upper(),
             side=side.upper(),
             type="TAKE_PROFIT",
@@ -134,6 +142,10 @@ def place_take_profit_safe(
             reduceOnly=bool(reduce_only),
             positionSide=position_side,
         )
+        # Handle async result if needed
+        if result is None:
+            return {"ok": False, "error": "futures_create_order returned None"}
+        return result if isinstance(result, dict) else {"ok": True, "result": result}
     except Exception as e:
         logger.error("[order_hygiene] take-profit failed: %s", e)
         return {"ok": False, "error": str(e)}

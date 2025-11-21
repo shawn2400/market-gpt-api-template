@@ -294,8 +294,8 @@ def atomic_update_orders(
     symbol: str,
     plan: Dict[str, Any],
     *,
-    verify_timeout_ms: int = None,
-    strategy: str = None
+    verify_timeout_ms: Optional[int] = None,
+    strategy: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     מבצע עדכון אטומי פשוט:
@@ -319,10 +319,18 @@ def atomic_update_orders(
         for c in plan["cancel"]:
             try:
                 if c.get("orderId"):
-                    res = client.futures_cancel_order(symbol=symbol, orderId=c["orderId"])
+                    try:
+                        res = client.futures_cancel_order(symbol=symbol, orderId=c["orderId"])
+                        cancelled.append(res)
+                    except Exception as cancel_err:
+                        # Silently skip - order may already be filled/canceled
+                        logger.debug(f"Failed to cancel orderId {c['orderId']}: {cancel_err}")
                 else:
-                    res = client.futures_cancel_order(symbol=symbol, origClientOrderId=c.get("clientOrderId"))
-                cancelled.append(res)
+                    try:
+                        res = client.futures_cancel_order(symbol=symbol, origClientOrderId=c.get("clientOrderId"))
+                        cancelled.append(res)
+                    except Exception as cancel_err:
+                        logger.debug(f"Failed to cancel clientOrderId {c.get('clientOrderId')}: {cancel_err}")
             except Exception as e:
                 if strategy != "MINIMAL":
                     return {"ok": False, "detail": f"cancel failed: {e}"}
