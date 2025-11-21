@@ -249,7 +249,11 @@ class DynamicBudgetManager:
             )
             
             # Ensure leverage is a valid int
-            return int(float(leverage_value)) if leverage_value else self.leverage_min
+            try:
+                lev_float = float(leverage_value) if leverage_value else float(self.leverage_min)
+                return int(lev_float)
+            except (ValueError, TypeError):
+                return self.leverage_min
             
         except Exception as e:
             # Fallback to simple calculation if DynamicLeverageCalculator fails

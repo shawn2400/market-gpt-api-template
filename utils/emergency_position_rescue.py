@@ -115,25 +115,24 @@ class EmergencyPositionRescuer:
         return payload
     
     def generate_tp_order_payloads(self, symbol: str, position_data: Dict,
-                                  tp_levels: List[float] = None) -> List[Dict]:
+                                  tp_levels: Optional[List[float]] = None) -> List[Dict]:
         """
         Generate multi-level TP order payloads
         
         Default: 3 levels at 1.5%, 3.0%, 5.0% above current
         """
-        if tp_levels is None:
-            tp_levels = [1.5, 3.0, 5.0]
+        tp_levels_to_use: List[float] = tp_levels if tp_levels is not None else [1.5, 3.0, 5.0]
         
         mark_price = float(position_data.get('mark_price', 0))
         size = abs(float(position_data.get('size', 0)))
         side = "LONG" if position_data.get('size', 0) > 0 else "SHORT"
         
-        # Split size across 3 levels
-        qty_per_level = size / len(tp_levels)
+        # Split size across levels
+        qty_per_level = size / len(tp_levels_to_use)
         
         payloads = []
         
-        for i, tp_pct in enumerate(tp_levels):
+        for i, tp_pct in enumerate(tp_levels_to_use):
             if side == "LONG":
                 tp_price = mark_price * (1 + tp_pct / 100.0)
                 close_side = "SELL"

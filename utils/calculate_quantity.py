@@ -27,10 +27,10 @@ except Exception as e:
     logger.warning("[calculate_quantity] quantity_utils core not available, will use precision_utils fallback: %s", e)
 
 # --- פולבקים דרך precision_utils ---
-_get_precision_info_px: Optional[Callable[[str], Dict[str, float]]] = None
-_apply_qty_step_px: Optional[Callable[[float, str], float]] = None
-_apply_price_tick_px: Optional[Callable[[float, str], tuple]] = None
-_calc_qty_budget_px: Optional[Callable[[str, float, float, float], Dict[str, Any]]] = None
+_get_precision_info_px: Optional[Callable] = None
+_apply_qty_step_px: Optional[Callable] = None
+_apply_price_tick_px: Optional[Callable] = None
+_calc_qty_budget_px: Optional[Callable] = None
 
 try:
     from utils.precision_utils import (
