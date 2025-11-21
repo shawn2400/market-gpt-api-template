@@ -1,0 +1,54 @@
+~/workspace$ # 1️⃣ בטל את ה-lock
+rm -f .git/index.lock
+
+# 2️⃣ הוסף את כל הקבצים
+git add -A
+
+# 3️⃣ Commit עם הודעה טובה
+git commit -m "🔧 CRITICAL FIXES: Stop Price Validation + Quality Threshold Raise + Meme Coin Blacklist
+
+✅ BUG FIXES (Runtime Protection):
+1. ATR Fallback (2% default) - prevents price=0 when ATR missing
+2. SL Price Validation - skips placement if price ≤ 0 (APIError -4006 fix)
+3. TP Price Validation - skips placement if price ≤ 0 (APIError -4001 fix)
+4. Trailing SL Guard - validates before order placement
+
+🛡️ QUALITY IMPROVEMENTS:
+- Raised MIN_QUALITY_SCORE: 4.0 → 7.0 (prevents 1000BOB -30.93% disasters)
+- Added meme_coin_blacklist.json with high-volatility tokens
+
+📝 Modified Files:
+- utils/trade_execution_core.py (ATR fallback, SL/TP validation)
+- workers/position_monitor.py (SL/TP guards)
+- utils/auto_executor.py (quality threshold)
+- static/meme_coin_blacklist.json (NEW)"
+
+# 4️⃣ Push לGithub
+git push origin main
+[main 58ee802] 🔧 CRITICAL FIXES: Stop Price Validation + Quality Threshold Raise + Meme Coin Blacklist
+ 3 files changed, 20 insertions(+), 1 deletion(-)
+Enumerating objects: 77, done.
+Counting objects: 100% (77/77), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (43/43), done.
+Writing objects: 100% (47/47), 31.94 KiB | 495.00 KiB/s, done.
+Total 47 (delta 34), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (34/34), completed with 14 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   ad0a0aa..58ee802  main -> main
+~/workspace$ cd /home/runner/$REPL_SLUG
+rm -f .git/index.lock
+git add -A
+git commit -m "🔧 CRITICAL FIXES: Stop Price Validation + Quality Threshold Raise + Meme Coin Blacklist"
+git push origin main
+[main 66416a3] 🔧 CRITICAL FIXES: Stop Price Validation + Quality Threshold Raise + Meme Coin Blacklist
+ 1 file changed, 1 insertion(+)
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ 
