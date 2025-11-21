@@ -22,11 +22,23 @@ import time
 import asyncio
 import logging
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.binance_client import _init_client as get_client
+
+def send_telegram_message(message: str, parse_mode: str = "HTML") -> None:
+    """Send Telegram message"""
+    try:
+        import requests
+        bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+        chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+        if bot_token and chat_id:
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": parse_mode}, timeout=5)
+    except Exception:
+        pass
 from utils.db import _conn
 from utils.dynamic_sltp_manager import DynamicSLTPManager
 from utils.live_position_manager import LivePositionManager
@@ -61,6 +73,9 @@ def get_active_positions() -> List[Dict[str, Any]]:
     """Get all active positions from Binance"""
     try:
         client = get_client()
+        if not client:
+            logger.error("Binance client not available")
+            return []
         positions = client.futures_position_information()
         
         active = []
@@ -86,6 +101,9 @@ def get_open_orders(symbol: str) -> Dict[str, List[Dict[str, Any]]]:
     """Get open orders grouped by type"""
     try:
         client = get_client()
+        if not client:
+            logger.error("Binance client not available")
+            return {"SL": [], "TP": [], "TRAILING": [], "OTHER": []}
         orders = client.futures_get_open_orders(symbol=symbol)
         
         categorized = {
@@ -140,6 +158,9 @@ def get_market_data(symbol: str) -> Dict[str, Any]:
     """Get current market data for symbol"""
     try:
         client = get_client()
+        if not client:
+            logger.error("Binance client not available")
+            return {"atr": 0, "atr_pct": 0, "price": 0, "high_24h": 0, "low_24h": 0}
         
         # Get klines for ATR calculation
         klines = client.futures_klines(symbol=symbol, interval="15m", limit=20)
@@ -167,6 +188,7 @@ def get_market_data(symbol: str) -> Dict[str, Any]:
 
 def add_missing_sl(position: Dict[str, Any]) -> bool:
     """Add SL using dynamic calculation"""
+    symbol = ""
     try:
         symbol = position["symbol"]
         entry_price = position["entryPrice"]
@@ -203,6 +225,9 @@ def add_missing_sl(position: Dict[str, Any]) -> bool:
         
         # Get Binance filters and round to proper precision
         client = get_client()
+        if not client:
+            logger.error(f"Binance client not available for {symbol}")
+            return False
         tick, step = _get_filters(client, symbol)
         sl_price_rounded = _bn_round(sl_price, tick)
         
@@ -277,6 +302,7 @@ def add_missing_sl(position: Dict[str, Any]) -> bool:
 
 def add_missing_tp(position: Dict[str, Any]) -> bool:
     """Add TP ladder using dynamic calculation"""
+    symbol = ""
     try:
         symbol = position["symbol"]
         entry_price = position["entryPrice"]
@@ -317,6 +343,9 @@ def add_missing_tp(position: Dict[str, Any]) -> bool:
         
         # Place TP orders
         client = get_client()
+        if not client:
+            logger.error(f"Binance client not available for {symbol}")
+            return False
         side = "SELL" if direction == "LONG" else "BUY"
         
         # Split position into 3 parts
@@ -376,6 +405,9 @@ def cancel_orphaned_orders() -> int:
     """Cancel orders for positions that don't exist"""
     try:
         client = get_client()
+        if not client:
+            logger.error("Binance client not available")
+            return 0
         
         # Get all positions
         positions = get_active_positions()
@@ -409,26 +441,31 @@ def cancel_orphaned_orders() -> int:
 def log_guardian_fix(symbol: str, issue: str, fix_applied: str, success: bool):
     """Log guardian fix to database"""
     try:
-        with _conn() as conn:
-            if not conn:
-                return
+        conn = _conn()
+        if not conn:
+            return
+        
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS guardian_fixes (
+                    id SERIAL PRIMARY KEY,
+                    timestamp TIMESTAMP DEFAULT NOW(),
+                    symbol VARCHAR(20),
+                    issue VARCHAR(50),
+                    fix_applied TEXT,
+                    success BOOLEAN
+                )
+            """)
             
-            with conn.cursor() as cur:
-                cur.execute("""
-                    CREATE TABLE IF NOT EXISTS guardian_fixes (
-                        id SERIAL PRIMARY KEY,
-                        timestamp TIMESTAMP DEFAULT NOW(),
-                        symbol VARCHAR(20),
-                        issue VARCHAR(50),
-                        fix_applied TEXT,
-                        success BOOLEAN
-                    )
-                """)
-                
-                cur.execute("""
-                    INSERT INTO guardian_fixes (symbol, issue, fix_applied, success)
-                    VALUES (%s, %s, %s, %s)
-                """, (symbol, issue, fix_applied, success))
+            cur.execute("""
+                INSERT INTO guardian_fixes (symbol, issue, fix_applied, success)
+                VALUES (%s, %s, %s, %s)
+            """, (symbol, issue, fix_applied, success))
+            conn.commit()
+            cur.close()
+        finally:
+            conn.close()
     except Exception as e:
         logger.error(f"Failed to log guardian fix: {e}")
 

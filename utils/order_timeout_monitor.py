@@ -261,18 +261,24 @@ class OrderTimeoutMonitor:
     def _notify_conversion(self, order_info: Dict[str, Any]) -> None:
         """Send Telegram notification about LIMIT→MARKET conversion."""
         try:
-            from utils.telegram_digest import queue_trade_event
+            import requests
+            bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+            chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+            
+            if not bot_token or not chat_id:
+                return
             
             message = (
-                f"🔄 **LIMIT→MARKET Conversion**\n"
-                f"Symbol: {order_info['symbol']}\n"
+                f"🔄 <b>LIMIT→MARKET Conversion</b>\n"
+                f"Symbol: <code>{order_info['symbol']}</code>\n"
                 f"Side: {order_info['side']}\n"
                 f"Quantity: {order_info['quantity']}\n"
                 f"Type: {order_info['order_type']}\n"
                 f"Reason: Timeout ({self.timeout_sec}s)"
             )
             
-            queue_trade_event("INFO", message)
+            url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+            requests.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"}, timeout=5)
         except Exception as e:
             logger.warning(f"Failed to send Telegram notification: {e}")
     
