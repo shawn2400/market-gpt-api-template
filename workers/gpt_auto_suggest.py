@@ -1672,6 +1672,32 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
         LOGGER.info(f"NO PROPOSAL from AI for {symbol}")
         return None
     
+    # 🚀 CHECK BTC CORRELATION - HARD GATE (block if market direction conflicts)
+    try:
+        from utils.market_intelligence import get_market_intelligence
+        mi_engine = get_market_intelligence()
+        btc_direction, btc_penalty = mi_engine.check_btc_correlation(symbol, prop.get("side", "LONG"))
+        
+        # HARD GATE: If BTC strongly bearish and we're trying LONG → REJECT
+        # Only block on EXTREME BTC movements (penalty > 2.0 = major conflict)
+        if btc_penalty > 2.0 and prop.get("side") == "LONG" and btc_direction == "BEARISH":
+            LOGGER.info(
+                f"🔴 REJECTED {symbol}: BTC correlation conflict (BTC={btc_direction}, "
+                f"penalty={btc_penalty:.2f} > 2.0, trade={prop.get('side')})"
+            )
+            return None
+        elif btc_penalty > 2.0 and prop.get("side") == "SHORT" and btc_direction == "BULLISH":
+            LOGGER.info(
+                f"🔴 REJECTED {symbol}: BTC correlation conflict (BTC={btc_direction}, "
+                f"penalty={btc_penalty:.2f} > 2.0, trade={prop.get('side')})"
+            )
+            return None
+        
+        if btc_penalty > 0:
+            LOGGER.info(f"⚠️ {symbol}: BTC correlation penalty={btc_penalty:.2f} ({btc_direction})")
+    except Exception as e:
+        LOGGER.debug(f"BTC correlation check failed (proceeding): {e}")
+    
     # 🎯 REGIME-BASED QUALITY FILTER (from Dynamic Protection Manager)
     quality_score = _quality_from_ctx(ctx)
     min_quality = _get_regime_quality_threshold(ctx)
@@ -1708,6 +1734,35 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     rr = rr_from_levels(prop["entry"], prop["sl"], prop["tp1"])
     min_rr, success_req, fb_note = await _apply_funding_bias_req(prop["side"], symbol, min_rr, success_req)
 
+    # 💎 DYNAMIC LEVERAGE CALCULATION (force 2-35x scaling)
+    try:
+        from utils.dynamic_sizing import get_dynamic_sizing_engine
+        sizing_engine = get_dynamic_sizing_engine()
+        
+        # Get quality score for leverage calculation
+        quality = quality_score or _quality_from_ctx(ctx) or 5.0
+        
+        # Calculate dynamic leverage based on market regime, quality, and wallet
+        dynamic_lev = sizing_engine.calculate_leverage(
+            symbol=symbol,
+            quality=quality,
+            regime=market_condition.regime if market_condition else "neutral",
+            context=ctx
+        )
+        
+        # Override AI leverage with dynamic calculation (force 2-35x range)
+        if dynamic_lev and 2 <= dynamic_lev <= 35:
+            prop["leverage"] = dynamic_lev
+            LOGGER.info(f"💎 {symbol}: Dynamic Leverage={dynamic_lev:.1f}x (quality={quality:.1f}, regime={market_condition.regime if market_condition else 'neutral'})")
+        else:
+            # Fallback if calculation failed
+            prop["leverage"] = max(2, min(35, prop.get("leverage", 5)))
+            LOGGER.debug(f"Dynamic leverage calc returned invalid value {dynamic_lev}, using {prop.get('leverage', 5)}x")
+    except Exception as e:
+        # Safe fallback: use AI leverage or default 5x
+        prop["leverage"] = max(2, min(35, prop.get("leverage", 5)))
+        LOGGER.debug(f"Dynamic leverage calc failed: {e}, using {prop.get('leverage', 5)}x")
+
     # גייטינג כללי
     vol_reg = ((ctx.get("filters") or {}).get("vol_regime","mid")) if ctx else "mid"
     
@@ -1721,7 +1776,7 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     LOGGER.debug(
         f"🔍 {symbol} gate_trade params: side={prop['side']}, price={price}, "
         f"entry={prop['entry']}, sl={prop['sl']}, tp1={prop['tp1']}, "
-        f"vol_regime={vol_reg}, success_pct={success_pct}, leverage={prop.get('leverage')}"
+        f"vol_regime={vol_reg}, success_pct={success_pct}, leverage={prop.get('leverage'):.1f}x"
     )
     
     g = gate_trade(symbol, prop["side"], price, prop["entry"], prop["sl"], prop["tp1"],
