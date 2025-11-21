@@ -1678,18 +1678,19 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
         mi_engine = get_market_intelligence()
         btc_direction, btc_penalty = mi_engine.check_btc_correlation(symbol, prop.get("side", "LONG"))
         
-        # HARD GATE: If BTC strongly bearish and we're trying LONG → REJECT
-        # Only block on EXTREME BTC movements (penalty > 2.0 = major conflict)
-        if btc_penalty > 2.0 and prop.get("side") == "LONG" and btc_direction == "BEARISH":
-            LOGGER.info(
-                f"🔴 REJECTED {symbol}: BTC correlation conflict (BTC={btc_direction}, "
-                f"penalty={btc_penalty:.2f} > 2.0, trade={prop.get('side')})"
+        # 🔴 HARD GATE: Block ANY conflicting BTC trade (penalty > 0.5 = significant conflict)
+        # LONG trades: Reject if BTC bearish (penalty > 0.5)
+        # SHORT trades: Reject if BTC bullish (penalty > 0.5)
+        if btc_penalty > 0.5 and prop.get("side") == "LONG" and btc_direction == "BEARISH":
+            LOGGER.warning(
+                f"🔴 REJECTED {symbol}: BTC bearish conflict (BTC={btc_direction}, "
+                f"penalty={btc_penalty:.2f} > 0.5, blocking LONG trades)"
             )
             return None
-        elif btc_penalty > 2.0 and prop.get("side") == "SHORT" and btc_direction == "BULLISH":
-            LOGGER.info(
-                f"🔴 REJECTED {symbol}: BTC correlation conflict (BTC={btc_direction}, "
-                f"penalty={btc_penalty:.2f} > 2.0, trade={prop.get('side')})"
+        elif btc_penalty > 0.5 and prop.get("side") == "SHORT" and btc_direction == "BULLISH":
+            LOGGER.warning(
+                f"🔴 REJECTED {symbol}: BTC bullish conflict (BTC={btc_direction}, "
+                f"penalty={btc_penalty:.2f} > 0.5, blocking SHORT trades)"
             )
             return None
         

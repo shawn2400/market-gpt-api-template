@@ -620,14 +620,20 @@ class ExecutionBot:
                     sl_price_raw = current_price * (1 - fallback_sl_pct) if position_side == "LONG" else current_price * (1 + fallback_sl_pct)
                     # 🔧 FIX: Use validator.round_price which returns float
                     sl_price = validator.round_price(symbol, sl_price_raw)
-                    self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 2% SL @ {sl_price} (raw={sl_price_raw}, current_price={current_price})")
+                    # 🚨 CRITICAL: If rounding returns 0, use raw price as absolute fallback
+                    if not sl_price or sl_price <= 0:
+                        sl_price = sl_price_raw
+                    self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 2% SL @ {sl_price:.8f} (raw={sl_price_raw:.8f}, current_price={current_price})")
                 
                 if not tp_price or tp_price <= 0:
                     fallback_tp_pct = 0.03
                     tp_price_raw = current_price * (1 + fallback_tp_pct) if position_side == "LONG" else current_price * (1 - fallback_tp_pct)
                     # 🔧 FIX: Use validator.round_price which returns float
                     tp_price = validator.round_price(symbol, tp_price_raw)
-                    self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 3% TP @ {tp_price} (raw={tp_price_raw}, current_price={current_price})")
+                    # 🚨 CRITICAL: If rounding returns 0, use raw price as absolute fallback
+                    if not tp_price or tp_price <= 0:
+                        tp_price = tp_price_raw
+                    self.log.warning(f"⚠️ ATR missing for {symbol}, using fallback 3% TP @ {tp_price:.8f} (raw={tp_price_raw:.8f}, current_price={current_price})")
                 
                 # 🚨 CRITICAL SAFETY CHECK: Verify SL/TP are valid before trading
                 if not sl_price or sl_price <= 0:
