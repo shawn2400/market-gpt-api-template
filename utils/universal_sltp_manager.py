@@ -311,10 +311,10 @@ async def attach_multi_target_protection(
                 import pandas as pd
                 
                 klines = await get_klines(symbol, interval="15m", limit=24)
-                if klines and len(klines) >= 14:
+                if klines is not None and len(klines) >= 14:
                     df = pd.DataFrame(klines)
                     atr_series = calculate_atr(df, period=14)
-                    if not atr_series.empty:
+                    if atr_series is not None and not atr_series.empty:
                         atr_value = float(atr_series.iloc[-1])
                         volatility = atr_value / entry_price
                         logger.info(f"📊 {symbol}: Calculated ATR volatility={volatility*100:.2f}%")
@@ -413,8 +413,8 @@ async def attach_multi_target_protection(
                 if position_side and position_side != "BOTH":
                     tp_order_params["positionSide"] = position_side
                 else:
-                    # In One-Way Mode, set reduceOnly=True to prevent increasing position
-                    tp_order_params["reduceOnly"] = True
+                    # In One-Way Mode, set reduceOnly=true to prevent increasing position
+                    tp_order_params["reduceOnly"] = "true"
                 
                 tp_order = client.futures_create_order(**tp_order_params)
                 

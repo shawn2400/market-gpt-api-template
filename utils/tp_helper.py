@@ -17,11 +17,11 @@ except Exception:
         pass
     def inc_manage_once_failed():  # type: ignore
         pass
-    def observe_callback_rate(_v: float):  # type: ignore
+    def observe_callback_rate(v: float):  # type: ignore
         pass
-    def observe_be_distance_bps(_v: float):  # type: ignore
+    def observe_be_distance_bps(v: float):  # type: ignore
         pass
-    def observe_tp_ladders(_n: int):  # type: ignore
+    def observe_tp_ladders(n: int):  # type: ignore
         pass
     def inc_tp_merge():  # type: ignore
         pass
@@ -29,14 +29,14 @@ except Exception:
         pass
     def inc_tp_nudged():  # type: ignore
         pass
-    def observe_time_to_tp1(_sec: float):  # type: ignore
+    def observe_time_to_tp1(seconds: float):  # type: ignore
         pass
 
 # 🔔 אירועים (Redis + Telegram)
 try:
     from utils.pos_events import emit  # async
 except Exception:
-    async def emit(*args, **kwargs):  # type: ignore
+    async def emit(sym: str, op: str, **fields):  # type: ignore
         return {"ok": False, "skipped": True, "reason": "pos_events_unavailable"}
 
 # ─── עזרי עיגול לטיק/סטפ של בורסה ─────────────────────────────────────────────
