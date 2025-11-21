@@ -12,7 +12,7 @@ from typing import Dict, Any, List
 from utils.db import _conn, _is_postgres, DB_URL, USE_DB
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL","WARNING").upper(),
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("populate_kpis")
