@@ -427,24 +427,22 @@ class ExecutionBot:
             # If we have 4 ISOLATED positions and this is a NEW symbol
             if len(isolated_open) >= 4:
                 isolated_symbols = [p["symbol"] for p in isolated_open]
-                self.log.warning(
-                    f"⚠️ ISOLATED LIMIT: 4/4 positions full ({', '.join(isolated_symbols)})"
+                self.log.error(
+                    f"🛑 ISOLATED LIMIT REACHED (4/4): {', '.join(isolated_symbols)}"
                 )
                 
-                # Option 1: Auto-downgrade to CROSS margin (safest)
-                ticket_exec["margin_type"] = "CROSS"
-                ticket_exec["isolated_limit_downgrade"] = True
-                self.log.info(f"🔄 Auto-downgraded {symbol} to CROSS margin (ISOLATED limit reached)")
-                return
-                
-                # Option 2: Reject trade (strict mode)
-                # raise RuntimeError(
-                #     f"Binance ISOLATED limit reached (4/4). "
-                #     f"Close one ISOLATED position or use CROSS margin. "
-                #     f"Current ISOLATED: {', '.join(isolated_symbols)}"
-                # )
+                # ❌ FORCE ISOLATED - DO NOT DOWNGRADE TO CROSS
+                # User must close one position first
+                raise RuntimeError(
+                    f"🛑 Binance ISOLATED limit reached (4/4). "
+                    f"ISOLATED margin is MANDATORY for safety. "
+                    f"Close one ISOLATED position before trading again. "
+                    f"Current ISOLATED: {', '.join(isolated_symbols)}"
+                )
             
-            self.log.info(f"✅ ISOLATED OK: {len(isolated_open)}/4 positions, allowing {symbol}")
+            # ✅ Force ISOLATED mode for all new positions
+            ticket_exec["margin_type"] = "isolated"
+            self.log.info(f"✅ ISOLATED ENFORCED: {symbol} ({len(isolated_open)+1}/4 positions)")
             
         except RuntimeError:
             raise  # Re-raise our own errors

@@ -116,6 +116,57 @@ _tp_extension_state: Dict[str, Dict[str, Any]] = {}  # symbol -> {last_tp_hit: i
 # Track Trailing SL state
 _trailing_sl_state: Dict[str, Dict[str, Any]] = {}  # symbol -> {peak_price: float, sl_price: float, ...}
 
+# 🧠 POST-TRADE ANALYSIS - Learn from every closed trade
+def _analyze_completed_trade(symbol: str, trade_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    🧠 Analyze completed trade to improve future trades
+    
+    Extracts:
+    - Entry quality (was it the right price?)
+    - SL/TP execution (did it hit targets or stops?)
+    - PnL result
+    - Suggestions for next trade
+    """
+    try:
+        entry_price = float(trade_data.get("entry_price", 0))
+        exit_price = float(trade_data.get("exit_price", 0))
+        side = trade_data.get("side", "")
+        pnl_pct = trade_data.get("pnl_percent", 0)
+        
+        analysis = {
+            "symbol": symbol,
+            "side": side,
+            "entry": entry_price,
+            "exit": exit_price,
+            "pnl_pct": pnl_pct,
+            "successful": pnl_pct > 0,
+            "analysis_time": time.time(),
+        }
+        
+        # 🎯 Learn from this trade
+        if pnl_pct > 3.0:
+            analysis["quality"] = "EXCELLENT"
+            analysis["suggestion"] = f"✅ Great execution! Entry {entry_price} was ideal, consider similar setups"
+        elif pnl_pct > 1.0:
+            analysis["quality"] = "GOOD"
+            analysis["suggestion"] = f"✅ Solid trade, target hit correctly"
+        elif pnl_pct > 0:
+            analysis["quality"] = "BREAK_EVEN"
+            analysis["suggestion"] = f"⚠️ Minor profit, tighten targets next time"
+        elif pnl_pct > -1.5:
+            analysis["quality"] = "ACCEPTABLE_LOSS"
+            analysis["suggestion"] = f"⚠️ Small loss, SL worked as expected"
+        else:
+            analysis["quality"] = "FAILURE"
+            analysis["suggestion"] = f"❌ Large loss, review entry signal or increase SL"
+        
+        log.info(f"📊 Trade Analysis [{symbol}]: {analysis['quality']} | PnL: {pnl_pct:.2f}% | {analysis['suggestion']}")
+        return analysis
+        
+    except Exception as e:
+        log.error(f"Failed to analyze trade for {symbol}: {e}")
+        return {}
+
 def _position_snapshot(symbol: str) -> Tuple[Optional[float], Optional[float]]:
     """
     מחזיר (entry_price, qty_abs) אם יש פוזיציה, אחרת (None, None)
