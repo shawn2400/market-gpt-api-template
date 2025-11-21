@@ -1,0 +1,210 @@
+
+ETHUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-1.61 USDT
+Entry Price
+2,887.00 USDT
+Avg. Close Price
+2,845.79 USDT
+Max Open Interest
+0.039 ETH
+Closed Vol.
+0.039 ETH
+ROI
+-5.70%
+Opened
+11/20/2025 23:53:01
+Closed
+11/21/2025 01:37:21
+
+BNBUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-1.09 USDT
+Entry Price
+879.890 USDT
+Avg. Close Price
+870.870 USDT
+Max Open Interest
+0.12 BNB
+Closed Vol.
+0.12 BNB
+ROI
+-4.10%
+Opened
+11/20/2025 23:53:09
+Closed
+11/21/2025 01:36:33
+
+AEROUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+2.42 USDT
+Entry Price
+0.7236094 USDT
+Avg. Close Price
+0.7300006 USDT
+Max Open Interest
+379.5 AERO
+Closed Vol.
+379.5 AERO
+ROI
++3.53%
+Opened
+11/20/2025 22:04:28
+Closed
+11/20/2025 23:35:23
+
+XRPUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+1.37 USDT
+Entry Price
+1.9960 USDT
+Avg. Close Price
+2.0126 USDT
+Max Open Interest
+82.2 XRP
+Closed Vol.
+82.2 XRP
+ROI
++3.34%
+Opened
+11/20/2025 22:07:00
+Closed
+11/20/2025 23:27:11
+
+TRXUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-0.05 USDT
+Entry Price
+0.27820 USDT
+Avg. Close Price
+0.27770 USDT
+Max Open Interest
+89 TRX
+Closed Vol.
+89 TRX
+ROI
+-0.53%
+Opened
+11/20/2025 21:02:26
+Closed
+11/20/2025 21:54:43
+
+BNBUSDT
+Perp
+Isolated Short
+Closed
+Closing PNL
+-0.06 USDT
+Entry Price
+876.350 USDT
+Avg. Close Price
+879.020 USDT
+Max Open Interest
+0.02 BNB
+Closed Vol.
+0.02 BNB
+ROI
+-1.21%
+Opened
+11/20/2025 21:35:56
+Closed
+11/20/2025 21:54:43
+
+BNBUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+0.01 USDT
+Entry Price
+875.500 USDT
+Avg. Close Price
+876.440 USDT
+Max Open Interest
+0.02 BNB
+Closed Vol.
+0.02 BNB
+ROI
++0.42%
+Opened
+11/20/2025 20:33:14
+Closed
+11/20/2025 21:35:55
+
+1000000BOBUSDT
+Perp
+Cross Long
+Closed
+Closing PNL
+-2.49 USDT
+Entry Price
+0.0286300 USDT
+Avg. Close Price
+0.0280395 USDT
+Max Open Interest
+4,217 1000000BOB
+Closed Vol.
+4,217 1000000BOB
+ROI
+-30.93%
+Opened
+11/20/2025 20:26:45
+Closed
+11/20/2025 20:54:48
+
+ADAUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+2.53 USDT
+Entry Price
+0.46514 USDT
+Avg. Close Price
+0.46775 USDT
+Max Open Interest
+971 ADA
+Closed Vol.
+971 ADA
+ROI
++1.68%
+Opened
+11/19/2025 11:16:37
+Closed
+11/19/2025 14:13:33
+
+1000FLOKIUSDT
+Perp
+Isolated Long
+Closed
+Closing PNL
+-2.15 USDT
+Entry Price
+0.0526800 USDT
+Avg. Close Price
+0.0522800 USDT
+Max Open Interest
+5,363 1000FLOKI
+Closed Vol.
+5,363 1000FLOKI
+ROI
+-2.27%
+Opened
+11/19/2025 10:15:43
+Closed
+11/19/2025 11:22:09

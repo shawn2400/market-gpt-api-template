@@ -452,11 +452,22 @@ def _compute_tp_sl_targets(
         except Exception:
             pass
 
-    if (out["sl"] is None) and sl_dynamic_enable and atr_abs and atr_abs > 0:
-        if side.upper() == "BUY":
-            slp = max(1e-12, price_ref - sl_atr_mult * atr_abs)
+    if (out["sl"] is None) and sl_dynamic_enable:
+        if atr_abs and atr_abs > 0:
+            # Use ATR-based SL if available
+            if side.upper() == "BUY":
+                slp = max(1e-12, price_ref - sl_atr_mult * atr_abs)
+            else:
+                slp = max(1e-12, price_ref + sl_atr_mult * atr_abs)
         else:
-            slp = max(1e-12, price_ref + sl_atr_mult * atr_abs)
+            # 🛡️ FIX: Fallback to 2% default when ATR unavailable (prevents price=0 bug)
+            log.warning(f"⚠️ ATR missing for {symbol}, using fallback 2% SL")
+            if side.upper() == "BUY":
+                slp = price_ref * 0.98  # 2% below entry for BUY
+            else:
+                slp = price_ref * 1.02  # 2% above entry for SELL
+        
+        slp = max(1e-12, slp)  # Ensure positive
         out["sl"] = {"price": float(_q_price(symbol, slp)), "qty": float(_q_qty(symbol, qty))}
     return out
 

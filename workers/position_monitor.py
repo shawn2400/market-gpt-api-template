@@ -682,15 +682,20 @@ async def ensure_positions_protected() -> None:
                                     futures_cancel_all_orders(symbol)
                                     close_side = "SELL" if position_side == "LONG" else "BUY"
                                     
-                                    sl_order = futures_create_order(
-                                        symbol=symbol,
-                                        side=close_side,
-                                        type="STOP_MARKET",
-                                        quantity=abs(amt),
-                                        stopPrice=current_sl or new_sl,
-                                        reduceOnly=True,
-                                        positionSide=position_side
-                                    )
+                                    # 🛡️ FIX: Validate SL price before placing (prevents APIError -4006)
+                                    sl_price_to_place = current_sl or new_sl
+                                    if sl_price_to_place and sl_price_to_place > 0:
+                                        sl_order = futures_create_order(
+                                            symbol=symbol,
+                                            side=close_side,
+                                            type="STOP_MARKET",
+                                            quantity=abs(amt),
+                                            stopPrice=sl_price_to_place,
+                                            reduceOnly=True,
+                                            positionSide=position_side
+                                        )
+                                    else:
+                                        logger.warning(f"⚠️ {symbol}: Trailing SL skipped - price invalid ({sl_price_to_place})")
                                     
                                     profit_from_entry = ((current_sl or new_sl) - entry_price) / entry_price * 100 if position_side == "LONG" else (entry_price - (current_sl or new_sl)) / entry_price * 100
                                     
@@ -737,15 +742,19 @@ async def ensure_positions_protected() -> None:
                             # Place new STOP_MARKET at protected SL
                             close_side = "SELL" if position_side == "LONG" else "BUY"
                             
-                            sl_order = futures_create_order(
-                                symbol=symbol,
-                                side=close_side,
-                                type="STOP_MARKET",
-                                quantity=abs(amt),
-                                stopPrice=protected_sl,
-                                reduceOnly=True,
-                                positionSide=position_side
-                            )
+                            # 🛡️ FIX: Validate SL price before placing (prevents APIError -4006)
+                            if protected_sl and protected_sl > 0:
+                                sl_order = futures_create_order(
+                                    symbol=symbol,
+                                    side=close_side,
+                                    type="STOP_MARKET",
+                                    quantity=abs(amt),
+                                    stopPrice=protected_sl,
+                                    reduceOnly=True,
+                                    positionSide=position_side
+                                )
+                            else:
+                                logger.warning(f"⚠️ {symbol}: Dynamic SL skipped - price invalid ({protected_sl})")
                             
                             # 🛡️ FIX: On success, clear failure tracking
                             if symbol in _sl_placement_failures:
@@ -839,7 +848,8 @@ async def ensure_positions_protected() -> None:
                                                 try:
                                                     tp_qty = abs(amt) * tp_config["targets"][idx]["exit_percent"]
                                                     
-                                                    if tp_qty > 0:
+                                                    # 🛡️ FIX: Validate TP price before placing (prevents APIError -4001)
+                                                    if tp_qty > 0 and tp_price and tp_price > 0:
                                                         futures_create_order(
                                                             symbol=symbol,
                                                             side=exit_side,
@@ -849,6 +859,8 @@ async def ensure_positions_protected() -> None:
                                                             reduceOnly=True,
                                                             positionSide=position_side
                                                         )
+                                                    elif tp_price and tp_price <= 0:
+                                                        logger.warning(f"⚠️ {symbol}: TP{idx+1} skipped - price invalid ({tp_price})")
                                                 except Exception as tp_place_err:
                                                     logger.warning(f"⚠️ {symbol}: Failed to place TP{idx+1}: {tp_place_err}")
                                             
