@@ -23,6 +23,7 @@ logger = logging.getLogger("algogpt.smart_filter")
 
 # Legacy fallback constants (used only if dynamic config fails)
 PRICE_CHANGE_MIN = float(os.getenv("PRICE_CHANGE_MIN", "2.0"))  # 2% move
+QUALITY_SCORE_MIN = float(os.getenv("QUALITY_SCORE_MIN", "2.5"))  # Min quality gate
 
 def stage1_volume_spike(ctx: Dict[str, Any], volume_min: float) -> Tuple[bool, str]:
     """
