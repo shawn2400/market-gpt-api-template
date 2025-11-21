@@ -263,7 +263,8 @@ def _balance_usdt() -> float:
         for r in bal or []:
             if str(r.get("asset")).upper() == "USDT":
                 av = r.get("availableBalance") or r.get("withdrawAvailable") or r.get("balance")
-                return float(av)
+                if av is not None:
+                    return float(av)
     except Exception:
         pass
     return 0.0
