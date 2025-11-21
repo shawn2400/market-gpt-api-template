@@ -61,6 +61,25 @@ except Exception as _e:
 logger = logging.getLogger("algogpt.trade_manager")
 
 # Progressive Rollout System (v2 - Regime-based Dynamic Trading)
+detect_market_regime_v2 = None
+adaptive_mix = None
+quantize_price = None
+quantize_qty = None
+make_key = None
+seen = None
+cb_track = None
+cb_allow = None
+dyn_decisions = None
+dyn_skips = None
+dyn_errors = None
+sl_changes = None
+tp_sets = None
+age_guard_hit = None
+conf_low_hit = None
+cb_blocks = None
+live_enforce = None
+regime_confidence = None
+
 try:
     from utils.regime_detector_v2 import detect_market_regime_v2
     from utils.adaptive_mixer import adaptive_mix
@@ -279,13 +298,11 @@ def _modify_stop_loss_impl(symbol: str, new_price: float, *, position_side: str 
     sym = symbol.upper()
     close_side = "SELL" if position_side.upper() == "LONG" else "BUY"
     
-    print(f"📍 [modify_stop_loss] {sym} {position_side}: Attempting to set SL @ {new_price:.4f}")
     logger.info(f"[modify_stop_loss] {sym} {position_side} - target SL: {new_price}")
     
     # CRITICAL: In Hedge Mode, only cancel orders matching this position side
     cancelled = _cancel_closing_orders(sym, ("STOP", "STOP_MARKET"), position_side=position_side)
     if cancelled > 0:
-        print(f"🗑️ [modify_stop_loss] Cancelled {cancelled} existing {position_side} SL orders for {sym}")
         logger.info(f"[modify_stop_loss] Cancelled {cancelled} existing {position_side} SL orders")
     
     stop_str, _ = _q_price(sym, float(new_price))
@@ -304,12 +321,10 @@ def _modify_stop_loss_impl(symbol: str, new_price: float, *, position_side: str 
         except Exception:
             pass
     if not qty or qty <= 0:
-        print(f"❌ [modify_stop_loss] {sym} {position_side} - FAILED: No position quantity found")
         logger.error(f"[modify_stop_loss] {sym} {position_side} - qty missing")
         return {"ok": False, "error": "qty_missing_for_modify_sl"}
     
     qty_str, _ = _q_qty(sym, float(qty))
-    print(f"🎯 [modify_stop_loss] {sym} placing {close_side} STOP_MARKET: qty={qty_str}, stopPrice={stop_str}, positionSide={position_side}")
     
     try:
         resp = futures_create_order(
@@ -324,11 +339,9 @@ def _modify_stop_loss_impl(symbol: str, new_price: float, *, position_side: str 
             timeInForce="GTC",
         )
         order_id = resp.get("orderId", "unknown")
-        print(f"✅ [modify_stop_loss] {sym} SL placed successfully! OrderID: {order_id}")
         logger.info(f"[modify_stop_loss] {sym} SL order created: {order_id}")
         return {"ok": True, "response": resp}
     except Exception as e:
-        print(f"❌ [modify_stop_loss] {sym} placement FAILED: {e}")
         logger.error(f"[modify_stop_loss] {sym} failed: {e}")
         return {"ok": False, "error": str(e)}
 
@@ -601,16 +614,13 @@ async def manage_open_trades():
     # ⚠️ DEBUG: Read directly from ENV to bypass module cache
     _ALLOW_FROM_ENV = os.getenv("ALLOW_MANAGE_OPEN_TRADES", "true").lower() in ("1", "true", "yes", "on")
     logger.info(f"🔍 [DEBUG] ALLOW_MANAGE_OPEN_TRADES config={ALLOW_MANAGE_OPEN_TRADES}, ENV={_ALLOW_FROM_ENV}, cap={_cap_triggered}")
-    print(f"🔍 [DEBUG] ALLOW_MANAGE_OPEN_TRADES config={ALLOW_MANAGE_OPEN_TRADES}, ENV={_ALLOW_FROM_ENV}, cap={_cap_triggered}", flush=True)
     
     if not _ALLOW_FROM_ENV or _cap_triggered:
-        print(f"⚠️ [manage_open_trades] BLOCKED: ALLOW_MANAGE={_ALLOW_FROM_ENV}, cap_triggered={_cap_triggered}", flush=True)
         logger.info(f"[manage] Disabled or cap triggered, skipping (ALLOW={_ALLOW_FROM_ENV}, cap={_cap_triggered})")
         return
 
     try:
         positions = get_open_positions() or []
-        print(f"📊 [manage_open_trades] Found {len(positions)} open positions")
         logger.info(f"[manage] Found {len(positions)} open positions")
         now = time.time()
         for pos in positions:
@@ -628,27 +638,22 @@ async def manage_open_trades():
                 except Exception as e:
                     logger.debug(f"Could not get leverage for {sym}: {e}")
                 
-                print(f"🔍 [manage] Processing {sym}: qty={qty}, entry={entry}, leverage={leverage}")
                 logger.info(f"[manage] Processing {sym}: qty={qty}, entry={entry}, leverage={leverage}")
                 if not sym or entry <= 0 or abs(qty) <= 0:
-                    print(f"❌ [manage] Skipping {sym}: invalid data (qty={qty}, entry={entry})")
                     logger.info(f"[manage] Skipping {sym}: invalid data (qty={qty}, entry={entry})")
                     continue
                 side = "LONG" if qty > 0 else "SHORT"
                 price = _price_now(sym)
                 if price <= 0:
-                    print(f"❌ [manage] Skipping {sym}: no price")
                     logger.info(f"[manage] Skipping {sym}: no price")
                     continue
 
                 if now - _last_update.get(sym, 0) < _COOLDOWN:
-                    print(f"⏭️ [manage] Skipping {sym}: cooldown active ({_COOLDOWN}s)")
                     logger.info(f"[manage] Skipping {sym}: cooldown active")
                     continue
 
                 df = get_klines_df(sym, interval="5m", limit=50)
                 if df is None or getattr(df, "empty", False):
-                    print(f"❌ [manage] Skipping {sym}: failed to get klines data")
                     logger.info(f"[manage] Skipping {sym}: failed to get klines data")
                     continue
 
@@ -660,15 +665,12 @@ async def manage_open_trades():
                 macd_now = float(macd_line.iloc[-1] - macd_signal.iloc[-1])
 
                 if not (_is_finite_number(current_atr) and current_atr > 0):
-                    print(f"❌ [manage] Skipping {sym}: invalid ATR (atr={current_atr})")
                     logger.info(f"[manage] Skipping {sym}: invalid ATR")
                     continue
                 if not _is_finite_number(current_adx):
-                    print(f"❌ [manage] Skipping {sym}: invalid ADX (adx={current_adx})")
                     logger.info(f"[manage] Skipping {sym}: invalid ADX")
                     continue
                 if not _is_finite_number(macd_now):
-                    print(f"❌ [manage] Skipping {sym}: invalid MACD (macd={macd_now})")
                     logger.info(f"[manage] Skipping {sym}: invalid MACD")
                     continue
 
@@ -677,7 +679,6 @@ async def manage_open_trades():
                 # ═══════════════════════════════════════════════════════════════════
                 # Check symbol whitelist/blacklist (only in ENFORCE mode)
                 if DYN_ENFORCE and not DYN_SHADOW and not _enforce_allowed(sym):
-                    print(f"⏭️ [DynPath] Skipping {sym}: not in DYN_ALLOWED_SYMBOLS whitelist")
                     logger.info(f"[DynPath] Skipping {sym}: not in whitelist")
                     continue
                 
@@ -733,18 +734,14 @@ async def manage_open_trades():
                         
                         if any(k not in context for k in required):
                             dyn_skips.labels(reason="missing_context").inc()
-                            print(f"⚠️ [DynPath] {sym} missing context fields, skipping")
                         elif (now - float(context["last_market_update_ts"])) > DYN_SAFE_STALE_SEC:
                             age_guard_hit.inc()
                             dyn_skips.labels(reason="stale_data").inc()
-                            print(f"⚠️ [DynPath] {sym} stale data ({now - context['last_market_update_ts']:.0f}s), skipping")
                         elif BTC_GATE_ENABLE and not bool(context.get("btc_gate_ok", True)):
                             dyn_skips.labels(reason="btc_gate").inc()
-                            print(f"⚠️ [DynPath] {sym} BTC gate check failed, skipping")
                         elif not cb_allow():
                             cb_blocks.inc()
                             dyn_skips.labels(reason="circuit_block").inc()
-                            print(f"⛔ [DynPath] Circuit breaker open, skipping all dynamic updates")
                         else:
                             # Detect regime
                             feats = {
@@ -758,7 +755,6 @@ async def manage_open_trades():
                             if r.confidence < DYN_MIN_CONF:
                                 conf_low_hit.inc()
                                 dyn_skips.labels(reason="low_conf").inc()
-                                print(f"⚠️ [DynPath] {sym} low confidence ({r.confidence:.3f} < {DYN_MIN_CONF}), skipping")
                             else:
                                 # Adaptive parameter mixing
                                 mix = adaptive_mix(
@@ -801,7 +797,6 @@ async def manage_open_trades():
                                 
                                 if seen(idem_key):
                                     dyn_skips.labels(reason="idem_dup").inc()
-                                    print(f"⏭️ [DynPath] {sym} duplicate detected (idempotency), skipping")
                                 else:
                                     # Progressive rollout: check if symbol is allowed for enforce
                                     enforce_now = (DYN_ENFORCE and not DYN_SHADOW and _enforce_allowed(context["symbol"]))
@@ -810,7 +805,6 @@ async def manage_open_trades():
                                         # SHADOW MODE
                                         dyn_decisions.labels(symbol=context["symbol"], regime=r.regime).inc()
                                         regime_confidence.labels(symbol=sym, regime=r.regime).set(r.confidence)
-                                        print(json.dumps({
                                             "evt": "dyn_shadow",
                                             "sym": context["symbol"],
                                             "regime": r.regime,
@@ -825,7 +819,6 @@ async def manage_open_trades():
                                         cb_track(ok=True)
                                     else:
                                         # ENFORCE MODE
-                                        print(f"🚀 [DynPath ENFORCE] {sym} {r.regime} (conf={r.confidence:.3f}) → SL={sl_p:.4f}, TP={tp_p:.4f}")
                                         
                                         # Execute Zero-Gap SL update
                                         # For hedge mode, we must send positionSide=side
@@ -838,7 +831,6 @@ async def manage_open_trades():
                                         )
                                         if ok1:
                                             sl_changes.labels(symbol=context["symbol"]).inc()
-                                            print(f"✅ [DynPath] {sym} SL updated to {sl_p:.4f}")
                                         
                                         # Execute TP Ladder
                                         tp_ladder_levels = mix.get("tp_ladder", [tp_p])
@@ -861,7 +853,6 @@ async def manage_open_trades():
                                         )
                                         if ok2:
                                             tp_sets.labels(symbol=context["symbol"]).inc()
-                                            print(f"✅ [DynPath] {sym} TP ladder set: {tp_prices}")
                                         
                                         dyn_decisions.labels(symbol=context["symbol"], regime=r.regime).inc()
                                         regime_confidence.labels(symbol=sym, regime=r.regime).set(r.confidence)
@@ -870,13 +861,11 @@ async def manage_open_trades():
                                         # Skip legacy path if enforce successful
                                         if ok1 and ok2:
                                             _last_update[sym] = now
-                                            print(f"✅ [DynPath] {sym} dynamic management complete, skipping legacy")
                                             continue
                     
                     except Exception as e:
                         dyn_errors.labels(stage="manage_dyn").inc()
                         cb_track(ok=False)
-                        print(json.dumps({"evt": "dyn_error", "err": str(e), "sym": sym}, ensure_ascii=False))
                         logger.error(f"[DynPath] Error for {sym}: {e}", exc_info=True)
                 
                 # ═══════════════════════════════════════════════════════════════════
