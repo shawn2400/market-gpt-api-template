@@ -728,10 +728,9 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:  # type: ignore
         adapt_order_for_mode = _adapt_order_for_mode  # type: ignore
         detected_mode = detect_position_mode()  # type: ignore
         kwargs = adapt_order_for_mode(kwargs, side)  # type: ignore
-        print(f"[DEBUG] Position mode={detected_mode}, positionSide={kwargs.get('positionSide')!r} (side={side})")
     except Exception as e:
         # Don't crash on adaptation failure - just log and proceed
-        print(f"[WARN] Position mode adaptation failed: {e}")
+        pass
     
     # Smart reduceOnly handling for Hedge Mode
     # CRITICAL: In Hedge Mode (positionSide present), Binance NEVER needs reduceOnly
@@ -743,15 +742,11 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:  # type: ignore
     if typ in {"STOP_MARKET", "TAKE_PROFIT_MARKET"} and close_position:
         for forbidden in ("reduceOnly", "quantity", "price", "timeInForce", "postOnly"):
             kwargs.pop(forbidden, None)
-        print(f"[DEBUG futures_create_order] closePosition=true, removed forbidden params")
     
     # Rule 2: In Hedge Mode (positionSide present) → ALWAYS remove reduceOnly
     elif position_side:
         if kwargs.get("reduceOnly"):
             kwargs.pop("reduceOnly", None)
-            print(f"[DEBUG futures_create_order] Removed reduceOnly (Hedge Mode, positionSide={position_side})")
-    
-    print(f"[DEBUG futures_create_order] Final: positionSide={kwargs.get('positionSide')!r}, reduceOnly={kwargs.get('reduceOnly')!r}")
     last: Optional[Exception] = None
     for attempt in range(1, max(1, BINANCE_MAX_RETRIES) + 1):
         try:
@@ -764,25 +759,21 @@ def futures_create_order(**kwargs) -> Dict[str, Any]:  # type: ignore
             last = e
             # If -4061 error (position side mismatch), invalidate position mode cache and re-adapt
             if getattr(e, 'code', None) == -4061:  # type: ignore
-                print(f"[ERROR] -4061 Position side mismatch! Invalidating cache and re-adapting order...")
                 try:
                     from utils.position_mode import invalidate_cache  # type: ignore
                     invalidate_cache()  # type: ignore
                     # Re-adapt order after cache invalidation
                     if adapt_order_for_mode:  # type: ignore
                         kwargs = adapt_order_for_mode(kwargs, side)  # type: ignore
-                    print(f"[DEBUG] Re-adapted: positionSide={kwargs.get('positionSide')!r}")
                     
                     # 🔧 CRITICAL FIX: Re-quantize price and quantity after adaptation
                     # Adaptation may have changed parameters, so we need to re-validate precision
                     if "quantity" in kwargs:
                         kwargs["quantity"] = _quantize_qty(sym, float(kwargs["quantity"]))  # type: ignore
-                        print(f"[DEBUG] Re-quantized quantity: {kwargs['quantity']}")
                     if "price" in kwargs:
                         kwargs["price"] = _quantize_price(sym, float(kwargs["price"]))  # type: ignore
-                        print(f"[DEBUG] Re-quantized price: {kwargs['price']}")
                 except Exception as adapt_err:
-                    print(f"[WARN] Failed to re-adapt after -4061: {adapt_err}")
+                    pass
             time.sleep(min(BACKOFF_MAX_MS, BACKOFF_BASE_MS * attempt) / 1000.0)
             continue
         except Exception as e:

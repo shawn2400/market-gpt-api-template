@@ -67,47 +67,46 @@ class MetaBrainScanner:
         self.logger.info(f"⚙️ Config: {SYMBOLS_PER_CYCLE} symbols/cycle, {SCAN_INTERVAL_SEC}s interval")
     
     async def get_market_data(self, symbol: str) -> Dict[str, Any]:
-        """
-        Fetch market data for symbol.
-        
-        TODO: Replace with actual Binance API call or context endpoint
-        For now, returns mock data to test the workflow.
-        """
-        # This is a simplified mock - replace with real data
-        return {
-            "symbol": symbol,
-            "price": 43250.0,
-            "volume_24h": 1500000000,
-            "volume_avg_7d": 1200000000,
-            "price_change_24h_pct": 2.5,
-            "liquidity_score": 8.5,
-            "atr": 1000,
-            "atr_pct": 2.3,
-            "rsi": 58,
-            "macd_signal": "bullish",
-            "ema_20": 43100,
-            "ema_50": 42800,
-            "support_level": 42900,
-            "resistance_level": 43600,
-            "regime": "CHOPPY",
-            "bb_upper": 43800,
-            "bb_lower": 42700
-        }
+        """Fetch market data for symbol from Binance API context endpoint."""
+        try:
+            from utils.binance_client import futures_get_ticker
+            ticker = futures_get_ticker(symbol)
+            return {
+                "symbol": symbol,
+                "price": float(ticker.get("lastPrice", 0)),
+                "volume_24h": float(ticker.get("quoteVolume", 0)),
+                "price_change_24h_pct": float(ticker.get("priceChangePercent", 0)),
+            }
+        except Exception as e:
+            self.logger.warning(f"Failed to get market data for {symbol}: {e}")
+            return {
+                "symbol": symbol,
+                "price": 0,
+                "volume_24h": 0,
+                "price_change_24h_pct": 0,
+            }
     
     async def get_wallet_state(self) -> Dict[str, Any]:
-        """
-        Get wallet state from Binance.
-        
-        TODO: Replace with actual Binance Futures API call
-        For now, returns mock data.
-        """
-        # Mock wallet - replace with real Binance call
-        return {
-            "total_balance": 1000.0,
-            "available_balance": 850.0,
-            "locked_in_trades": 150.0,
-            "open_positions": 2
-        }
+        """Get wallet state from Binance Futures API."""
+        try:
+            from utils.binance_client import futures_account
+            account = futures_account()
+            total = float(account.get("totalWalletBalance", 0))
+            available = float(account.get("availableBalance", 0))
+            return {
+                "total_balance": total,
+                "available_balance": available,
+                "locked_in_trades": total - available,
+                "open_positions": len([p for p in account.get("positions", []) if float(p.get("positionAmt", 0)) != 0])
+            }
+        except Exception as e:
+            self.logger.warning(f"Failed to get wallet state: {e}")
+            return {
+                "total_balance": 0,
+                "available_balance": 0,
+                "locked_in_trades": 0,
+                "open_positions": 0
+            }
     
     async def scan_symbol(self, symbol: str) -> Optional[Dict[str, Any]]:
         """
