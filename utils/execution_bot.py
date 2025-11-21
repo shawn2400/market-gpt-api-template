@@ -644,6 +644,13 @@ class ExecutionBot:
                     self.log.error(f"🚨 CRITICAL SAFETY VIOLATION: TP price is 0 or invalid for {symbol} - CANNOT TRADE WITHOUT PROTECTION")
                     return {"ok": False, "error": "tp_calculation_failed", "detail": f"TP={tp_price}"}
                 
+                # 🛡️ CRITICAL FIX: Check TP distance from entry to prevent APIError -2021 "Order would immediately trigger"
+                tp_distance_pct = abs(tp_price - current_price) / current_price if current_price > 0 else 0
+                if tp_distance_pct < 0.001:  # Less than 0.1% distance
+                    adjusted_tp = current_price * (1.001 if position_side == "LONG" else 0.999)
+                    self.log.warning(f"⚠️ TP too close to entry (dist={tp_distance_pct*100:.4f}%), adjusting from {tp_price:.8f} to {adjusted_tp:.8f}")
+                    tp_price = adjusted_tp
+                
                 self.log.info(f"✅ SL/TP calculated successfully for {symbol}: SL={sl_price}, TP={tp_price}")
                 
                 # 🛡️ Save metadata BEFORE order placement
