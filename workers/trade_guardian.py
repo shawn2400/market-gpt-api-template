@@ -441,11 +441,9 @@ def cancel_orphaned_orders() -> int:
 def log_guardian_fix(symbol: str, issue: str, fix_applied: str, success: bool):
     """Log guardian fix to database"""
     try:
-        conn = _conn()
-        if not conn:
-            return
-        
-        try:
+        with _conn() as conn:
+            if not conn:
+                return
             cur = conn.cursor()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS guardian_fixes (
@@ -462,10 +460,6 @@ def log_guardian_fix(symbol: str, issue: str, fix_applied: str, success: bool):
                 INSERT INTO guardian_fixes (symbol, issue, fix_applied, success)
                 VALUES (%s, %s, %s, %s)
             """, (symbol, issue, fix_applied, success))
-            conn.commit()
-            cur.close()
-        finally:
-            conn.close()
     except Exception as e:
         logger.error(f"Failed to log guardian fix: {e}")
 
