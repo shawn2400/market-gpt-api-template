@@ -389,10 +389,20 @@ async def attach_multi_target_protection(
                 exit_percent = target["exit_percent"]
                 tp_quantity = total_quantity * exit_percent
                 
+                # 🔧 CRITICAL: Validate quantity is non-zero
+                if tp_quantity <= 0:
+                    logger.warning(f"⚠️ TP{i} quantity invalid ({tp_quantity:.8f}), skipping")
+                    continue
+                
                 # 🔧 CRITICAL: Use BinanceSymbolValidator to round quantity & price correctly
                 # This ensures compliance with Binance stepSize & tickSize filters
                 tp_quantity_rounded = validator.round_quantity(symbol, tp_quantity, is_market=False)
                 tp_price_rounded = validator.round_price(symbol, tp_price)
+                
+                # 🔧 CRITICAL: Verify rounded quantity is still non-zero
+                if tp_quantity_rounded <= 0:
+                    logger.warning(f"⚠️ TP{i} rounded quantity is zero ({tp_quantity_rounded}), skipping")
+                    continue
                 
                 # 🛡️ CRITICAL FIX: Ensure TP has safe distance from current price to prevent APIError -2021
                 try:

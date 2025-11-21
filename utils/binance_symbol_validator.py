@@ -102,34 +102,33 @@ class BinanceSymbolValidator:
     
     def round_price(self, symbol: str, price: float) -> float:
         """
-        Round price to correct precision for symbol. CRITICAL: Returns properly truncated float.
+        Round price to correct precision for symbol. CRITICAL: Returns EXACTLY truncated float.
         
         Args:
             symbol: Trading symbol
             price: Raw price
             
         Returns:
-            Rounded price matching Binance tick size & pricePrecision (truncated to correct decimals)
+            Rounded price matching Binance tick size & pricePrecision
         """
         info = self.get_symbol_info(symbol)
         if not info:
             logger.warning(f"No symbol info for {symbol}, using raw price")
-            truncated = round(price, 4)
-            return float(f"{truncated:.4f}")
+            return float(f"{price:.4f}")
         
         tick_size = info["tickSize"]
-        price_precision = info.get("pricePrecision", 4)  # Default to 4 decimals for micro-caps
+        price_precision = info.get("pricePrecision", 4)
         
         try:
-            # Use Decimal for all calculations to avoid float precision issues
+            # All Decimal math to avoid float precision issues
             decimal_price = Decimal(str(price))
             decimal_tick = Decimal(str(tick_size))
             
-            # Calculate how many ticks fit into price
+            # Calculate how many ticks fit
             ticks = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_DOWN)
             rounded = ticks * decimal_tick
             
-            # If ROUND_DOWN produces 0 and price > 0, use ROUND_UP (ultra-small-cap coins)
+            # If ROUND_DOWN produces 0 and price > 0, use ROUND_UP
             if rounded <= 0 and price > 0:
                 ticks = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_UP)
                 rounded = ticks * decimal_tick
@@ -141,25 +140,21 @@ class BinanceSymbolValidator:
             else:
                 decimal_places = 0
             
-            # Format using Decimal to preserve precision
-            rounded_decimal = Decimal(str(rounded))
-            # CRITICAL FIX: Use proper string formatting to truncate extra decimals
-            final_price_str = f"{float(rounded_decimal):.{decimal_places}f}"
+            # CRITICAL: Format Decimal directly, then convert to float
+            # This ensures EXACT truncation with NO extra precision
+            final_price_str = format(rounded, f'.{decimal_places}f')
             final_price = float(final_price_str)
             
             if final_price <= 0 and price > 0:
-                # Fallback: Truncate raw price to price_precision
-                logger.warning(f"⚠️ Rounding failed for {symbol}, using fallback precision={price_precision}")
-                fallback_str = f"{price:.{price_precision}f}"
-                return float(fallback_str)
+                # Fallback: Format raw price to price_precision
+                logger.warning(f"⚠️ Rounding failed for {symbol}, fallback to {price_precision} decimals")
+                return float(format(Decimal(str(price)), f'.{price_precision}f'))
             
             return final_price
             
         except Exception as e:
-            logger.error(f"🚨 Error rounding price for {symbol}: {e}. Returning truncated price.")
-            # CRITICAL: Always return a properly truncated float
-            fallback_str = f"{price:.{price_precision}f}"
-            return float(fallback_str)
+            logger.error(f"🚨 Error rounding {symbol}: {e}")
+            return float(format(Decimal(str(price)), f'.{price_precision}f'))
     
     def round_quantity(self, symbol: str, quantity: float, is_market: bool = False) -> float:
         """
