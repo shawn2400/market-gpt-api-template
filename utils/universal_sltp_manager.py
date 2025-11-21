@@ -394,6 +394,25 @@ async def attach_multi_target_protection(
                 tp_quantity_rounded = validator.round_quantity(symbol, tp_quantity, is_market=False)
                 tp_price_rounded = validator.round_price(symbol, tp_price)
                 
+                # 🛡️ CRITICAL FIX: Ensure minimum distance from current price to prevent APIError -2021 "Order would immediately trigger"
+                # Get current price and ensure TP is at least 0.05% away
+                try:
+                    from utils.binance_client import get_symbol_ticker
+                    current_price_data = get_symbol_ticker(symbol)
+                    if current_price_data:
+                        current_price = float(current_price_data.get("price", entry_price))
+                        min_distance_pct = 0.0005  # 0.05% minimum distance
+                        if side == "LONG" and tp_price_rounded <= current_price * (1 + min_distance_pct):
+                            # For LONG, TP must be higher
+                            tp_price_rounded = current_price * (1 + min_distance_pct)
+                            logger.info(f"⚠️ Adjusted TP{i} for {symbol} to maintain minimum distance: {tp_price_rounded:.8f}")
+                        elif side == "SHORT" and tp_price_rounded >= current_price * (1 - min_distance_pct):
+                            # For SHORT, TP must be lower
+                            tp_price_rounded = current_price * (1 - min_distance_pct)
+                            logger.info(f"⚠️ Adjusted TP{i} for {symbol} to maintain minimum distance: {tp_price_rounded:.8f}")
+                except Exception as price_err:
+                    logger.debug(f"⚠️ Could not fetch current price for distance check: {price_err}")
+                
                 tp_quantity_str = str(tp_quantity_rounded)
                 tp_price_str = str(tp_price_rounded)
                 

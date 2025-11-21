@@ -117,40 +117,50 @@ class BinanceSymbolValidator:
             return round(price, 4)
         
         tick_size = info["tickSize"]
-        price_precision = info.get("pricePrecision", 8)  # 🔧 Get pricePrecision!
+        price_precision = info.get("pricePrecision", 8)
         
-        # Critical fix: Round to tick size ONLY (ignore precision field)
-        decimal_price = Decimal(str(price))
-        decimal_tick = Decimal(str(tick_size))
-        
-        # Calculate how many ticks fit into price
-        ticks = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_DOWN)
-        rounded = ticks * decimal_tick
-        
-        # 🚨 CRITICAL SAFETY: If ROUND_DOWN results in 0, use ROUND_UP instead (ultra-small-cap coins)
-        if rounded <= 0 and price > 0:
-            logger.warning(f"⚠️ ROUND_DOWN produced ≤0 price for {symbol} (raw={price}), using ROUND_UP instead")
-            ticks = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_UP)
+        try:
+            # Critical fix: Round to tick size ONLY (ignore precision field)
+            decimal_price = Decimal(str(price))
+            decimal_tick = Decimal(str(tick_size))
+            
+            # Calculate how many ticks fit into price
+            ticks = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_DOWN)
             rounded = ticks * decimal_tick
-        
-        # Determine decimal places from tick size
-        tick_str = str(tick_size).rstrip('0').rstrip('.')
-        if '.' in tick_str:
-            decimal_places = len(tick_str.split('.')[1])
-        else:
-            decimal_places = 0
-        
-        # Format to exact decimal places needed for tick size
-        final_price = float(round(float(rounded), decimal_places))
-        
-        # 🚨 FINAL SAFETY: If still ≤0, format raw price to pricePrecision as fallback
-        if final_price <= 0:
-            logger.error(f"🚨 CRITICAL: Rounding failed for {symbol} - even ROUND_UP produced ≤0. Using raw price {price} formatted to {price_precision} decimals")
-            # 🔧 CRITICAL: Format raw price to pricePrecision, not raw string!
-            fallback = round(price, price_precision)
-            return fallback
-        
-        return final_price
+            
+            # 🚨 CRITICAL SAFETY: If ROUND_DOWN results in 0, use ROUND_UP instead (ultra-small-cap coins)
+            if rounded <= 0 and price > 0:
+                ticks = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_UP)
+                rounded = ticks * decimal_tick
+            
+            # Determine decimal places from tick size
+            tick_str = str(tick_size).rstrip('0').rstrip('.')
+            if '.' in tick_str:
+                decimal_places = len(tick_str.split('.')[1])
+            else:
+                decimal_places = 0
+            
+            # Format to exact decimal places needed for tick size using Decimal for precision
+            rounded_decimal = Decimal(str(rounded))
+            format_str = f"{{:.{decimal_places}f}}"
+            final_price_str = format_str.format(rounded_decimal)
+            final_price = float(final_price_str)
+            
+            # 🚨 FINAL SAFETY: If still ≤0, format raw price to pricePrecision as fallback
+            if final_price <= 0 and price > 0:
+                logger.warning(f"⚠️ Rounding failed for {symbol} (raw={price}), formatting to {price_precision} decimals")
+                # Use Decimal for precise formatting
+                price_decimal = Decimal(str(price))
+                precision_format = f"{{:.{price_precision}f}}"
+                fallback_str = precision_format.format(price_decimal)
+                fallback = float(fallback_str)
+                return fallback
+            
+            return final_price
+            
+        except Exception as e:
+            logger.error(f"🚨 Error rounding price for {symbol}: {e}. Using default rounding.")
+            return round(price, price_precision)
     
     def round_quantity(self, symbol: str, quantity: float, is_market: bool = False) -> float:
         """
