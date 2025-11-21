@@ -390,7 +390,7 @@ def cancel_orphaned_orders() -> int:
             
             if symbol not in active_symbols:
                 try:
-                    client.futures_cancel_order(symbol=symbol, orderId=order["orderId"])
+                    client.futures_cancel_order(symbol=symbol, order_id=order["orderId"])
                     logger.info(f"🧹 Cancelled orphaned order for {symbol}")
                     cancelled_count += 1
                 except Exception as e:

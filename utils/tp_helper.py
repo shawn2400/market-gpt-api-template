@@ -112,7 +112,7 @@ def prune_conflicting(client, symbol: str) -> None:
             t = str(o.get("type") or "")
             if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
                 try:
-                    client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+                    client.futures_cancel_order(symbol=symbol, order_id=o.get("orderId"))
                 except Exception as e:
                     continue  # Silently skip - order may already be filled/canceled
     except Exception:
@@ -219,7 +219,7 @@ def move_sl_stop(*, client, symbol: str, side_txt: str,
                     except Exception:
                         pass
                     try:
-                        client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+                        client.futures_cancel_order(symbol=symbol, order_id=o.get("orderId"))
                         canceled += 1
                     except Exception as e:
                         # Silently skip - order may already be filled/canceled
@@ -374,7 +374,7 @@ def maybe_merge_close_tps(client, symbol: str, *, tick: float, tick_band: int) -
         a, b = ro[i], ro[i + 1]
         if abs(a["price"] - b["price"]) <= band and a["side"] == b["side"]:
             try:
-                client.futures_cancel_order(symbol=symbol, orderId=b["orderId"])
+                client.futures_cancel_order(symbol=symbol, order_id=b["orderId"])
             except Exception:
                 i += 1
                 continue
@@ -496,7 +496,7 @@ def anti_stale_nudge(client, symbol: str, *, side_txt: str,
                         reduceOnly=True,
                     )
                     try:
-                        client.futures_cancel_order(symbol=symbol, orderId=o["orderId"])
+                        client.futures_cancel_order(symbol=symbol, order_id=o["orderId"])
                     except Exception:
                         pass  # Order may already be filled/canceled
                     moved += 1

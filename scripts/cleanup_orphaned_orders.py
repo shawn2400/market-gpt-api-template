@@ -100,7 +100,7 @@ def cleanup_symbol(symbol: str, force: bool = False, reduce_only_filter: bool = 
         cancelled_count = 0
         for order in orders_to_cancel:
             try:
-                client.futures_cancel_order(symbol=symbol, orderId=order.get("orderId"))
+                client.futures_cancel_order(symbol=symbol, order_id=order.get("orderId"))
                 cancelled_count += 1
             except Exception as e:
                 print(f"  ⚠️ Failed to cancel order {order.get('orderId')}: {e}")

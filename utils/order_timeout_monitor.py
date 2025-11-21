@@ -217,7 +217,7 @@ class OrderTimeoutMonitor:
     def _cancel_order(self, symbol: str, order_id: int) -> bool:
         """Cancel LIMIT order."""
         try:
-            self.client.futures_cancel_order(symbol=symbol, orderId=order_id)
+            self.client.futures_cancel_order(symbol=symbol, order_id=order_id)
             logger.info(f"🗑️ Canceled LIMIT order {order_id} ({symbol})")
             return True
         except Exception as e:

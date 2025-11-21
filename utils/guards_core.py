@@ -320,7 +320,7 @@ def atomic_update_orders(
             try:
                 if c.get("orderId"):
                     try:
-                        res = client.futures_cancel_order(symbol=symbol, orderId=c["orderId"])
+                        res = client.futures_cancel_order(symbol=symbol, order_id=c["orderId"])
                         cancelled.append(res)
                     except Exception as cancel_err:
                         # Silently skip - order may already be filled/canceled
