@@ -693,13 +693,16 @@ class ExecutionBot:
                     base_kwargs["quantity"] = qty  # 🔧 FIX: Update base_kwargs too!
                     self.log.info(f"✅ Corrected quantity for {symbol}: {qty}")
                 
-                if corrected.get("price") is not None and corrected.get("price") > 0 and order_type == "LIMIT":
-                    entry_price = corrected["price"]
-                    attempt_order["price"] = entry_price
-                    base_kwargs["price"] = entry_price  # 🔧 FIX: Update base_kwargs too!
-                    self.log.info(f"✅ Corrected price for {symbol}: {entry_price}")
-                elif corrected.get("price") is not None and corrected.get("price") <= 0 and order_type == "LIMIT":
-                    self.log.warning(f"⚠️ CRITICAL: Validator returned invalid price {corrected.get('price')} for {symbol} - using raw entry_price {entry_price} instead")
+                # 🔧 Price validation with safety check for small-cap coins
+                corrected_price = corrected.get("price")
+                if order_type == "LIMIT" and corrected_price:
+                    if corrected_price > 0:
+                        entry_price = corrected_price
+                        attempt_order["price"] = entry_price
+                        base_kwargs["price"] = entry_price  # 🔧 FIX: Update base_kwargs too!
+                        self.log.info(f"✅ Corrected price for {symbol}: {entry_price}")
+                    else:
+                        self.log.warning(f"⚠️ CRITICAL: Validator returned invalid price {corrected_price} for {symbol} - using raw entry_price {entry_price} instead")
                     
             except Exception as val_err:
                 self.log.warning(f"⚠️ Symbol validation failed (proceeding anyway): {val_err}")
