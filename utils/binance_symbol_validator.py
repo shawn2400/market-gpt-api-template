@@ -102,25 +102,26 @@ class BinanceSymbolValidator:
     
     def round_price(self, symbol: str, price: float) -> float:
         """
-        Round price to correct precision for symbol.
+        Round price to correct precision for symbol. CRITICAL: Returns properly truncated float.
         
         Args:
             symbol: Trading symbol
             price: Raw price
             
         Returns:
-            Rounded price matching Binance tick size & pricePrecision
+            Rounded price matching Binance tick size & pricePrecision (truncated to correct decimals)
         """
         info = self.get_symbol_info(symbol)
         if not info:
             logger.warning(f"No symbol info for {symbol}, using raw price")
-            return round(price, 4)
+            truncated = round(price, 4)
+            return float(f"{truncated:.4f}")
         
         tick_size = info["tickSize"]
-        price_precision = info.get("pricePrecision", 8)
+        price_precision = info.get("pricePrecision", 4)  # Default to 4 decimals for micro-caps
         
         try:
-            # Critical fix: Round to tick size ONLY (ignore precision field)
+            # Use Decimal for all calculations to avoid float precision issues
             decimal_price = Decimal(str(price))
             decimal_tick = Decimal(str(tick_size))
             
@@ -128,7 +129,7 @@ class BinanceSymbolValidator:
             ticks = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_DOWN)
             rounded = ticks * decimal_tick
             
-            # 🚨 CRITICAL SAFETY: If ROUND_DOWN results in 0, use ROUND_UP instead (ultra-small-cap coins)
+            # If ROUND_DOWN produces 0 and price > 0, use ROUND_UP (ultra-small-cap coins)
             if rounded <= 0 and price > 0:
                 ticks = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_UP)
                 rounded = ticks * decimal_tick
@@ -140,27 +141,25 @@ class BinanceSymbolValidator:
             else:
                 decimal_places = 0
             
-            # Format to exact decimal places needed for tick size using Decimal for precision
+            # Format using Decimal to preserve precision
             rounded_decimal = Decimal(str(rounded))
-            format_str = f"{{:.{decimal_places}f}}"
-            final_price_str = format_str.format(rounded_decimal)
+            # CRITICAL FIX: Use proper string formatting to truncate extra decimals
+            final_price_str = f"{float(rounded_decimal):.{decimal_places}f}"
             final_price = float(final_price_str)
             
-            # 🚨 FINAL SAFETY: If still ≤0, format raw price to pricePrecision as fallback
             if final_price <= 0 and price > 0:
-                logger.warning(f"⚠️ Rounding failed for {symbol} (raw={price}), formatting to {price_precision} decimals")
-                # Use Decimal for precise formatting
-                price_decimal = Decimal(str(price))
-                precision_format = f"{{:.{price_precision}f}}"
-                fallback_str = precision_format.format(price_decimal)
-                fallback = float(fallback_str)
-                return fallback
+                # Fallback: Truncate raw price to price_precision
+                logger.warning(f"⚠️ Rounding failed for {symbol}, using fallback precision={price_precision}")
+                fallback_str = f"{price:.{price_precision}f}"
+                return float(fallback_str)
             
             return final_price
             
         except Exception as e:
-            logger.error(f"🚨 Error rounding price for {symbol}: {e}. Using default rounding.")
-            return round(price, price_precision)
+            logger.error(f"🚨 Error rounding price for {symbol}: {e}. Returning truncated price.")
+            # CRITICAL: Always return a properly truncated float
+            fallback_str = f"{price:.{price_precision}f}"
+            return float(fallback_str)
     
     def round_quantity(self, symbol: str, quantity: float, is_market: bool = False) -> float:
         """

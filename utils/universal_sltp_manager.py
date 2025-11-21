@@ -394,23 +394,28 @@ async def attach_multi_target_protection(
                 tp_quantity_rounded = validator.round_quantity(symbol, tp_quantity, is_market=False)
                 tp_price_rounded = validator.round_price(symbol, tp_price)
                 
-                # 🛡️ CRITICAL FIX: Ensure minimum distance from current price to prevent APIError -2021 "Order would immediately trigger"
-                # Get current price and ensure TP is at least 0.05% away
+                # 🛡️ CRITICAL FIX: Ensure TP has safe distance from current price to prevent APIError -2021
                 try:
                     from utils.binance_client import get_price
                     current_price = get_price(symbol)
                     if current_price and current_price > 0:
-                        min_distance_pct = 0.0005  # 0.05% minimum distance
-                        if side == "LONG" and tp_price_rounded <= current_price * (1 + min_distance_pct):
-                            # For LONG, TP must be higher
-                            tp_price_rounded = current_price * (1 + min_distance_pct)
-                            logger.info(f"⚠️ Adjusted TP{i} for {symbol} to maintain minimum distance: {tp_price_rounded:.8f}")
-                        elif side == "SHORT" and tp_price_rounded >= current_price * (1 - min_distance_pct):
-                            # For SHORT, TP must be lower
-                            tp_price_rounded = current_price * (1 - min_distance_pct)
-                            logger.info(f"⚠️ Adjusted TP{i} for {symbol} to maintain minimum distance: {tp_price_rounded:.8f}")
+                        # Ensure 0.1% minimum distance to avoid "Order would immediately trigger"
+                        min_distance_pct = 0.001
+                        
+                        if side == "LONG":
+                            # For LONG: TP must be at least min_distance above current price
+                            min_tp = current_price * (1 + min_distance_pct)
+                            if tp_price_rounded <= min_tp:
+                                tp_price_rounded = min_tp
+                                logger.info(f"📍 Adjusted TP{i} {symbol} LONG: {tp_price_rounded:.8f} (min distance)")
+                        else:  # SHORT
+                            # For SHORT: TP must be at least min_distance below current price
+                            max_tp = current_price * (1 - min_distance_pct)
+                            if tp_price_rounded >= max_tp:
+                                tp_price_rounded = max_tp
+                                logger.info(f"📍 Adjusted TP{i} {symbol} SHORT: {tp_price_rounded:.8f} (min distance)")
                 except Exception as price_err:
-                    logger.debug(f"⚠️ Could not fetch current price for distance check: {price_err}")
+                    logger.debug(f"⚠️ Distance check failed: {price_err}")
                 
                 tp_quantity_str = str(tp_quantity_rounded)
                 tp_price_str = str(tp_price_rounded)
