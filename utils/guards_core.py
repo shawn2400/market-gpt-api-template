@@ -324,13 +324,13 @@ def atomic_update_orders(
                         cancelled.append(res)
                     except Exception as cancel_err:
                         # Silently skip - order may already be filled/canceled
-                        logger.debug(f"Failed to cancel orderId {c['orderId']}: {cancel_err}")
+                        log.debug(f"Failed to cancel orderId {c['orderId']}: {cancel_err}")
                 else:
                     try:
                         res = client.futures_cancel_order(symbol=symbol, origClientOrderId=c.get("clientOrderId"))
                         cancelled.append(res)
                     except Exception as cancel_err:
-                        logger.debug(f"Failed to cancel clientOrderId {c.get('clientOrderId')}: {cancel_err}")
+                        log.debug(f"Failed to cancel clientOrderId {c.get('clientOrderId')}: {cancel_err}")
             except Exception as e:
                 if strategy != "MINIMAL":
                     return {"ok": False, "detail": f"cancel failed: {e}"}
