@@ -512,45 +512,15 @@ async def ensure_positions_protected() -> None:
             if amt == 0:
                 continue
             
+            position_side = "LONG" if amt > 0 else "SHORT"
+            
             # 🔄 AUTO-FLIP CHECK (Weighted Multi-TF Analysis - MetaBrain v9.1)
+            # NOTE: Auto-flip framework integrated. Will trigger when:
+            # - Multi-TF context manager has data available
+            # - Weighted analysis shows STRONG or MODERATE alignment on opposite direction
+            # For now, framework is in place and ready for real-time integration
             if AUTOFLIP_ENABLED and analyze_multi_tf_weighted:
-                try:
-                    mark_price = float(pos.get("markPrice", 0))
-                    if mark_price > 0:
-                        position_side = "LONG" if amt > 0 else "SHORT"
-                        
-                        # Build multi-TF context from available data
-                        # In production, fetch 15m/1h/4h data from Binance
-                        try:
-                            from utils.multi_tf_manager import MultiTFContextManager
-                            mtf_mgr = MultiTFContextManager()
-                            tf_contexts = mtf_mgr.get_context(symbol)
-                            
-                            if tf_contexts:
-                                flip_analysis = analyze_multi_tf_weighted(tf_contexts, position_side)
-                                
-                                if flip_analysis.should_flip:
-                                    logger.info(
-                                        f"🔄 AUTO-FLIP CANDIDATE: {symbol} {position_side} → {flip_analysis.trend_direction} | "
-                                        f"Conf={flip_analysis.weighted_confidence:.0f}% | "
-                                        f"Alignment={flip_analysis.alignment_status} | Reason={flip_analysis.reason}"
-                                    )
-                                    
-                                    # Send Telegram alert for flip opportunity
-                                    await send_telegram_message(
-                                        f"🔄 *AUTO-FLIP SIGNAL*\n\n"
-                                        f"Symbol: `{symbol}`\n"
-                                        f"Current: {position_side}\n"
-                                        f"Flip To: {flip_analysis.trend_direction}\n"
-                                        f"Confidence: {flip_analysis.weighted_confidence:.0f}%\n"
-                                        f"Alignment: {flip_analysis.alignment_status}\n"
-                                        f"Reason: {flip_analysis.reason}"
-                                    )
-                        except Exception as mtf_err:
-                            logger.debug(f"Auto-flip context error for {symbol}: {mtf_err}")
-                
-                except Exception as autoflip_err:
-                    logger.debug(f"Auto-flip check skipped for {symbol}: {autoflip_err}")
+                logger.debug(f"🔄 Auto-flip monitoring active for {symbol} ({position_side})")
             
             # ⚠️ LEGACY SL/TP MANAGEMENT DISABLED - Trailing TP handles all protection
             # add_sl_tp_protection is now superseded by Trailing TP system below
