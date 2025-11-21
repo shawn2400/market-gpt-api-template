@@ -633,9 +633,10 @@ def get_all_orders(symbol: str, limit: int = 100, **kwargs) -> List[Dict[str, An
 @observe_http(name="binance_cancel_order", include_labels=["symbol"])
 def futures_cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
     try:
+        # 🔧 CRITICAL FIX: Raw ccxt client uses orderId (camelCase), not order_id (snake_case)
         return _shielded_call(
             "futures_cancel_order",
-            lambda: client.futures_cancel_order(symbol=symbol.upper(), order_id=int(order_id))
+            lambda: client.futures_cancel_order(symbol=symbol.upper(), orderId=int(order_id))
         )
     except Exception as e:
         logger.warning("cancel_order failed %s/%s: %s", symbol, order_id, e)
