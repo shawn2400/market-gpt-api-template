@@ -506,7 +506,9 @@ async def ensure_positions_protected() -> None:
             # add_sl_tp_protection is now superseded by Trailing TP system below
             
             # 🎯 PROGRESSIVE SL LOCKER (Lock profits at each TP level - NEW MetaBrain v9.1)
-            if progressive_sl_locker:
+            # NOTE: Disabled for now - Trailing TP handles all protection. Progressive SL was causing early exits
+            # by canceling all orders. Will re-enable with safer logic that only modifies SL, not TP orders.
+            if False and progressive_sl_locker:  # DISABLED UNTIL FIXED
                 try:
                     mark_price = float(pos.get("markPrice", 0))
                     position_side = "LONG" if amt > 0 else "SHORT"
@@ -520,15 +522,13 @@ async def ensure_positions_protected() -> None:
                             
                             # Update SL to lock profit at this TP level
                             try:
-                                from utils.binance_client import futures_create_order, futures_cancel_all_orders
+                                from utils.binance_client import futures_create_order
                                 
                                 close_side = "SELL" if position_side == "LONG" else "BUY"
                                 entry_price = float(pos.get("entryPrice", 0))
                                 
-                                # Cancel existing SL orders
-                                futures_cancel_all_orders(symbol)
-                                
                                 # Place new STOP_MARKET at TP level (lock profit)
+                                # CRITICAL: Do NOT cancel all orders - that closes TP orders too!
                                 if new_sl_price and new_sl_price > 0:
                                     sl_order = futures_create_order(
                                         symbol=symbol,
@@ -536,8 +536,8 @@ async def ensure_positions_protected() -> None:
                                         type="STOP_MARKET",
                                         quantity=abs(amt),
                                         stopPrice=new_sl_price,
-                                        reduceOnly=True,
-                                        positionSide=position_side
+                                        reduceOnly=True
+                                        # REMOVED: positionSide=position_side (causes ONE-WAY mode conflicts)
                                     )
                                     
                                     await send_telegram_message(
