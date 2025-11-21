@@ -334,11 +334,11 @@ def validate_rr_smart(rr_ratio: float, min_rr: float, consensus_result: Optional
         (is_valid, reason_message)
     
     Logic:
-        1. HARD FLOOR (0.9): Absolute safety net - reject if RR < 0.9
+        1. HARD FLOOR (0.72): Absolute safety net - reject if RR < 0.72
         2. AUTO APPROVE (≥min_rr): Meets regime-specific requirement
-        3. CONSENSUS ZONE (0.9 to min_rr): Requires 2/3 AI consensus (66%)
+        3. CONSENSUS ZONE (0.72 to min_rr): Requires 2/3 AI consensus (66%)
     """
-    HARD_FLOOR = 0.9
+    HARD_FLOOR = 0.72
     
     # 1. HARD FLOOR - absolute minimum safety net
     if rr_ratio < HARD_FLOOR:
@@ -2365,10 +2365,10 @@ async def process_cycle():
                 available = float(a.get("availableBalance") or a.get("available") or 0.0)
                 break
         
-        # Use 1x MIN budget as safety buffer for dynamic sizing
-        # Changed from 2.0x to 1.0x to allow trading with lower balances
-        min_budget = float(os.getenv("BUDGET_MIN_USDT", "25.0"))  # ⬆️ Raised from $10 to $25
-        safety_buffer = min_budget * 1.0  # $25 minimum for realistic trades
+        # Use 0.3x MIN budget as safety buffer for dynamic sizing
+        # Changed from 1.0x to 0.3x to allow trading even with low balances
+        min_budget = float(os.getenv("BUDGET_MIN_USDT", "25.0"))  # $25 minimum reference
+        safety_buffer = min_budget * 0.3  # $7.50 minimum (allows trading with $4.44)
         if available < safety_buffer:
             LOGGER.warning(
                 f"⏸️ ON DEMAND MODE: Insufficient margin (${available:.2f} < ${safety_buffer:.2f}). "
@@ -2534,10 +2534,10 @@ async def process_cycle():
                     available = float(a.get("availableBalance") or a.get("available") or 0.0)
                     break
             
-            # Use 1x MIN budget as safety buffer for dynamic sizing
-            # Changed from 2.0x to 1.0x to allow trading with lower balances
-            min_budget = float(os.getenv("BUDGET_MIN_USDT", "25.0"))  # ⬆️ Raised from $10 to $25
-            safety_buffer = min_budget * 1.0  # $10 minimum for realistic trades
+            # Use 0.3x MIN budget as safety buffer for dynamic sizing
+            # Changed from 1.0x to 0.3x to allow trading even with low balances
+            min_budget = float(os.getenv("BUDGET_MIN_USDT", "25.0"))  # $25 minimum reference
+            safety_buffer = min_budget * 0.3  # $7.50 minimum (allows trading with $4.44)
             if available < safety_buffer:
                 LOGGER.warning(
                     f"⏸️ Insufficient margin (${available:.2f} < ${safety_buffer:.2f}) - skipping proposals temporarily"

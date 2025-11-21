@@ -22,14 +22,6 @@ args = "Auto Health Monitor"
 
 [[workflows.workflow.tasks]]
 task = "workflow.run"
-args = "Fills Watcher"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "Auto Scanner"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
 args = "GPT-5 Central Brain"
 
 [[workflows.workflow.tasks]]
@@ -52,6 +44,14 @@ args = "Telegram Digest Reporter"
 task = "workflow.run"
 args = "AlgoGPT Server"
 
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Auto Scanner"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Fills Watcher"
+
 [[workflows.workflow]]
 name = "Auto Health Monitor"
 author = "agent"
@@ -62,28 +62,6 @@ args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG BASE_UR
 
 [workflows.workflow.metadata]
 outputType = "console"
-
-[[workflows.workflow]]
-name = "Fills Watcher"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG FILLS_WATCH_ENABLE=1 FILLS_WATCH_INTERVAL_SEC=15 python workers/fills_watcher.py"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
-name = "Auto Scanner"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "cd /home/runner/$REPL_SLUG && ALERT_INGEST_URL=http://127.0.0.1:5000/alerts/ingest CONTEXT_URL=http://127.0.0.1:5000 DATABASE_URL='postgresql://neondb_owner:npg_8zKsmVwMLZ0u@ep-spring-silence-ag9wyuvd-pooler.c-2.eu-central-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require' PYTHONPATH=/home/runner/$REPL_SLUG SUGGEST_FUTURES=1 SUGGEST_SPOT=1 SUGGEST_GRID=1 AUTO_RUN=1 TRADE_AUTO_SUGGEST=1 SUGGEST_INTERVAL_SEC=120 python workers/gpt_auto_suggest.py"
 
 [[workflows.workflow]]
 name = "GPT-5 Central Brain"
@@ -151,6 +129,28 @@ waitForPort = 5000
 
 [workflows.workflow.metadata]
 outputType = "webview"
+
+[[workflows.workflow]]
+name = "Auto Scanner"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && ALERT_INGEST_URL=http://127.0.0.1:5000/alerts/ingest CONTEXT_URL=http://127.0.0.1:5000 DATABASE_URL='postgresql://neondb_owner:npg_8zKsmVwMLZ0u@ep-spring-silence-ag9wyuvd-pooler.c-2.eu-central-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require' PYTHONPATH=/home/runner/$REPL_SLUG SUGGEST_FUTURES=1 SUGGEST_SPOT=1 SUGGEST_GRID=1 AUTO_RUN=1 TRADE_AUTO_SUGGEST=1 SUGGEST_INTERVAL_SEC=120 python workers/gpt_auto_suggest.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Fills Watcher"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "cd /home/runner/$REPL_SLUG && PYTHONPATH=/home/runner/$REPL_SLUG FILLS_WATCH_ENABLE=1 FILLS_WATCH_INTERVAL_SEC=15 python workers/fills_watcher.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[ports]]
 localPort = 5000
