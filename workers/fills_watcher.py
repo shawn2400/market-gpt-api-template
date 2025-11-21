@@ -319,12 +319,13 @@ def _check_and_extend_tp(symbol: str, current_price: float, entry_price: float, 
                 positionSide=side
             )
             
-            if result and result.get("ok"):  # type: ignore
+            result_dict = result if isinstance(result, dict) else {}  # type: ignore
+            if result_dict and result_dict.get("ok"):  # type: ignore
                 log.info(
                     f"✅ TP{target['level']} placed: {symbol} {order_side} {tp_qty_rounded} @ {tp_price_rounded}"
                 )
             else:
-                log.warning(f"❌ Failed to place TP{target['level']}: {result.get('error')}")
+                log.warning(f"❌ Failed to place TP{target['level']}: {result_dict.get('error')}")
         
         # Update extension state
         _tp_extension_state[symbol] = {
@@ -425,11 +426,12 @@ def _update_trailing_sl(symbol: str, current_price: float, entry_price: float, r
     
     # Calculate trailing distance based on volatility
     try:
-        klines = get_klines(symbol, "15m", 24)
-        if klines and len(klines) >= 14:
-            highs = [float(k[2]) for k in klines]
-            lows = [float(k[3]) for k in klines]
-            closes = [float(k[4]) for k in klines]
+        klines = get_klines(symbol, "15m", 24) if callable(get_klines) else None  # type: ignore
+        klines_list = list(klines) if klines else []  # type: ignore
+        if klines_list and len(klines_list) >= 14:
+            highs = [float(k[2]) for k in klines_list]  # type: ignore
+            lows = [float(k[3]) for k in klines_list]  # type: ignore
+            closes = [float(k[4]) for k in klines_list]  # type: ignore
             
             # Calculate ATR
             atr_sum = 0.0
@@ -502,7 +504,8 @@ def _update_trailing_sl(symbol: str, current_price: float, entry_price: float, r
             positionSide=side
         )
         
-        if result and result.get("ok"):  # type: ignore
+        result_dict = result if isinstance(result, dict) else {}  # type: ignore
+        if result_dict and result_dict.get("ok"):  # type: ignore
             old_sl = trail_state["current_sl"]
             trail_state["current_sl"] = new_sl_rounded
             trail_state["last_update_time"] = time.time()
