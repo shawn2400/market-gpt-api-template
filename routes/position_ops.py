@@ -283,7 +283,7 @@ def _cancel_open_conditional(client, symbol: str,
         should = (typ in kinds) if strict else (typ in kinds or "STOP" in typ or "TAKE_PROFIT" in typ)
         with suppress(Exception):
             if should:
-                client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
+                client.futures_cancel_order(symbol=symbol.upper(), order_id=o["orderId"])
                 n += 1
     return n
 
@@ -295,7 +295,7 @@ def _cancel_open_tp_limits(client, symbol: str) -> int:
         reduce_only = str(o.get("reduceOnly", "false")).lower() == "true"
         if typ == "LIMIT" and reduce_only and any(tag in coid for tag in ("TP", "TP1", "TP2", "TP3")):
             with suppress(Exception):
-                client.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"])
+                client.futures_cancel_order(symbol=symbol.upper(), order_id=o["orderId"])
                 n += 1
     return n
 
