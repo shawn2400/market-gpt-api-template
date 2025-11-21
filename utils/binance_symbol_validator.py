@@ -109,7 +109,7 @@ class BinanceSymbolValidator:
             price: Raw price
             
         Returns:
-            Rounded price matching Binance tick size
+            Rounded price matching Binance tick size & pricePrecision
         """
         info = self.get_symbol_info(symbol)
         if not info:
@@ -117,6 +117,7 @@ class BinanceSymbolValidator:
             return round(price, 4)
         
         tick_size = info["tickSize"]
+        price_precision = info.get("pricePrecision", 8)  # 🔧 Get pricePrecision!
         
         # Critical fix: Round to tick size ONLY (ignore precision field)
         decimal_price = Decimal(str(price))
@@ -142,10 +143,12 @@ class BinanceSymbolValidator:
         # Format to exact decimal places needed for tick size
         final_price = float(round(float(rounded), decimal_places))
         
-        # 🚨 FINAL SAFETY: If still ≤0, return raw price as absolute fallback
+        # 🚨 FINAL SAFETY: If still ≤0, format raw price to pricePrecision as fallback
         if final_price <= 0:
-            logger.error(f"🚨 CRITICAL: Rounding failed for {symbol} - even ROUND_UP produced ≤0. Using raw price {price}")
-            return price
+            logger.error(f"🚨 CRITICAL: Rounding failed for {symbol} - even ROUND_UP produced ≤0. Using raw price {price} formatted to {price_precision} decimals")
+            # 🔧 CRITICAL: Format raw price to pricePrecision, not raw string!
+            fallback = round(price, price_precision)
+            return fallback
         
         return final_price
     
