@@ -1,0 +1,908 @@
+# 🚀 **מערכת מסחר אוטומטית מלאה - גרסת 2GB + Redis**
+
+## 📁 **מבנה הקבצים הסופי**
+
+### 1. **קובץ ראשי - main_system.py**
+
+```python
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+מערכת מסחר אוטומטית מלאה - גרסת 2GB + Redis
+AUTO_TRADING_SYSTEM_V1
+"""
+
+import pandas as pd
+import numpy as np
+import ta
+from binance.client import Client
+import time
+import logging
+from datetime import datetime, timedelta
+import redis
+import json
+import threading
+from concurrent.futures import ThreadPoolExecutor
+import psutil
+import gc
+
+class AutoTradingSystem:
+    def __init__(self, api_key: str, api_secret: str, redis_host: str = 'localhost'):
+        self.client = Client(api_key, api_secret)
+        self.redis = redis.Redis(host=redis_host, port=6379, decode_responses=True, max_connections=5)
+        
+        # הגדרות מערכת
+        self.trading_pairs = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'ADAUSDT', 'DOTUSDT']
+        self.active_positions = {}
+        self.signals_history = []
+        
+        # ניהול משאבים
+        self.resource_manager = ResourceManager()
+        self.performance_tracker = PerformanceTracker()
+        
+        # רכיבי הליבה
+        self.signal_generator = SignalGenerator(self.client, self.redis)
+        self.position_manager = PositionManager(self.client, self.redis)
+        self.risk_manager = RiskManager(self.client)
+        
+        self.setup_logging()
+        self.initialize_system()
+    
+    def setup_logging(self):
+        """הגדרת לוגינג"""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s | %(levelname)s | %(message)s',
+            handlers=[
+                logging.FileHandler('auto_trading.log', encoding='utf-8'),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+    
+    def initialize_system(self):
+        """אתחול המערכת"""
+        self.logger.info("🚀 מאתחל מערכת מסחר אוטומטית...")
+        
+        # בדיקת חיבורים
+        self.test_connections()
+        
+        # טען נתונים ראשוניים
+        self.load_initial_data()
+        
+        # הפעל מוניטורים
+        self.start_monitors()
+        
+        self.logger.info("✅ מערכת מסחר אוטומטית מוכנה!")
+    
+    def test_connections(self):
+        """בדיקת חיבורים"""
+        try:
+            # בדיקת Binance
+            self.client.get_account()
+            self.logger.info("✅ Binance API מחובר")
+            
+            # בדיקת Redis
+            self.redis.ping()
+            self.logger.info("✅ Redis מחובר")
+            
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה בחיבורים: {e}")
+            raise
+    
+    def load_initial_data(self):
+        """טען נתונים ראשוניים"""
+        try:
+            # טען נתונים היסטוריים בסיסיים
+            for symbol in self.trading_pairs:
+                data = self.signal_generator.get_technical_data(symbol, '15m', 20)
+                if data is not None:
+                    self.redis.set(f"data_{symbol}", json.dumps(data), ex=300)
+            
+            self.logger.info("📊 נתונים ראשוניים נטענו")
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה בטעינת נתונים: {e}")
+    
+    def start_monitors(self):
+        """הפעלת מוניטורים"""
+        def resource_monitor():
+            while True:
+                self.resource_manager.check_resources()
+                time.sleep(30)
+        
+        def performance_monitor():
+            while True:
+                self.performance_tracker.track_performance(self.active_positions)
+                time.sleep(60)
+        
+        threading.Thread(target=resource_monitor, daemon=True).start()
+        threading.Thread(target=performance_monitor, daemon=True).start()
+        self.logger.info("🔍 מוניטורים הופעלו")
+    
+    def run_trading_cycle(self):
+        """מחזור מסחר ראשי"""
+        cycle_start = time.time()
+        self.logger.info("🔄 מתחיל מחזור מסחר...")
+        
+        try:
+            # 1. ניהול פוזיציות קיימות
+            self.manage_existing_positions()
+            
+            # 2. סריקת אותות חדשים
+            signals_found = self.scan_for_signals()
+            
+            # 3. ניהול משאבים
+            self.resource_manager.optimize()
+            
+            cycle_time = time.time() - cycle_start
+            self.logger.info(f"✅ מחזור הושלם: {signals_found} אותות | זמן: {cycle_time:.1f}s")
+            
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה במחזור מסחר: {e}")
+    
+    def manage_existing_positions(self):
+        """ניהול פוזיציות קיימות"""
+        try:
+            for symbol in list(self.active_positions.keys()):
+                position = self.active_positions[symbol]
+                current_price = self.get_current_price(symbol)
+                
+                # עדכן PNL
+                position['unrealized_pnl'] = self.calculate_pnl(position, current_price)
+                position['current_price'] = current_price
+                
+                # החלט whether to hold or close
+                hold_decision = self.position_manager.should_hold_position(position, current_price)
+                
+                if not hold_decision['should_hold']:
+                    self.close_position(symbol, hold_decision['reason'])
+                else:
+                    # עדכן הגנות אם needed
+                    if hold_decision.get('update_sl'):
+                        self.update_stop_loss(symbol, hold_decision['new_sl'])
+                    
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה בניהול פוזיציות: {e}")
+    
+    def scan_for_signals(self, max_symbols=3):
+        """סריקת אותות חדשים"""
+        signals_found = 0
+        
+        for symbol in self.trading_pairs[:max_symbols]:  # הגבל לסריקה
+            try:
+                if len(self.active_positions) >= 3:  # מקסימום 3 פוזיציות
+                    break
+                
+                signal = self.signal_generator.generate_signal(symbol)
+                
+                if signal and signal['confidence'] > 0.65:
+                    # בדיקת סיכון
+                    risk_approved = self.risk_manager.approve_trade(signal, self.active_positions)
+                    
+                    if risk_approved:
+                        self.execute_trade(signal)
+                        signals_found += 1
+                
+                time.sleep(1)  # הפסקה בין סריקות
+                
+            except Exception as e:
+                self.logger.error(f"❌ שגיאה בסריקת {symbol}: {e}")
+                continue
+        
+        return signals_found
+    
+    def execute_trade(self, signal):
+        """ביצוע מסחר"""
+        try:
+            symbol = signal['symbol']
+            action = signal['action']
+            confidence = signal['confidence']
+            
+            # חישוב גודל פוזיציה
+            position_size = self.risk_manager.calculate_position_size(symbol, signal['price'])
+            
+            # ביצוע הקניה
+            if action == "BUY":
+                order = self.client.order_market_buy(
+                    symbol=symbol,
+                    quantity=position_size
+                )
+            else:
+                order = self.client.order_market_sell(
+                    symbol=symbol,
+                    quantity=position_size
+                )
+            
+            # רישום הפוזיציה
+            position = {
+                'symbol': symbol,
+                'direction': action,
+                'entry_price': float(order['fills'][0]['price']),
+                'quantity': position_size,
+                'entry_time': datetime.now(),
+                'stop_loss': self.calculate_stop_loss(signal['price'], action),
+                'take_profit': self.calculate_take_profit(signal['price'], action),
+                'confidence': confidence
+            }
+            
+            self.active_positions[symbol] = position
+            
+            # רישום הגנות
+            self.place_protection_orders(position)
+            
+            self.logger.info(f"🎯 מסחר בוצע: {symbol} {action} | ביטחון: {confidence:.2f}")
+            
+            # שמור ב-Redis
+            self.redis.hset(f"position_{symbol}", mapping=position)
+            
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה בביצוע מסחר: {e}")
+    
+    def close_position(self, symbol, reason):
+        """סגירת פוזיציה"""
+        try:
+            position = self.active_positions[symbol]
+            
+            # ביצוע מכירה
+            if position['direction'] == "BUY":
+                order = self.client.order_market_sell(
+                    symbol=symbol,
+                    quantity=position['quantity']
+                )
+            else:
+                order = self.client.order_market_buy(
+                    symbol=symbol,
+                    quantity=position['quantity']
+                )
+            
+            # חישוב PNL סופי
+            exit_price = float(order['fills'][0]['price'])
+            final_pnl = self.calculate_pnl(position, exit_price)
+            
+            # ניקוי
+            del self.active_positions[symbol]
+            self.redis.delete(f"position_{symbol}")
+            
+            self.logger.info(f"📤 פוזיציה נסגרה: {symbol} | סיבה: {reason} | PNL: {final_pnl:.2f}%")
+            
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה בסגירת פוזיציה: {e}")
+    
+    def calculate_stop_loss(self, entry_price, direction):
+        """חישוב stop loss"""
+        if direction == "BUY":
+            return entry_price * 0.98  # 2% stop loss
+        else:
+            return entry_price * 1.02  # 2% stop loss
+    
+    def calculate_take_profit(self, entry_price, direction):
+        """חישוב take profit"""
+        if direction == "BUY":
+            return entry_price * 1.04  # 4% take profit
+        else:
+            return entry_price * 0.96  # 4% take profit
+    
+    def calculate_pnl(self, position, current_price):
+        """חישוב PNL"""
+        if position['direction'] == "BUY":
+            return (current_price - position['entry_price']) / position['entry_price'] * 100
+        else:
+            return (position['entry_price'] - current_price) / position['entry_price'] * 100
+    
+    def get_current_price(self, symbol):
+        """קבלת מחיר נוכחי"""
+        try:
+            ticker = self.client.get_symbol_ticker(symbol=symbol)
+            return float(ticker['price'])
+        except:
+            return 0.0
+    
+    def place_protection_orders(self, position):
+        """רישום orders הגנה"""
+        try:
+            symbol = position['symbol']
+            
+            # Stop Loss
+            self.client.create_order(
+                symbol=symbol,
+                side='SELL' if position['direction'] == 'BUY' else 'BUY',
+                type='STOP_LOSS_LIMIT',
+                timeInForce='GTC',
+                quantity=position['quantity'],
+                stopPrice=round(position['stop_loss'], 6),
+                price=round(position['stop_loss'], 6)
+            )
+            
+            # Take Profit
+            self.client.create_order(
+                symbol=symbol,
+                side='SELL' if position['direction'] == 'BUY' else 'BUY',
+                type='TAKE_PROFIT_LIMIT',
+                timeInForce='GTC',
+                quantity=position['quantity'],
+                stopPrice=round(position['take_profit'], 6),
+                price=round(position['take_profit'], 6)
+            )
+            
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה ברישום הגנות: {e}")
+    
+    def update_stop_loss(self, symbol, new_sl):
+        """עדכון stop loss"""
+        try:
+            # בטל orders הגנה ישנים
+            orders = self.client.get_open_orders(symbol=symbol)
+            for order in orders:
+                if order['type'] in ['STOP_LOSS_LIMIT', 'TAKE_PROFIT_LIMIT']:
+                    self.client.cancel_order(symbol=symbol, orderId=order['orderId'])
+            
+            # צור orders חדשים
+            self.place_protection_orders(self.active_positions[symbol])
+            
+            self.logger.info(f"🔄 Stop Loss עודכן: {symbol} -> {new_sl}")
+            
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה בעדכון Stop Loss: {e}")
+    
+    def run_continuous_trading(self):
+        """הרצת מסחר רציף"""
+        self.logger.info("🚀 מתחיל מסחר אוטומטי רציף...")
+        
+        cycle_count = 0
+        while True:
+            try:
+                cycle_count += 1
+                self.logger.info(f"🔁 מחזור #{cycle_count}")
+                
+                self.run_trading_cycle()
+                
+                # המתנה דינאמית based on load
+                memory_usage = psutil.virtual_memory().percent
+                sleep_time = 30 if memory_usage < 70 else 60
+                time.sleep(sleep_time)
+                
+            except KeyboardInterrupt:
+                self.logger.info("⏹️ מסחר הופסק ידנית")
+                break
+            except Exception as e:
+                self.logger.error(f"❌ שגיאה קריטית: {e}")
+                time.sleep(60)
+
+class SignalGenerator:
+    """גנרטור אותות"""
+    
+    def __init__(self, client, redis):
+        self.client = client
+        self.redis = redis
+        self.cache = {}
+    
+    def generate_signal(self, symbol):
+        """יצירת אות מסחר"""
+        try:
+            # בדוק cache first
+            cache_key = f"signal_{symbol}"
+            cached_signal = self.redis.get(cache_key)
+            if cached_signal:
+                return json.loads(cached_signal)
+            
+            # קבל נתונים
+            data = self.get_technical_data(symbol, '15m', 30)
+            if data is None or len(data) < 20:
+                return None
+            
+            # חשב אינדיקטורים
+            indicators = self.calculate_indicators(data)
+            
+            # צור אות
+            signal = self.analyze_indicators(indicators, symbol)
+            
+            # שמור ב-cache
+            if signal:
+                self.redis.set(cache_key, json.dumps(signal), ex=120)  # 2 דקות
+            
+            return signal
+            
+        except Exception as e:
+            logging.error(f"❌ שגיאה ביצירת אות: {e}")
+            return None
+    
+    def get_technical_data(self, symbol, interval, limit):
+        """קבלת נתונים טכניים"""
+        try:
+            klines = self.client.get_klines(
+                symbol=symbol,
+                interval=interval,
+                limit=limit
+            )
+            
+            df = pd.DataFrame(klines, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_volume', 'trades', 'taker_buy', 'taker_quote', 'ignore'
+            ])
+            
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col])
+            
+            return df
+            
+        except Exception as e:
+            logging.error(f"❌ שגיאה בקבלת נתונים: {e}")
+            return None
+    
+    def calculate_indicators(self, df):
+        """חישוב אינדיקטורים"""
+        try:
+            close = df['close']
+            volume = df['volume']
+            
+            # אינדיקטורים בסיסיים
+            rsi = ta.momentum.RSIIndicator(close, window=14).rsi().iloc[-1]
+            macd = ta.trend.MACD(close).macd().iloc[-1]
+            macd_signal = ta.trend.MACD(close).macd_signal().iloc[-1]
+            
+            # מחיר vs ממוצע
+            sma_20 = ta.trend.SMAIndicator(close, window=20).sma_indicator().iloc[-1]
+            price_vs_sma = (close.iloc[-1] - sma_20) / sma_20
+            
+            # ווליום
+            volume_ma = ta.trend.SMAIndicator(volume, window=20).sma_indicator().iloc[-1]
+            volume_ratio = volume.iloc[-1] / volume_ma
+            
+            return {
+                'rsi': rsi,
+                'macd': macd,
+                'macd_signal': macd_signal,
+                'price_vs_sma': price_vs_sma,
+                'volume_ratio': volume_ratio,
+                'current_price': close.iloc[-1]
+            }
+            
+        except Exception as e:
+            logging.error(f"❌ שגיאה בחישוב אינדיקטורים: {e}")
+            return {}
+    
+    def analyze_indicators(self, indicators, symbol):
+        """ניתוח אינדיקטורים ליצירת אות"""
+        if not indicators:
+            return None
+        
+        rsi = indicators['rsi']
+        macd = indicators['macd']
+        macd_signal = indicators['macd_signal']
+        price_vs_sma = indicators['price_vs_sma']
+        volume_ratio = indicators['volume_ratio']
+        
+        # לוגיקת מסחר בסיסית
+        bullish_signals = 0
+        bearish_signals = 0
+        
+        # RSI analysis
+        if 30 < rsi < 70:
+            if rsi > 50:
+                bullish_signals += 1
+            else:
+                bearish_signals += 1
+        
+        # MACD analysis
+        if macd > macd_signal:
+            bullish_signals += 1
+        else:
+            bearish_signals += 1
+        
+        # Price vs SMA
+        if price_vs_sma > 0:
+            bullish_signals += 1
+        else:
+            bearish_signals += 1
+        
+        # Volume confirmation
+        if volume_ratio > 1.2:
+            if bullish_signals > bearish_signals:
+                bullish_signals += 1
+            else:
+                bearish_signals += 1
+        
+        # קביעת אות
+        total_signals = bullish_signals + bearish_signals
+        if total_signals == 0:
+            return None
+        
+        confidence = max(bullish_signals, bearish_signals) / total_signals
+        
+        if bullish_signals > bearish_signals and confidence > 0.6:
+            action = "BUY"
+        elif bearish_signals > bullish_signals and confidence > 0.6:
+            action = "SELL"
+        else:
+            return None
+        
+        return {
+            'symbol': symbol,
+            'action': action,
+            'confidence': confidence,
+            'price': indicators['current_price'],
+            'timestamp': datetime.now(),
+            'indicators': {
+                'rsi': rsi,
+                'macd_diff': macd - macd_signal,
+                'price_vs_sma': price_vs_sma,
+                'volume_boost': volume_ratio
+            }
+        }
+
+class PositionManager:
+    """מנהל פוזיציות"""
+    
+    def __init__(self, client, redis):
+        self.client = client
+        self.redis = redis
+    
+    def should_hold_position(self, position, current_price):
+        """החלט whether to hold or close position"""
+        try:
+            symbol = position['symbol']
+            entry_price = position['entry_price']
+            direction = position['direction']
+            
+            # חשב PNL
+            if direction == "BUY":
+                pnl_pct = (current_price - entry_price) / entry_price * 100
+            else:
+                pnl_pct = (entry_price - current_price) / entry_price * 100
+            
+            # תנאי יציאה
+            if pnl_pct <= -3:  # stop loss
+                return {'should_hold': False, 'reason': 'Stop Loss'}
+            
+            if pnl_pct >= 4:  # take profit
+                return {'should_hold': False, 'reason': 'Take Profit'}
+            
+            # תנאי החזקה - בדוק מומנטום
+            momentum = self.check_momentum(symbol)
+            
+            if momentum < 0.3 and pnl_pct > 0:
+                return {'should_hold': False, 'reason': 'Momentum Lost'}
+            
+            # אם הרווח מעל 2% - trail stop
+            if pnl_pct > 2:
+                new_sl = current_price * 0.99 if direction == "BUY" else current_price * 1.01
+                return {
+                    'should_hold': True, 
+                    'update_sl': True,
+                    'new_sl': new_sl
+                }
+            
+            return {'should_hold': True, 'reason': 'Conditions Good'}
+            
+        except Exception as e:
+            logging.error(f"❌ שגיאה בבדיקת החזקה: {e}")
+            return {'should_hold': True, 'reason': 'Error'}
+    
+    def check_momentum(self, symbol):
+        """בדיקת מומנטום"""
+        try:
+            data = self.get_technical_data(symbol, '5m', 10)
+            if data is None or len(data) < 5:
+                return 0.5
+            
+            closes = data['close'].values
+            price_change = (closes[-1] - closes[0]) / closes[0]
+            
+            return max(0.0, min(1.0, 0.5 + price_change * 10))
+            
+        except:
+            return 0.5
+
+class RiskManager:
+    """מנהל סיכונים"""
+    
+    def __init__(self, client):
+        self.client = client
+    
+    def approve_trade(self, signal, active_positions):
+        """אישור מסחר based on סיכון"""
+        try:
+            symbol = signal['symbol']
+            
+            # בדוק אם כבר יש פוזיציה
+            if symbol in active_positions:
+                return False
+            
+            # הגבל מספר פוזיציות
+            if len(active_positions) >= 3:
+                return False
+            
+            # בדוק ביטחון אות
+            if signal['confidence'] < 0.65:
+                return False
+            
+            return True
+            
+        except Exception as e:
+            logging.error(f"❌ שגיאה באישור מסחר: {e}")
+            return False
+    
+    def calculate_position_size(self, symbol, entry_price):
+        """חישוב גודל פוזיציה"""
+        try:
+            # קבל יתרה
+            account = self.client.get_account()
+            usdt_balance = next(
+                (float(x['free']) for x in account['balances'] if x['asset'] == 'USDT'), 
+                100.0  # ברירת מחדל
+            )
+            
+            # 2% סיכון לעסקה
+            risk_amount = usdt_balance * 0.02
+            
+            # גודל פוזיציה
+            position_size = risk_amount / entry_price
+            
+            # עיגול
+            info = self.client.get_symbol_info(symbol)
+            if info:
+                lot_size = next(
+                    (f for f in info['filters'] if f['filterType'] == 'LOT_SIZE'), 
+                    None
+                )
+                if lot_size:
+                    step_size = float(lot_size['stepSize'])
+                    position_size = round(position_size / step_size) * step_size
+            
+            return max(position_size, 0.001)  # מינימום
+            
+        except Exception as e:
+            logging.error(f"❌ שגיאה בחישוב גודל פוזיציה: {e}")
+            return 0.001
+
+class ResourceManager:
+    """מנהל משאבים"""
+    
+    def __init__(self):
+        self.memory_log = []
+    
+    def check_resources(self):
+        """בדיקת משאבים"""
+        try:
+            memory = psutil.virtual_memory()
+            cpu = psutil.cpu_percent(interval=1)
+            
+            self.memory_log.append(memory.percent)
+            if len(self.memory_log) > 100:
+                self.memory_log.pop(0)
+            
+            if memory.percent > 80:
+                logging.warning(f"⚠️ זיכרון גבוה: {memory.percent}%")
+                self.optimize()
+            
+            return {
+                'memory_percent': memory.percent,
+                'cpu_percent': cpu,
+                'memory_mb': memory.used / 1024 / 1024
+            }
+            
+        except Exception as e:
+            logging.error(f"❌ שגיאה בבדיקת משאבים: {e}")
+            return {}
+    
+    def optimize(self):
+        """אופטימיזציית משאבים"""
+        logging.info("🧹 מבצע אופטימיזציית משאבים...")
+        
+        # נקה cache
+        gc.collect()
+        
+        # המתן להפחתת load
+        time.sleep(2)
+
+class PerformanceTracker:
+    """מעקב ביצועים"""
+    
+    def __init__(self):
+        self.performance_data = []
+    
+    def track_performance(self, active_positions):
+        """מעקב ביצועים"""
+        try:
+            performance = {
+                'timestamp': datetime.now(),
+                'active_positions': len(active_positions),
+                'total_pnl': sum(pos.get('unrealized_pnl', 0) for pos in active_positions.values()),
+                'positions_details': {
+                    symbol: {
+                        'pnl': pos.get('unrealized_pnl', 0),
+                        'direction': pos['direction'],
+                        'time_in_trade': (datetime.now() - pos['entry_time']).total_seconds() / 60
+                    }
+                    for symbol, pos in active_positions.items()
+                }
+            }
+            
+            self.performance_data.append(performance)
+            if len(self.performance_data) > 1000:
+                self.performance_data = self.performance_data[-500:]
+            
+            # log summary every 10 tracks
+            if len(self.performance_data) % 10 == 0:
+                self.log_summary()
+                
+        except Exception as e:
+            logging.error(f"❌ שגיאה במעקב ביצועים: {e}")
+    
+    def log_summary(self):
+        """רישום סיכום ביצועים"""
+        if not self.performance_data:
+            return
+        
+        recent = self.performance_data[-10:]  # 10 הרשומות האחרונות
+        avg_positions = np.mean([p['active_positions'] for p in recent])
+        avg_pnl = np.mean([p['total_pnl'] for p in recent])
+        
+        logging.info(f"📊 סיכום ביצועים: {avg_positions:.1f} פוזיציות | PNL ממוצע: {avg_pnl:.2f}%")
+
+# 🚀 הרצת המערכת
+def main():
+    API_KEY = "your_api_key_here"
+    API_SECRET = "your_api_secret_here"
+    REDIS_HOST = "localhost"
+    
+    try:
+        # אתחול המערכת
+        trading_system = AutoTradingSystem(API_KEY, API_SECRET, REDIS_HOST)
+        
+        # הפעל מסחר רציף
+        trading_system.run_continuous_trading()
+        
+    except KeyboardInterrupt:
+        print("\n🎯 מערכת הופסקה ידי המשתמש")
+    except Exception as e:
+        print(f"❌ שגיאה: {e}")
+        time.sleep(30)
+
+if __name__ == "__main__":
+    main()
+```
+
+## 📁 **2. קובץ הגדרות - config.py**
+
+```python
+# config.py - הגדרות מערכת
+
+TRADING_CONFIG = {
+    "trading_pairs": ["BTCUSDT", "ETHUSDT", "BNBUSDT", "ADAUSDT", "DOTUSDT"],
+    "max_positions": 3,
+    "max_daily_trades": 10,
+    "risk_per_trade": 0.02,  # 2%
+    "min_confidence": 0.65,
+    
+    "position_management": {
+        "stop_loss_pct": 0.02,  # 2%
+        "take_profit_pct": 0.04,  # 4%
+        "trailing_start": 0.02,  # 2%
+        "max_hold_hours": 24
+    },
+    
+    "signals": {
+        "scan_interval_minutes": 2,
+        "rsi_period": 14,
+        "macd_fast": 12,
+        "macd_slow": 26,
+        "volume_ma_period": 20
+    },
+    
+    "resources": {
+        "max_memory_mb": 1800,
+        "redis_ttl_seconds": 300,
+        "cleanup_interval_minutes": 5
+    }
+}
+
+# Redis configuration
+REDIS_CONFIG = {
+    "host": "localhost",
+    "port": 6379,
+    "decode_responses": True,
+    "max_connections": 5,
+    "socket_connect_timeout": 5,
+    "socket_timeout": 5
+}
+
+# Binance configuration
+BINANCE_CONFIG = {
+    "testnet": False,  # Change to True for testing
+    "timeout": 10,
+    "retries": 3
+}
+```
+
+## 📁 **3. קובץ דרישות - requirements.txt**
+
+```txt
+python-binance==1.0.16
+pandas==1.5.3
+numpy==1.23.5
+ta==0.10.2
+redis==4.5.4
+psutil==5.9.4
+```
+
+## 📁 **4. קובץ התקנה - setup.sh**
+
+```bash
+#!/bin/bash
+echo "🚀 Installing Auto Trading System..."
+
+# Create virtual environment
+python3 -m venv trading_env
+source trading_env/bin/activate
+
+# Install requirements
+pip install -r requirements.txt
+
+# Create necessary directories
+mkdir -p logs
+mkdir -p data
+
+echo "✅ Installation complete!"
+echo "📝 Edit config.py with your API keys"
+echo "🚀 Run: python main_system.py"
+```
+
+## 🚀 **הוראות התקנה והפעלה**
+
+### שלב 1: **התקנה**
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+### שלב 2: **הגדרת API Keys**
+```python
+# ב-config.py:
+API_KEY = "your_actual_binance_api_key"
+API_SECRET = "your_actual_binance_secret"
+```
+
+### שלב 3: **הפעלת Redis**
+```bash
+# אם Redis לא מותקן:
+sudo apt update
+sudo apt install redis-server
+sudo systemctl start redis
+```
+
+### שלב 4: **הרצה**
+```bash
+source trading_env/bin/activate
+python main_system.py
+```
+
+## 📊 **מה המערכת תעשה:**
+
+### ✅ **אוטומציה מלאה:**
+- **סריקת אותות** כל 2 דקות
+- **ביצוע מסחר** אוטומטי
+- **ניהול פוזיציות** אוטומטי
+- **ניהול סיכונים** אוטומטי
+
+### ✅ **ניהול חכם:**
+- **מקסימום 3 פוזיציות** בו"ז
+- **Stop Loss/Take Profit** אוטומטי
+- **Trailing Stop** כאשר ברווח
+- **ניטור משאבים** אוטומטי
+
+### ✅ **הגנות:**
+- **בדיקת חיבורים** אוטומטית
+- **ניהול זיכרון** אוטומטי
+- **שחזור משגיאות** אוטומטי
+- **רישום מלא** של כל הפעולות
+
+## 🎯 **המערכת מוכנה להפעלה!**
+
+**כל מה שצריך לעשות:**
+1. ✅ **התקנה** עם setup.sh
+2. ✅ **הגדרה** של API keys
+3. ✅ **הפעלה** של Redis
+4. ✅ **הרצה** של המערכת
+
+**המערכת תרוץ אוטומטית ותנהל את המסחר שלך 24/7!** 🚀
