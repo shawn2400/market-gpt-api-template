@@ -73,7 +73,7 @@ class LivePositionManager:
             
             # Cancel old SL order with error handling
             try:
-                self.client.futures_cancel_order(symbol=symbol, orderId=order_id)
+                self.client.futures_cancel_order(symbol=symbol, order_id=order_id)
                 self.logger.debug(f"Cancelled old SL order {order_id}")
             except Exception as cancel_err:
                 self.logger.warning(f"⚠️ Failed to cancel old SL {order_id}: {cancel_err} (proceeding anyway)")
@@ -137,7 +137,7 @@ class LivePositionManager:
             
             # Cancel old TP order with error handling
             try:
-                self.client.futures_cancel_order(symbol=symbol, orderId=order_id)
+                self.client.futures_cancel_order(symbol=symbol, order_id=order_id)
                 self.logger.debug(f"Cancelled old TP order {order_id}")
             except Exception as cancel_err:
                 self.logger.warning(f"⚠️ Failed to cancel old TP {order_id}: {cancel_err} (proceeding anyway)")

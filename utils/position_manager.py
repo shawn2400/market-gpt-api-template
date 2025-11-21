@@ -395,14 +395,14 @@ async def manage_once(
             # Cancel SL/Trail orders (also closePosition=true orders without reduceOnly flag)
             if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET") or bool(o.get("closePosition")):
                 try:
-                    client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+                    client.futures_cancel_order(symbol=symbol, order_id=o.get("orderId"))
                     cancelled_sl_count += 1
                 except Exception as e:
                     logger.warning(f"Failed to cancel old SL for {symbol}: {e}")
             # Cancel ALL types of TP orders (LIMIT, TAKE_PROFIT, TAKE_PROFIT_MARKET with reduceOnly)
             elif t in ("LIMIT", "TAKE_PROFIT", "TAKE_PROFIT_MARKET") and reduce_only:
                 try:
-                    client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+                    client.futures_cancel_order(symbol=symbol, order_id=o.get("orderId"))
                     cancelled_tp_count += 1
                 except Exception as e:
                     logger.warning(f"Failed to cancel old TP for {symbol}: {e}")
@@ -537,7 +537,7 @@ async def manage_once(
                         if _ticks_between(last_h, px, tick) <= TP_REARM_TICK and last_h < px:
                             new_px = _bn_round(max(px - tick, tick), tick)
                             try:
-                                client.futures_cancel_order(symbol=symbol, orderId=oid)
+                                client.futures_cancel_order(symbol=symbol, order_id=oid)
                             except Exception:
                                 pass  # Order may already be filled
                             with suppress(Exception):
@@ -556,7 +556,7 @@ async def manage_once(
                         if _ticks_between(last_l, px, tick) <= TP_REARM_TICK and last_l > px:
                             new_px = _round_tick_dir(px + tick, tick, "up")
                             try:
-                                client.futures_cancel_order(symbol=symbol, orderId=oid)
+                                client.futures_cancel_order(symbol=symbol, order_id=oid)
                             except Exception:
                                 pass  # Order may already be filled
                             with suppress(Exception):

@@ -281,7 +281,7 @@ class ZeroGapSLManager:
                     if order_pos_side and order_pos_side != position_side.upper():
                         continue
                 try:
-                    self.client.futures_cancel_order(symbol=symbol, orderId=oid)
+                    self.client.futures_cancel_order(symbol=symbol, order_id=oid)
                     cancelled_count += 1
                     log.info(f"[ZeroGapSL] {symbol} cancelled old SL order {oid}")
                 except Exception as e:
