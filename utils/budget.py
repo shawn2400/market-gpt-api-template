@@ -2,7 +2,7 @@
 # utils/budget.py
 from __future__ import annotations
 import os, json, logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from utils.binance_client import (
     futures_balance, get_symbol_filters,
@@ -73,7 +73,8 @@ def _get_equity_usdt(*, use_available: bool = True) -> float:
             instead of maintenance margin ($0.17)
     """
     try:
-        bals = futures_balance() or []
+        bals_result = futures_balance()
+        bals: List[Dict[str, Any]] = bals_result if isinstance(bals_result, list) else []
         for a in bals:
             asset = str(a.get("asset") or a.get("assetName") or "").upper()
             if asset != "USDT":

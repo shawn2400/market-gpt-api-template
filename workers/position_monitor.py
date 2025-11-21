@@ -27,14 +27,14 @@ except Exception:
     _BAN_SHIELD_AVAILABLE = False
 
 try:
-    from utils.telegram_digest import get_digest
+    from utils.telegram_digest import get_digest, TelegramDigest  # type: ignore
 except Exception:
-    class MockDigest:
+    class TelegramDigest:  # type: ignore
         def add_health_alert(self, *args, **kwargs):  # type: ignore
             pass
     
-    def get_digest():  # type: ignore[return]
-        return MockDigest()
+    def get_digest() -> TelegramDigest:  # type: ignore
+        return TelegramDigest()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -259,8 +259,8 @@ async def ensure_positions_protected() -> None:
         if hedge_manager:
             try:
                 dual_positions = hedge_manager.detect_dual_positions(positions)
-                if dual_positions and isinstance(dual_positions, dict):
-                    logger.warning(f"🚨 Detected {len(dual_positions)} dual position(s): {', '.join(dual_positions.keys())}")
+                if dual_positions and isinstance(dual_positions, dict) and len(dual_positions) > 0:
+                    logger.warning(f"🚨 Detected {len(dual_positions)} dual position(s): {', '.join(str(k) for k in dual_positions.keys())}")
                     
                     for symbol, sides in dual_positions.items():
                         # Resolve using "close_weaker" strategy

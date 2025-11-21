@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import os, math, time, logging, json, hashlib
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 from utils.binance_client import (
     get_symbol_filters,
     get_all_orders,
@@ -193,17 +193,19 @@ def _adx_from_klines(kl: List[List[float]], period: int = 14) -> float:
     plus_dm: List[float] = []
     minus_dm: List[float] = []
     tr_list: List[float] = []
-    prev_h = prev_l = prev_c = None
+    prev_h: Optional[float] = None
+    prev_l: Optional[float] = None
+    prev_c: Optional[float] = None
     for r in kl:
         h, l, c = float(r[2]), float(r[3]), float(r[4])
         if prev_h is None:
             prev_h, prev_l, prev_c = h, l, c
             continue
-        up_move = h - prev_h
-        down_move = prev_l - l
+        up_move = h - (prev_h or 0.0)
+        down_move = (prev_l or 0.0) - l
         pdm = up_move if (up_move > down_move and up_move > 0) else 0.0
         mdm = down_move if (down_move > up_move and down_move > 0) else 0.0
-        tr = max(h - l, abs(h - prev_c), abs(l - prev_c))
+        tr = max(h - l, abs(h - (prev_c or 0.0)), abs(l - (prev_c or 0.0)))
         plus_dm.append(pdm); minus_dm.append(mdm); tr_list.append(tr)
 
     def rma(xs: List[float], p: int) -> List[float]:
@@ -256,7 +258,8 @@ def _parse_pct_csv(s: str) -> List[float]:
 
 def _balance_usdt() -> float:
     try:
-        bal = futures_balance()
+        bal_result = futures_balance()
+        bal: List[Dict[str, Any]] = bal_result if isinstance(bal_result, list) else []
         for r in bal or []:
             if str(r.get("asset")).upper() == "USDT":
                 av = r.get("availableBalance") or r.get("withdrawAvailable") or r.get("balance")
@@ -337,7 +340,8 @@ class _Idem:
 
 def _cancel_old_closing_orders(symbol: str, position_side: Optional[str] = None, kinds: Optional[tuple] = None) -> int:
     try:
-        orders = get_all_orders(symbol, limit=50) or []
+        orders_result = get_all_orders(symbol, limit=50)
+        orders: List[Dict[str, Any]] = orders_result if isinstance(orders_result, list) else []
         tps = ("TAKE_PROFIT", "TAKE_PROFIT_MARKET")
         sls = ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET")
         target_kinds = kinds or (tps + sls)
