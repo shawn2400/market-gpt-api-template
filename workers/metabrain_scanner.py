@@ -27,6 +27,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.metabrain_orchestrator import get_metabrain_orchestrator
 from utils.watchlist_utils import load_watchlist
+import time
 
 logger = logging.getLogger("metabrain_scanner")
 logging.basicConfig(
@@ -70,7 +71,9 @@ class MetaBrainScanner:
         try:
             from utils.binance_client import get_client
             client = get_client()
-            ticker = client.futures_symbol_ticker(symbol=symbol)
+            if client is None:
+                raise RuntimeError("Binance client unavailable")
+            ticker: Dict[str, Any] = client.futures_symbol_ticker(symbol=symbol)
             return {
                 "symbol": symbol,
                 "price": float(ticker.get("lastPrice", 0)),
@@ -91,7 +94,9 @@ class MetaBrainScanner:
         try:
             from utils.binance_client import get_client
             client = get_client()
-            account = client.futures_account()
+            if client is None:
+                raise RuntimeError("Binance client unavailable")
+            account: Dict[str, Any] = client.futures_account()
             total = float(account.get("totalWalletBalance", 0))
             available = float(account.get("availableBalance", 0))
             return {
@@ -238,8 +243,17 @@ class MetaBrainScanner:
 """
             
             # Send to Telegram
-            await send_alert_immediate(message, parse_mode="HTML")
-            self.logger.info(f"📱 Telegram report sent for {symbol}")
+            try:
+                import httpx
+                chat_id = os.getenv("TELEGRAM_CHAT_ID", "")
+                bot_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
+                if chat_id and bot_token:
+                    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+                    async with httpx.AsyncClient() as client:
+                        await client.post(url, json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"})
+                    self.logger.info(f"📱 Telegram report sent for {symbol}")
+            except Exception as tg_err:
+                self.logger.warning(f"Failed to send Telegram notification: {tg_err}")
         
         except Exception as e:
             self.logger.error(f"Failed to send Telegram report: {e}", exc_info=True)
