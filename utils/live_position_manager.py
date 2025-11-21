@@ -66,8 +66,17 @@ class LivePositionManager:
                 self.logger.warning(f"No Binance client - mock SL update to {new_sl_price}")
                 return True
             
-            self.client.futures_cancel_order(symbol=symbol, orderId=order_id)
-            self.logger.debug(f"Cancelled old SL order {order_id}")
+            # Validate SL price
+            if not new_sl_price or new_sl_price <= 0:
+                self.logger.error(f"❌ Invalid SL price: {new_sl_price}")
+                return False
+            
+            # Cancel old SL order with error handling
+            try:
+                self.client.futures_cancel_order(symbol=symbol, orderId=order_id)
+                self.logger.debug(f"Cancelled old SL order {order_id}")
+            except Exception as cancel_err:
+                self.logger.warning(f"⚠️ Failed to cancel old SL {order_id}: {cancel_err} (proceeding anyway)")
             
             side = "SELL" if direction == "LONG" else "BUY"
             
@@ -118,8 +127,20 @@ class LivePositionManager:
                 self.logger.warning(f"No Binance client - mock TP update to {new_tp_price}")
                 return True
             
-            self.client.futures_cancel_order(symbol=symbol, orderId=order_id)
-            self.logger.debug(f"Cancelled old TP order {order_id}")
+            # Validate TP price and quantity
+            if not new_tp_price or new_tp_price <= 0:
+                self.logger.error(f"❌ Invalid TP price: {new_tp_price}")
+                return False
+            if not quantity or quantity <= 0:
+                self.logger.error(f"❌ Invalid quantity: {quantity}")
+                return False
+            
+            # Cancel old TP order with error handling
+            try:
+                self.client.futures_cancel_order(symbol=symbol, orderId=order_id)
+                self.logger.debug(f"Cancelled old TP order {order_id}")
+            except Exception as cancel_err:
+                self.logger.warning(f"⚠️ Failed to cancel old TP {order_id}: {cancel_err} (proceeding anyway)")
             
             side = "SELL" if direction == "LONG" else "BUY"
             

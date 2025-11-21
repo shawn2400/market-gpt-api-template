@@ -111,7 +111,10 @@ def prune_conflicting(client, symbol: str) -> None:
         for o in oo or []:
             t = str(o.get("type") or "")
             if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
-                client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+                try:
+                    client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
+                except Exception as e:
+                    continue  # Silently skip - order may already be filled/canceled
     except Exception:
         return
 
@@ -218,7 +221,8 @@ def move_sl_stop(*, client, symbol: str, side_txt: str,
                     try:
                         client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
                         canceled += 1
-                    except Exception:
+                    except Exception as e:
+                        # Silently skip - order may already be filled/canceled
                         continue
         except Exception:
             pass
@@ -478,6 +482,10 @@ def anti_stale_nudge(client, symbol: str, *, side_txt: str,
             new_rounded = round_tick_dir(new, float(tick), "down" if side_txt.upper() == "BUY" else "up")
             if abs(new_rounded - old) >= float(tick):
                 try:
+                    # Validate price before placing
+                    if new_rounded <= 0 or o["origQty"] <= 0:
+                        continue
+                    
                     client.futures_create_order(
                         symbol=symbol,
                         side=o["side"],
@@ -487,7 +495,10 @@ def anti_stale_nudge(client, symbol: str, *, side_txt: str,
                         timeInForce="GTC",
                         reduceOnly=True,
                     )
-                    client.futures_cancel_order(symbol=symbol, orderId=o["orderId"])
+                    try:
+                        client.futures_cancel_order(symbol=symbol, orderId=o["orderId"])
+                    except Exception:
+                        pass  # Order may already be filled/canceled
                     moved += 1
                     # 🔔 emit tp_nudge
                     try:
