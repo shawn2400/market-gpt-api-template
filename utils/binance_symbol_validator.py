@@ -126,6 +126,12 @@ class BinanceSymbolValidator:
         ticks = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_DOWN)
         rounded = ticks * decimal_tick
         
+        # 🚨 CRITICAL SAFETY: If ROUND_DOWN results in 0, use ROUND_UP instead (ultra-small-cap coins)
+        if rounded <= 0 and price > 0:
+            logger.warning(f"⚠️ ROUND_DOWN produced ≤0 price for {symbol} (raw={price}), using ROUND_UP instead")
+            ticks = (decimal_price / decimal_tick).quantize(Decimal('1'), rounding=ROUND_UP)
+            rounded = ticks * decimal_tick
+        
         # Determine decimal places from tick size
         tick_str = str(tick_size).rstrip('0').rstrip('.')
         if '.' in tick_str:
@@ -134,7 +140,14 @@ class BinanceSymbolValidator:
             decimal_places = 0
         
         # Format to exact decimal places needed for tick size
-        return float(round(float(rounded), decimal_places))
+        final_price = float(round(float(rounded), decimal_places))
+        
+        # 🚨 FINAL SAFETY: If still ≤0, return raw price as absolute fallback
+        if final_price <= 0:
+            logger.error(f"🚨 CRITICAL: Rounding failed for {symbol} - even ROUND_UP produced ≤0. Using raw price {price}")
+            return price
+        
+        return final_price
     
     def round_quantity(self, symbol: str, quantity: float, is_market: bool = False) -> float:
         """
