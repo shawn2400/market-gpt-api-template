@@ -14,6 +14,13 @@ I prefer iterative development with clear, concise communication. Please ask for
 - ✅ **Meme Coin Blacklist**: Added high-volatility token filtering (1000BOB: -30.93% → BLOCKED)
 - 📊 **Trade Analysis**: Win rate 40% (4/10) → Target 70%+ after quality gating
 
+## Critical Bug Fixes (Nov 21 Evening)
+- 🔧 **Progressive SL Bug FIXED**: Was canceling ALL orders including TPs, causing early exits. Disabled until safe re-implementation.
+- 🔄 **Auto-Flip Integration**: Integrated `analyze_multi_tf_weighted()` into position_monitor.py for weighted multi-timeframe position reversal analysis
+- 🧠 **Regime Detection Engine**: Created `utils/regime_detection_engine.py` (UPGRADE #1) - detects TRENDING/CHOPPY/VOLATILE regimes
+- 🚀 **Advanced Features Framework**: Created skeleton for 10 upgrades + 15 exponential features (Deep Learning, Sentiment, On-Chain, etc.)
+- 🛡️ **System Status**: All 9 workflows operational, Trailing TP primary protection, Auto-flip monitoring active
+
 ## System Architecture
 
 ### UI/UX
@@ -51,6 +58,8 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Auto-Strategy Selection Engine**: Automatically chooses optimal strategy based on market conditions.
 -   **Multi-Target TP System**: 3-level take profit with dynamic exit percentages and volatility-adjusted RR ratios, including dynamic TP extension.
 -   **Dynamic Trailing SL**: Activates after TP1, moves Stop Loss up as price climbs, tightens progressively at higher TP levels.
+-   **Auto-Flip Multi-Timeframe Analysis**: Weighted analysis of 15m/1h/4h timeframes for intelligent position reversal (STRONG/MODERATE/WEAK/CONFLICTING alignment detection).
+-   **Regime Detection Engine**: Detects market regimes (TRENDING/CHOPPY/VOLATILE) and adapts trading parameters automatically.
 
 **ExecutionBot - Unified Trade Execution Wrapper:**
 -   Centralized architecture for all trade execution logic with source-aware approval gating and Stage Engine integration for auto-bypass.

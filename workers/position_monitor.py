@@ -132,6 +132,16 @@ except Exception as e:
     progressive_sl_locker = None  # type: ignore
     logger.warning(f"⚠️ Progressive SL Locker unavailable: {e}")
 
+# 🔄 AUTO-FLIP MULTI-TIMEFRAME ANALYSIS (MetaBrain v9.1 - Position Reversal)
+try:
+    from utils.auto_flip import analyze_multi_tf_weighted
+    AUTOFLIP_ENABLED = True
+    logger.info("✅ Auto-Flip Multi-TF Analyzer loaded successfully")
+except Exception as e:
+    AUTOFLIP_ENABLED = False
+    analyze_multi_tf_weighted = None  # type: ignore
+    logger.warning(f"⚠️ Auto-Flip unavailable: {e}")
+
 async def calculate_symbol_atr(symbol: str, period: int = 14) -> float:
     """
     Calculate ATR (Average True Range) for a symbol
@@ -501,6 +511,46 @@ async def ensure_positions_protected() -> None:
             
             if amt == 0:
                 continue
+            
+            # 🔄 AUTO-FLIP CHECK (Weighted Multi-TF Analysis - MetaBrain v9.1)
+            if AUTOFLIP_ENABLED and analyze_multi_tf_weighted:
+                try:
+                    mark_price = float(pos.get("markPrice", 0))
+                    if mark_price > 0:
+                        position_side = "LONG" if amt > 0 else "SHORT"
+                        
+                        # Build multi-TF context from available data
+                        # In production, fetch 15m/1h/4h data from Binance
+                        try:
+                            from utils.multi_tf_manager import MultiTFContextManager
+                            mtf_mgr = MultiTFContextManager()
+                            tf_contexts = mtf_mgr.get_context(symbol)
+                            
+                            if tf_contexts:
+                                flip_analysis = analyze_multi_tf_weighted(tf_contexts, position_side)
+                                
+                                if flip_analysis.should_flip:
+                                    logger.info(
+                                        f"🔄 AUTO-FLIP CANDIDATE: {symbol} {position_side} → {flip_analysis.trend_direction} | "
+                                        f"Conf={flip_analysis.weighted_confidence:.0f}% | "
+                                        f"Alignment={flip_analysis.alignment_status} | Reason={flip_analysis.reason}"
+                                    )
+                                    
+                                    # Send Telegram alert for flip opportunity
+                                    await send_telegram_message(
+                                        f"🔄 *AUTO-FLIP SIGNAL*\n\n"
+                                        f"Symbol: `{symbol}`\n"
+                                        f"Current: {position_side}\n"
+                                        f"Flip To: {flip_analysis.trend_direction}\n"
+                                        f"Confidence: {flip_analysis.weighted_confidence:.0f}%\n"
+                                        f"Alignment: {flip_analysis.alignment_status}\n"
+                                        f"Reason: {flip_analysis.reason}"
+                                    )
+                        except Exception as mtf_err:
+                            logger.debug(f"Auto-flip context error for {symbol}: {mtf_err}")
+                
+                except Exception as autoflip_err:
+                    logger.debug(f"Auto-flip check skipped for {symbol}: {autoflip_err}")
             
             # ⚠️ LEGACY SL/TP MANAGEMENT DISABLED - Trailing TP handles all protection
             # add_sl_tp_protection is now superseded by Trailing TP system below
