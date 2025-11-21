@@ -161,9 +161,9 @@ class TradeStateManager:
             return {"ok": False, "state": "INIT", "error": "tp_failed", "detail": tp}
 
         self.state.name = "ACTIVE"
-        self.state.entry_order_id = str(entry.get("orderId") or entry.get("response", {}).get("orderId") or "")
-        self.state.sl_order_id    = str(sl.get("orderId")    or sl.get("response", {}).get("orderId")    or "")
-        self.state.tp_order_id    = str(tp.get("orderId")    or tp.get("response", {}).get("orderId")    or "")
+        self.state.entry_order_id = str(entry.get("order_id") or entry.get("response", {}).get("order_id") or "")
+        self.state.sl_order_id    = str(sl.get("order_id")    or sl.get("response", {}).get("order_id")    or "")
+        self.state.tp_order_id    = str(tp.get("order_id")    or tp.get("response", {}).get("order_id")    or "")
         self.state.last_action_ts = time.time()
 
         return {"ok": True, "state": "ACTIVE", "entry": entry, "sl": sl, "tp": tp, "hygiene_impl": _HAS_HYGIENE}

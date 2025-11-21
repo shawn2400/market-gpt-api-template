@@ -112,7 +112,7 @@ def prune_conflicting(client, symbol: str) -> None:
             t = str(o.get("type") or "")
             if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
                 try:
-                    client.futures_cancel_order(symbol=symbol, order_id=o.get("orderId"))
+                    client.futures_cancel_order(symbol=symbol, order_id=o.get("order_id"))
                 except Exception as e:
                     continue  # Silently skip - order may already be filled/canceled
     except Exception:
@@ -219,7 +219,7 @@ def move_sl_stop(*, client, symbol: str, side_txt: str,
                     except Exception:
                         pass
                     try:
-                        client.futures_cancel_order(symbol=symbol, order_id=o.get("orderId"))
+                        client.futures_cancel_order(symbol=symbol, order_id=o.get("order_id"))
                         canceled += 1
                     except Exception as e:
                         # Silently skip - order may already be filled/canceled
@@ -351,7 +351,7 @@ def fetch_reduce_only_limits(client, symbol: str):
                     out.append({
                         "price": float(o.get("price")),
                         "side": str(o.get("side")),
-                        "orderId": o.get("orderId"),
+                        "order_id": o.get("order_id"),
                         "origQty": float(o.get("origQty") or o.get("origqty") or 0.0),
                     })
                 except Exception:
@@ -374,7 +374,7 @@ def maybe_merge_close_tps(client, symbol: str, *, tick: float, tick_band: int) -
         a, b = ro[i], ro[i + 1]
         if abs(a["price"] - b["price"]) <= band and a["side"] == b["side"]:
             try:
-                client.futures_cancel_order(symbol=symbol, order_id=b["orderId"])
+                client.futures_cancel_order(symbol=symbol, order_id=b["order_id"])
             except Exception:
                 i += 1
                 continue
@@ -425,7 +425,7 @@ def maybe_rearm_on_bounce(client, symbol: str, *, side_txt: str,
             already_there = any(abs(p - tgt) <= band for p in existing_prices)
             if close_enough and (not already_there):
                 try:
-                    client.futures_create_order(
+                    oid_to_place = client.futures_create_order(
                         symbol=symbol,
                         side=("SELL" if side_txt.upper() == "BUY" else "BUY"),
                         type="LIMIT",

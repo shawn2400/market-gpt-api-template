@@ -281,9 +281,9 @@ def _cancel_stops(cli, symbol: str, keep_order_id: Optional[int], kinds=("STOP",
     for o in _active_orders(cli, symbol):
         typ=(o.get("type") or "").upper()
         if any(k in typ for k in kinds):
-            if keep_order_id is None or o.get("orderId")!=keep_order_id:
+            if keep_order_id is None or o.get("order_id")!=keep_order_id:
                 with suppress(Exception):
-                    cli.futures_cancel_order(symbol=symbol.upper(), orderId=o["orderId"]); n+=1
+                    cli.futures_cancel_order(symbol=symbol.upper(), order_id=o["order_id"]); n+=1
     return n
 
 # =========================
@@ -411,16 +411,16 @@ def ensure_protective_stop(symbol: str, prefer_mode: Optional[str] = None) -> Di
 
     # Verify
     after = _active_orders(cli, symbol)
-    found = any(o.get("orderId")==new_ord.get("orderId") and (o.get("status") or "").upper()=="NEW" for o in after)
+    found = any(o.get("order_id")==new_ord.get("order_id") and (o.get("status") or "").upper()=="NEW" for o in after)
     if not found:
         return {"ok": False, "symbol": symbol, "mode": mode, "actions":[{"verify_failed": True}]}
 
     # Cancel old stops (excluding the new one)
-    cancelled = _cancel_stops(cli, symbol, keep_order_id=new_ord.get("orderId"))
+    cancelled = _cancel_stops(cli, symbol, keep_order_id=new_ord.get("order_id"))
     return {
         "ok": True, "symbol": symbol, "mode": mode,
         "actions": [
-            {"placed_new_stop": {"orderId": new_ord.get("orderId"), "stopPrice": target_px, "qty": (qty_cover if mode=='quantities' else None), "reason": reason, "positionSide": pos_side}},
+            {"placed_new_stop": {"order_id": new_ord.get("order_id"), "stopPrice": target_px, "qty": (qty_cover if mode=='quantities' else None), "reason": reason, "positionSide": pos_side}},
             {"cancelled_old_stops": cancelled},
         ]
     }

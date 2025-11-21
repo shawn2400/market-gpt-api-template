@@ -92,7 +92,7 @@ def _cancel_reduce_only(sym: str):
     try:
         for od in cli.futures_get_open_orders(symbol=sym):
             if str(od.get("reduceOnly")).lower()=="true":
-                try: cli.futures_cancel_order(symbol=sym, orderId=od["orderId"])
+                try: cli.futures_cancel_order(symbol=sym, order_id=od["order_id"])
                 except: pass
     except: pass
 
@@ -103,7 +103,7 @@ def _current_be_sl(sym: str):
             if t in ("STOP","STOP_MARKET") and str(o.get("closePosition","false")).lower()=="true":
                 return float(o.get("stopPrice") or 0.0)
     except: pass
-    return None
+    return 0.0
 
 def _place_be(sym: str, long: bool, entry: float, tick: float):
     mult=1.0+(BE_BPS/10000.0)
@@ -115,7 +115,7 @@ def _place_be(sym: str, long: bool, entry: float, tick: float):
     try:
         for o in cli.futures_get_open_orders(symbol=sym):
             if str(o.get("type","")).upper() in ("STOP","STOP_MARKET") and str(o.get("closePosition","false")).lower()=="true":
-                try: cli.futures_cancel_order(symbol=sym, orderId=o["orderId"])
+                try: cli.futures_cancel_order(symbol=sym, order_id=o["order_id"])
                 except: pass
         cli.futures_create_order(
             symbol=sym, side=("SELL" if long else "BUY"),
@@ -194,7 +194,7 @@ def main():
                     try:
                         for o in cli.futures_get_open_orders(symbol=SYM):
                             if str(o.get("type","")).upper() in ("STOP","STOP_MARKET") and str(o.get("closePosition","false")).lower()=="true":
-                                try: cli.futures_cancel_order(symbol=SYM, orderId=o["orderId"])
+                                try: cli.futures_cancel_order(symbol=SYM, order_id=o["order_id"])
                                 except: pass
                         cli.futures_create_order(
                             symbol=SYM, side=("SELL" if long else "BUY"),

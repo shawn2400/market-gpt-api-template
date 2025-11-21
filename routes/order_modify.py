@@ -87,7 +87,7 @@ def update_order(req: UpdateOrderReq = Body(...)) -> Dict[str, Any]:
         try:
             oo = get_open_orders(sym)
             for o in oo:
-                if (req.orderId and o.get("orderId") == req.orderId) or \
+                if (req.orderId and o.get("order_id") == req.orderId) or \
                    (req.clientId and o.get("clientOrderId") == req.clientId):
                     qty = o.get("origQty") or o.get("quantity")
                     if not old_trigger:
@@ -151,11 +151,11 @@ def update_order(req: UpdateOrderReq = Body(...)) -> Dict[str, Any]:
     return {
         "ok": True,
         "symbol": sym,
-        "orderId_prev": req.orderId,
-        "clientId_prev": req.clientId,
+        "order_id_prev": req.orderId,
+        "client_id_prev": req.clientId,
         "replaced": kind,
         "new_trigger": float(req.new_price),
-        "response": {k: resp.get(k) for k in ("orderId", "clientOrderId", "type", "side", "status", "stopPrice", "origQty") if isinstance(resp, dict)},
+        "response": {k: resp.get(k) for k in ("order_id", "clientOrderId", "type", "side", "status", "stopPrice", "origQty") if isinstance(resp, dict)},
     }
 
 
