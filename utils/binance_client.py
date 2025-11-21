@@ -1262,26 +1262,27 @@ def _validate_sltp_logic(symbol: str, side: str, entry: float, sl: Optional[floa
     
     Returns:
         (is_valid, reason_str)
+    
+    ✅ FIXED: Allows SL to move above entry for LONG (profit locking/trailing stop)
+    and below entry for SHORT (profit locking/trailing stop)
     """
     if entry <= 0:
         return False, f"Entry {entry:.8f} invalid (≤ 0)"
     
     if side == "LONG":
-        # LONG: SL < entry < TP
-        if sl and sl >= entry:
-            return False, f"LONG SL={sl:.8f} must be < entry={entry:.8f}"
-        if tp and tp <= entry:
-            return False, f"LONG TP={tp:.8f} must be > entry={entry:.8f}"
+        # LONG: SL can move from below entry UP TO ABOVE entry (profit locking)
+        # Only require: SL > 0 (positive price)
         if sl and sl <= 0:
             return False, f"LONG SL={sl:.8f} must be > 0"
+        if tp and tp <= entry:
+            return False, f"LONG TP={tp:.8f} must be > entry={entry:.8f}"
     
     elif side == "SHORT":
-        # SHORT: TP < entry < SL
-        if sl and sl <= entry:
-            return False, f"SHORT SL={sl:.8f} must be > entry={entry:.8f}"
+        # SHORT: SL can move from above entry DOWN TO BELOW entry (profit locking)
+        # Only require: SL > 0 (positive price)
+        if sl and sl <= 0:
+            return False, f"SHORT SL={sl:.8f} must be > 0"
         if tp and tp >= entry:
             return False, f"SHORT TP={tp:.8f} must be < entry={entry:.8f}"
-        if tp and tp <= 0:
-            return False, f"SHORT TP={tp:.8f} must be > 0"
     
     return True, "✅ Valid"
