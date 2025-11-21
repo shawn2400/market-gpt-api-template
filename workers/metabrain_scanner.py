@@ -27,7 +27,6 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from utils.metabrain_orchestrator import get_metabrain_orchestrator
 from utils.watchlist_utils import load_watchlist
-from utils.telegram_digest import send_alert_immediate
 
 logger = logging.getLogger("metabrain_scanner")
 logging.basicConfig(
@@ -67,10 +66,11 @@ class MetaBrainScanner:
         self.logger.info(f"⚙️ Config: {SYMBOLS_PER_CYCLE} symbols/cycle, {SCAN_INTERVAL_SEC}s interval")
     
     async def get_market_data(self, symbol: str) -> Dict[str, Any]:
-        """Fetch market data for symbol from Binance API context endpoint."""
+        """Fetch market data for symbol from Binance API."""
         try:
-            from utils.binance_client import futures_get_ticker
-            ticker = futures_get_ticker(symbol)
+            from utils.binance_client import get_client
+            client = get_client()
+            ticker = client.futures_symbol_ticker(symbol=symbol)
             return {
                 "symbol": symbol,
                 "price": float(ticker.get("lastPrice", 0)),
@@ -89,8 +89,9 @@ class MetaBrainScanner:
     async def get_wallet_state(self) -> Dict[str, Any]:
         """Get wallet state from Binance Futures API."""
         try:
-            from utils.binance_client import futures_account
-            account = futures_account()
+            from utils.binance_client import get_client
+            client = get_client()
+            account = client.futures_account()
             total = float(account.get("totalWalletBalance", 0))
             available = float(account.get("availableBalance", 0))
             return {
@@ -265,7 +266,7 @@ class MetaBrainScanner:
             
             # Get next batch of symbols
             end_index = self.symbol_index + SYMBOLS_PER_CYCLE
-            batch = symbols[self.symbol_index:end_index]
+            batch: List[str] = [str(s) for s in symbols[self.symbol_index:end_index]]
             
             # Wrap around if we reach the end
             if end_index >= len(symbols):
