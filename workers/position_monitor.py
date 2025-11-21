@@ -260,7 +260,8 @@ async def ensure_positions_protected() -> None:
             try:
                 dual_positions = hedge_manager.detect_dual_positions(positions)
                 if dual_positions and isinstance(dual_positions, dict) and len(dual_positions) > 0:
-                    logger.warning(f"🚨 Detected {len(dual_positions)} dual position(s): {', '.join(str(k) for k in dual_positions.keys())}")
+                    dp_keys = list(dual_positions.keys()) if isinstance(dual_positions, dict) else []
+                    logger.warning(f"🚨 Detected {len(dp_keys)} dual position(s): {', '.join(str(k) for k in dp_keys)}")
                     
                     for symbol, sides in dual_positions.items():
                         # Resolve using "close_weaker" strategy

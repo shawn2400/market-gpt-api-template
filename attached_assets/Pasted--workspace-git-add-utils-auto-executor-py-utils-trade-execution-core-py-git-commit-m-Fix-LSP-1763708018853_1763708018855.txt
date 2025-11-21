@@ -1,0 +1,77 @@
+~/workspace$ git add utils/auto_executor.py utils/trade_execution_core.py
+git commit -m "🔧 Fix LSP Type Hints: pre_trade_risk_check, _build_dynamic_policy, _balance_usdt"
+git push
+On branch main
+Your branch is ahead of 'origin/main' by 4 commits.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+    modified:   data/ai_tracking/predictions.jsonl
+    modified:   static/cache/ws_prices.json
+
+no changes added to commit (use "git add" and/or "git commit -a")
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ git add utils/ workers/
+git commit -m "✅ Trade System Type Safety Improvements
+
+- Fixed auto_executor.py risk_checker signature
+- Updated dynamic_policy return types  
+- Enhanced balance_usdt null safety
+- Improved trade_execution_core type hints"
+git push
+On branch main
+Your branch is ahead of 'origin/main' by 4 commits.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+    modified:   data/ai_tracking/predictions.jsonl
+    modified:   static/cache/ws_prices.json
+
+no changes added to commit (use "git add" and/or "git commit -a")
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ git add utils/ workers/
+git commit -m "✅ Trade System Type Safety Improvements
+
+- Fixed auto_executor.py risk_checker signature
+- Updated dynamic_policy return types  
+- Enhanced balance_usdt null safety
+- Improved trade_execution_core type hints"
+git push
+On branch main
+Your branch is ahead of 'origin/main' by 4 commits.
+  (use "git push" to publish your local commits)
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+    modified:   data/ai_tracking/predictions.jsonl
+    modified:   static/cache/ws_prices.json
+
+no changes added to commit (use "git add" and/or "git commit -a")
+To https://github.com/shawn2400/market-gpt-api-template
+ ! [rejected]        main -> main (fetch first)
+error: failed to push some refs to 'https://github.com/shawn2400/market-gpt-api-template'
+hint: Updates were rejected because the remote contains work that you do not
+hint: have locally. This is usually caused by another repository pushing to
+hint: the same ref. If you want to integrate the remote changes, use
+hint: 'git pull' before pushing again.
+hint: See the 'Note about fast-forwards' in 'git push --help' for details.
+~/workspace$ 

@@ -783,10 +783,10 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                     timeInForce="GTC", stopPrice=stop_str, price=stop_str, quantity=qty_str, **order_common_open)
     if coid_stp: stp_args["newClientOrderId"] = coid_stp
 
-    lim = futures_create_order(**lim_args)
-    lim_id = str(lim.get("orderId") or "")
-    stp = futures_create_order(**stp_args)
-    stp_id = str(stp.get("orderId") or "")
+    lim = await asyncio.to_thread(futures_create_order, **lim_args)
+    lim_id = str(lim.get("orderId") or "") if isinstance(lim, dict) else ""
+    stp = await asyncio.to_thread(futures_create_order, **stp_args)
+    stp_id = str(stp.get("orderId") or "") if isinstance(stp, dict) else ""
 
     def _is_filled(oid: str) -> Tuple[bool, Optional[float]]:
         try:
@@ -828,14 +828,17 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
             return {"ok": True, "entry_kind": "STOP", "price": stp_fill_px or stop_p, "sanity_bps": None, "sanity_ok": True, "order": stp}
 
         if time.time() - t0 >= float(pol["escalate_after_s"]):
-            cur = get_price(sym) or futures_mark_price(sym) or base_price
-            slip_bps = abs(cur - limit_p) / max(limit_p, 1e-9) * 10000.0
+            cur_price = get_price(sym) or futures_mark_price(sym) or base_price
+            if cur_price is None:
+                cur_price = base_price
+            slip_bps = abs(float(cur_price) - float(limit_p)) / max(float(limit_p), 1e-9) * 10000.0
             gate = _quality_gate(sym, side)
             justified = (gate.get("enter_ok") is True) and (slip_bps >= float(pol["escalate_slip_bps"]))
             if ALLOW_MARKET_ENTRY and justified:
                 for oid in (lim_id, stp_id):
                     try:
-                        if oid: futures_cancel_order(sym, oid)
+                        if oid: 
+                            await asyncio.to_thread(futures_cancel_order, sym, oid)
                     except Exception: pass
                 order_common_mkt: Dict[str, Any] = {}
                 if is_hedge:
@@ -843,7 +846,7 @@ async def _place_hybrid_entry(sym: str, side: str, qty: float, base_price: float
                 mkt_args = dict(symbol=sym, side=side, type="MARKET", quantity=qty_str, **order_common_mkt)
                 coid_mkt = _new_coid("OPEN_MKT") or None
                 if coid_mkt: mkt_args["newClientOrderId"] = coid_mkt
-                mkt = futures_create_order(**mkt_args)
+                mkt = await asyncio.to_thread(futures_create_order, **mkt_args)
                 mk = get_price(sym) or futures_mark_price(sym) or cur
                 bps = abs((cur or 0) - (mk or 0)) / max(mk or 1e-9, 1e-9) * 10000.0 if mk and cur else None
                 return {"ok": True, "entry_kind": "MARKET_ESCALATE", "price": float(cur), "sanity_bps": bps, "sanity_ok": (bps is None) or (bps <= POST_FILL_SANITY_BPS), "order": mkt}

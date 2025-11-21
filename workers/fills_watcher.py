@@ -24,10 +24,20 @@ except Exception:
         pass
 
 # Import Multi-Target TP for dynamic TP extension
+TP_EXTENSION_AVAILABLE = False
+get_multi_target_tp = None
+futures_create_order = None
+get_klines = None
+BinanceSymbolValidator = None
+
 try:
-    from utils.multi_target_tp import get_multi_target_tp
-    from utils.binance_client import futures_create_order, get_klines
-    from utils.binance_symbol_validator import BinanceSymbolValidator
+    from utils.multi_target_tp import get_multi_target_tp as _gtp
+    from utils.binance_client import futures_create_order as _fco, get_klines as _gk
+    from utils.binance_symbol_validator import BinanceSymbolValidator as _bsv
+    get_multi_target_tp = _gtp
+    futures_create_order = _fco
+    get_klines = _gk
+    BinanceSymbolValidator = _bsv
     TP_EXTENSION_AVAILABLE = True
 except Exception as e:
     log.debug(f"TP Extension unavailable: {e}")
