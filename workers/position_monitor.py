@@ -263,9 +263,9 @@ async def ensure_positions_protected() -> None:
                     dp_keys = list(dual_positions.keys()) if isinstance(dual_positions, dict) else []
                     logger.warning(f"🚨 Detected {len(dp_keys)} dual position(s): {', '.join(str(k) for k in dp_keys)}")
                     
-                    for symbol, sides in dual_positions.items():
+                    for symbol, sides in (dual_positions.items() if isinstance(dual_positions, dict) else []):  # type: ignore
                         # Resolve using "close_weaker" strategy
-                        result = hedge_manager.resolve_dual_position(
+                        result = hedge_manager.resolve_dual_position(  # type: ignore
                             symbol=symbol,
                             sides=sides,
                             strategy="close_weaker"  # Close leg with worse PnL

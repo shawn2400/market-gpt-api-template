@@ -537,7 +537,7 @@ def _update_trailing_sl(symbol: str, current_price: float, entry_price: float, r
             except Exception as e:
                 log.debug(f"Failed to send trailing SL notification: {e}")
         else:
-            log.warning(f"❌ Failed to update trailing SL: {result.get('error')}")
+            log.warning(f"❌ Failed to update trailing SL: {result_dict.get('error')}")
     
     except Exception as e:
         log.error(f"❌ Failed to update trailing SL for {symbol}: {e}", exc_info=True)
@@ -1252,14 +1252,15 @@ class _FillsWatcherThread(threading.Thread):
                 try:
                     # Get recent fills (last 5 minutes)
                     recent_fills = get_recent_fills(symbol, limit=20, lookback_seconds=300)  # type: ignore
+                    recent_fills_list = list(recent_fills) if recent_fills else []  # type: ignore
                     
-                    if not recent_fills:  # type: ignore
+                    if not recent_fills_list:  # type: ignore
                         continue
                     
-                    fills_checked += len(recent_fills)
+                    fills_checked += len(recent_fills_list)  # type: ignore
                     
                     # Process each fill
-                    for fill in recent_fills:
+                    for fill in recent_fills_list:  # type: ignore
                         client_order_id = fill.get("clientOrderId") or fill.get("origClientOrderId")
                         
                         if not client_order_id:

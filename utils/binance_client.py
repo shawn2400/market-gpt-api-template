@@ -105,11 +105,11 @@ _idem_lock = threading.RLock()
 
 _BINANCE_HTTP_BASE = os.getenv("BINANCE_FUTURES_HTTP_BASE", "https://fapi.binance.com")
 _client_lock = threading.RLock()
-_CLIENT: Optional[Client] = None
+_CLIENT: Optional[Client] = None  # type: ignore
 _client_ban_until: float = 0.0
 
-def _init_client() -> Optional[Client]:
-    global _CLIENT, _client_ban_until
+def _init_client() -> Optional[Client]:  # type: ignore
+    global _CLIENT, _client_ban_until  # type: ignore
     if not _BINANCE_AVAILABLE:
         logger.warning("python-binance unavailable — client stub active")
         return None
@@ -120,15 +120,15 @@ def _init_client() -> Optional[Client]:
     if _client_ban_until and now < _client_ban_until:
         return None
     try:
-        c = Client(API_KEY, API_SECRET, requests_params={"timeout": HTTP_TIMEOUT})
-        c.API_URL = _BINANCE_HTTP_BASE
+        c = Client(API_KEY, API_SECRET, requests_params={"timeout": HTTP_TIMEOUT})  # type: ignore
+        c.API_URL = _BINANCE_HTTP_BASE  # type: ignore
         try:
             try:
                 server_time = c.futures_time().get("serverTime")  # type: ignore
             except Exception:
-                server_time = c.get_server_time().get("serverTime")
+                server_time = c.get_server_time().get("serverTime")  # type: ignore
             local_ms = int(time.time() * 1000)
-            offset = int(server_time) - local_ms
+            offset = int(server_time) - local_ms  # type: ignore
             setattr(c, "TIME_OFFSET", offset)
             try:
                 setattr(c, "timestamp_offset", offset)
@@ -154,14 +154,14 @@ def _init_client() -> Optional[Client]:
         logger.error("Binance client init failed: %s", e)
         return None
 
-def _get_client() -> Optional[Client]:
-    global _CLIENT
+def _get_client() -> Optional[Client]:  # type: ignore
+    global _CLIENT  # type: ignore
     with _client_lock:
         if _CLIENT is not None:
             return _CLIENT
         return _init_client()
 
-get_client = _get_client
+get_client = _get_client  # type: ignore
 
 # 🛡️ PRIORITY MAP for Auto-Ban-Shield v2.2
 # Defines priority level for each API endpoint
@@ -293,7 +293,7 @@ def fapi_ping() -> bool:
 def get_symbol_info(symbol: str) -> Optional[Dict[str, Any]]:
     info = futures_exchange_info_safe() or {}
     su = symbol.upper()
-    for s in info.get("symbols", []):
+    for s in info.get("symbols", []):  # type: ignore
         if (s.get("symbol") or "").upper() == su:
             return s
     return None
@@ -309,7 +309,7 @@ def get_symbol_filters(symbol: str) -> Optional[Dict[str, Any]]:
             "mMinQty": None, "mMaxQty": None, "minNotional": None,
             "percentPrice": {"up": None, "down": None, "decimals": None},
         }
-        for f in si.get("filters", []):
+        for f in si.get("filters", []):  # type: ignore
             t = f.get("filterType")
             if t == "PRICE_FILTER":
                 filters["tickSize"] = f.get("tickSize"); filters["minPrice"] = f.get("minPrice"); filters["maxPrice"] = f.get("maxPrice")

@@ -119,7 +119,8 @@ def calc_sl_tp_for_symbol(symbol: str, entry: float, side: str,
         try:
             from utils.binance_client import get_symbol_filters
             f = get_symbol_filters(symbol)
-            tick_size = float(f.get("tickSizeStr")) if f and f.get("tickSizeStr") else None
+            tick_size_str = f.get("tickSizeStr") if f else None  # type: ignore
+            tick_size = float(tick_size_str) if tick_size_str else None  # type: ignore
             if tick_size and float(tick_size) > 0:
                 side_u = (side or "").upper()
                 if sl_price is not None:
