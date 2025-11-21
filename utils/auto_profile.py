@@ -128,10 +128,18 @@ def correlation_guard(beta: float) -> Tuple[bool, str]:
     return True, "ok"
 
 def should_allow_trade(sym: str, *, beta: float = 1.0) -> Tuple[bool, str, str]:
-    ok, rsn = daily_loss_guard(sym);       if not ok: return False, "daily", rsn
-    ok, rsn = drawdown_guard(sym);         if not ok: return False, "drawdown", rsn
-    ok, rsn = session_rule_guard();        if not ok: return False, "session", rsn
-    ok, rsn = correlation_guard(beta);     if not ok: return False, "correlation", rsn
+    ok, rsn = daily_loss_guard(sym)
+    if not ok:
+        return False, "daily", rsn
+    ok, rsn = drawdown_guard(sym)
+    if not ok:
+        return False, "drawdown", rsn
+    ok, rsn = session_rule_guard()
+    if not ok:
+        return False, "session", rsn
+    ok, rsn = correlation_guard(beta)
+    if not ok:
+        return False, "correlation", rsn
     return True, "ok", "ok"
 
 
