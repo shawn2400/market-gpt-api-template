@@ -1292,17 +1292,19 @@ class _FillsWatcherThread(threading.Thread):
                             )
                             
                             if protection_result and protection_result.get("ok"):
-                            log.info(f"✅ [{trade_type}] SL/TP protection applied: {symbol}")
-                            fills_protected += 1
-                            
-                            # Mark as processed
-                            self.processed_client_order_ids.add(client_order_id)
-                            
-                            # Cleanup metadata (TTL will handle it, but we can clean early)
-                            delete_order_metadata(client_order_id)
-                        else:
-                            errors = protection_result.get("errors", [])
-                            log.error(f"❌ [{trade_type}] SL/TP protection FAILED: {symbol} - {errors}")
+                                log.info(f"✅ [{trade_type}] SL/TP protection applied: {symbol}")
+                                fills_protected += 1
+                                
+                                # Mark as processed
+                                self.processed_client_order_ids.add(client_order_id)
+                                
+                                # Cleanup metadata (TTL will handle it, but we can clean early)
+                                delete_order_metadata(client_order_id)
+                            else:
+                                errors = protection_result.get("errors", []) if protection_result else []
+                                log.error(f"❌ [{trade_type}] SL/TP protection FAILED: {symbol} - {errors}")
+                        except Exception as prot_err:
+                            log.error(f"❌ Protection exception for {symbol}: {prot_err}")
                         
                 except Exception as symbol_err:
                     log.error(f"Failed to process fills for {symbol}: {symbol_err}", exc_info=True)
