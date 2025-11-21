@@ -1,7 +1,7 @@
 # scan_runner.py
 import requests, time, logging
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=os.getenv("LOG_LEVEL","WARNING").upper(), format="%(asctime)s [%(levelname)s] %(message)s")
 BASE_URL = "https://algogpt-docker.onrender.com"
 
 def find_best_trades(top=25):

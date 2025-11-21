@@ -7,7 +7,7 @@ import logging
 # Logging Setup (CRITICAL for debugging production crashes)
 # =========================
 logging.basicConfig(
-    level=logging.INFO,
+    level=os.getenv("LOG_LEVEL","WARNING").upper(),
     format='[%(asctime)s] [%(process)d] [%(levelname)s] %(message)s',
     datefmt='%Y-%m-%d %H:%M:%S',
     stream=sys.stdout

@@ -8,7 +8,7 @@ from utils.ws_fallback import get_price_smart
 from utils.ai_analysis import predict_optimal_sl_tp
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
+logging.basicConfig(level=os.getenv("LOG_LEVEL","WARNING").upper(), format="%(asctime)s [%(levelname)s] %(message)s")
 
 MAX_OPEN_TRADES = 4
 
