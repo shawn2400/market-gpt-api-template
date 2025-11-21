@@ -1913,7 +1913,7 @@ async def propose_spot(symbol: str, ctx: Dict[str, Any], success_floor: float) -
         "trade_id": f"s{int(time.time())}{random.randint(100,999)}",
         "trade_type": "SPOT",
         "symbol": symbol,
-        "side": "LONG",
+        "side": prop.get("side") or prop.get("direction") or "LONG",
         "current_price": float(price or 0.0),
         "entry": float(prop["entry"]), "sl": float(prop["sl"]),
         "tp1": float(prop["tp1"]),
