@@ -397,10 +397,9 @@ async def attach_multi_target_protection(
                 # 🛡️ CRITICAL FIX: Ensure minimum distance from current price to prevent APIError -2021 "Order would immediately trigger"
                 # Get current price and ensure TP is at least 0.05% away
                 try:
-                    from utils.binance_client import get_symbol_ticker
-                    current_price_data = get_symbol_ticker(symbol)
-                    if current_price_data:
-                        current_price = float(current_price_data.get("price", entry_price))
+                    from utils.binance_client import get_price
+                    current_price = get_price(symbol)
+                    if current_price and current_price > 0:
                         min_distance_pct = 0.0005  # 0.05% minimum distance
                         if side == "LONG" and tp_price_rounded <= current_price * (1 + min_distance_pct):
                             # For LONG, TP must be higher
