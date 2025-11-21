@@ -32,7 +32,11 @@ BinanceSymbolValidator = None
 
 try:
     from utils.multi_target_tp import get_multi_target_tp as _gtp
-    from utils.binance_client import futures_create_order as _fco, get_klines as _gk
+    from utils.binance_client import futures_create_order as _fco
+    try:
+        from utils.binance_client import get_klines as _gk
+    except ImportError:
+        _gk = None  # type: ignore
     from utils.binance_symbol_validator import BinanceSymbolValidator as _bsv
     get_multi_target_tp = _gtp
     futures_create_order = _fco

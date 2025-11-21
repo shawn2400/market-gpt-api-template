@@ -705,7 +705,7 @@ class ExecutionBot:
                 # ⏱️ Track LIMIT orders for timeout monitoring
                 if order_type == "LIMIT" and self._timeout_monitor and order:
                     try:
-                        order_id = order.get("orderId")
+                        order_id = order.get("orderId")  # type: ignore
                         if order_id:
                             self._timeout_monitor.track_order(
                                 order_id=order_id,
@@ -767,7 +767,7 @@ class ExecutionBot:
                                 f"✅ Multi-Target TP protection attached for {symbol}:\n"
                                 f"   SL: 1 order\n"
                                 f"   TP: {len(tp_orders)} orders (TP1/TP2/TP3)\n"
-                                f"   RR Ratio: {tp_config['risk_reward_ratio']:.1f}"
+                                f"   RR Ratio: {tp_config.get('risk_reward_ratio', 0):.1f}"  # type: ignore
                             )
                         else:
                             sltp_failed = True
@@ -881,7 +881,7 @@ class ExecutionBot:
                     position_side = retry_kwargs.get("positionSide") or ("LONG" if side == "BUY" else "SHORT")
                     
                     try:
-                        entry_price_actual = float(order.get("avgPrice") or order.get("price") or ticket.get("price") or 0)
+                        entry_price_actual = float(order.get("avgPrice") or order.get("price") or ticket.get("price") or 0)  # type: ignore
                         if entry_price_actual <= 0:
                             from utils.binance_client import get_price
                             entry_price_actual = get_price(symbol) or 0
