@@ -778,8 +778,15 @@ async def ensure_positions_protected() -> None:
                                     futures_cancel_all_orders(symbol)
                                     close_side = "SELL" if position_side == "LONG" else "BUY"
                                     
-                                    # 🛡️ FIX: Validate SL price before placing (prevents APIError -4006)
+                                    # 🛡️ FIX: Enforce breakeven floor - Trailing SL CANNOT go below entry price
                                     sl_price_to_place = current_sl or new_sl
+                                    
+                                    # Prevent trailing SL from violating breakeven protection
+                                    if position_side == "LONG":
+                                        sl_price_to_place = max(sl_price_to_place, entry_price)  # LONG: SL >= entry_price (don't go below entry)
+                                    else:  # SHORT
+                                        sl_price_to_place = min(sl_price_to_place, entry_price)  # SHORT: SL <= entry_price (don't go above entry)
+                                    
                                     if sl_price_to_place and sl_price_to_place > 0:
                                         sl_order = futures_create_order(
                                             symbol=symbol,
@@ -793,7 +800,7 @@ async def ensure_positions_protected() -> None:
                                     else:
                                         logger.warning(f"⚠️ {symbol}: Trailing SL skipped - price invalid ({sl_price_to_place})")
                                     
-                                    profit_from_entry = ((current_sl or new_sl) - entry_price) / entry_price * 100 if position_side == "LONG" else (entry_price - (current_sl or new_sl)) / entry_price * 100
+                                    profit_from_entry = (sl_price_to_place - entry_price) / entry_price * 100 if position_side == "LONG" else (entry_price - sl_price_to_place) / entry_price * 100
                                     
                                     logger.info(
                                         f"📈 {symbol} {position_side}: Trailing SL @ {current_sl or new_sl:.8f} "
