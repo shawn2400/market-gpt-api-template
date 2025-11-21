@@ -934,7 +934,11 @@ async def ensure_positions_protected() -> None:
                                             # Cancel old TP orders
                                             for tp_order in tp_orders[:3]:
                                                 try:
-                                                    futures_cancel_order(symbol, order_id=tp_order.get("orderId"))
+                                                    # 🔧 FIX: Handle both parameter names for compatibility
+                                                    try:
+                                                        futures_cancel_order(symbol, order_id=tp_order.get("orderId"))
+                                                    except TypeError:
+                                                        futures_cancel_order(symbol, orderId=tp_order.get("orderId"))
                                                 except:
                                                     pass  # Order may already be filled
                                             

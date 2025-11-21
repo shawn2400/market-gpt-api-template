@@ -112,7 +112,11 @@ def prune_conflicting(client, symbol: str) -> None:
             t = str(o.get("type") or "")
             if t in ("STOP", "STOP_MARKET", "TRAILING_STOP_MARKET"):
                 try:
-                    client.futures_cancel_order(symbol=symbol, order_id=o.get("order_id"))
+                    # 🔧 FIX: Handle both parameter names for compatibility
+                    try:
+                        client.futures_cancel_order(symbol=symbol, order_id=o.get("order_id") or o.get("orderId"))
+                    except TypeError:
+                        client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
                 except Exception as e:
                     continue  # Silently skip - order may already be filled/canceled
     except Exception:
@@ -219,7 +223,11 @@ def move_sl_stop(*, client, symbol: str, side_txt: str,
                     except Exception:
                         pass
                     try:
-                        client.futures_cancel_order(symbol=symbol, order_id=o.get("order_id"))
+                        # 🔧 FIX: Handle both parameter names for compatibility
+                        try:
+                            client.futures_cancel_order(symbol=symbol, order_id=o.get("order_id") or o.get("orderId"))
+                        except TypeError:
+                            client.futures_cancel_order(symbol=symbol, orderId=o.get("orderId"))
                         canceled += 1
                     except Exception as e:
                         # Silently skip - order may already be filled/canceled
@@ -496,7 +504,11 @@ def anti_stale_nudge(client, symbol: str, *, side_txt: str,
                         reduceOnly=True,
                     )
                     try:
-                        client.futures_cancel_order(symbol=symbol, order_id=o["orderId"])
+                        # 🔧 FIX: Handle both parameter names for compatibility
+                        try:
+                            client.futures_cancel_order(symbol=symbol, order_id=o["orderId"])
+                        except TypeError:
+                            client.futures_cancel_order(symbol=symbol, orderId=o["orderId"])
                     except Exception:
                         pass  # Order may already be filled/canceled
                     moved += 1
