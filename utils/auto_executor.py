@@ -30,7 +30,7 @@ try:
     from utils.risk_checker import pre_trade_risk_check, RISK_CHECK_ENABLE
 except Exception:
     RISK_CHECK_ENABLE = False
-    def pre_trade_risk_check(*args, **kwargs):  # type: ignore
+    def pre_trade_risk_check(*args: Any, **kwargs: Any) -> Dict[str, Any]:  # type: ignore
         return {"ok": True, "score": 100.0, "reasons": ["risk_module_missing"], "metrics": {}}
 
 # ✅ אישורים — ConfirmStore מגיע מ־trade_executor כדי להיות אחיד מול ה-webhook
@@ -388,7 +388,7 @@ def _estimate_profit_lock_pct(adx_now: float, atr_pct: float, mom_pct: float) ->
     return round(out * 100.0, 2)
 
 # ─────────── Dynamic policy builder ───────────
-def _build_dynamic_policy(symbol: str) -> Dict[str, float]:
+def _build_dynamic_policy(symbol: str) -> Dict[str, Any]:
     if not DYNAMIC_POLICY_ENABLE:
         return {
             "entry_bps": ENTRY_BAND_BPS_FALLBK,
@@ -559,7 +559,7 @@ async def send_confirm_request(chat_id: int, title: str, summary_html: str, cid:
         except Exception: return {"ok": False, "error": f"http {r.status_code}"}
 
 async def require_approval(chat_id: int, payload: Dict[str, Any]) -> Dict[str, Any]:
-    cid = ConfirmStore.create(chat_id, payload, ttl=CONFIRM_TTL_SEC)
+    cid = ConfirmStore.create(chat_id, payload, CONFIRM_TTL_SEC)
     title = "אישור טרייד"
     summary = (
         f"<b>{payload.get('symbol')}</b> {payload.get('side')}  "
