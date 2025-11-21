@@ -250,11 +250,14 @@ class DynamicBudgetManager:
             
             # Ensure leverage is a valid int
             try:
-                if leverage_value:
+                # Handle case where leverage_value is a dict or other type
+                if isinstance(leverage_value, dict):
+                    lev_float = float(leverage_value.get('leverage', self.leverage_min))
+                elif leverage_value:
                     lev_float = float(leverage_value)
                 else:
                     lev_float = float(self.leverage_min)
-                return int(lev_float)
+                return max(self.leverage_min, min(self.leverage_max, int(lev_float)))
             except (ValueError, TypeError, AttributeError):
                 return self.leverage_min
             
