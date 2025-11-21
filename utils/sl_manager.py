@@ -281,7 +281,14 @@ class ZeroGapSLManager:
                     if order_pos_side and order_pos_side != position_side.upper():
                         continue
                 try:
-                    self.client.futures_cancel_order(symbol=symbol, order_id=oid)
+                    # 🔧 FIX: Use orderId parameter for raw ccxt/binance client, not order_id
+                    # The raw client uses orderId (camelCase), wrapper uses order_id (snake_case)
+                    try:
+                        # Try with order_id (our wrapper)
+                        self.client.futures_cancel_order(symbol=symbol, order_id=oid)
+                    except TypeError:
+                        # Fall back to orderId (raw ccxt)
+                        self.client.futures_cancel_order(symbol=symbol, orderId=oid)
                     cancelled_count += 1
                     log.info(f"[ZeroGapSL] {symbol} cancelled old SL order {oid}")
                 except Exception as e:
