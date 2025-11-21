@@ -325,11 +325,31 @@ class DynamicSLTPManager:
             tp2 = tp2_base / tp_mult
             tp3 = tp3_base / tp_mult
         
+        # 🛡️ CRITICAL: Validate all TP prices are positive (prevent APIError -4001)
+        for tp_idx, tp_val in enumerate([tp1, tp2, tp3]):
+            if tp_val <= 0:
+                self.logger.error(
+                    f"❌ CRITICAL TP validation failed: TP{tp_idx+1}={tp_val:.8f} is ≤ 0! "
+                    f"Entry={entry_price:.8f}, SL={sl_price:.8f}, Side={side}"
+                )
+                # Fallback: Set TPs at 1%, 2%, 3% above/below entry for safety
+                if side == "LONG":
+                    tp1 = entry_price * 1.01
+                    tp2 = entry_price * 1.02
+                    tp3 = entry_price * 1.03
+                else:
+                    tp1 = entry_price * 0.99
+                    tp2 = entry_price * 0.98
+                    tp3 = entry_price * 0.97
+                self.logger.warning(f"🛡️ Using fallback TPs: TP1={tp1:.8f}, TP2={tp2:.8f}, TP3={tp3:.8f}")
+                break
+        
         # Estimate probabilities from Monte Carlo results
         # Find closest ATR multiples
-        tp1_atr_mult = abs(tp1 - entry_price) / atr
-        tp2_atr_mult = abs(tp2 - entry_price) / atr
-        tp3_atr_mult = abs(tp3 - entry_price) / atr
+        atr_safe = max(atr, 0.00001)  # Prevent division by zero
+        tp1_atr_mult = abs(tp1 - entry_price) / atr_safe
+        tp2_atr_mult = abs(tp2 - entry_price) / atr_safe
+        tp3_atr_mult = abs(tp3 - entry_price) / atr_safe
         
         prob1 = self._interpolate_probability(tp1_atr_mult, target_probabilities)
         prob2 = self._interpolate_probability(tp2_atr_mult, target_probabilities)

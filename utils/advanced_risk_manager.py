@@ -243,7 +243,7 @@ class AdvancedRiskManager:
             volatility: Optional pre-calculated volatility
             
         Returns:
-            Stop loss price
+            Stop loss price (always > 0 for Binance compatibility)
         """
         # Determine ATR multiplier
         if volatility is None:
@@ -255,8 +255,16 @@ class AdvancedRiskManager:
         # Calculate SL price
         if position_side == "LONG":
             sl_price = entry_price - sl_distance
+            # 🛡️ CRITICAL: For LONG, SL must be > 0 and < entry_price
+            if sl_price <= 0:
+                sl_price = max(entry_price * 0.98, 0.00001)  # 2% below entry, never negative
+                logger.warning(f"⚠️ LONG SL clamped to {sl_price:.8f} (was negative)")
         else:  # SHORT
             sl_price = entry_price + sl_distance
+            # 🛡️ CRITICAL: For SHORT, SL must be > entry_price (above entry)
+            if sl_price <= entry_price:
+                sl_price = entry_price * 1.02  # 2% above entry for SHORT protection
+                logger.warning(f"⚠️ SHORT SL adjusted to {sl_price:.8f} (must be above entry)")
         
         logger.debug(
             f"Dynamic SL: entry={entry_price:.8f}, atr={atr:.8f}, "

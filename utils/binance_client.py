@@ -1224,3 +1224,56 @@ __all__ = [
 
 
 
+
+# 🛡️ ============= CRITICAL PRICE VALIDATION WRAPPER =============
+def _validate_order_price(symbol: str, price: Optional[float], order_type: str, side: str) -> Optional[float]:
+    """
+    🛡️ CRITICAL: Validate order price before Binance API call.
+    Prevents APIError -4001 (Price less than 0) and -4006 (Stop price less than 0).
+    
+    Returns:
+        - price if valid (> 0)
+        - None if invalid (skip order, log error)
+    """
+    if price is None:
+        return None
+    
+    if price <= 0:
+        logger.error(
+            f"❌ CRITICAL PRICE VALIDATION FAILED: {symbol} {order_type} {side} "
+            f"price={price:.8f} is ≤ 0 - SKIPPING ORDER TO PREVENT API ERROR"
+        )
+        return None
+    
+    return price
+
+# 🛡️ ============= VALIDATE SL/TP LOGIC =============
+def _validate_sltp_logic(symbol: str, side: str, entry: float, sl: Optional[float], tp: Optional[float]) -> Tuple[bool, str]:
+    """
+    🛡️ Validate SL/TP configuration for LONG/SHORT positions.
+    
+    Returns:
+        (is_valid, reason_str)
+    """
+    if entry <= 0:
+        return False, f"Entry {entry:.8f} invalid (≤ 0)"
+    
+    if side == "LONG":
+        # LONG: SL < entry < TP
+        if sl and sl >= entry:
+            return False, f"LONG SL={sl:.8f} must be < entry={entry:.8f}"
+        if tp and tp <= entry:
+            return False, f"LONG TP={tp:.8f} must be > entry={entry:.8f}"
+        if sl and sl <= 0:
+            return False, f"LONG SL={sl:.8f} must be > 0"
+    
+    elif side == "SHORT":
+        # SHORT: TP < entry < SL
+        if sl and sl <= entry:
+            return False, f"SHORT SL={sl:.8f} must be > entry={entry:.8f}"
+        if tp and tp >= entry:
+            return False, f"SHORT TP={tp:.8f} must be < entry={entry:.8f}"
+        if tp and tp <= 0:
+            return False, f"SHORT TP={tp:.8f} must be > 0"
+    
+    return True, "✅ Valid"
