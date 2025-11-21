@@ -1,0 +1,23 @@
+CRITICAL WORKFLOW UPDATE - ENABLE AGGRESSIVE PROFIT LOCKING:
+
+Add this environment variable to AlgoGPT Server workflow:
+DYN_MIN_CONF=0.30
+
+This changes:
+  ❌ OLD: Confidence threshold = 0.62 (62%) → Positions skip profit-taking
+  ✅ NEW: Confidence threshold = 0.30 (30%) → Positions LOCK profits immediately
+
+Impact on SOLUSDT, TONUSDT, AAVEUSDT:
+  - Current confidence: 0.375-0.40 (37-40%)
+  - With DYN_MIN_CONF=0.30, they will NOW execute TP orders
+  - Positions will lock 1st profit at TP1 automatically
+  - Progressive locking at TP2, TP3 follows
+
+How to apply:
+1. Stop AlgoGPT Server workflow
+2. Edit workflow command: Add DYN_MIN_CONF=0.30 before 'gunicorn'
+3. Restart workflow
+4. Positions will begin locking profits within 30 seconds
+
+Example workflow command (insert this):
+DYN_MIN_CONF=0.30 PORT=5000 gunicorn -c gunicorn_conf.py main:app
