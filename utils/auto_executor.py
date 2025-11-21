@@ -56,7 +56,7 @@ POST_FILL_SANITY_BPS    = float(os.getenv("POST_FILL_SANITY_BPS", "40"))
 SL_LIMIT_OFFSET_BPS   = float(os.getenv("SL_LIMIT_OFFSET_BPS", "8"))
 TP_LIMIT_OFFSET_BPS   = float(os.getenv("TP_LIMIT_OFFSET_BPS", "8"))
 
-MIN_QUALITY_SCORE     = float(os.getenv("MIN_QUALITY_SCORE", "4.0"))  # Lower threshold for realistic trading
+MIN_QUALITY_SCORE     = float(os.getenv("MIN_QUALITY_SCORE", "7.0"))  # 🛡️ RAISED: Prevent low-quality trades (1000BOB disaster)
 MAX_ATR_PCT           = float(os.getenv("MAX_ATR_PCT", "2.5"))  # gate לייט
 MIN_VOLUME            = float(os.getenv("MIN_VOLUME", "0"))
 

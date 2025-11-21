@@ -1,0 +1,15 @@
+{
+  "blacklist": [
+    "1000BOBUSDT",
+    "1000FLOKIUSDT",
+    "1000LUNCUSDT",
+    "1000XECUSDT",
+    "1000SHIB",
+    "1000PEPEUSDT",
+    "POPCATUSDT",
+    "BONKUSDT",
+    "DOGEUSDT"
+  ],
+  "reason": "High volatility meme coins - minimum 50% win rate required",
+  "updated": "2025-11-21"
+}
