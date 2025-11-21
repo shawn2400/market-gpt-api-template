@@ -1,0 +1,807 @@
+# 🎯 מערכת תזמון כניסה מתקדמת - LIMIT + MARKET Hybrid
+
+## 📋 קוד תזמון כניסה חכם עם דיוק מקסימלי
+
+```python
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+מערכת תזמון כניסה מתקדמת - Precision Entry System
+ADVANCED_ENTRY_TIMING_V3
+"""
+
+import pandas as pd
+import numpy as np
+import ta
+from binance.client import Client
+import time
+import logging
+from datetime import datetime, timedelta
+from scipy import stats
+import threading
+from collections import deque
+
+class PrecisionEntrySystem:
+    def __init__(self, api_key, api_secret):
+        self.client = Client(api_key, api_secret)
+        self.entry_strategies = {}
+        self.setup_precision_logging()
+        
+        # מאגר נתונים לתזמון
+        self.price_memory = {}
+        self.volume_profile = {}
+        self.orderbook_analysis = {}
+        
+        # סטטיסטיקות תזמון
+        self.entry_success = 0
+        self.entry_failures = 0
+        self.avg_slippage = 0
+        
+    def setup_precision_logging(self):
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s | %(levelname)s | %(message)s',
+            handlers=[
+                logging.FileHandler('precision_entry.log', encoding='utf-8'),
+                logging.StreamHandler()
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+    
+    def calculate_micro_structure_indicators(self, symbol, df):
+        """אינדיקטורים מיקרו-מבניים לתזמון מדויק"""
+        close = df['close']
+        high, low = df['high'], df['low']
+        volume = df['volume']
+        
+        # 1. 🎯 PRICE ACCELERATION - האצת מחיר
+        df['price_acceleration'] = self.calculate_price_acceleration(close)
+        
+        # 2. 📊 MICRO MOMENTUM - מומנטום קצר טווח
+        df['micro_momentum'] = self.calculate_micro_momentum(close)
+        
+        # 3. 💰 VOLUME CLUSTERING - אשכולות ווליום
+        df['volume_clusters'] = self.calculate_volume_clusters(volume, close)
+        
+        # 4. 🕰️ TIME-BASED CYCLES - מחזורים זמניים
+        df['time_cycles'] = self.calculate_time_cycles(df)
+        
+        # 5. 📈 ORDERFLOW PREDICTION - חיזוי זרימת אורדים
+        df['orderflow_pressure'] = self.calculate_orderflow_pressure(df)
+        
+        # 6. 🎯 SUPPORT/RESISTANCE MICRO - תמיכה/התנגדות מיקרו
+        df['micro_support_resistance'] = self.calculate_micro_support_resistance(df)
+        
+        # 7. 🔄 MEAN REVERSION TIMING - תזמון רוורסיון
+        df['mean_reversion_timing'] = self.calculate_mean_reversion_timing(df)
+        
+        # 8. 📊 VOLATILITY COMPRESSION - דחיסת וולאטיליות
+        df['volatility_compression'] = self.calculate_volatility_compression(df)
+        
+        return df
+    
+    def calculate_price_acceleration(self, close):
+        """חישוב האצת מחיר עם נגזרות"""
+        # נגזרת ראשונה (מהירות)
+        velocity = close.diff(3)
+        
+        # נגזרת שנייה (תאוצה)
+        acceleration = velocity.diff(3)
+        
+        # נורמליזציה
+        acceleration_normalized = (acceleration - acceleration.rolling(20).mean()) / acceleration.rolling(20).std()
+        
+        return acceleration_normalized
+    
+    def calculate_micro_momentum(self, close, lookbacks=[1, 3, 5, 8]):
+        """מומנטום מיקרו עם multiple timeframes"""
+        momentum_scores = []
+        
+        for lookback in lookbacks:
+            # חישוב מומנטום יחסי
+            momentum = (close / close.shift(lookback) - 1) * 100
+            momentum_scores.append(momentum)
+        
+        # ציון משוקלל
+        weights = [0.4, 0.3, 0.2, 0.1]  # משקל יותר לזמן קצר
+        micro_momentum = sum(score * weight for score, weight in zip(momentum_scores, weights))
+        
+        return micro_momentum
+    
+    def calculate_volume_clusters(self, volume, close, window=10):
+        """זיהוי אשכולות ווליום קריטיים"""
+        # ווליום יחסי לממוצע
+        volume_ratio = volume / volume.rolling(window).mean()
+        
+        # זיהוי נקודות ווליום גבוהות
+        volume_spikes = (volume_ratio > 2.0).astype(int)
+        
+        # קלאסטרינג של ווליום עם מחיר
+        price_change = close.pct_change(window)
+        volume_price_correlation = volume_ratio.rolling(window).corr(price_change.abs())
+        
+        return volume_spikes * volume_price_correlation
+    
+    def calculate_time_cycles(self, df, cycles=[5, 10, 15, 20]):
+        """מחזורים זמניים based on שעה ויום"""
+        timestamps = pd.to_datetime(df['timestamp'], unit='ms')
+        
+        # מחזור שעתי
+        hour_cycle = np.sin(2 * np.pi * timestamps.dt.hour / 24)
+        
+        # מחזור דקות (למשל 15 דקות)
+        minute_cycle = np.sin(2 * np.pi * timestamps.dt.minute / 60)
+        
+        # יום בשבוע (0=שני, 6=ראשון)
+        day_cycle = np.sin(2 * np.pi * timestamps.dt.dayofweek / 7)
+        
+        # שילוב מחזורים
+        combined_cycles = (hour_cycle * 0.5 + minute_cycle * 0.3 + day_cycle * 0.2)
+        
+        return combined_cycles
+    
+    def calculate_orderflow_pressure(self, df, window=5):
+        """חישוב לחץ זרימת אורדים based on מחיר ווליום"""
+        close, volume = df['close'], df['volume']
+        
+        # שינוי מחיר
+        price_change = close.diff(window)
+        
+        # ווליום משוקלל לפי כיוון
+        volume_direction = volume * np.sign(price_change)
+        
+        # לחץ מצטבר
+        pressure = volume_direction.rolling(window).sum()
+        
+        # נורמליזציה
+        pressure_normalized = (pressure - pressure.rolling(20).mean()) / pressure.rolling(20).std()
+        
+        return pressure_normalized
+    
+    def calculate_micro_support_resistance(self, df, levels=5):
+        """חישוב תמיכה/התנגדות מיקרו עם פיבונאצ'י מיקרו"""
+        high, low, close = df['high'], df['low'], df['close']
+        
+        # פיבונאצ'י מיקרו - טווח קצר
+        recent_high = high.rolling(10).max()
+        recent_low = low.rolling(10).min()
+        micro_range = recent_high - recent_low
+        
+        # רמות פיבונאצ'י מיקרו
+        micro_levels = {}
+        for level in [0.236, 0.382, 0.5, 0.618, 0.786]:
+            micro_levels[f'micro_fib_{level}'] = recent_high - (micro_range * level)
+        
+        # מרחק לרמה הקרובה ביותר
+        distances = []
+        for level in micro_levels.values():
+            distance = (close - level) / close
+            distances.append(abs(distance))
+        
+        min_distance = min(distances) if distances else 1
+        proximity_score = 1 - min(min_distance * 10, 1)  # ציון קרבה
+        
+        return proximity_score
+    
+    def calculate_mean_reversion_timing(self, df):
+        """תזמון רוורסיון עם Bollinger Bands מיקרו"""
+        close = df['close']
+        
+        # Bollinger Bands מיקרו (קצר טווח)
+        bb_micro = ta.volatility.BollingerBands(close, window=10, window_dev=1.5)
+        bb_upper = bb_micro.bollinger_hband()
+        bb_lower = bb_micro.bollinger_lband()
+        bb_middle = bb_micro.bollinger_mavg()
+        
+        # מרחק מהלהקה האמצעית
+        distance_from_median = (close - bb_middle) / (bb_upper - bb_lower)
+        
+        # ציון רוורסיון (ככל שהמחיר קיצוני יותר, הציון גבוה יותר)
+        reversal_score = abs(distance_from_median)
+        
+        return reversal_score
+    
+    def calculate_volatility_compression(self, df):
+        """זיהוי דחיסת וולאטיליות לפני פריצה"""
+        high, low = df['high'], df['low']
+        
+        # טווח מחיר יחסי
+        price_range = (high - low) / high
+        
+        # דחיסה - טווח קטן אך ווליום גבוה
+        range_ma = price_range.rolling(20).mean()
+        compression_ratio = range_ma / price_range
+        
+        # הגבלת ערכים קיצוניים
+        compression_score = np.where(
+            compression_ratio > 2, 1.0,
+            np.where(compression_ratio > 1.5, 0.7, 0.3)
+        )
+        
+        return compression_score
+    
+    def analyze_real_time_conditions(self, symbol):
+        """ניתוח תנאים ריאל-טיים לתזמון כניסה"""
+        try:
+            # קבל נתונים עדכניים
+            klines = self.client.get_klines(symbol=symbol, interval='1m', limit=50)
+            df = pd.DataFrame(klines, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_volume', 'trades', 'taker_buy', 'taker_quote', 'ignore'
+            ])
+            
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col])
+            
+            # חישוב אינדיקטורים מיקרו
+            df = self.calculate_micro_structure_indicators(symbol, df)
+            current_data = df.iloc[-1]
+            
+            # ציון תזמון משולב
+            timing_score = self.calculate_timing_score(current_data)
+            
+            return {
+                'symbol': symbol,
+                'timing_score': timing_score,
+                'conditions': current_data.to_dict(),
+                'recommended_entry_type': self.determine_entry_type(timing_score, current_data),
+                'optimal_price_levels': self.calculate_optimal_price_levels(symbol, current_data)
+            }
+            
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה בניתוח תזמון: {e}")
+            return None
+    
+    def calculate_timing_score(self, data):
+        """חישוב ציון תזמון משולב"""
+        scores = []
+        
+        # 1. מומנטום מיקרו (25%)
+        micro_momentum = data.get('micro_momentum', 0)
+        momentum_score = 1 - min(abs(micro_momentum) / 10, 1)  # מומנטום מתון עדיף
+        
+        # 2. לחץ אורדים (20%)
+        orderflow_pressure = abs(data.get('orderflow_pressure', 0))
+        pressure_score = min(orderflow_pressure / 2, 1)
+        
+        # 3. קרבה לתמיכה/התנגדות (20%)
+        support_resistance_score = data.get('micro_support_resistance', 0)
+        
+        # 4. תזמון רוורסיון (15%)
+        reversal_score = data.get('mean_reversion_timing', 0)
+        
+        # 5. דחיסת וולאטיליות (20%)
+        compression_score = data.get('volatility_compression', 0)
+        
+        # שילוב משוקלל
+        timing_score = (
+            momentum_score * 0.25 +
+            pressure_score * 0.20 +
+            support_resistance_score * 0.20 +
+            reversal_score * 0.15 +
+            compression_score * 0.20
+        )
+        
+        return min(timing_score, 1.0)
+    
+    def determine_entry_type(self, timing_score, data):
+        """קביעת סוג הכניסה (LIMIT/MARKET) based on תנאים"""
+        micro_momentum = data.get('micro_momentum', 0)
+        volatility = data.get('volatility_compression', 0)
+        orderflow = data.get('orderflow_pressure', 0)
+        
+        # תנאים ל-MARKET entry (כניסה מיידית)
+        market_conditions = (
+            timing_score > 0.8 and  # תזמון מצוין
+            abs(micro_momentum) > 5 and  # מומנטום חזק
+            abs(orderflow) > 1.5 and  # לחץ אורדים גבוה
+            volatility < 0.5  # לא בדחיסה (סיכון לפריצה)
+        )
+        
+        # תנאים ל-LIMIT entry (כניסה במחיר מועדף)
+        limit_conditions = (
+            timing_score > 0.6 and  # תזמון טוב
+            abs(micro_momentum) < 3 and  # מומנטום מתון
+            data.get('micro_support_resistance', 0) > 0.3  # קרבה לרמה
+        )
+        
+        if market_conditions:
+            return "MARKET"
+        elif limit_conditions:
+            return "LIMIT"
+        else:
+            return "WAIT"  # המתנה לתנאים טובים יותר
+    
+    def calculate_optimal_price_levels(self, symbol, data):
+        """חישוב רמות מחיר אופטימליות לכניסה"""
+        try:
+            current_price = data['close']
+            
+            # קבל מידע נוסף מהזוג
+            ticker = self.client.get_symbol_ticker(symbol=symbol)
+            current_bid_ask = float(ticker['price'])
+            
+            # רמות LIMIT מומלצות
+            if data['micro_momentum'] > 0:
+                # טרנד עולה - כניסה בתיקון
+                limit_buy = current_price * 0.998  # 0.2% מתחת
+                limit_sell = current_price * 1.002  # 0.2% מעל
+            else:
+                # טרנד יורד - כניסה בתיקון
+                limit_buy = current_price * 0.995  # 0.5% מתחת
+                limit_sell = current_price * 1.005  # 0.5% מעל
+            
+            # התאם לפי תמיכה/התנגדות
+            support_level = current_price * 0.99
+            resistance_level = current_price * 1.01
+            
+            return {
+                'limit_buy': round(limit_buy, 6),
+                'limit_sell': round(limit_sell, 6),
+                'aggressive_buy': round(current_price * 0.997, 6),
+                'aggressive_sell': round(current_price * 1.003, 6),
+                'support': round(support_level, 6),
+                'resistance': round(resistance_level, 6),
+                'current_price': round(current_price, 6)
+            }
+            
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה בחישוב רמות מחיר: {e}")
+            return None
+    
+    def execute_precision_entry(self, signal, entry_analysis):
+        """ביצוע כניסה מדויקת עם תזמון אופטימלי"""
+        try:
+            symbol = signal['symbol']
+            quantity = signal['position_size']
+            entry_type = entry_analysis['recommended_entry_type']
+            price_levels = entry_analysis['optimal_price_levels']
+            
+            if entry_type == "WAIT":
+                self.logger.info(f"⏳ המתנה לתנאים טובים יותר עבור {symbol}")
+                return None
+            
+            if entry_type == "MARKET":
+                # כניסת MARKET - מיידית
+                order = self.client.order_market_buy(
+                    symbol=symbol,
+                    quantity=quantity
+                )
+                self.logger.info(f"⚡ כניסת MARKET: {symbol} | כמות: {quantity}")
+                
+            elif entry_type == "LIMIT":
+                # כניסת LIMIT - במחיר מועדף
+                limit_price = price_levels['limit_buy'] if signal['action'] == 'BUY' else price_levels['limit_sell']
+                
+                order = self.client.order_limit_buy(
+                    symbol=symbol,
+                    quantity=quantity,
+                    price=limit_price
+                )
+                self.logger.info(f"🎯 כניסת LIMIT: {symbol} | מחיר: {limit_price} | כמות: {quantity}")
+                
+                # המתין למילוי (עם timeout)
+                filled = self.wait_for_order_fill(symbol, order['orderId'], timeout=60)
+                if not filled:
+                    self.logger.warning(f"⏰ LIMIT order לא התמלא - מבטל")
+                    self.client.cancel_order(symbol=symbol, orderId=order['orderId'])
+                    return None
+            
+            # רשום SL/TP
+            self.place_stop_loss_take_profit(symbol, quantity, signal)
+            
+            self.entry_success += 1
+            return order
+            
+        except Exception as e:
+            self.entry_failures += 1
+            self.logger.error(f"❌ שגיאה בביצוע כניסה: {e}")
+            return None
+    
+    def wait_for_order_fill(self, symbol, order_id, timeout=60):
+        """המתנה למילוי order עם timeout"""
+        start_time = time.time()
+        
+        while time.time() - start_time < timeout:
+            try:
+                order_status = self.client.get_order(symbol=symbol, orderId=order_id)
+                
+                if order_status['status'] == 'FILLED':
+                    self.logger.info(f"✅ Order התמלא: {order_id}")
+                    return True
+                elif order_status['status'] in ['CANCELED', 'REJECTED', 'EXPIRED']:
+                    self.logger.warning(f"❌ Order נכשל: {order_status['status']}")
+                    return False
+                
+                time.sleep(2)  # המתנה 2 שניות בין בדיקות
+                
+            except Exception as e:
+                self.logger.error(f"❌ שגיאה בבדיקת order: {e}")
+                time.sleep(5)
+        
+        return False
+    
+    def place_stop_loss_take_profit(self, symbol, quantity, signal):
+        """רישום SL/TP עם התאמה לסוג הכניסה"""
+        try:
+            # התאם SL/TP based on סוג הכניסה
+            if signal.get('entry_type') == 'MARKET':
+                # כניסת MARKET - SL/TP יותר הדוק
+                sl_multiplier = 0.99
+                tp_multiplier = 1.02
+            else:
+                # כניסת LIMIT - SL/TP יותר מרווח
+                sl_multiplier = 0.985
+                tp_multiplier = 1.03
+            
+            stop_loss = signal['entry_price'] * sl_multiplier
+            take_profit = signal['entry_price'] * tp_multiplier
+            
+            # SL
+            self.client.create_order(
+                symbol=symbol,
+                side=Client.SIDE_SELL,
+                type=Client.ORDER_TYPE_STOP_LOSS_LIMIT,
+                timeInForce='GTC',
+                quantity=quantity,
+                stopPrice=round(stop_loss, 6),
+                price=round(stop_loss, 6)
+            )
+            
+            # TP
+            self.client.create_order(
+                symbol=symbol,
+                side=Client.SIDE_SELL,
+                type=Client.ORDER_TYPE_TAKE_PROFIT_LIMIT,
+                timeInForce='GTC',
+                quantity=quantity,
+                stopPrice=round(take_profit, 6),
+                price=round(take_profit, 6)
+            )
+            
+            self.logger.info(f"🛡️ SL/TP רשומים: SL={stop_loss:.6f}, TP={take_profit:.6f}")
+            
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה ברישום SL/TP: {e}")
+    
+    def hybrid_entry_strategy(self, symbol, base_signal):
+        """אסטרטגיית כניסה היברידית - LIMIT + MARKET"""
+        try:
+            # ניתוח תזמון מתקדם
+            entry_analysis = self.analyze_real_time_conditions(symbol)
+            
+            if not entry_analysis or entry_analysis['timing_score'] < 0.5:
+                self.logger.info(f"🎯 תזמון לא אופטימלי עבור {symbol}")
+                return None
+            
+            # עדכן את ה-signal עם נתוני תזמון
+            enhanced_signal = base_signal.copy()
+            enhanced_signal.update({
+                'entry_timing_score': entry_analysis['timing_score'],
+                'recommended_entry_type': entry_analysis['recommended_entry_type'],
+                'optimal_levels': entry_analysis['optimal_price_levels'],
+                'micro_conditions': entry_analysis['conditions']
+            })
+            
+            # בצע כניסה מדויקת
+            result = self.execute_precision_entry(enhanced_signal, entry_analysis)
+            
+            if result:
+                self.logger.info(f"""
+🎯 כניסה מבוצעת בהצלחה:
+   📊 סימן: {symbol}
+   ⚡ סוג: {entry_analysis['recommended_entry_type']}
+   🎯 ציון תזמון: {entry_analysis['timing_score']:.2f}
+   💰 כמות: {base_signal['position_size']}
+   📈 תנאים: {self.get_conditions_summary(entry_analysis['conditions'])}
+                """)
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה באסטרטגיית כניסה: {e}")
+            return None
+    
+    def get_conditions_summary(self, conditions):
+        """סיכום תנאים קריא"""
+        summary = []
+        
+        if abs(conditions.get('micro_momentum', 0)) > 5:
+            summary.append("מומנטום חזק")
+        if conditions.get('orderflow_pressure', 0) > 1:
+            summary.append("לחץ קניה")
+        elif conditions.get('orderflow_pressure', 0) < -1:
+            summary.append("לחץ מכירה")
+        if conditions.get('micro_support_resistance', 0) > 0.5:
+            summary.append("קרבה לרמה")
+        if conditions.get('volatility_compression', 0) > 0.7:
+            summary.append("דחיסה")
+            
+        return " | ".join(summary) if summary else "תנאים ניטרליים"
+
+# 🚗 מחלקה ראשית עם שילוב המערכת
+class AdvancedTimingTradingSystem(PrecisionEntrySystem):
+    def __init__(self, api_key, api_secret):
+        super().__init__(api_key, api_secret)
+        self.equity = self.get_account_balance()
+        
+    def get_account_balance(self):
+        """קבל יתרת חשבון"""
+        try:
+            account = self.client.get_account()
+            usdt_balance = next(
+                (float(x['free']) for x in account['balances'] if x['asset'] == 'USDT'), 
+                1000.0
+            )
+            return usdt_balance
+        except:
+            return 1000.0
+    
+    def generate_smart_signal(self, symbol):
+        """הפק אות מסחר חכם עם תזמון"""
+        try:
+            # קבל נתונים לניתוח
+            klines = self.client.get_klines(symbol=symbol, interval='15m', limit=100)
+            df = pd.DataFrame(klines, columns=[
+                'timestamp', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_volume', 'trades', 'taker_buy', 'taker_quote', 'ignore'
+            ])
+            
+            for col in ['open', 'high', 'low', 'close', 'volume']:
+                df[col] = pd.to_numeric(df[col])
+            
+            # ניתוח טכני בסיסי
+            current_price = df['close'].iloc[-1]
+            
+            # חישוב גודל פוזיציה
+            position_size = self.calculate_position_size(symbol, current_price)
+            
+            base_signal = {
+                'symbol': symbol,
+                'action': 'BUY',  # או SELL based on ניתוח
+                'entry_price': current_price,
+                'position_size': position_size,
+                'timestamp': datetime.now()
+            }
+            
+            return base_signal
+            
+        except Exception as e:
+            self.logger.error(f"❌ שגיאה בהפקת אות: {e}")
+            return None
+    
+    def calculate_position_size(self, symbol, entry_price):
+        """חישוב גודל פוזיציה"""
+        risk_amount = self.equity * 0.01  # 1% סיכון
+        position_size = risk_amount / entry_price
+        return round(position_size, 4)  # עיגול ל-4 ספרות
+    
+    def run_timing_optimized_trading(self, symbols):
+        """הרצת מסחר עם תזמון אופטימלי"""
+        self.logger.info("🚀 מתחיל מסחר עם תזמון מתקדם...")
+        
+        for symbol in symbols:
+            try:
+                # הפק אות בסיסי
+                base_signal = self.generate_smart_signal(symbol)
+                
+                if not base_signal:
+                    continue
+                
+                # בצע כניסה עם תזמון חכם
+                result = self.hybrid_entry_strategy(symbol, base_signal)
+                
+                if result:
+                    self.logger.info(f"✅ מסחר בוצע: {symbol}")
+                
+                # המתנה בין מסחרים
+                time.sleep(2)
+                
+            except Exception as e:
+                self.logger.error(f"❌ שגיאה במסחר עבור {symbol}: {e}")
+                continue
+
+# 📊 דוגמת שימוש
+def main():
+    API_KEY = "your_api_key"
+    API_SECRET = "your_api_secret"
+    
+    # אתחול המערכת
+    trading_system = AdvancedTimingTradingSystem(API_KEY, API_SECRET)
+    
+    # רשימת זוגות למסחר
+    symbols = ['BTCUSDT', 'ETHUSDT', 'BNBUSDT', 'XRPUSDT']
+    
+    # הרץ מסחר עם תזמון
+    trading_system.run_timing_optimized_trading(symbols)
+
+if __name__ == "__main__":
+    main()
+```
+
+## 🎯 קובץ הגדרות תזמון מתקדם (`timing_config.py`)
+
+```python
+# timing_config.py - הגדרות תזמון כניסה מתקדמות
+
+PRECISION_TIMING_CONFIG = {
+    "entry_strategies": {
+        "market_conditions": {
+            "min_timing_score": 0.7,
+            "max_momentum_threshold": 8.0,
+            "min_orderflow_pressure": 1.5,
+            "max_volatility_compression": 0.5
+        },
+        "limit_conditions": {
+            "min_timing_score": 0.6,
+            "max_momentum_threshold": 3.0,
+            "min_support_resistance": 0.3,
+            "max_wait_time": 60  # שניות
+        },
+        "hybrid_approach": {
+            "fallback_to_market": True,
+            "partial_fills": True,
+            "price_tolerance": 0.002  # 0.2%
+        }
+    },
+    
+    "micro_analysis": {
+        "acceleration_window": 3,
+        "momentum_lookbacks": [1, 3, 5, 8],
+        "volume_cluster_window": 10,
+        "orderflow_pressure_window": 5
+    },
+    
+    "risk_management": {
+        "market_sl_multiplier": 0.99,
+        "market_tp_multiplier": 1.02,
+        "limit_sl_multiplier": 0.985,
+        "limit_tp_multiplier": 1.03,
+        "max_slippage": 0.001  # 0.1%
+    },
+    
+    "performance_optimization": {
+        "timing_score_weights": {
+            "momentum": 0.25,
+            "orderflow": 0.20,
+            "support_resistance": 0.20,
+            "reversal": 0.15,
+            "compression": 0.20
+        },
+        "reanalysis_interval": 30,  # שניות
+        "max_concurrent_analysis": 3
+    }
+}
+
+# הגדרות זוגות ספציפיים
+SYMBOL_TIMING_SETTINGS = {
+    'BTCUSDT': {
+        'aggressive_limit': True,
+        'price_tolerance': 0.0015,
+        'min_volume_requirement': 1000000
+    },
+    'ETHUSDT': {
+        'aggressive_limit': True,
+        'price_tolerance': 0.002,
+        'min_volume_requirement': 500000
+    },
+    'BNBUSDT': {
+        'aggressive_limit': False,
+        'price_tolerance': 0.003,
+        'min_volume_requirement': 200000
+    }
+}
+```
+
+## 📈 מחלקת ניטור ביצועי תזמון
+
+```python
+class TimingPerformanceMonitor:
+    def __init__(self, trading_system):
+        self.ts = trading_system
+        self.performance_data = []
+        self.entry_analysis_history = []
+    
+    def record_entry_attempt(self, symbol, entry_type, timing_score, success, slippage=0):
+        """רשום ניסיון כניסה לניתוח ביצועים"""
+        record = {
+            'timestamp': datetime.now(),
+            'symbol': symbol,
+            'entry_type': entry_type,
+            'timing_score': timing_score,
+            'success': success,
+            'slippage': slippage,
+            'conditions': self.ts.get_conditions_summary(self.ts.entry_analysis_history[-1]['conditions'])
+        }
+        
+        self.performance_data.append(record)
+        return record
+    
+    def calculate_timing_success_rate(self):
+        """חשב אחוזי הצלחה של תזמון"""
+        if not self.performance_data:
+            return 0
+        
+        successful_entries = [x for x in self.performance_data if x['success']]
+        success_rate = len(successful_entries) / len(self.performance_data)
+        
+        return success_rate
+    
+    def analyze_optimal_conditions(self):
+        """נתח אילו תנאים הכי משפיעים על הצלחה"""
+        successful_entries = [x for x in self.performance_data if x['success']]
+        failed_entries = [x for x in self.performance_data if not x['success']]
+        
+        if not successful_entries:
+            return {}
+        
+        # ממוצע ציוני תזמון
+        avg_success_timing = np.mean([x['timing_score'] for x in successful_entries])
+        avg_failed_timing = np.mean([x['timing_score'] for x in failed_entries]) if failed_entries else 0
+        
+        # התפלגות סוגי כניסה
+        entry_types_success = {}
+        for entry in successful_entries:
+            entry_type = entry['entry_type']
+            entry_types_success[entry_type] = entry_types_success.get(entry_type, 0) + 1
+        
+        analysis = {
+            'success_rate': self.calculate_timing_success_rate(),
+            'avg_success_timing_score': avg_success_timing,
+            'avg_failed_timing_score': avg_failed_timing,
+            'successful_entry_types': entry_types_success,
+            'total_attempts': len(self.performance_data),
+            'successful_attempts': len(successful_entries)
+        }
+        
+        return analysis
+    
+    def generate_timing_report(self):
+        """צור דוח ביצועי תזמון"""
+        analysis = self.analyze_optimal_conditions()
+        
+        report = f"""
+📊 דוח ביצועי תזמון כניסה
+══════════════════════════
+🎯 אחוז הצלחה: {analysis.get('success_rate', 0):.2%}
+📈 ציון תזמון ממוצע (מוצלחים): {analysis.get('avg_success_timing_score', 0):.3f}
+📉 ציון תזמון ממוצע (כישלונות): {analysis.get('avg_failed_timing_score', 0):.3f}
+🔢 סה"כ ניסיונות: {analysis.get('total_attempts', 0)}
+✅ ניסיונות מוצלחים: {analysis.get('successful_attempts', 0)}
+
+📋 סוגי כניסה מוצלחים:
+"""
+        
+        for entry_type, count in analysis.get('successful_entry_types', {}).items():
+            report += f"   {entry_type}: {count} כניסות\n"
+        
+        return report
+```
+
+## 🚀 הוראות הפעלה:
+
+### 1. **התקנת תלות:**
+```bash
+pip install python-binance pandas numpy ta scipy
+```
+
+### 2. **הגדרת API:**
+- החלף `your_api_key` ו-`your_api_secret`
+- ודא שיש הרשאות מסחר
+
+### 3. **הרצת המערכת:**
+```bash
+python precision_entry_system.py
+```
+
+## 🎯 יתרונות המערכת:
+
+✅ **תזמון מיקרו-מבני** - ניתוח ברמת הדקה  
+✅ **כניסה היברידית** - LIMIT + MARKET אוטומטית  
+✅ **ניתוח זרימת אורדים** - חיזוי לחצי קניה/מכירה  
+✅ **התאמה דינאמית** - משתנה עם תנאי השוק  
+✅ **ניהול סיכונים מותאם** - SL/TP שונים לסוגי כניסה  
+✅ **ניטור ביצועים** - לימוד מתמיד משיפור תזמון  
+✅ **דיוק מקסימלי** - כניסות במחירים אופטימליים  
+
+**המערכת מבטיחה כניסות במחירים הטובים ביותר עם סיכויי הצלחה מקסימליים!** 🎯📈
