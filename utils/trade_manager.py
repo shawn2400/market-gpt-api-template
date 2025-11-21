@@ -805,6 +805,7 @@ async def manage_open_trades():
                                         # SHADOW MODE
                                         dyn_decisions.labels(symbol=context["symbol"], regime=r.regime).inc()
                                         regime_confidence.labels(symbol=sym, regime=r.regime).set(r.confidence)
+                                        logger.debug(json.dumps({
                                             "evt": "dyn_shadow",
                                             "sym": context["symbol"],
                                             "regime": r.regime,
