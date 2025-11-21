@@ -168,7 +168,7 @@ def cancel_all(symbol: str) -> Dict[str, Any]:
 
 def cancel_order(symbol: str, order_id: int) -> Dict[str, Any]:
     cli = get_client()
-    res = cli.futures_cancel_order(symbol=symbol.upper(), orderId=int(order_id))
+    res = cli.futures_cancel_order(symbol=symbol.upper(), order_id=int(order_id))
     return {"ok": True, "result": res}
 
 def get_position(symbol: str) -> Dict[str, Any]:
