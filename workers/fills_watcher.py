@@ -31,17 +31,17 @@ get_klines = None
 BinanceSymbolValidator = None
 
 try:
-    from utils.multi_target_tp import get_multi_target_tp as _gtp
-    from utils.binance_client import futures_create_order as _fco
+    from utils.multi_target_tp import get_multi_target_tp as _gtp  # type: ignore
+    from utils.binance_client import futures_create_order as _fco  # type: ignore
     try:
-        from utils.binance_client import get_klines as _gk
-    except ImportError:
+        from utils.binance_client import get_klines as _gk  # type: ignore
+    except (ImportError, AttributeError):
         _gk = None  # type: ignore
-    from utils.binance_symbol_validator import BinanceSymbolValidator as _bsv
-    get_multi_target_tp = _gtp
-    futures_create_order = _fco
-    get_klines = _gk
-    BinanceSymbolValidator = _bsv
+    from utils.binance_symbol_validator import BinanceSymbolValidator as _bsv  # type: ignore
+    get_multi_target_tp = _gtp  # type: ignore
+    futures_create_order = _fco  # type: ignore
+    get_klines = _gk  # type: ignore
+    BinanceSymbolValidator = _bsv  # type: ignore
     TP_EXTENSION_AVAILABLE = True
 except Exception as e:
     log.debug(f"TP Extension unavailable: {e}")
@@ -237,10 +237,10 @@ def _check_and_extend_tp(symbol: str, current_price: float, entry_price: float, 
     # Calculate current volatility (ATR)
     try:
         # Handle both sync and async get_klines
-        klines = get_klines(symbol, "15m", 24) if get_klines else None
+        klines = get_klines(symbol, "15m", 24) if get_klines else None  # type: ignore
         if asyncio.iscoroutine(klines):
             klines = None  # Skip if async (would need await in async context)
-        if klines and len(klines) >= 14:
+        if klines and len(klines) >= 14:  # type: ignore
             highs = [float(k[2]) for k in klines]
             lows = [float(k[3]) for k in klines]
             closes = [float(k[4]) for k in klines]
@@ -262,10 +262,10 @@ def _check_and_extend_tp(symbol: str, current_price: float, entry_price: float, 
     if not TP_EXTENSION_AVAILABLE or not get_multi_target_tp:
         return
     try:
-        tp_manager_result = get_multi_target_tp()
+        tp_manager_result = get_multi_target_tp()  # type: ignore
         if asyncio.iscoroutine(tp_manager_result):
             return  # Skip if async (need proper async context)
-        tp_manager = tp_manager_result
+        tp_manager = tp_manager_result  # type: ignore
     except Exception as e:
         log.debug(f"Failed to get TP manager: {e}")
         return
@@ -296,19 +296,19 @@ def _check_and_extend_tp(symbol: str, current_price: float, entry_price: float, 
         if not validator:
             return
         
-        for target in extended_config["targets"]:
-            tp_price = target["price"]
-            tp_qty = remaining_qty * target["exit_percent"]
+        for target in extended_config["targets"]:  # type: ignore
+            tp_price = target["price"]  # type: ignore
+            tp_qty = remaining_qty * target["exit_percent"]  # type: ignore
             
             # Round to symbol precision
-            tp_price_rounded = validator.round_price(symbol, tp_price)
-            tp_qty_rounded = validator.round_quantity(symbol, tp_qty)
+            tp_price_rounded = validator.round_price(symbol, tp_price)  # type: ignore
+            tp_qty_rounded = validator.round_quantity(symbol, tp_qty)  # type: ignore
             
             # Determine order side (opposite of position)
             order_side = "SELL" if side == "LONG" else "BUY"
             
             # Place TP order
-            result = futures_create_order(
+            result = futures_create_order(  # type: ignore
                 symbol=symbol,
                 side=order_side,
                 type="LIMIT",
@@ -319,7 +319,7 @@ def _check_and_extend_tp(symbol: str, current_price: float, entry_price: float, 
                 positionSide=side
             )
             
-            if result.get("ok"):
+            if result and result.get("ok"):  # type: ignore
                 log.info(
                     f"✅ TP{target['level']} placed: {symbol} {order_side} {tp_qty_rounded} @ {tp_price_rounded}"
                 )
@@ -479,8 +479,8 @@ def _update_trailing_sl(symbol: str, current_price: float, entry_price: float, r
     
     # Round to symbol precision
     try:
-        validator = BinanceSymbolValidator()
-        new_sl_rounded = validator.round_price(symbol, new_sl)
+        validator = BinanceSymbolValidator()  # type: ignore
+        new_sl_rounded = validator.round_price(symbol, new_sl)  # type: ignore
     except Exception:
         new_sl_rounded = round(new_sl, 4)
     
@@ -492,7 +492,7 @@ def _update_trailing_sl(symbol: str, current_price: float, entry_price: float, r
         
         # Place new SL order
         sl_side = "SELL" if side == "LONG" else "BUY"
-        result = futures_create_order(
+        result = futures_create_order(  # type: ignore
             symbol=symbol,
             side=sl_side,
             type="STOP_MARKET",
@@ -502,7 +502,7 @@ def _update_trailing_sl(symbol: str, current_price: float, entry_price: float, r
             positionSide=side
         )
         
-        if result.get("ok"):
+        if result and result.get("ok"):  # type: ignore
             old_sl = trail_state["current_sl"]
             trail_state["current_sl"] = new_sl_rounded
             trail_state["last_update_time"] = time.time()
@@ -1248,9 +1248,9 @@ class _FillsWatcherThread(threading.Thread):
             for symbol in symbols_with_metadata:
                 try:
                     # Get recent fills (last 5 minutes)
-                    recent_fills = get_recent_fills(symbol, limit=20, lookback_seconds=300)
+                    recent_fills = get_recent_fills(symbol, limit=20, lookback_seconds=300)  # type: ignore
                     
-                    if not recent_fills:
+                    if not recent_fills:  # type: ignore
                         continue
                     
                     fills_checked += len(recent_fills)
