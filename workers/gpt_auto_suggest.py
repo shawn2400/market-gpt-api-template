@@ -89,12 +89,12 @@ def _indicators_from_df(interval: str, df) -> Dict[str, Any]:
         volume_sma_20 = df["volume"].rolling(window=20, min_periods=1).mean()
         
         # ATR as percentage of price
-        atr_pct = (float(atr_val.iloc[-1]) / price * 100.0) if not atr_val.empty else 2.0
+        atr_pct = (float(atr_val.iloc[-1]) / price * 100.0) if not atr_val.empty else 2.0  # type: ignore
         
         # Calculate Bollinger Bands width percentage (critical for regime detection)
-        bb_upper_val = float(bb_upper.iloc[-1]) if not bb_upper.empty else price * 1.02
-        bb_mid_val = float(bb_mid.iloc[-1]) if not bb_mid.empty else price
-        bb_lower_val = float(bb_lower.iloc[-1]) if not bb_lower.empty else price * 0.98
+        bb_upper_val = float(bb_upper.iloc[-1]) if not bb_upper.empty else price * 1.02  # type: ignore
+        bb_mid_val = float(bb_mid.iloc[-1]) if not bb_mid.empty else price  # type: ignore
+        bb_lower_val = float(bb_lower.iloc[-1]) if not bb_lower.empty else price * 0.98  # type: ignore
         
         bb_width_pct = ((bb_upper_val - bb_lower_val) / bb_mid_val * 100.0) if bb_mid_val > 0 else 5.0
         
@@ -1243,8 +1243,9 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
     wallet_state = {"available_balance": 1000.0}  # Default fallback
     try:
         from utils.binance_client import futures_balance
-        balances = futures_balance()
-        for asset in balances:
+        balances = futures_balance()  # type: ignore
+        balances = balances if not asyncio.iscoroutine(balances) else await balances  # type: ignore
+        for asset in balances or []:
             if asset.get("asset") == "USDT":
                 wallet_state["available_balance"] = float(asset.get("availableBalance", 1000.0))
                 break
@@ -1754,7 +1755,7 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
     dynamic_sizing_engine = get_dynamic_sizing_engine()
     sizing = dynamic_sizing_engine.calculate_position(
         quality_score=quality_score,
-        risk_reward=rr,
+        risk_reward=rr or 1.5,  # type: ignore
         ai_confidence=prop.get("success_pct") or 70.0,
         volatility=volatility,
         account_equity=account_equity,
@@ -2042,8 +2043,9 @@ async def propose_grid(symbol: str, ctx: Dict[str, Any]) -> Optional[Dict[str, A
     
     # Get account equity
     try:
-        bals = futures_balance() or []
-        usdt_bal = next((b for b in bals if b.get("asset") == "USDT"), {})
+        bals = futures_balance() or []  # type: ignore
+        bals = bals if not asyncio.iscoroutine(bals) else await bals  # type: ignore
+        usdt_bal = next((b for b in bals if b.get("asset") == "USDT"), {})  # type: ignore
         account_equity = float(usdt_bal.get("balance", 0.0))
     except Exception:
         account_equity = 100.0  # Fallback
@@ -2525,8 +2527,9 @@ async def process_cycle():
         available = 0.0  # Initialize before try block
         try:
             from utils.binance_client import futures_balance
-            bals = futures_balance() or []
-            for a in bals:
+            bals = futures_balance() or []  # type: ignore
+            bals = bals if not asyncio.iscoroutine(bals) else await bals  # type: ignore
+            for a in bals or []:
                 if str(a.get("asset", "")).upper() == "USDT":
                     available = float(a.get("availableBalance") or a.get("available") or 0.0)
                     break
