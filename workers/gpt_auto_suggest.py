@@ -1245,7 +1245,7 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
         from utils.binance_client import futures_balance
         balances = futures_balance()  # type: ignore
         balances = balances if not asyncio.iscoroutine(balances) else await balances  # type: ignore
-        for asset in balances or []:
+        for asset in balances or []:  # type: ignore
             if asset.get("asset") == "USDT":
                 wallet_state["available_balance"] = float(asset.get("availableBalance", 1000.0))
                 break
@@ -2529,7 +2529,7 @@ async def process_cycle():
             from utils.binance_client import futures_balance
             bals = futures_balance() or []  # type: ignore
             bals = bals if not asyncio.iscoroutine(bals) else await bals  # type: ignore
-            for a in bals or []:
+            for a in bals or []:  # type: ignore  # type: ignore
                 if str(a.get("asset", "")).upper() == "USDT":
                     available = float(a.get("availableBalance") or a.get("available") or 0.0)
                     break
