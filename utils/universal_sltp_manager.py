@@ -359,19 +359,23 @@ async def attach_multi_target_protection(
         
         # Place SL order (STOP_MARKET for guaranteed execution)
         try:
-            logger.info(f"📤 Placing SL: {symbol} {sl_side} @ {sl_price:.{price_precision}f} (STOP_MARKET)")
+            # 🔧 CRITICAL FIX: Use validator.round_price() for SL to handle micro-cap coins
+            sl_price_rounded = validator.round_price(symbol, sl_price)
+            sl_price_str = str(sl_price_rounded)
+            
+            logger.info(f"📤 Placing SL: {symbol} {sl_side} @ {sl_price_str} (STOP_MARKET)")
             
             sl_order = client.futures_create_order(
                 symbol=symbol,
                 side=sl_side,
                 type="STOP_MARKET",
-                stopPrice=f"{sl_price:.{price_precision}f}",
+                stopPrice=sl_price_str,
                 closePosition=True,
                 newClientOrderId=build_client_order_id(symbol, sl_side, role="SL"),
                 positionSide=position_side if position_side else None
             )
             result["sl_order"] = sl_order
-            logger.info(f"✅ SL placed: {symbol} @ {sl_price:.{price_precision}f} | Order ID: {sl_order.get('orderId')}")
+            logger.info(f"✅ SL placed: {symbol} @ {sl_price_str} | Order ID: {sl_order.get('orderId')}")
             
         except Exception as sl_err:
             error_msg = f"SL placement failed: {sl_err}"
