@@ -241,14 +241,15 @@ class DynamicBudgetManager:
             from utils.dynamic_leverage import DynamicLeverageCalculator
             
             calculator = DynamicLeverageCalculator()
-            leverage = calculator.calculate_leverage(
+            leverage_value = calculator.calculate_leverage(
                 trade_quality=quality_score,
                 symbol="BTCUSDT",  # Fallback symbol (actual symbol from trade context)
                 atr_pct=volatility_atr_pct / 100.0,  # Convert to decimal
                 current_price=50000.0  # Fallback price (not critical for leverage calc)
             )
             
-            return int(leverage)
+            # Ensure leverage is a valid int
+            return int(float(leverage_value)) if leverage_value else self.leverage_min
             
         except Exception as e:
             # Fallback to simple calculation if DynamicLeverageCalculator fails
