@@ -1042,7 +1042,7 @@ async def handle_order_filled(event: Dict[str, Any]):
                             pass
                         break
                 
-                _ = _set_be_native(symbol, offset_bps=TP_BE_OFFSET_BPS)
+                _ = _set_be_native(symbol=symbol, entry_price=entry_price or 0.0, side_opened=("LONG" if amt > 0 else "SHORT"), qty_hint=abs(amt), offset_bps=TP_BE_OFFSET_BPS)
                 await notify_sl_tp_update(symbol, "AUTO", "breakeven", entry_price or 0.0, entry=entry_price, leverage=lev)
                 with suppress(Exception):
                     ensure_protective_stop(symbol, prefer_mode="native")
@@ -1142,7 +1142,7 @@ async def _be_guard_tick():
                 pass
 
             if _set_be_native:
-                _ = _set_be_native(symbol, offset_bps=TP_BE_OFFSET_BPS)
+                _ = _set_be_native(symbol=symbol, entry_price=entry, side_opened=side, qty_hint=abs(amt), offset_bps=TP_BE_OFFSET_BPS)
                 await notify_sl_tp_update(symbol, side, "breakeven", entry, entry=entry, leverage=leverage)
             else:
                 await modify_stop_loss_async(symbol, entry, position_side=side)
