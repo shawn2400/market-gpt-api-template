@@ -262,12 +262,14 @@ class MaxHoldingPowerEngine(AdvancedFeature):
             symbol = data.get("symbol")
             if symbol and symbol in self.manager.active_positions:
                 report = self.manager.get_position_report(symbol)
-                return {
-                    "status": "ACTIVE",
-                    "position_state": report['state'],
-                    "confidence": report['confidence'],
-                    "recommendation": "HOLD" if float(report['confidence']) > 0.6 else "REVIEW"
-                }
+                if report:
+                    confidence_str = report.get('confidence', '0.0')
+                    return {
+                        "status": "ACTIVE",
+                        "position_state": report.get('state', 'UNKNOWN'),
+                        "confidence": confidence_str,
+                        "recommendation": "HOLD" if float(confidence_str) > 0.6 else "REVIEW"
+                    }
             return {"status": "NO_POSITION"}
         except Exception as e:
             logger.debug(f"MAX HOLDING POWER analysis error: {e}")
