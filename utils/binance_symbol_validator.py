@@ -140,21 +140,23 @@ class BinanceSymbolValidator:
             else:
                 decimal_places = 0
             
-            # CRITICAL: Format Decimal directly, then convert to float
-            # This ensures EXACT truncation with NO extra precision
-            final_price_str = format(rounded, f'.{decimal_places}f')
+            # CRITICAL: Use quantize() to truncate to exact decimals, then convert to float
+            quantized = rounded.quantize(Decimal(10) ** -decimal_places, rounding=ROUND_DOWN)
+            final_price_str = str(quantized)
             final_price = float(final_price_str)
             
             if final_price <= 0 and price > 0:
-                # Fallback: Format raw price to price_precision
+                # Fallback: Use quantize on raw price with price_precision
                 logger.warning(f"⚠️ Rounding failed for {symbol}, fallback to {price_precision} decimals")
-                return float(format(Decimal(str(price)), f'.{price_precision}f'))
+                quantized_fallback = Decimal(str(price)).quantize(Decimal(10) ** -price_precision, rounding=ROUND_DOWN)
+                return float(str(quantized_fallback))
             
             return final_price
             
         except Exception as e:
             logger.error(f"🚨 Error rounding {symbol}: {e}")
-            return float(format(Decimal(str(price)), f'.{price_precision}f'))
+            quantized_error = Decimal(str(price)).quantize(Decimal(10) ** -price_precision, rounding=ROUND_DOWN)
+            return float(str(quantized_error))
     
     def round_quantity(self, symbol: str, quantity: float, is_market: bool = False) -> float:
         """
@@ -166,7 +168,7 @@ class BinanceSymbolValidator:
             is_market: True for market orders (uses MARKET_LOT_SIZE)
             
         Returns:
-            Rounded quantity matching Binance step size
+            Rounded quantity matching Binance step size (guaranteed truncated correctly)
         """
         info = self.get_symbol_info(symbol)
         if not info:
@@ -196,8 +198,9 @@ class BinanceSymbolValidator:
         if step_size >= 1.0:
             return int(float(rounded))
         
-        # Format to exact decimal places needed for step size
-        return float(round(float(rounded), decimal_places))
+        # CRITICAL FIX: Use quantize() to ensure EXACT truncation, not float arithmetic
+        quantized = rounded.quantize(Decimal(10) ** -decimal_places, rounding=ROUND_DOWN)
+        return float(str(quantized))
     
     def validate_order(
         self,
