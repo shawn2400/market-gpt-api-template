@@ -208,7 +208,7 @@ class OrderTimeoutMonitor:
     def _get_order_status(self, symbol: str, order_id: int) -> Optional[str]:
         """Get order status from Binance."""
         try:
-            order = self.client.futures_get_order(symbol=symbol, orderId=order_id)
+            order = self.client.futures_get_order(symbol=symbol, order_id=order_id)
             return order.get("status")
         except Exception as e:
             logger.error(f"Failed to get order status for {order_id}: {e}")
