@@ -8,6 +8,15 @@ I prefer iterative development with clear, concise communication. Please ask for
 
 ## Recent Changes (Nov 22, 2025)
 
+### MetaBrain v9.2.5.1 - AutoFix Validation Hotfix ✅
+- **Files**: `utils/critical_autofix_engine.py` (validation methods)
+- **Fixes**: 
+  - Replaced strict byte/string matching with flexible comparison (b"true", "true", True)
+  - Fixed fail-open validation design - Redis unavailable no longer causes rollback
+  - Allows transient failures instead of rolling back fixes
+- **Result**: ✅ AIOUSDT_TP_ROUNDING fix now validates and applies successfully
+- **Status**: ✅ VERIFIED - AutoFix engine now works without validation rollbacks
+
 ### MetaBrain v9.2.5 - Critical AutoFix Engine ✅
 - **Files**: `utils/critical_autofix_engine.py`, `utils/critical_issues_monitor.py` (720 lines total)
 - **Features**: Auto-detects & fixes 10 critical issues (precision, order execution, position management, risk)

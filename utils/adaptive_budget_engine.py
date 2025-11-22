@@ -23,14 +23,23 @@ import logging
 import os
 from typing import Dict, Any
 
+import asyncio
+
 try:
     from utils.binance_client import futures_account
-    # Wrap it as async
-    async def futures_account_safe(*args, **kwargs):
-        return futures_account(*args, **kwargs)
 except ImportError:
-    # Fallback if not available
-    async def futures_account_safe(*args, **kwargs):
+    futures_account = None
+
+async def futures_account_safe():
+    """Safely call futures_account, handling both sync and async"""
+    if not futures_account:
+        return None
+    try:
+        # Call the futures_account function directly (it's synchronous)
+        # Run it in a thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        return await loop.run_in_executor(None, futures_account)
+    except Exception:
         return None
 
 logger = logging.getLogger("adaptive_budget_engine")
@@ -66,11 +75,16 @@ class AdaptiveBudgetEngine:
             # Get current balance from Binance
             balance_response = await futures_account_safe()
             
-            if not balance_response or not balance_response.get('totalWalletBalance'):
-                self.logger.warning("❌ Could not detect balance from Binance, using env defaults")
+            if not balance_response:
+                self.logger.warning("⚠️ Could not detect balance from Binance, using env defaults")
                 return self._get_env_defaults()
             
-            balance_usdt = float(balance_response['totalWalletBalance'])
+            balance_usdt = float(balance_response.get('totalWalletBalance', 0.0))
+            
+            if balance_usdt <= 0:
+                self.logger.warning("⚠️ Balance detected as $0, using env defaults")
+                return self._get_env_defaults()
+            
             self.logger.info(f"💰 Detected balance: ${balance_usdt:.2f} USDT")
             
             # Scale based on balance
