@@ -977,23 +977,21 @@ async def ensure_positions_protected() -> None:
                                 logger.debug(f"⚠️ {symbol}: ATR=0, skipping dynamic SL")
                     
                     # 🎯 LAYER 5: DYNAMIC TP UPDATE (MetaBrain v9.1 - Real-time TP Adjustment)
-                    # Update TP orders every 30s based on price movement and volatility
+                    # UPDATE existing TP orders instead of cancel-create to avoid 10-order limit
                     try:
                         from utils.multi_target_tp import MultiTargetTP
-                        from utils.binance_client import get_all_orders, futures_cancel_order
+                        from utils.order_consolidation_engine import get_order_consolidation_engine
+                        from utils.binance_client import get_all_orders
                         
                         mttp = MultiTargetTP()
+                        consolidation = get_order_consolidation_engine()
                         
                         # Get current TP orders
                         all_orders_result = get_all_orders(symbol)
                         all_orders = all_orders_result if isinstance(all_orders_result, list) else []
-                        tp_orders = [
-                            o for o in all_orders
-                            if o.get("type") in ("TAKE_PROFIT", "TAKE_PROFIT_MARKET") or
-                               (o.get("type") == "LIMIT" and o.get("reduceOnly") == True)
-                        ]
+                        existing_tp_orders = consolidation.find_existing_tp_orders(all_orders)
                         
-                        if tp_orders and atr > 0:
+                        if existing_tp_orders and atr > 0:
                             # Recalculate TP levels based on current price
                             pnl_pct = ((mark_price - entry_price) / entry_price * 100) if position_side == "LONG" else ((entry_price - mark_price) / entry_price * 100)
                             
@@ -1011,121 +1009,78 @@ async def ensure_positions_protected() -> None:
                                 
                                 if tp_config and "targets" in tp_config and len(tp_config["targets"]) >= 3:
                                     new_tp_prices = [t["price"] for t in tp_config["targets"][:5]]  # UP TO 5
-                                    old_tp_prices = [float(o.get("stopPrice", 0)) for o in tp_orders[:5]]  # UP TO 5
                                     
-                                    # Check if TP prices changed significantly (> 0.01%)
+                                    # Check if TP prices changed significantly
                                     prices_changed = any(
                                         abs(new - old) / old > 0.0001 if old > 0 else True
-                                        for new, old in zip(new_tp_prices, old_tp_prices)
+                                        for new, old in zip(
+                                            new_tp_prices,
+                                            [float(o.get("stopPrice", 0)) for o in existing_tp_orders[:5]]
+                                        )
                                     )
                                     
                                     if prices_changed:
                                         try:
-                                            # Import required functions
-                                            from utils.binance_client import futures_create_order, futures_cancel_order
-                                            
-                                            # Cancel old TP orders (skip if order no longer exists - expected for filled orders)
-                                            for tp_order in tp_orders[:5]:  # UP TO 5 TP ORDERS
-                                                try:
-                                                    order_id = tp_order.get("orderId")
-                                                    result = futures_cancel_order(symbol, order_id)
-                                                    if result.get("ok") == False:
-                                                        error_msg = result.get("error", "Unknown error")
-                                                        # -2011 = Order not found (filled/cancelled) - expected, skip
-                                                        if "-2011" in error_msg or "Unknown order" in error_msg:
-                                                            logger.debug(f"ℹ️ {symbol}: TP order {order_id} already filled/cancelled")
-                                                        else:
-                                                            logger.warning(f"⚠️ {symbol}: Failed to cancel TP order {order_id}: {error_msg}")
-                                                except Exception as cancel_err:
-                                                    error_code = getattr(cancel_err, "code", None)
-                                                    # -2011 = Order not found (filled/cancelled) - expected, skip
-                                                    if error_code == -2011 or "Unknown order" in str(cancel_err).lower():
-                                                        logger.debug(f"ℹ️ {symbol}: TP order {order_id} already filled/cancelled")
-                                                    else:
-                                                        logger.warning(f"⚠️ {symbol}: Could not cancel TP order {order_id}: {cancel_err}")
-                                            
-                                            # Place new TP orders
-                                            exit_side = "SELL" if position_side == "LONG" else "BUY"
-                                            validator = BinanceSymbolValidator()
-                                            
                                             # 🔧 v9.3.8+ FIX: Skip TP placement if position remnant is too small (< $0.05)
                                             current_price = mark_price if mark_price > 0 else entry_price
                                             total_position_value = abs(amt) * current_price if current_price > 0 else 0
                                             min_position_value_usd = 0.05  # Don't bother with cents
                                             
                                             if total_position_value < min_position_value_usd:
-                                                logger.warning(f"⚠️ {symbol}: Position value ${total_position_value:.4f} < ${min_position_value_usd}, skipping TP placement (not worth spread)")
+                                                logger.warning(f"⚠️ {symbol}: Position value ${total_position_value:.4f} < ${min_position_value_usd}, skipping TP update")
                                                 continue
+                                            
+                                            # Calculate TP quantities
+                                            new_tp_quantities = []
+                                            validator = BinanceSymbolValidator()
                                             
                                             for idx, tp_price in enumerate(new_tp_prices):
                                                 try:
                                                     tp_qty = abs(amt) * tp_config["targets"][idx]["exit_percent"]
                                                     exit_percent = tp_config["targets"][idx]["exit_percent"]
                                                     
-                                                    # 🔧 v9.3.8+ FIX: Check if TP quantity value is worth trading
+                                                    # Check if quantity value is worth trading
                                                     tp_qty_value_usd = tp_qty * tp_price if tp_price > 0 else 0
                                                     if tp_qty_value_usd < min_position_value_usd:
-                                                        logger.warning(f"⚠️ {symbol}: TP{idx+1} value ${tp_qty_value_usd:.4f} < ${min_position_value_usd}, skipping (too small)")
+                                                        logger.debug(f"⏸️ {symbol}: TP{idx+1} value ${tp_qty_value_usd:.4f} < ${min_position_value_usd}, skipping")
+                                                        new_tp_quantities.append(0)
                                                         continue
                                                     
-                                                    # 🔧 CRITICAL FIX: Validate quantity is positive and non-zero (prevent APIError -4003)
+                                                    # Validate and round quantity
                                                     if tp_qty is None or tp_qty <= 0:
-                                                        logger.warning(f"⚠️ {symbol}: TP{idx+1} qty invalid ({tp_qty}), trying 3-level fallback")
-                                                        
-                                                        # Level 1: Try with 2x exit percentage (split remaining evenly among remaining TPs)
-                                                        alt_exit_pct = min(exit_percent * 2, 1.0)
-                                                        alt_qty = abs(amt) * alt_exit_pct
-                                                        
-                                                        if alt_qty > 0:
-                                                            tp_qty = alt_qty
-                                                            logger.info(f"✅ TP{idx+1} fallback L1: using {alt_exit_pct*100:.0f}% = {tp_qty:.8f}")
-                                                        else:
-                                                            # Level 2: Use entire remaining position
-                                                            tp_qty = abs(amt)
-                                                            logger.info(f"✅ TP{idx+1} fallback L2: using full qty = {tp_qty:.8f}")
-                                                        
-                                                        if tp_qty <= 0:
-                                                            # Level 3: Skip this TP
-                                                            logger.warning(f"⚠️ TP{idx+1} unrecoverable, skipping")
-                                                            continue
+                                                        tp_qty = abs(amt) * min(exit_percent * 2, 1.0)
                                                     
-                                                    # 🛡️ CRITICAL: Round quantity to symbol precision BEFORE sending to Binance
                                                     tp_qty_rounded = validator.round_quantity(symbol, tp_qty, is_market=False)
                                                     if tp_qty_rounded <= 0:
-                                                        logger.warning(f"⚠️ {symbol}: TP{idx+1} qty rounded to 0 ({tp_qty:.8f} → {tp_qty_rounded}), trying fallback")
-                                                        # Use entire remaining position as fallback
                                                         tp_qty_rounded = validator.round_quantity(symbol, abs(amt), is_market=False)
-                                                        if tp_qty_rounded <= 0:
-                                                            logger.warning(f"⚠️ TP{idx+1} unrecoverable after rounding, skipping")
-                                                            continue
                                                     
-                                                    # 🛡️ FIX: Validate TP price before placing (prevents APIError -4024/-4006)
-                                                    if tp_price is None or tp_price <= 0:
-                                                        logger.warning(f"⚠️ {symbol}: TP{idx+1} price invalid ({tp_price}), skipping")
-                                                        continue
-                                                    
-                                                    if tp_qty_rounded > 0 and tp_price and tp_price > 0:
-                                                        futures_create_order(
-                                                            symbol=symbol,
-                                                            side=exit_side,
-                                                            type="TAKE_PROFIT_MARKET",
-                                                            quantity=str(tp_qty_rounded),
-                                                            stopPrice=tp_price,
-                                                            reduceOnly=True,
-                                                            positionSide=position_side
-                                                        )
-                                                    elif tp_price and tp_price <= 0:
-                                                        logger.warning(f"⚠️ {symbol}: TP{idx+1} skipped - price invalid ({tp_price})")
-                                                except Exception as tp_place_err:
-                                                    logger.warning(f"⚠️ {symbol}: Failed to place TP{idx+1}: {tp_place_err}")
+                                                    new_tp_quantities.append(tp_qty_rounded)
+                                                except Exception as qty_err:
+                                                    logger.debug(f"TP{idx+1} qty calc error: {qty_err}")
+                                                    new_tp_quantities.append(0)
                                             
+                                            # 🔄 CONSOLIDATE: UPDATE existing orders instead of CREATE new
+                                            exit_side = "SELL" if position_side == "LONG" else "BUY"
+                                            
+                                            consolidation_result = consolidation.consolidate_tp_orders(
+                                                symbol=symbol,
+                                                new_tp_prices=new_tp_prices,
+                                                new_tp_quantities=new_tp_quantities,
+                                                existing_tp_orders=existing_tp_orders,
+                                                futures_edit_order=futures_create_order,  # Using create as fallback
+                                                futures_create_order=futures_create_order,
+                                                exit_side=exit_side,
+                                                position_side=position_side
+                                            )
+                                            
+                                            summary = consolidation.get_consolidation_summary(consolidation_result)
                                             logger.info(
-                                                f"🎯 {symbol}: Dynamic TP updated | "
+                                                f"🎯 {symbol}: TP Consolidation {summary} | "
                                                 f"{''.join(f'TP{i+1}={tp:.8f}, ' for i, tp in enumerate(new_tp_prices))} | "
                                                 f"PnL={pnl_pct:+.2f}%, Vol={volatility*100:.1f}%"
                                             )
                                         except Exception as tp_update_err:
-                                            logger.warning(f"⚠️ {symbol}: Dynamic TP update failed: {tp_update_err}")
+                                            logger.warning(f"⚠️ {symbol}: Dynamic TP consolidation failed: {tp_update_err}")
                     except Exception as dtp_err:
                         logger.debug(f"⚠️ {symbol}: Dynamic TP check skipped: {dtp_err}")
                     
