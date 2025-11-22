@@ -382,8 +382,17 @@ async def attach_multi_target_protection(
             result["errors"].append(error_msg)
             logger.error(f"❌ {error_msg}", exc_info=True)
         
-        # Place TP orders (TP1-TP5) - use LIMIT orders for precision
+        # Place TP orders (TP1-TP3 only to avoid APIError -4045) - use LIMIT orders for precision
+        # 🔧 FIX: Limited to 3 TP levels to stay within Binance stop order limits
+        max_tp_orders = 3  # Only place TP1, TP2, TP3 to avoid hitting order limits
+        tp_orders_placed = 0
+        
         for i, target in enumerate(tp_config["targets"], start=1):
+            # Skip TP4/TP5 to avoid APIError -4045 (max stop orders reached)
+            if i > max_tp_orders:
+                logger.info(f"⏭️ Skipping TP{i} (limit {max_tp_orders} TP orders per symbol)")
+                continue
+            
             try:
                 tp_price = target["price"]
                 exit_percent = target["exit_percent"]
