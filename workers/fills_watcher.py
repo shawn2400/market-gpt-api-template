@@ -1290,17 +1290,35 @@ class _FillsWatcherThread(threading.Thread):
                         log.info(f"🛡️ [{trade_type}] Fill detected: {symbol} | clientOrderId={client_order_id}")
                         log.info(f"📈 Protection: SL={sl_price:.6f}, TP={tp_price:.6f}, Side={fill_side}")
                         
-                        # Attach SL/TP protection
+                        # Attach Multi-Target TP Protection (TP1/TP2/TP3) + SL
                         try:
-                            protection_result = await attach_sltp_protection(
+                            from utils.universal_sltp_manager import attach_multi_target_protection
+                            
+                            entry_price = metadata.get("entry_price", 0)
+                            quantity = metadata.get("quantity", 0)
+                            leverage = metadata.get("leverage", 1)
+                            
+                            # Convert LONG/SHORT to proper position side
+                            position_side = fill_side if fill_side in ("LONG", "SHORT") else None
+                            
+                            # 🎯 Use Multi-Target TP for consistent 3-tier profit locking
+                            protection_result = await attach_multi_target_protection(
                                 symbol=symbol,
                                 side=fill_side,
+                                entry_price=entry_price,
                                 sl_price=sl_price,
-                                tp_price=tp_price
+                                total_quantity=quantity,
+                                leverage=leverage,
+                                strategy=trade_type.lower() if trade_type else "market",
+                                volatility=None,  # Will auto-calculate from ATR
+                                regime="unknown",
+                                win_rate=None,
+                                position_side=position_side
                             )
                             
                             if protection_result and protection_result.get("ok"):
-                                log.info(f"✅ [{trade_type}] SL/TP protection applied: {symbol}")
+                                log.info(f"✅ [{trade_type}] Multi-Target TP protection applied: {symbol}")
+                                log.info(f"   📊 TP1/TP2/TP3: {len(protection_result.get('tp_orders', []))} orders placed")
                                 fills_protected += 1
                                 
                                 # Mark as processed
@@ -1310,9 +1328,9 @@ class _FillsWatcherThread(threading.Thread):
                                 delete_order_metadata(client_order_id)
                             else:
                                 errors = protection_result.get("errors", []) if protection_result else []
-                                log.error(f"❌ [{trade_type}] SL/TP protection FAILED: {symbol} - {errors}")
+                                log.error(f"❌ [{trade_type}] Multi-Target TP protection FAILED: {symbol} - {errors}")
                         except Exception as prot_err:
-                            log.error(f"❌ Protection exception for {symbol}: {prot_err}")
+                            log.error(f"❌ Protection exception for {symbol}: {prot_err}", exc_info=True)
                         
                 except Exception as symbol_err:
                     log.error(f"Failed to process fills for {symbol}: {symbol_err}", exc_info=True)
