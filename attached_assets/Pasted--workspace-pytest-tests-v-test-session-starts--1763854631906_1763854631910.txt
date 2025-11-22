@@ -1,0 +1,1574 @@
+~/workspace$ pytest tests/ -v
+====================================== test session starts =======================================
+platform linux -- Python 3.11.13, pytest-8.2.2, pluggy-1.6.0 -- /nix/store/2lcqw1d28vklbk8ikiwad28iq2smwndv-python-wrapped-0.1.0/bin/python3
+cachedir: .pytest_cache
+rootdir: /home/runner/workspace
+configfile: pytest.ini
+plugins: anyio-4.11.0
+collected 39 items                                                                               
+
+tests/test_capabilities.py::test_free_plan_detection PASSED                                [  2%]
+tests/test_capabilities.py::test_paid_plan_detection PASSED                                [  5%]
+tests/test_capabilities.py::test_upgrade_downgrade PASSED                                  [  7%]
+tests/test_consensus_engine.py::test_merge_empty PASSED                                    [ 10%]
+tests/test_consensus_engine.py::test_merge_scans PASSED                                    [ 12%]
+tests/test_consensus_engine.py::test_merge_signals PASSED                                  [ 15%]
+tests/test_consensus_engine.py::test_score_ranking PASSED                                  [ 17%]
+tests/test_external_connectivity.py::test_all_plugins_loaded PASSED                        [ 20%]
+tests/test_external_connectivity.py::test_plugin_status PASSED                             [ 23%]
+tests/test_external_connectivity.py::test_plugin_enable_disable PASSED                     [ 25%]
+tests/test_external_connectivity.py::test_plugin_scoring PASSED                            [ 28%]
+tests/test_external_connectivity.py::test_plugin_manager_get_by_type PASSED                [ 30%]
+tests/test_health.py::test_health FAILED                                                   [ 33%]
+tests/test_health.py::test_readyz FAILED                                                   [ 35%]
+tests/test_hybrid_router.py::test_get_scans SKIPPED (async def function and no async
+plugin installed (see warnings))                                                           [ 38%]
+tests/test_hybrid_router.py::test_get_signals SKIPPED (async def function and no async
+plugin installed (see warnings))                                                           [ 41%]
+tests/test_hybrid_router.py::test_execute_order SKIPPED (async def function and no async
+plugin installed (see warnings))                                                           [ 43%]
+tests/test_hybrid_router.py::test_failover_if_hyper_disabled SKIPPED (async def function
+and no async plugin installed (see warnings))                                              [ 46%]
+tests/test_imports.py::test_health_root_and_meta FAILED                                    [ 48%]
+tests/test_imports.py::test_public_endpoints_ok FAILED                                     [ 51%]
+tests/test_imports.py::test_aliases_crud_ok FAILED                                         [ 53%]
+tests/test_position_sizing.py::test_auto_qty_disabled_by_default PASSED                    [ 56%]
+tests/test_position_sizing.py::test_auto_qty_min_notional PASSED                           [ 58%]
+tests/test_position_sizing.py::test_ensure_final_qty_when_missing PASSED                   [ 61%]
+tests/test_precision.py::test_round_to_precision PASSED                                    [ 64%]
+tests/test_precision.py::test_get_precision_info_structure PASSED                          [ 66%]
+tests/test_price_routes.py::test_price_last_endpoint FAILED                                [ 69%]
+tests/test_price_routes.py::test_price_symbol_endpoint FAILED                              [ 71%]
+tests/test_quantize.py::test_quantize_price_floor PASSED                                   [ 74%]
+tests/test_quantize.py::test_quantize_price_up PASSED                                      [ 76%]
+tests/test_quantize.py::test_quantize_price_nearest FAILED                                 [ 79%]
+tests/test_quantize.py::test_quantize_qty_floor PASSED                                     [ 82%]
+tests/test_quantize.py::test_ensure_min_qty PASSED                                         [ 84%]
+tests/test_quantize.py::test_ensure_min_notional PASSED                                    [ 87%]
+tests/test_quantize.py::test_clamp_decimals PASSED                                         [ 89%]
+tests/test_self_optimizer.py::test_evaluate_empty PASSED                                   [ 92%]
+tests/test_self_optimizer.py::test_evaluate_single_win PASSED                              [ 94%]
+tests/test_self_optimizer.py::test_evaluate_mixed_results PASSED                           [ 97%]
+tests/test_self_optimizer.py::test_evaluate_multiple_bots PASSED                           [100%]
+
+============================================ FAILURES ============================================
+__________________________________________ test_health ___________________________________________
+.pythonlibs/lib/python3.11/site-packages/httpx/_transports/default.py:72: in map_httpcore_exceptions
+    yield
+.pythonlibs/lib/python3.11/site-packages/httpx/_transports/default.py:236: in handle_request
+    resp = self._pool.handle_request(req)
+.pythonlibs/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:256: in handle_request
+    raise exc from None
+.pythonlibs/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:236: in handle_request
+    response = connection.handle_request(
+.pythonlibs/lib/python3.11/site-packages/httpcore/_sync/connection.py:101: in handle_request
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/httpcore/_sync/connection.py:78: in handle_request
+    stream = self._connect(request)
+.pythonlibs/lib/python3.11/site-packages/httpcore/_sync/connection.py:124: in _connect
+    stream = self._network_backend.connect_tcp(**kwargs)
+.pythonlibs/lib/python3.11/site-packages/httpcore/_backends/sync.py:207: in connect_tcp
+    with map_exceptions(exc_map):
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/httpcore/_exceptions.py:14: in map_exceptions
+    raise to_exc(exc) from exc
+E   httpcore.ConnectError: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+tests/test_health.py:6: in test_health
+    r = httpx.get(f"{BASE}/health", timeout=10)
+.pythonlibs/lib/python3.11/site-packages/httpx/_api.py:210: in get
+    return request(
+.pythonlibs/lib/python3.11/site-packages/httpx/_api.py:118: in request
+    return client.request(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:837: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:926: in send
+    response = self._send_handling_auth(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:954: in _send_handling_auth
+    response = self._send_handling_redirects(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:991: in _send_handling_redirects
+    response = self._send_single_request(request)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:1027: in _send_single_request
+    response = transport.handle_request(request)
+.pythonlibs/lib/python3.11/site-packages/httpx/_transports/default.py:235: in handle_request
+    with map_httpcore_exceptions():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/httpx/_transports/default.py:89: in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+E   httpx.ConnectError: [Errno 111] Connection refused
+__________________________________________ test_readyz ___________________________________________
+.pythonlibs/lib/python3.11/site-packages/httpx/_transports/default.py:72: in map_httpcore_exceptions
+    yield
+.pythonlibs/lib/python3.11/site-packages/httpx/_transports/default.py:236: in handle_request
+    resp = self._pool.handle_request(req)
+.pythonlibs/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:256: in handle_request
+    raise exc from None
+.pythonlibs/lib/python3.11/site-packages/httpcore/_sync/connection_pool.py:236: in handle_request
+    response = connection.handle_request(
+.pythonlibs/lib/python3.11/site-packages/httpcore/_sync/connection.py:101: in handle_request
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/httpcore/_sync/connection.py:78: in handle_request
+    stream = self._connect(request)
+.pythonlibs/lib/python3.11/site-packages/httpcore/_sync/connection.py:124: in _connect
+    stream = self._network_backend.connect_tcp(**kwargs)
+.pythonlibs/lib/python3.11/site-packages/httpcore/_backends/sync.py:207: in connect_tcp
+    with map_exceptions(exc_map):
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/httpcore/_exceptions.py:14: in map_exceptions
+    raise to_exc(exc) from exc
+E   httpcore.ConnectError: [Errno 111] Connection refused
+
+The above exception was the direct cause of the following exception:
+tests/test_health.py:11: in test_readyz
+    r = httpx.get(f"{BASE}/readyz", timeout=10)
+.pythonlibs/lib/python3.11/site-packages/httpx/_api.py:210: in get
+    return request(
+.pythonlibs/lib/python3.11/site-packages/httpx/_api.py:118: in request
+    return client.request(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:837: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:926: in send
+    response = self._send_handling_auth(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:954: in _send_handling_auth
+    response = self._send_handling_redirects(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:991: in _send_handling_redirects
+    response = self._send_single_request(request)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:1027: in _send_single_request
+    response = transport.handle_request(request)
+.pythonlibs/lib/python3.11/site-packages/httpx/_transports/default.py:235: in handle_request
+    with map_httpcore_exceptions():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/httpx/_transports/default.py:89: in map_httpcore_exceptions
+    raise mapped_exc(message) from exc
+E   httpx.ConnectError: [Errno 111] Connection refused
+___________________________________ test_health_root_and_meta ____________________________________
+  + Exception Group Traceback (most recent call last):
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 87, in collapse_excgroups
+  |     yield
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 190, in __call__
+  |     async with anyio.create_task_group() as task_group:
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/_backends/_asyncio.py", line 781, in __aexit__
+  |     raise BaseExceptionGroup(
+  | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 341, in from_call
+    |     result: Optional[TResult] = func()
+    |                                 ^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 241, in <lambda>
+    |     lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_hooks.py", line 512, in __call__
+    |     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    |     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 167, in _multicall
+    |     raise exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/threadexception.py", line 87, in pytest_runtest_call
+    |     yield from thread_exception_runtest_hook()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/threadexception.py", line 63, in thread_exception_runtest_hook
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/unraisableexception.py", line 90, in pytest_runtest_call
+    |     yield from unraisable_exception_runtest_hook()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/unraisableexception.py", line 65, in unraisable_exception_runtest_hook
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/logging.py", line 850, in pytest_runtest_call
+    |     yield from self._runtest_for(item, "call")
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/logging.py", line 833, in _runtest_for
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/capture.py", line 878, in pytest_runtest_call
+    |     return (yield)
+    |             ^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/skipping.py", line 257, in pytest_runtest_call
+    |     return (yield)
+    |             ^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 121, in _multicall
+    |     res = hook_impl.function(*args)
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 183, in pytest_runtest_call
+    |     raise e
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 173, in pytest_runtest_call
+    |     item.runtest()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/python.py", line 1632, in runtest
+    |     self.ihook.pytest_pyfunc_call(pyfuncitem=self)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_hooks.py", line 512, in __call__
+    |     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    |     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 167, in _multicall
+    |     raise exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 121, in _multicall
+    |     res = hook_impl.function(*args)
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/python.py", line 162, in pytest_pyfunc_call
+    |     result = testfunction(**testargs)
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/tests/test_imports.py", line 15, in test_health_root_and_meta
+    |     assert c.get("/meta/version").status_code == 200
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 548, in get
+    |     return super().get(
+    |            ^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 1066, in get
+    |     return self.request(
+    |            ^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 516, in request
+    |     return super().request(
+    |            ^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 837, in request
+    |     return self.send(request, auth=auth, follow_redirects=follow_redirects)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 926, in send
+    |     response = self._send_handling_auth(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 954, in _send_handling_auth
+    |     response = self._send_handling_redirects(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 991, in _send_handling_redirects
+    |     response = self._send_single_request(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 1027, in _send_single_request
+    |     response = transport.handle_request(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 398, in handle_request
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 395, in handle_request
+    |     portal.call(self.app, scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py", line 321, in call
+    |     return cast(T_Retval, self.start_task_soon(func, *args).result())
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py", line 449, in result
+    |     return self.__get_result()
+    |            ^^^^^^^^^^^^^^^^^^^
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+    |     raise self._exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py", line 252, in _call_func
+    |     retval = await retval_or_awaitable
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/applications.py", line 1054, in __call__
+    |     await super().__call__(scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/applications.py", line 123, in __call__
+    |     await self.middleware_stack(scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    |     await self.app(scope, receive, _send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 284, in _head_compat_and_soft_readyz
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 228, in rate_limiting_middleware
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 185, in add_no_cache_headers
+    |     response = await call_next(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/utils/auth.py", line 163, in validate_token
+    |     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+    | fastapi.exceptions.HTTPException: 401: Invalid API key
+    +------------------------------------
+
+During handling of the above exception, another exception occurred:
+tests/test_imports.py:15: in test_health_root_and_meta
+    assert c.get("/meta/version").status_code == 200
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:548: in get
+    return super().get(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:1066: in get
+    return self.request(
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:516: in request
+    return super().request(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:837: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:926: in send
+    response = self._send_handling_auth(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:954: in _send_handling_auth
+    response = self._send_handling_redirects(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:991: in _send_handling_redirects
+    response = self._send_single_request(request)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:1027: in _send_single_request
+    response = transport.handle_request(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:398: in handle_request
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:395: in handle_request
+    portal.call(self.app, scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py:321: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py:449: in result
+    return self.__get_result()
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py:252: in _call_func
+    retval = await retval_or_awaitable
+.pythonlibs/lib/python3.11/site-packages/fastapi/applications.py:1054: in __call__
+    await super().__call__(scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/starlette/applications.py:123: in __call__
+    await self.middleware_stack(scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:284: in _head_compat_and_soft_readyz
+    return await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:228: in rate_limiting_middleware
+    return await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:185: in add_no_cache_headers
+    response = await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+utils/auth.py:163: in validate_token
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+E   fastapi.exceptions.HTTPException: 401: Invalid API key
+--------------------------------------- Captured log call ----------------------------------------
+ERROR    algogpt.main:main.py:226 Rate limiting middleware error: 401: Invalid API key
+____________________________________ test_public_endpoints_ok ____________________________________
+  + Exception Group Traceback (most recent call last):
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 87, in collapse_excgroups
+  |     yield
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 190, in __call__
+  |     async with anyio.create_task_group() as task_group:
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/_backends/_asyncio.py", line 781, in __aexit__
+  |     raise BaseExceptionGroup(
+  | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 341, in from_call
+    |     result: Optional[TResult] = func()
+    |                                 ^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 241, in <lambda>
+    |     lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_hooks.py", line 512, in __call__
+    |     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    |     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 167, in _multicall
+    |     raise exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/threadexception.py", line 87, in pytest_runtest_call
+    |     yield from thread_exception_runtest_hook()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/threadexception.py", line 63, in thread_exception_runtest_hook
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/unraisableexception.py", line 90, in pytest_runtest_call
+    |     yield from unraisable_exception_runtest_hook()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/unraisableexception.py", line 65, in unraisable_exception_runtest_hook
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/logging.py", line 850, in pytest_runtest_call
+    |     yield from self._runtest_for(item, "call")
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/logging.py", line 833, in _runtest_for
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/capture.py", line 878, in pytest_runtest_call
+    |     return (yield)
+    |             ^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/skipping.py", line 257, in pytest_runtest_call
+    |     return (yield)
+    |             ^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 121, in _multicall
+    |     res = hook_impl.function(*args)
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 183, in pytest_runtest_call
+    |     raise e
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 173, in pytest_runtest_call
+    |     item.runtest()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/python.py", line 1632, in runtest
+    |     self.ihook.pytest_pyfunc_call(pyfuncitem=self)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_hooks.py", line 512, in __call__
+    |     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    |     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 167, in _multicall
+    |     raise exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 121, in _multicall
+    |     res = hook_impl.function(*args)
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/python.py", line 162, in pytest_pyfunc_call
+    |     result = testfunction(**testargs)
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/tests/test_imports.py", line 20, in test_public_endpoints_ok
+    |     r1 = c.get("/scan/public-now")
+    |          ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 548, in get
+    |     return super().get(
+    |            ^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 1066, in get
+    |     return self.request(
+    |            ^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 516, in request
+    |     return super().request(
+    |            ^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 837, in request
+    |     return self.send(request, auth=auth, follow_redirects=follow_redirects)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 926, in send
+    |     response = self._send_handling_auth(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 954, in _send_handling_auth
+    |     response = self._send_handling_redirects(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 991, in _send_handling_redirects
+    |     response = self._send_single_request(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 1027, in _send_single_request
+    |     response = transport.handle_request(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 398, in handle_request
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 395, in handle_request
+    |     portal.call(self.app, scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py", line 321, in call
+    |     return cast(T_Retval, self.start_task_soon(func, *args).result())
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+    |     return self.__get_result()
+    |            ^^^^^^^^^^^^^^^^^^^
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+    |     raise self._exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py", line 252, in _call_func
+    |     retval = await retval_or_awaitable
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/applications.py", line 1054, in __call__
+    |     await super().__call__(scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/applications.py", line 123, in __call__
+    |     await self.middleware_stack(scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    |     await self.app(scope, receive, _send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 284, in _head_compat_and_soft_readyz
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 228, in rate_limiting_middleware
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 185, in add_no_cache_headers
+    |     response = await call_next(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/utils/auth.py", line 163, in validate_token
+    |     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+    | fastapi.exceptions.HTTPException: 401: Invalid API key
+    +------------------------------------
+
+During handling of the above exception, another exception occurred:
+tests/test_imports.py:20: in test_public_endpoints_ok
+    r1 = c.get("/scan/public-now")
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:548: in get
+    return super().get(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:1066: in get
+    return self.request(
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:516: in request
+    return super().request(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:837: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:926: in send
+    response = self._send_handling_auth(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:954: in _send_handling_auth
+    response = self._send_handling_redirects(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:991: in _send_handling_redirects
+    response = self._send_single_request(request)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:1027: in _send_single_request
+    response = transport.handle_request(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:398: in handle_request
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:395: in handle_request
+    portal.call(self.app, scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py:321: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py:252: in _call_func
+    retval = await retval_or_awaitable
+.pythonlibs/lib/python3.11/site-packages/fastapi/applications.py:1054: in __call__
+    await super().__call__(scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/starlette/applications.py:123: in __call__
+    await self.middleware_stack(scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:284: in _head_compat_and_soft_readyz
+    return await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:228: in rate_limiting_middleware
+    return await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:185: in add_no_cache_headers
+    response = await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+utils/auth.py:163: in validate_token
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+E   fastapi.exceptions.HTTPException: 401: Invalid API key
+--------------------------------------- Captured log call ----------------------------------------
+ERROR    algogpt.main:main.py:226 Rate limiting middleware error: 401: Invalid API key
+______________________________________ test_aliases_crud_ok ______________________________________
+  + Exception Group Traceback (most recent call last):
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 87, in collapse_excgroups
+  |     yield
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 190, in __call__
+  |     async with anyio.create_task_group() as task_group:
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/_backends/_asyncio.py", line 781, in __aexit__
+  |     raise BaseExceptionGroup(
+  | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 341, in from_call
+    |     result: Optional[TResult] = func()
+    |                                 ^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 241, in <lambda>
+    |     lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_hooks.py", line 512, in __call__
+    |     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    |     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 167, in _multicall
+    |     raise exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/threadexception.py", line 87, in pytest_runtest_call
+    |     yield from thread_exception_runtest_hook()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/threadexception.py", line 63, in thread_exception_runtest_hook
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/unraisableexception.py", line 90, in pytest_runtest_call
+    |     yield from unraisable_exception_runtest_hook()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/unraisableexception.py", line 65, in unraisable_exception_runtest_hook
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/logging.py", line 850, in pytest_runtest_call
+    |     yield from self._runtest_for(item, "call")
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/logging.py", line 833, in _runtest_for
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/capture.py", line 878, in pytest_runtest_call
+    |     return (yield)
+    |             ^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/skipping.py", line 257, in pytest_runtest_call
+    |     return (yield)
+    |             ^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 121, in _multicall
+    |     res = hook_impl.function(*args)
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 183, in pytest_runtest_call
+    |     raise e
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 173, in pytest_runtest_call
+    |     item.runtest()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/python.py", line 1632, in runtest
+    |     self.ihook.pytest_pyfunc_call(pyfuncitem=self)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_hooks.py", line 512, in __call__
+    |     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    |     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 167, in _multicall
+    |     raise exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 121, in _multicall
+    |     res = hook_impl.function(*args)
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/python.py", line 162, in pytest_pyfunc_call
+    |     result = testfunction(**testargs)
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/tests/test_imports.py", line 31, in test_aliases_crud_ok
+    |     r = c.post("/aliases/set", json={"alias": "doc", "target": "/docs"})
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 633, in post
+    |     return super().post(
+    |            ^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 1157, in post
+    |     return self.request(
+    |            ^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 516, in request
+    |     return super().request(
+    |            ^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 837, in request
+    |     return self.send(request, auth=auth, follow_redirects=follow_redirects)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 926, in send
+    |     response = self._send_handling_auth(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 954, in _send_handling_auth
+    |     response = self._send_handling_redirects(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 991, in _send_handling_redirects
+    |     response = self._send_single_request(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 1027, in _send_single_request
+    |     response = transport.handle_request(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 398, in handle_request
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 395, in handle_request
+    |     portal.call(self.app, scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py", line 321, in call
+    |     return cast(T_Retval, self.start_task_soon(func, *args).result())
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py", line 456, in result
+    |     return self.__get_result()
+    |            ^^^^^^^^^^^^^^^^^^^
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+    |     raise self._exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py", line 252, in _call_func
+    |     retval = await retval_or_awaitable
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/applications.py", line 1054, in __call__
+    |     await super().__call__(scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/applications.py", line 123, in __call__
+    |     await self.middleware_stack(scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    |     await self.app(scope, receive, _send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 284, in _head_compat_and_soft_readyz
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 228, in rate_limiting_middleware
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 185, in add_no_cache_headers
+    |     response = await call_next(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/utils/auth.py", line 163, in validate_token
+    |     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+    | fastapi.exceptions.HTTPException: 401: Invalid API key
+    +------------------------------------
+
+During handling of the above exception, another exception occurred:
+tests/test_imports.py:31: in test_aliases_crud_ok
+    r = c.post("/aliases/set", json={"alias": "doc", "target": "/docs"})
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:633: in post
+    return super().post(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:1157: in post
+    return self.request(
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:516: in request
+    return super().request(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:837: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:926: in send
+    response = self._send_handling_auth(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:954: in _send_handling_auth
+    response = self._send_handling_redirects(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:991: in _send_handling_redirects
+    response = self._send_single_request(request)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:1027: in _send_single_request
+    response = transport.handle_request(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:398: in handle_request
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:395: in handle_request
+    portal.call(self.app, scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py:321: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py:456: in result
+    return self.__get_result()
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py:252: in _call_func
+    retval = await retval_or_awaitable
+.pythonlibs/lib/python3.11/site-packages/fastapi/applications.py:1054: in __call__
+    await super().__call__(scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/starlette/applications.py:123: in __call__
+    await self.middleware_stack(scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:284: in _head_compat_and_soft_readyz
+    return await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:228: in rate_limiting_middleware
+    return await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:185: in add_no_cache_headers
+    response = await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+utils/auth.py:163: in validate_token
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+E   fastapi.exceptions.HTTPException: 401: Invalid API key
+--------------------------------------- Captured log call ----------------------------------------
+ERROR    algogpt.main:main.py:226 Rate limiting middleware error: 401: Invalid API key
+____________________________________ test_price_last_endpoint ____________________________________
+  + Exception Group Traceback (most recent call last):
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 87, in collapse_excgroups
+  |     yield
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 190, in __call__
+  |     async with anyio.create_task_group() as task_group:
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/_backends/_asyncio.py", line 781, in __aexit__
+  |     raise BaseExceptionGroup(
+  | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 341, in from_call
+    |     result: Optional[TResult] = func()
+    |                                 ^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 241, in <lambda>
+    |     lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_hooks.py", line 512, in __call__
+    |     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    |     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 167, in _multicall
+    |     raise exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/threadexception.py", line 87, in pytest_runtest_call
+    |     yield from thread_exception_runtest_hook()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/threadexception.py", line 63, in thread_exception_runtest_hook
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/unraisableexception.py", line 90, in pytest_runtest_call
+    |     yield from unraisable_exception_runtest_hook()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/unraisableexception.py", line 65, in unraisable_exception_runtest_hook
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/logging.py", line 850, in pytest_runtest_call
+    |     yield from self._runtest_for(item, "call")
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/logging.py", line 833, in _runtest_for
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/capture.py", line 878, in pytest_runtest_call
+    |     return (yield)
+    |             ^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/skipping.py", line 257, in pytest_runtest_call
+    |     return (yield)
+    |             ^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 121, in _multicall
+    |     res = hook_impl.function(*args)
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 183, in pytest_runtest_call
+    |     raise e
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 173, in pytest_runtest_call
+    |     item.runtest()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/python.py", line 1632, in runtest
+    |     self.ihook.pytest_pyfunc_call(pyfuncitem=self)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_hooks.py", line 512, in __call__
+    |     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    |     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 167, in _multicall
+    |     raise exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 121, in _multicall
+    |     res = hook_impl.function(*args)
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/python.py", line 162, in pytest_pyfunc_call
+    |     result = testfunction(**testargs)
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/tests/test_price_routes.py", line 8, in test_price_last_endpoint
+    |     r = client.get("/price/last", params={"symbol":"BTCUSDT"})
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 548, in get
+    |     return super().get(
+    |            ^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 1066, in get
+    |     return self.request(
+    |            ^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 516, in request
+    |     return super().request(
+    |            ^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 837, in request
+    |     return self.send(request, auth=auth, follow_redirects=follow_redirects)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 926, in send
+    |     response = self._send_handling_auth(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 954, in _send_handling_auth
+    |     response = self._send_handling_redirects(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 991, in _send_handling_redirects
+    |     response = self._send_single_request(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 1027, in _send_single_request
+    |     response = transport.handle_request(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 398, in handle_request
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 395, in handle_request
+    |     portal.call(self.app, scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py", line 321, in call
+    |     return cast(T_Retval, self.start_task_soon(func, *args).result())
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py", line 449, in result
+    |     return self.__get_result()
+    |            ^^^^^^^^^^^^^^^^^^^
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+    |     raise self._exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py", line 252, in _call_func
+    |     retval = await retval_or_awaitable
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/applications.py", line 1054, in __call__
+    |     await super().__call__(scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/applications.py", line 123, in __call__
+    |     await self.middleware_stack(scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    |     await self.app(scope, receive, _send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 284, in _head_compat_and_soft_readyz
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 228, in rate_limiting_middleware
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 185, in add_no_cache_headers
+    |     response = await call_next(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/utils/auth.py", line 163, in validate_token
+    |     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+    | fastapi.exceptions.HTTPException: 401: Invalid API key
+    +------------------------------------
+
+During handling of the above exception, another exception occurred:
+tests/test_price_routes.py:8: in test_price_last_endpoint
+    r = client.get("/price/last", params={"symbol":"BTCUSDT"})
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:548: in get
+    return super().get(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:1066: in get
+    return self.request(
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:516: in request
+    return super().request(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:837: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:926: in send
+    response = self._send_handling_auth(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:954: in _send_handling_auth
+    response = self._send_handling_redirects(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:991: in _send_handling_redirects
+    response = self._send_single_request(request)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:1027: in _send_single_request
+    response = transport.handle_request(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:398: in handle_request
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:395: in handle_request
+    portal.call(self.app, scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py:321: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py:449: in result
+    return self.__get_result()
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py:252: in _call_func
+    retval = await retval_or_awaitable
+.pythonlibs/lib/python3.11/site-packages/fastapi/applications.py:1054: in __call__
+    await super().__call__(scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/starlette/applications.py:123: in __call__
+    await self.middleware_stack(scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:284: in _head_compat_and_soft_readyz
+    return await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:228: in rate_limiting_middleware
+    return await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:185: in add_no_cache_headers
+    response = await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+utils/auth.py:163: in validate_token
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+E   fastapi.exceptions.HTTPException: 401: Invalid API key
+--------------------------------------- Captured log call ----------------------------------------
+ERROR    algogpt.main:main.py:226 Rate limiting middleware error: 401: Invalid API key
+___________________________________ test_price_symbol_endpoint ___________________________________
+  + Exception Group Traceback (most recent call last):
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 87, in collapse_excgroups
+  |     yield
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 190, in __call__
+  |     async with anyio.create_task_group() as task_group:
+  |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/_backends/_asyncio.py", line 781, in __aexit__
+  |     raise BaseExceptionGroup(
+  | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 341, in from_call
+    |     result: Optional[TResult] = func()
+    |                                 ^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 241, in <lambda>
+    |     lambda: runtest_hook(item=item, **kwds), when=when, reraise=reraise
+    |             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_hooks.py", line 512, in __call__
+    |     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    |     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 167, in _multicall
+    |     raise exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/threadexception.py", line 87, in pytest_runtest_call
+    |     yield from thread_exception_runtest_hook()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/threadexception.py", line 63, in thread_exception_runtest_hook
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/unraisableexception.py", line 90, in pytest_runtest_call
+    |     yield from unraisable_exception_runtest_hook()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/unraisableexception.py", line 65, in unraisable_exception_runtest_hook
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/logging.py", line 850, in pytest_runtest_call
+    |     yield from self._runtest_for(item, "call")
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/logging.py", line 833, in _runtest_for
+    |     yield
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/capture.py", line 878, in pytest_runtest_call
+    |     return (yield)
+    |             ^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 139, in _multicall
+    |     teardown.throw(exception)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/skipping.py", line 257, in pytest_runtest_call
+    |     return (yield)
+    |             ^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 121, in _multicall
+    |     res = hook_impl.function(*args)
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 183, in pytest_runtest_call
+    |     raise e
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/runner.py", line 173, in pytest_runtest_call
+    |     item.runtest()
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/python.py", line 1632, in runtest
+    |     self.ihook.pytest_pyfunc_call(pyfuncitem=self)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_hooks.py", line 512, in __call__
+    |     return self._hookexec(self.name, self._hookimpls.copy(), kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_manager.py", line 120, in _hookexec
+    |     return self._inner_hookexec(hook_name, methods, kwargs, firstresult)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 167, in _multicall
+    |     raise exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/pluggy/_callers.py", line 121, in _multicall
+    |     res = hook_impl.function(*args)
+    |           ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/_pytest/python.py", line 162, in pytest_pyfunc_call
+    |     result = testfunction(**testargs)
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/tests/test_price_routes.py", line 15, in test_price_symbol_endpoint
+    |     r = client.get("/price/BTCUSDT")
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 548, in get
+    |     return super().get(
+    |            ^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 1066, in get
+    |     return self.request(
+    |            ^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 516, in request
+    |     return super().request(
+    |            ^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 837, in request
+    |     return self.send(request, auth=auth, follow_redirects=follow_redirects)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 926, in send
+    |     response = self._send_handling_auth(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 954, in _send_handling_auth
+    |     response = self._send_handling_redirects(
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 991, in _send_handling_redirects
+    |     response = self._send_single_request(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/httpx/_client.py", line 1027, in _send_single_request
+    |     response = transport.handle_request(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 398, in handle_request
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py", line 395, in handle_request
+    |     portal.call(self.app, scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py", line 321, in call
+    |     return cast(T_Retval, self.start_task_soon(func, *args).result())
+    |                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py", line 449, in result
+    |     return self.__get_result()
+    |            ^^^^^^^^^^^^^^^^^^^
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py", line 401, in __get_result
+    |     raise self._exception
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py", line 252, in _call_func
+    |     retval = await retval_or_awaitable
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/fastapi/applications.py", line 1054, in __call__
+    |     await super().__call__(scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/applications.py", line 123, in __call__
+    |     await self.middleware_stack(scope, receive, send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    |     await self.app(scope, receive, _send)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 284, in _head_compat_and_soft_readyz
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 228, in rate_limiting_middleware
+    |     return await call_next(request)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/main.py", line 185, in add_no_cache_headers
+    |     response = await call_next(request)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 165, in call_next
+    |     raise app_exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 151, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 189, in __call__
+    |     with collapse_excgroups():
+    |   File "/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py", line 158, in __exit__
+    |     self.gen.throw(typ, value, traceback)
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py", line 93, in collapse_excgroups
+    |     raise exc
+    |   File "/home/runner/workspace/.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/home/runner/workspace/utils/auth.py", line 163, in validate_token
+    |     raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+    | fastapi.exceptions.HTTPException: 401: Invalid API key
+    +------------------------------------
+
+During handling of the above exception, another exception occurred:
+tests/test_price_routes.py:15: in test_price_symbol_endpoint
+    r = client.get("/price/BTCUSDT")
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:548: in get
+    return super().get(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:1066: in get
+    return self.request(
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:516: in request
+    return super().request(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:837: in request
+    return self.send(request, auth=auth, follow_redirects=follow_redirects)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:926: in send
+    response = self._send_handling_auth(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:954: in _send_handling_auth
+    response = self._send_handling_redirects(
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:991: in _send_handling_redirects
+    response = self._send_single_request(request)
+.pythonlibs/lib/python3.11/site-packages/httpx/_client.py:1027: in _send_single_request
+    response = transport.handle_request(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:398: in handle_request
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/testclient.py:395: in handle_request
+    portal.call(self.app, scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py:321: in call
+    return cast(T_Retval, self.start_task_soon(func, *args).result())
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py:449: in result
+    return self.__get_result()
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/concurrent/futures/_base.py:401: in __get_result
+    raise self._exception
+.pythonlibs/lib/python3.11/site-packages/anyio/from_thread.py:252: in _call_func
+    retval = await retval_or_awaitable
+.pythonlibs/lib/python3.11/site-packages/fastapi/applications.py:1054: in __call__
+    await super().__call__(scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/starlette/applications.py:123: in __call__
+    await self.middleware_stack(scope, receive, send)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py:186: in __call__
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/errors.py:164: in __call__
+    await self.app(scope, receive, _send)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:284: in _head_compat_and_soft_readyz
+    return await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:228: in rate_limiting_middleware
+    return await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+main.py:185: in add_no_cache_headers
+    response = await call_next(request)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:165: in call_next
+    raise app_exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:151: in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:189: in __call__
+    with collapse_excgroups():
+/nix/store/7d088dip86hlzri9sk0h78b63yfmx0a0-python3-3.11.13/lib/python3.11/contextlib.py:158: in __exit__
+    self.gen.throw(typ, value, traceback)
+.pythonlibs/lib/python3.11/site-packages/starlette/_utils.py:93: in collapse_excgroups
+    raise exc
+.pythonlibs/lib/python3.11/site-packages/starlette/middleware/base.py:191: in __call__
+    response = await self.dispatch_func(request, call_next)
+utils/auth.py:163: in validate_token
+    raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+E   fastapi.exceptions.HTTPException: 401: Invalid API key
+--------------------------------------- Captured log call ----------------------------------------
+ERROR    algogpt.main:main.py:226 Rate limiting middleware error: 401: Invalid API key
+__________________________________ test_quantize_price_nearest ___________________________________
+tests/test_quantize.py:25: in test_quantize_price_nearest
+    assert quantize_price(100.005, F, "nearest") == 100.01
+E   AssertionError: assert 100.0 == 100.01
+E    +  where 100.0 = quantize_price(100.005, {'minNotional': 5.0, 'minQty': 0.001, 'step': 0.001, 'tick': 0.01}, 'nearest')
+==================================== short test summary info =====================================
+FAILED tests/test_health.py::test_health - httpx.ConnectError: [Errno 111] Connection refused
+FAILED tests/test_health.py::test_readyz - httpx.ConnectError: [Errno 111] Connection refused
+FAILED tests/test_imports.py::test_health_root_and_meta - fastapi.exceptions.HTTPException: 401: Invalid API key
+FAILED tests/test_imports.py::test_public_endpoints_ok - fastapi.exceptions.HTTPException: 401: Invalid API key
+FAILED tests/test_imports.py::test_aliases_crud_ok - fastapi.exceptions.HTTPException: 401: Invalid API key
+FAILED tests/test_price_routes.py::test_price_last_endpoint - fastapi.exceptions.HTTPException: 401: Invalid API key
+FAILED tests/test_price_routes.py::test_price_symbol_endpoint - fastapi.exceptions.HTTPException: 401: Invalid API key
+FAILED tests/test_quantize.py::test_quantize_price_nearest - AssertionError: assert 100.0 == 100.01
+ +  where 100.0 = quantize_price(100.005, {'minNotional': 5.0, 'minQty': 0.001, 'step': 0.001, 'tick': 0.01}, 'nearest')
+===================== 8 failed, 27 passed, 4 skipped, 18 warnings in 11.68s ======================
+~/workspace$ 
