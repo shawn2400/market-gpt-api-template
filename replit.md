@@ -102,3 +102,50 @@ The production environment runs on Render.com with 11 Background Workers and a N
 -   **N8N Workflow Automation**: External workflow integration, news ingestion.
 -   **Gunicorn**: Production-grade WSGI HTTP server.
 -   **Redis Cloud**: High-performance caching and temporary data storage.
+---
+
+## Quantum Exploratory Features (v9.3.8+ Testing)
+
+### 🧠 3 New "Quantum" Learning Engines (Hybrid Approach)
+
+**Phase 1: Testing Mode** - Running in parallel with existing 11 workers
+
+**Engine #1: Pattern Recognition** 
+- **File**: `utils/quantum_pattern_engine.py`
+- **What it does**: Learns from recent 50 winning trades, detects repeating patterns
+- **Example**: "When quality score = 8.5 + TRENDING + ATR 2% = usually wins" → boost confidence
+- **Current status**: Collecting trade history
+- **Expected impact**: +5-15% confidence on proven patterns
+
+**Engine #2: Adaptive Confidence Scoring**
+- **File**: `utils/adaptive_confidence_scorer.py`  
+- **What it does**: Adjusts confidence weights based on recent market regime performance
+- **Example**: If TRENDING regime has 70% win rate last week → boost market weight from 25% to 33%
+- **Current status**: Tracking regime performance
+- **Expected impact**: Better signal quality in winning market conditions
+
+**Engine #3: Market Regime Predictor**
+- **File**: `utils/market_regime_predictor.py`
+- **What it does**: Predicts NEXT regime (1-4 hours ahead) before it happens
+- **Example**: Detects ADX falling → predicts CHOPPY is coming → proactively reduce leverage
+- **Current status**: Building history
+- **Expected impact**: Earlier exits from bad regimes, proactive strategy adjustment
+
+**Integration**:
+- **File**: `utils/quantum_system_integrator.py`
+- **Purpose**: Wraps all 3 engines, plugs into existing strategy pipeline
+- **How it works**: `enhance_trade_proposal()` applies all 3 engines to trade scoring
+
+**Rollout Plan**:
+1. ✅ Created all 3 engines (DONE)
+2. ⏳ Phase 1: Test in parallel for 1-2 weeks
+3. ⏳ Phase 2: Measure impact vs baseline
+4. ⏳ Phase 3: Full integration if positive (>10% improvement)
+5. ⏳ Phase 4: Abandon if negative (automatic fallback to v9.3.8)
+
+**Risk Level**: LOW
+- Engines run in parallel (non-blocking)
+- Can be instantly disabled if underperforming
+- Existing 11 workers continue normally
+
+---
