@@ -6,6 +6,26 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
+## Recent Changes (Nov 22, 2025 - v9.3.4 Smart Token Budget Management)
+
+### MetaBrain v9.3.4 - Smart Token Budget Management ✅ (LATEST)
+- **Files**: `utils/token_budget_manager.py` (NEW), `utils/ai_decision_maker.py` (UPDATED)
+- **SMART BRAIN SUSPENSION SYSTEM**:
+  1. **6 AI Brains Connected** (all cost-aware):
+     - Qwen 2.5 Turbo: FREE ✅ (always active)
+     - DeepSeek: $0.0001/call (ultra-cheap)
+     - Gemini 2 Pro: $0.00005/call (very cheap)
+     - GPT-4o Mini: $0.0005/call (cheap)
+     - Grok (XAI): $0.0008/call (mid-cost)
+     - Claude (Anthropic): $0.003/call (premium)
+  2. **Intelligent Suspension/Resume**:
+     - Balance < $5.0 → SUSPEND all paid brains (except Qwen)
+     - Balance ≥ $10.0 → RESUME in priority order (cheap→expensive)
+     - Qwen (FREE) always active
+  3. **Budget Tracking** - Every call tracked, no waste
+  4. **Dynamic Consensus** - Only active brains vote
+- **Status**: ✅ Smart budget management enabled - סוכנים וסוגרים בחוכמה!
+
 ## System Architecture
 
 ### UI/UX

@@ -63,6 +63,11 @@ try:
 except ImportError:
     get_brain_manager = None
 
+try:
+    from utils.token_budget_manager import get_token_budget_manager
+except ImportError:
+    get_token_budget_manager = None
+
 logger = logging.getLogger("algogpt.ai_decisions")
 
 
@@ -477,11 +482,18 @@ class AIConsensusEngine:
         self.logger = logger
         self.brain_manager = get_brain_manager() if get_brain_manager else None
         
+        # 💰 Initialize Token Budget Manager (intelligent brain suspension/resume)
+        self.token_budget = get_token_budget_manager() if get_token_budget_manager else None
+        if self.token_budget:
+            self.logger.info("💰 Token Budget Manager enabled - intelligent brain suspension")
+        
         self.brain_classes = {
             "deepseek": DeepSeekBrain(),
             "qwen": QwenBrain(),
             "gemini": GeminiBrain(),
-            "grok": GrokBrain()
+            "grok": GrokBrain(),
+            "claude": ClaudeBrain(),
+            "gpt4o_mini": GPT4oMiniBrain()
         }
         
         if self.brain_manager:
@@ -504,16 +516,29 @@ class AIConsensusEngine:
     ) -> Dict[str, Any]:
         """
         Get consensus decision from all active AI brains.
+        💰 Token-budget aware: intelligently suspends/resumes brains
         
         Args:
             scout_data: Combined Scout analysis
             market_data: Market indicators
-            wallet_state: Wallet state
+            wallet_state: Wallet state (includes available_balance)
         
         Returns:
             Dict with final_vote, avg_score, brain_votes, consensus_pct
         """
         try:
+            # 💰 UPDATE TOKEN BUDGET with current wallet balance
+            available_balance = wallet_state.get("available_balance", 0.0)
+            if self.token_budget:
+                self.token_budget.sync_balance(available_balance)
+                active_brains_list = self.token_budget.get_active_brains()
+                budget_summary = self.token_budget.get_summary()
+                self.logger.info(
+                    f"💰 Budget Status: Balance=${available_balance:.2f}, "
+                    f"Active Brains: {len(active_brains_list)}/{budget_summary['total_brains']}, "
+                    f"Affordability: {budget_summary['affordability_score']:.0f}%"
+                )
+            
             scanner_score = scout_data.get("market_scanner", {}).get("score", 0)
             analyst_score = scout_data.get("technical_analyst", {}).get("score", 0)
             avg_score = (scanner_score + analyst_score) / 2
@@ -549,18 +574,50 @@ class AIConsensusEngine:
                                 wallet_state
                             )
                         )
+                        # 💰 Record brain call in budget
+                        if self.token_budget:
+                            self.token_budget.record_call(brain_id)
                 
                 brain_votes = await asyncio.gather(*tasks)
                 brain_votes = [v for v in brain_votes if v is not None]
                 
             else:
-                active_brains = self.brains
-                consensus_threshold = 2
+                # 💰 Filter brains by token budget (if available)
+                if self.token_budget:
+                    active_brains_names = self.token_budget.get_active_brains()
+                    active_brains = [
+                        self.brain_classes.get(name)
+                        for name in active_brains_names
+                        if name in self.brain_classes and self.brain_classes.get(name)
+                    ]
+                else:
+                    active_brains = self.brains
                 
-                tasks = [
-                    brain.vote(scout_data, market_data, wallet_state)
-                    for brain in active_brains
-                ]
+                consensus_threshold = max(1, len(active_brains) // 2)  # Dynamic threshold
+                
+                if not active_brains:
+                    self.logger.error("❌ No active brains available (token budget constraint)!")
+                    return {
+                        "final_vote": "REJECT",
+                        "final_score": 0,
+                        "approve_count": 0,
+                        "consensus_pct": 0,
+                        "brain_votes": [],
+                        "error": "No active brains (budget insufficient)"
+                    }
+                
+                tasks = []
+                brain_names = []
+                for brain in active_brains:
+                    if brain is None:  # Filter out None values
+                        continue
+                    brain_name = brain.name.lower().replace(" ", "_")
+                    tasks.append(brain.vote(scout_data, market_data, wallet_state))
+                    brain_names.append(brain_name)
+                    # 💰 Record brain call in budget
+                    if self.token_budget:
+                        self.token_budget.record_call(brain_name)
+                
                 brain_votes = await asyncio.gather(*tasks)
             
             approve_count = sum(1 for v in brain_votes if v["vote"] == "APPROVE")
