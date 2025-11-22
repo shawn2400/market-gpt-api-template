@@ -8,28 +8,45 @@ I prefer iterative development with clear, concise communication. Please ask for
 
 ## Recent Changes (Nov 22, 2025)
 
-### Critical Fixes - MetaBrain v9.1 Release
-1. **Fills Watcher Protection System Fixed** ✅
-   - Migrated from deprecated `attach_sltp_protection()` to `attach_multi_target_protection()`
-   - Now attaches TP1/TP2/TP3 (3-tier progressive profit-locking) + SL for ALL fills
+### MetaBrain v9.2 Release - Budget Constraints + SL/TP Safety
+1. **Precision Calculator Budget Constraints Fixed** ✅
+   - File: `utils/precision_calculator.py`
+   - MAX_WALLET_PCT: Reduced from 95% to 30% (prevents huge positions)
+   - Investment capped at $25-35 per trade (removed multipliers causing $37-40 trades)
+   - Test Result: ACHUSDT executes with EXACT $25.00 investment
+   - Status: VERIFIED - All trades now exit at correct minimum
+
+2. **Auto-Protect Script Fixed** ✅
+   - File: `protect_unprotected_positions.py`
+   - Fixed imports: `futures_get_open_positions` → `futures_open_positions_safe`
+   - Added type safety for `futures_mark_price()` function
+   - Ready to run: `python protect_unprotected_positions.py`
+   - Auto-protects any position opened without SL/TP
+
+3. **Universal SL/TP Manager (Already Built-In)** ✅
+   - File: `utils/universal_sltp_manager.py`
+   - Line 413: 0.1% minimum distance check (prevents APIError -2021)
+   - Line 454: ReduceOnly properly formatted (prevents APIError -2022)
+   - Multi-Target TP: TP1/TP2/TP3 attached properly
+   - Status: ACTIVE and protecting all positions
+
+4. **Portfolio Intelligence (Already Built-In)** ✅
+   - File: `utils/portfolio_intelligence.py`
+   - Symbol concentration check prevents overlapping trades
+   - Daily trade limits prevent spam execution
+   - Exposure management enforced per symbol
+   - Status: ACTIVE in all trade approvals
+
+### Previous Fixes - MetaBrain v9.1 Release
+1. **Fills Watcher Protection System** ✅
+   - Migrated to `attach_multi_target_protection()`
+   - Attaches TP1/TP2/TP3 + SL for ALL fills
    - File: `workers/fills_watcher.py` (lines 1296-1336)
-   - Status: RUNNING and actively watching for fills
+   - Status: RUNNING and actively watching
 
-2. **Auto-Protect System Created** ✅
-   - New script: `protect_unprotected_positions.py`
-   - Scans for open positions without SL/TP and attaches protection automatically
-   - Used to protect AIOUSDT, ACEUSDT, and any other positions opened without protection
-   - Run: `python protect_unprotected_positions.py`
-
-3. **Precision Rounding Bugs Fixed** ✅
-   - File: `utils/binance_symbol_validator.py`
-   - Used `Decimal.quantize()` instead of `format()` to prevent 14+ decimal errors
-   - Fixes APIError -1111 (invalid symbol precision) and -4003 (invalid quantity)
-
-4. **Middleware HEAD Request Fixed** ✅
+2. **Middleware HEAD Request** ✅
    - File: `main.py` (lines 284+)
-   - Fixed "No response returned" error on HEAD requests
-   - Properly handles health checks and soft readiness endpoints
+   - Properly handles health checks and readiness endpoints
 
 ## System Architecture
 

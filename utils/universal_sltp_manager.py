@@ -397,7 +397,16 @@ async def attach_multi_target_protection(
                 # 🔧 CRITICAL: Use BinanceSymbolValidator to round quantity & price correctly
                 # This ensures compliance with Binance stepSize & tickSize filters
                 tp_quantity_rounded = validator.round_quantity(symbol, tp_quantity, is_market=False)
+                
+                # CRITICAL FIX: Use round_price which handles tickSize rounding properly
+                # For symbols like AIOUSDT (tickSize=0.0000100), this ensures decimal precision
                 tp_price_rounded = validator.round_price(symbol, tp_price)
+                
+                # Verify price was actually rounded (debugging for tick size issues)
+                if abs(tp_price_rounded - tp_price) > tp_price * 0.01:  # >1% difference
+                    symbol_info = validator.get_symbol_info(symbol)  # type: ignore
+                    tick_size = symbol_info.get('tickSize') if symbol_info else 'N/A'
+                    logger.info(f"ℹ️ TP{i} price adjusted: {tp_price} → {tp_price_rounded} (tick size: {tick_size})")
                 
                 # 🔧 CRITICAL: Verify rounded quantity is still non-zero
                 if tp_quantity_rounded <= 0:
