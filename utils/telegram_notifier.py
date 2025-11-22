@@ -656,9 +656,14 @@ async def send_trade_opened(info: Dict[str, Any]) -> None:
     lev = plan.get("leverage", "—")
     kind = (plan.get("trade_kind") or plan.get("mode") or plan.get("market") or "Futures").capitalize()
     
-    # Concise open notification with unique dedupe (price + qty makes it unique)
+    # Get quality score (from payload or fallback to consensus_score or default)
+    quality_score = plan.get("quality_score") or plan.get("consensus_score") or plan.get("quality", 0.0)
+    quality_emoji = "🌟" if quality_score >= 8 else "✅" if quality_score >= 6 else "⚠️"
+    
+    # Concise open notification with quality score + unique dedupe (price + qty makes it unique)
+    quality_line = f" {quality_emoji} | 🧠 Quality: <b>{quality_score:.1f}/10</b>" if quality_score else ""
     await notify_telegram(
-        f"✅ <b>{s}</b> {kind} {side}\n"
+        f"✅ <b>{s}</b> {kind} {side}{quality_line}\n"
         f"• Price: <code>{_fmt_num(price,4)}</code> | Qty: {qty} | Lev: {lev}x",
         level="critical", kind="open", dedupe_key=f"open:{s}:{price}:{qty}:{int(time.time()//10)}", cooldown_sec=15
     )

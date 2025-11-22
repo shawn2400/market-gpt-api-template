@@ -6,10 +6,10 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform for 24/7 operati
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
-## Recent Changes (Nov 22, 2025 - Updated)
+## Recent Changes (Nov 22, 2025 - Final Update)
 
-### MetaBrain v9.2.8 - Full TP Grid Extension (TP1-TP5) ✅
-- **Files**: `utils/multi_target_tp.py`, `utils/universal_sltp_manager.py`, `workers/position_monitor.py`, `utils/trailing_tp.py`
+### MetaBrain v9.2.8 Final - Full TP Grid Extension + Dynamic Leverage + Quality Score Display ✅
+- **Files**: `utils/multi_target_tp.py`, `utils/universal_sltp_manager.py`, `workers/position_monitor.py`, `utils/trailing_tp.py`, `workers/gpt_auto_suggest.py`, `utils/telegram_notifier.py`
 - **Features**:
   1. **5-Level TP Grid** - Extended from 3 to 5 take-profit levels (TP1/TP2/TP3/TP4/TP5)
      - TP4 @ 350% RR, TP5 @ 450% RR for maximum profit capture
@@ -19,11 +19,17 @@ I prefer iterative development with clear, concise communication. Please ask for
   3. **Trailing TP Disabled** - Removed early exit mechanism (was closing at TP2/TP3)
      - Changed ENABLE_TRAILING_TP from "1" to "0"
      - Only basic 5% protection after TP3+ hit (not before)
-  4. **Universal Support** - Updated all placement functions to handle 5 TPs
-     - universal_sltp_manager now supports 3-5 TP levels dynamically
-     - position_monitor updates all 5 TP orders during ATR-based adjustments
-- **Impact**: 🎯 Full TP Grid executes to TP5 without premature exits. No more 0.05 sats left on positions!
-- **Status**: ✅ ACTIVE - All 9 workflows restarted with 5-TP support
+  4. **Leverage Fully Dynamic** - 2-35x ADX-driven
+     - 30+ ADX = 15x leverage, 0 ADX = 7x leverage
+     - LEVERAGE_DYNAMIC_ENABLE = "1" (enabled)
+  5. **Trade Size Filter** - Automatically rejects trades < $0.05 position size
+     - Added validation in maybe_emit() function
+  6. **Quality Score in Telegram** - All notifications display 5.5-10 quality score
+     - send_trade_opened now shows: 🌟 Quality: {score:.1f}/10
+     - Emoji changes: 🌟 (8+), ✅ (6+), ⚠️ (<6)
+  7. **SL/TP Fully Synchronized** - All 5 TP levels supported across all execution paths
+- **Impact**: 🎯 Full TP Grid executes to TP5 without premature exits. Quality scores visible in all notifications. No trades < $0.05!
+- **Status**: ✅ ACTIVE - All 9 workflows running with complete feature set
 
 ### MetaBrain v9.2.7 - Critical Fixes 🔧
 - **Files**: `workers/position_monitor.py`, `utils/auto_flip.py`
