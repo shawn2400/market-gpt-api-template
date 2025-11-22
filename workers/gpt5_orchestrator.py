@@ -130,6 +130,22 @@ async def send_orchestrator_update(analysis: Dict[str, Any], recommendation: Opt
 async def orchestrator_cycle():
     """Run one orchestrator analysis cycle"""
     try:
+        # 💰 MARGIN GATE: Skip orchestration analysis if insufficient margin
+        # This prevents wasting AI resources when account can't trade
+        try:
+            from utils.binance_client import futures_account
+            account = futures_account()
+            if account:
+                available_margin = float(account.get('availableBalance', 0))
+                if available_margin < 10.0:  # Minimum $10 required
+                    logger.warning(
+                        f"⏸️ GPT-5 Analysis paused: Insufficient margin (${available_margin:.2f} < $10). "
+                        f"Skipping this cycle to save resources."
+                    )
+                    return  # Skip this cycle, resume when margin available
+        except Exception as e:
+            logger.debug(f"Margin check failed (proceeding anyway): {e}")
+        
         logger.info("Running GPT-5 orchestrator cycle...")
         
         analysis = await analyze_system_state()

@@ -8,6 +8,17 @@ I prefer iterative development with clear, concise communication. Please ask for
 
 ## Recent Changes (Nov 22, 2025)
 
+### MetaBrain v9.2.6 - Automatic Resource Management 💰
+- **Files**: `utils/margin_gate.py`, `workers/gpt_auto_suggest.py`, `workers/gpt5_orchestrator.py`
+- **Feature**: Smart Resource Pausing - Automatic pause/resume based on available margin
+- **Behavior**:
+  - ⏸️ **PAUSES** when margin < $10: Auto Scanner, GPT-5, Brain Analysis
+  - 🔄 **FAST POLLING**: Checks every 10 seconds for freed margin
+  - ✅ **AUTO-RESUMES**: No manual intervention needed when margin returns (from profit/deposit)
+  - 📊 **NO WASTED API CALLS**: Prevents resource waste when account can't trade
+- **Impact**: Zero resource waste when budget depleted - system sleeps efficiently
+- **Status**: ✅ ACTIVE - Scanning pauses automatically when insufficient margin
+
 ### MetaBrain v9.2.5.2 - Position Limits Fix 🔧
 - **File**: `utils/position_limits.py` (line 179)
 - **Fix**: Changed `>=` to `>` in _check_total_open_orders()
