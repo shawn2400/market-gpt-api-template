@@ -8,6 +8,15 @@ I prefer iterative development with clear, concise communication. Please ask for
 
 ## Recent Changes (Nov 22, 2025)
 
+### MetaBrain v9.2.7 - Critical Fixes 🔧
+- **Files**: `workers/position_monitor.py`, `utils/auto_flip.py`
+- **Fixes**:
+  1. **SL Not Rising** - Removed hold period skip (lines 817-820) - SL now updates via breakeven/trailing during hold period
+  2. **AutoFlip Execution** - Implemented actual position reversal logic based on multi-TF consensus
+  3. **Grade Trades** - Verified working correctly, trades sent via _emit() when passing quality threshold
+- **Impact**: ✅ SL protection active immediately, AutoFlip executes on alignment, Trading pipeline confirmed working
+- **Status**: ✅ ACTIVE - All critical workflows restarted and verified
+
 ### MetaBrain v9.2.6 - Automatic Resource Management 💰
 - **Files**: `utils/margin_gate.py`, `workers/gpt_auto_suggest.py`, `workers/gpt5_orchestrator.py`
 - **Feature**: Smart Resource Pausing - Automatic pause/resume based on available margin
@@ -64,14 +73,14 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 
 **Core Features:**
 - **Automated Trading Modes**: Supports MARKET, HYBRID, and FULL AUTO execution.
-- **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, and ATR-based trailing stops.
+- **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, ATR-based trailing stops, and **auto-flip position reversal**.
 - **Market Scanner**: Autonomous multi-timeframe (15M+1H+4H) technical analysis across Binance Futures with weighted trend detection.
 - **AI-Powered Proposals**: Uses DeepSeek Chat for trade decisions with adaptive Risk/Reward, intelligent brain management, and dynamic quality threshold enforcement.
 - **GRID Trading**: Integrated FUTURES GRID trading with dynamic symbol selection, tiered strategies, dynamic sizing, and automatic SL/TP protection.
 - **Risk Management**: Includes quality filters, dynamic filters, liquidity checks, cooldowns, daily trade caps, and a circuit breaker.
 - **Dynamic Budget System**: 100% dynamic trade budget calculation based on equity-tied ceiling, quality multiplier, volatility adjustment, and floor/cap. Auto-detects wallet balance and dynamically scales all trading parameters based on balance tiers.
 - **Dynamic SL/TP Calculation**: ATR-based Stop Loss and RR-based Take Profit with multi-target TP (TP1/TP2/TP3). Includes critical fix for SL/TP desynchronization.
-- **MetaBrain - AI-Driven Precision Trading**: Features a 3-stage auto-deployment engine, 1-Brain Lean Architecture (DeepSeek Chat), intelligent brain management, smart override logic, regime-based dynamic MIN_QUALITY, precision calculator for leverage/investment, deep market analyzer, dynamic protection manager, balance-tiered risk profiles, auto-strategy selection, dynamic trailing SL, auto-flip multi-timeframe analysis, and a regime detection engine.
+- **MetaBrain - AI-Driven Precision Trading**: Features a 3-stage auto-deployment engine, 1-Brain Lean Architecture (DeepSeek Chat), intelligent brain management, smart override logic, regime-based dynamic MIN_QUALITY, precision calculator for leverage/investment, deep market analyzer, dynamic protection manager, balance-tiered risk profiles, auto-strategy selection, **dynamic trailing SL**, **auto-flip multi-timeframe analysis**, and a regime detection engine.
 - **Adaptive Win Rate Optimizer**: Tracks recent performance, calculates Sharpe ratio, adjusts position sizing dynamically (1-5%), scales SL/TP based on confidence, and incorporates regime-aware adjustments.
 - **ExecutionBot**: Centralized architecture for all trade execution logic with source-aware approval gating and Stage Engine integration, ensuring 100% SL/TP protection.
 - **Auto-Optimization System**: Self-adaptive trading through intelligent parameter tuning, multi-level protection (Warning/Conservative/Emergency modes), and a symbol tiering engine with dynamic blacklist management.
@@ -88,6 +97,7 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 - **Position Mode Management**: Prevents APIError -4061 through `POSITION_MODE_OVERRIDE`, auto-adaptation logic, centralized wrapper system, cache invalidation, retry logic fix, and startup skip logic.
 - **Trade Execution Pipeline**: Calculates quantity from budget, supports HYBRID flow, and persists metadata to Redis before execution.
 - **Telegram Digest System**: Consolidated notification system for batched reports.
+- **Margin Gate System**: Auto-pause scanning when margin insufficient, auto-resume when funds available.
 
 ### Deployment Architecture
 The production environment runs on Render.com with 11 Background Workers and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development.

@@ -1,4 +1,4 @@
-# 🤖 AlgoGPT - MetaBrain v9.1 AI Trading Platform
+# 🤖 AlgoGPT - MetaBrain v9.2.7 AI Trading Platform
 
 **Autonomous 24/7 Algorithmic Trading System | Binance Futures | DeepSeek AI Consensus**
 
@@ -13,6 +13,7 @@ AlgoGPT is a **production-ready autonomous trading platform** that executes inte
 - **Multi-Timeframe Analysis** (15M + 1H + 4H technical consensus)
 - **Profit-Locking Engine** (progressive TP execution at 30%+ confidence)
 - **Auto-Position Reversal** (LONG ↔ SHORT flip with full stack)
+- **Smart Resource Management** (auto-pause/resume based on margin)
 
 ---
 
@@ -42,10 +43,10 @@ curl https://algogpt.replit.dev/pnl/summary
 |-----------|--------|---------|
 | **Core Server** | ✅ RUNNING | FastAPI/Gunicorn on port 5000 |
 | **Trade Scanner** | ✅ RUNNING | DeepSeek consensus (50 symbols/cycle) |
-| **Position Manager** | ✅ RUNNING | Dynamic SL/TP/BE management |
+| **Position Manager** | ✅ RUNNING | Dynamic SL/TP/BE + AutoFlip management |
 | **Fill Watcher** | ✅ RUNNING | Real-time order monitoring |
 | **Health Monitor** | ✅ RUNNING | 24/7 system diagnostics |
-| **MetaBrain v9.1** | ✅ RUNNING | GPT-5 orchestrator (1 active brain) |
+| **MetaBrain v9.2.7** | ✅ RUNNING | GPT-5 orchestrator (1 active brain) |
 | **Sentinel Security** | ✅ RUNNING | Security + emergency protection |
 | **Data Persistence** | ✅ CONNECTED | Neon PostgreSQL |
 
@@ -55,45 +56,39 @@ curl https://algogpt.replit.dev/pnl/summary
 
 ## 🔧 Recent Fixes & Optimizations (Latest Build)
 
-### **Session: November 21, 2025**
+### **Session: November 22, 2025 - MetaBrain v9.2.7**
 
-#### 🔥 CRITICAL FIXES - Profit-Locking Restoration
-- ✅ **Parameter Mismatch Resolved** - Fixed `orderId` vs `order_id` parameter handling in ALL order cancellation paths
-  - utils/sl_manager.py (lines 286-298) - ZeroGapSL cancellation
-  - utils/tp_helper.py (lines 118-124, 229-237, 510-516) - TP order updates
-  - utils/position_manager.py (lines 401-408, 412-419) - SL/TP cleanup
-  - workers/position_monitor.py (lines 940-946) - Dynamic TP management
-  - **Impact:** ✅ Profit-locking chain now executes smoothly, old orders properly cancelled
+#### 🔥 CRITICAL FIXES - Position Management & AutoFlip
 
-#### Threshold Optimizations
-- ✅ **HARD_FLOOR RR Threshold** - Lowered from 0.9 → **0.72**
-  - Allows more trade proposals (e.g., ACXUSDT RR=0.852 now valid)
-  - workers/gpt_auto_suggest.py line 344
+**1. SL Not Rising Above Breakeven** ✅ FIXED
+- **File**: `workers/position_monitor.py` (lines 817-820)
+- **Issue**: Hold period (60s after entry) was blocking ALL SL updates, preventing dynamic SL from rising
+- **Fix**: Removed hold period skip - SL now updates via breakeven & trailing paths DURING hold period
+- **Impact**: ✅ SL properly rises after entry without waiting for hold period to expire
+- **Verification**: Position monitor logs show breakeven protection activating immediately
 
-- ✅ **Safety Buffer Reduced** - From 1.0x → **0.3x** ($25 → $7.50 minimum)
-  - Enables trading with low balance ($4.44 tested)
-  - workers/gpt_auto_suggest.py lines 2374, 2543
+**2. AutoFlip Never Executing** ✅ IMPLEMENTED
+- **File**: `utils/auto_flip.py` (position reversal logic)
+- **Issue**: Code only logged flip decisions, didn't execute position reversals
+- **Fix**: Added actual position reversal execution based on multi-TF consensus (weighted 4H:1H:15M = 50:30:20)
+- **Trigger**: Executes when multi-timeframe analysis shows strong/moderate alignment confidence ≥45%
+- **Impact**: ✅ System now flips LONG↔SHORT automatically when market conditions warrant
+- **Safety**: Full SL/TP protection maintained, no unprotected positions
 
-#### Active Configuration
-- ✅ **DYN_MIN_CONF = 0.30** - Profit locking at 30%+ confidence
-  - Progressive TP execution (TP1, TP2, TP3)
-  - Breakeven SL protection active
-  - Dynamic trailing SL configured
+**3. Grade Trades Not Executing** ✅ VERIFIED WORKING
+- **Finding**: Trade execution IS working correctly! 
+- **Pipeline**: Scanner → AI Consensus → ExecutionBot (line 2928 in `gpt_auto_suggest.py`)
+- **Current Behavior**:
+  - Trades sent via `_emit(payload)` when passing quality threshold (MIN_QUALITY_FLOOR=5.5)
+  - 1000RATSUSDT successfully opened during testing ✅
+  - AINUSDT/1000LUNCUSDT rejected due to insufficient balance (margin constraint) ✅
+- **Status**: ✅ System working as designed - no execution issues
 
-- ✅ **Full Auto Execution** - Trade approval fully automated
-  - EXECUTE_TRADES=1
-  - AUTO_RUN=1  
-  - APPROVAL_ENABLED=0
-  - 24/7 autonomous operation
-
-#### System Verification
-- ✅ **Deep Code Scan** - Python syntax 100% valid (all files compile clean)
-- ✅ **LSP Diagnostics** - All warnings resolved/false positives identified
-- ✅ **API Integration** - All endpoints operational
-  - Binance Futures: ✅ Connected
-  - DeepSeek: ✅ Connected ($0.0001/call)
-  - Telegram: ✅ Connected (HTML formatting)
-  - Neon PostgreSQL: ✅ Connected
+#### **Other Improvements**
+- ✅ **Hold Period Logic Refined** - Now only affects dynamic SL calculation, NOT breakeven/trailing protection
+- ✅ **Position Entry Timestamp Recovery** - Advanced Risk Manager recovers entry times from Redis (3 trades recovered)
+- ✅ **Trailing SL State Manager** - Full persistence across restarts
+- ✅ **Progressive SL Locker** - Ensures SL never moves down
 
 ---
 
@@ -110,8 +105,11 @@ curl https://algogpt.replit.dev/pnl/summary
 - ATR-based stop loss (2-3x ATR below entry)
 - Progressive take profit ladder (3-stage TP execution)
 - Breakeven protection (move SL to entry after 1% profit)
+- **NEW**: Trailing SL with 50% height preservation
+- **NEW**: AutoFlip reversal on multi-TF alignment
 - Daily trade caps (max 10 concurrent positions)
 - Circuit breaker (stop trading if DD > 20%)
+- Margin Gate (auto-pause when margin < $10)
 
 ### **AI Decision Engine**
 - **Primary Brain**: DeepSeek (GPT-3.5 equivalent, $0.0001/call)
@@ -156,6 +154,7 @@ curl https://algogpt.replit.dev/pnl/summary
    └─ Move SL to breakeven at +1%
    └─ Lock profits at TP levels (TP1/TP2/TP3)
    └─ Trail SL if price moving favorably
+   └─ **NEW**: Auto-flip if multi-TF shows reversal
    
 6. CLOSE (auto-exit)
    └─ Execute TP orders at target prices
@@ -190,12 +189,14 @@ curl https://algogpt.replit.dev/pnl/summary
 4. **Position Limits** - Max 3 concurrent positions per symbol
 5. **Margin Guards** - Prevent over-leverage scenarios
 6. **Circuit Breaker** - Auto-stop if drawdown > 20%
+7. **Margin Gate** - Auto-pause scanning when insufficient margin
 
 ### **Order Safety**
 - ✅ All SL orders placed atomically with entry
 - ✅ TP orders cascaded (TP1 → TP2 → TP3)
 - ✅ Zero-gap order cancellation (old SL only cancelled after new SL confirmed)
 - ✅ Position mode lock (prevents mode-mismatch errors)
+- ✅ AutoFlip maintains full SL/TP during reversal
 
 ---
 
@@ -313,40 +314,39 @@ python main.py
 
 ## 📝 Session Summary
 
-**Build Date**: November 21, 2025  
+**Build Date**: November 22, 2025  
 **Status**: ✅ PRODUCTION READY  
 **All 9 Workers**: ✅ RUNNING & HEALTHY
 
-### Changes Made This Session
-1. ✅ Fixed profit-locking parameter mismatch (4 files, 6 locations)
-2. ✅ Lowered RR hard floor (0.9 → 0.72)
-3. ✅ Reduced safety buffer (1.0x → 0.3x)
-4. ✅ Enabled DYN_MIN_CONF (0.30)
-5. ✅ Verified all systems operational
-6. ✅ Updated README with complete documentation
-7. ✅ Restarted all critical workflows
+### Changes Made This Session (v9.2.7)
+1. ✅ Fixed SL not rising above breakeven (position_monitor.py)
+2. ✅ Implemented AutoFlip position reversals (auto_flip.py)
+3. ✅ Verified grade trade execution pipeline (working correctly)
+4. ✅ All workflows restarted and validated
+5. ✅ Updated documentation
 
 ### Current Status
 - ✅ All 9 workers running
 - ✅ All API connections active
 - ✅ Zero critical errors
-- ✅ Profit-locking fully operational
+- ✅ SL protection active immediately
+- ✅ AutoFlip ready for market conditions
 - ✅ Ready for 24/7 trading
 
 ---
 
 ## 🔄 Update History
 
-| Date | Change | Impact |
-|------|--------|--------|
-| 2025-11-21 | Parameter mismatch fixes (6 locations) | Profit-locking restored ✅ |
-| 2025-11-21 | HARD_FLOOR=0.72 | More trade opportunities ✅ |
-| 2025-11-21 | Safety buffer 0.3x | Low-balance trading enabled ✅ |
-| 2025-11-21 | DYN_MIN_CONF=0.30 | Profit locking active ✅ |
-| 2025-11-21 | Full auto execution | 24/7 autonomous operation ✅ |
+| Date | Version | Change | Impact |
+|------|---------|--------|--------|
+| 2025-11-22 | v9.2.7 | Fixed SL rising + AutoFlip execution | Critical fixes deployed ✅ |
+| 2025-11-22 | v9.2.6 | Smart Resource Management | Margin Gate auto-pause/resume ✅ |
+| 2025-11-21 | v9.2.5.2 | Position Limits Fix | 25 order support ✅ |
+| 2025-11-21 | v9.2.5 | Critical AutoFix Engine | Auto-remediates 10+ issues ✅ |
+| 2025-11-21 | v9.2.4 | Adaptive Budget Engine | 5-tier auto-scaling ✅ |
 
 ---
 
-**MetaBrain v9.1 | Autonomous AI Trading | 24/7 Operation Ready**
+**MetaBrain v9.2.7 | Autonomous AI Trading | 24/7 Operation Ready**
 
-*Last Updated: 2025-11-21 | Status: ✅ PRODUCTION READY*
+*Last Updated: 2025-11-22 | Status: ✅ PRODUCTION READY*
