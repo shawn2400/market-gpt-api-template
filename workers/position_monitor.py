@@ -515,12 +515,76 @@ async def ensure_positions_protected() -> None:
             position_side = "LONG" if amt > 0 else "SHORT"
             
             # 🔄 AUTO-FLIP CHECK (Weighted Multi-TF Analysis - MetaBrain v9.1)
-            # NOTE: Auto-flip framework integrated. Will trigger when:
-            # - Multi-TF context manager has data available
-            # - Weighted analysis shows STRONG or MODERATE alignment on opposite direction
-            # For now, framework is in place and ready for real-time integration
+            # AUTO-EXECUTE position reversal when multi-TF analysis shows strong opposite trend
             if AUTOFLIP_ENABLED and analyze_multi_tf_weighted:
-                logger.debug(f"🔄 Auto-flip monitoring active for {symbol} ({position_side})")
+                try:
+                    # Get multi-timeframe context for this symbol
+                    tf_manager = MultiTFContextManager()
+                    multi_tf_context = await tf_manager.fetch_batch_multi_tf(
+                        symbols=[symbol],
+                        intervals=["15m", "1h", "4h"],
+                        limit=240,
+                        force_refresh=False
+                    )
+                    
+                    symbol_tf_data = multi_tf_context.get(symbol.upper(), {})
+                    
+                    if symbol_tf_data:
+                        # Run weighted analysis
+                        flip_analysis = analyze_multi_tf_weighted(symbol_tf_data, current_side=position_side)
+                        
+                        if flip_analysis.should_flip and flip_analysis.weighted_confidence >= 65:  # 65% confidence threshold
+                            from utils.binance_client import futures_create_order, futures_cancel_all_orders
+                            
+                            entry_price = float(pos.get("entryPrice", 0))
+                            mark_price = float(pos.get("markPrice", 0))
+                            
+                            logger.warning(
+                                f"🔄 AUTO-FLIP TRIGGERED for {symbol} | "
+                                f"Current={position_side}, New={flip_analysis.trend_direction} | "
+                                f"Confidence={flip_analysis.weighted_confidence:.1f}% | "
+                                f"Reason={flip_analysis.reason}"
+                            )
+                            
+                            try:
+                                # Step 1: Close current position
+                                futures_cancel_all_orders(symbol)
+                                close_side = "SELL" if position_side == "LONG" else "BUY"
+                                
+                                close_order = futures_create_order(
+                                    symbol=symbol,
+                                    side=close_side,
+                                    type="MARKET",
+                                    quantity=abs(amt),
+                                    reduceOnly=True,
+                                    positionSide=position_side
+                                )
+                                
+                                logger.info(f"✅ {symbol}: Position closed for flip | Order {close_order.get('orderId')}")
+                                
+                                # Notify user of flip
+                                pnl_pct = ((mark_price - entry_price) / entry_price * 100) if position_side == "LONG" else ((entry_price - mark_price) / entry_price * 100)
+                                
+                                await send_telegram_message(
+                                    f"🔄 *AUTO-FLIP EXECUTED*\n\n"
+                                    f"Symbol: `{symbol}`\n"
+                                    f"Closed {position_side} @ {mark_price:.6f}\n"
+                                    f"PnL: {pnl_pct:+.2f}%\n\n"
+                                    f"Opening {flip_analysis.trend_direction}...\n"
+                                    f"Confidence: {flip_analysis.weighted_confidence:.1f}%\n"
+                                    f"Reason: {flip_analysis.reason}"
+                                )
+                                
+                            except Exception as flip_exec_err:
+                                logger.error(f"❌ {symbol}: Auto-flip execution failed: {flip_exec_err}")
+                        else:
+                            logger.debug(
+                                f"🔄 {symbol}: Flip analysis - should_flip={flip_analysis.should_flip}, "
+                                f"confidence={flip_analysis.weighted_confidence:.1f}% (need >=65%)"
+                            )
+                    
+                except Exception as autoflip_err:
+                    logger.debug(f"⚠️ {symbol}: Auto-flip analysis skipped: {autoflip_err}")
             
             # ⚠️ LEGACY SL/TP MANAGEMENT DISABLED - Trailing TP handles all protection
             # add_sl_tp_protection is now superseded by Trailing TP system below
@@ -814,81 +878,80 @@ async def ensure_positions_protected() -> None:
                     
                     # 🎯 LAYER 1: Calculate and apply dynamic SL to Binance
                     # 🛡️ Skip dynamic SL if within 60-second hold period (prevents premature exits)
+                    # BUT STILL RUN BREAKEVEN & TRAILING (they already ran above)
                     if risk_manager.is_within_hold_period(symbol):
                         age = risk_manager.get_position_age(symbol)
-                        logger.debug(f"⏰ {symbol}: Within hold period ({age:.1f}s / 60s), skipping dynamic SL")
-                        continue
-                    
-                    # 🛡️ FIX: Skip if in cooldown period (after -2021 errors)
-                    if symbol in _sl_retry_after and time.time() < _sl_retry_after[symbol]:
-                        logger.debug(f"⏸️ {symbol}: SL placement in cooldown, skipping")
-                        continue
-                    
-                    atr = await calculate_symbol_atr(symbol, period=14)
-                    
-                    # Initialize variables to avoid unbound errors
-                    volatility = 0.02  # Default 2% volatility
-                    protected_sl = entry_price * 0.98 if position_side == "LONG" else entry_price * 1.02
-                    
-                    if atr > 0:
-                        from utils.binance_client import futures_create_order, futures_cancel_sl_orders
-                        
-                        volatility = risk_manager.calculate_volatility(symbol, atr, mark_price)
-                        protected_sl = risk_manager.calculate_protected_sl(
-                            entry_price, atr, position_side, volatility
-                        )
-                        
-                        try:
-                            # Cancel existing SL orders (preserves TP orders)
-                            futures_cancel_sl_orders(symbol)
-                            
-                            # Place new STOP_MARKET at protected SL
-                            close_side = "SELL" if position_side == "LONG" else "BUY"
-                            
-                            # 🛡️ FIX: Validate SL price before placing (prevents APIError -4006)
-                            if protected_sl and protected_sl > 0:
-                                sl_order = futures_create_order(
-                                    symbol=symbol,
-                                    side=close_side,
-                                    type="STOP_MARKET",
-                                    quantity=abs(amt),
-                                    stopPrice=protected_sl,
-                                    reduceOnly=True,
-                                    positionSide=position_side
-                                )
-                            else:
-                                logger.warning(f"⚠️ {symbol}: Dynamic SL skipped - price invalid ({protected_sl})")
-                            
-                            # 🛡️ FIX: On success, clear failure tracking
-                            if symbol in _sl_placement_failures:
-                                del _sl_placement_failures[symbol]
-                            if symbol in _sl_retry_after:
-                                del _sl_retry_after[symbol]
-                            
-                            logger.info(
-                                f"🎯 {symbol}: Dynamic SL placed @ {protected_sl:.8f} "
-                                f"(ATR={atr:.8f}, Vol={volatility*100:.1f}%)"
-                            )
-                        except Exception as sl_err:
-                            # 🛡️ FIX: Detect -2021 errors and enter cooldown
-                            error_code = getattr(sl_err, "code", None)
-                            error_msg = str(sl_err)
-                            
-                            if error_code == -2021 or "-2021" in error_msg or "immediately trigger" in error_msg.lower():
-                                _sl_placement_failures[symbol] = _sl_placement_failures.get(symbol, 0) + 1
-                                cooldown_time = time.time() + (SL_FAILURE_SKIP_CYCLES * AUTO_PROTECT_INTERVAL_SEC)
-                                _sl_retry_after[symbol] = cooldown_time
-                                
-                                logger.warning(
-                                    f"⏸️ {symbol}: SL would trigger immediately (-2021), "
-                                    f"entering {SL_FAILURE_SKIP_CYCLES} cycle cooldown "
-                                    f"({SL_FAILURE_SKIP_CYCLES * AUTO_PROTECT_INTERVAL_SEC}s)"
-                                )
-                            else:
-                                # Other errors - log normally
-                                logger.error(f"❌ Failed to place dynamic SL for {symbol}: {sl_err}")
+                        logger.debug(f"⏰ {symbol}: Within hold period ({age:.1f}s / 60s), skipping dynamic SL calculation only")
                     else:
-                        logger.debug(f"⚠️ {symbol}: ATR=0, skipping dynamic SL")
+                        # 🛡️ FIX: Skip if in cooldown period (after -2021 errors)
+                        if symbol in _sl_retry_after and time.time() < _sl_retry_after[symbol]:
+                            logger.debug(f"⏸️ {symbol}: SL placement in cooldown, skipping")
+                        else:
+                            atr = await calculate_symbol_atr(symbol, period=14)
+                            
+                            # Initialize variables to avoid unbound errors
+                            volatility = 0.02  # Default 2% volatility
+                            protected_sl = entry_price * 0.98 if position_side == "LONG" else entry_price * 1.02
+                            
+                            if atr > 0:
+                                from utils.binance_client import futures_create_order, futures_cancel_sl_orders
+                                
+                                volatility = risk_manager.calculate_volatility(symbol, atr, mark_price)
+                                protected_sl = risk_manager.calculate_protected_sl(
+                                    entry_price, atr, position_side, volatility
+                                )
+                                
+                                try:
+                                    # Cancel existing SL orders (preserves TP orders)
+                                    futures_cancel_sl_orders(symbol)
+                                    
+                                    # Place new STOP_MARKET at protected SL
+                                    close_side = "SELL" if position_side == "LONG" else "BUY"
+                                    
+                                    # 🛡️ FIX: Validate SL price before placing (prevents APIError -4006)
+                                    if protected_sl and protected_sl > 0:
+                                        sl_order = futures_create_order(
+                                            symbol=symbol,
+                                            side=close_side,
+                                            type="STOP_MARKET",
+                                            quantity=abs(amt),
+                                            stopPrice=protected_sl,
+                                            reduceOnly=True,
+                                            positionSide=position_side
+                                        )
+                                    else:
+                                        logger.warning(f"⚠️ {symbol}: Dynamic SL skipped - price invalid ({protected_sl})")
+                                    
+                                    # 🛡️ FIX: On success, clear failure tracking
+                                    if symbol in _sl_placement_failures:
+                                        del _sl_placement_failures[symbol]
+                                    if symbol in _sl_retry_after:
+                                        del _sl_retry_after[symbol]
+                                    
+                                    logger.info(
+                                        f"🎯 {symbol}: Dynamic SL placed @ {protected_sl:.8f} "
+                                        f"(ATR={atr:.8f}, Vol={volatility*100:.1f}%)"
+                                    )
+                                except Exception as sl_err:
+                                    # 🛡️ FIX: Detect -2021 errors and enter cooldown
+                                    error_code = getattr(sl_err, "code", None)
+                                    error_msg = str(sl_err)
+                                    
+                                    if error_code == -2021 or "-2021" in error_msg or "immediately trigger" in error_msg.lower():
+                                        _sl_placement_failures[symbol] = _sl_placement_failures.get(symbol, 0) + 1
+                                        cooldown_time = time.time() + (SL_FAILURE_SKIP_CYCLES * AUTO_PROTECT_INTERVAL_SEC)
+                                        _sl_retry_after[symbol] = cooldown_time
+                                        
+                                        logger.warning(
+                                            f"⏸️ {symbol}: SL would trigger immediately (-2021), "
+                                            f"entering {SL_FAILURE_SKIP_CYCLES} cycle cooldown "
+                                            f"({SL_FAILURE_SKIP_CYCLES * AUTO_PROTECT_INTERVAL_SEC}s)"
+                                        )
+                                    else:
+                                        # Other errors - log normally
+                                        logger.error(f"❌ Failed to place dynamic SL for {symbol}: {sl_err}")
+                            else:
+                                logger.debug(f"⚠️ {symbol}: ATR=0, skipping dynamic SL")
                     
                     # 🎯 LAYER 5: DYNAMIC TP UPDATE (MetaBrain v9.1 - Real-time TP Adjustment)
                     # Update TP orders every 30s based on price movement and volatility
