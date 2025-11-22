@@ -141,8 +141,8 @@ def format_ai_brains_status(active_brains: List[str], brain_scores: Dict[str, fl
 
 # ===================== TRADE SUMMARY =====================
 def format_trade_summary(
-    trades: List[Dict[str, Any]],
-    open_positions: List[Dict[str, Any]] = None
+    trades: Optional[List[Dict[str, Any]]] = None,
+    open_positions: Optional[List[Dict[str, Any]]] = None
 ) -> str:
     """
     Format comprehensive trade summary with:
@@ -150,6 +150,9 @@ def format_trade_summary(
     - Profit metrics
     - Success rate per TP
     """
+    trades = trades or []
+    open_positions = open_positions or []
+    
     if not trades and not open_positions:
         return "📊 <b>No trades</b>"
     
@@ -293,6 +296,8 @@ def format_expected_metrics(
         total_risk += risk
         
         # Calculate potential profit (average of TPs)
+        avg_tp = 0.0
+        potential_profit = 0.0
         if tp_prices and entry > 0:
             avg_tp = sum(tp_prices) / len(tp_prices)
             profit_per_unit = abs(avg_tp - entry)
@@ -395,15 +400,19 @@ def format_rich_telegram_message(
     active_brains: List[str],
     brain_scores: Dict[str, float],
     error_msgs: Dict[str, str],
-    closed_trades: List[Dict[str, Any]] = None,
-    open_positions: List[Dict[str, Any]] = None,
-    issues: List[Dict[str, str]] = None,
+    closed_trades: Optional[List[Dict[str, Any]]] = None,
+    open_positions: Optional[List[Dict[str, Any]]] = None,
+    issues: Optional[List[Dict[str, str]]] = None,
     win_rate: float = 0.0,
     avg_tp_time: float = 15
 ) -> str:
     """
     Create comprehensive rich Telegram message with all metrics
     """
+    closed_trades = closed_trades or []
+    open_positions = open_positions or []
+    issues = issues or []
+    
     sections = []
     
     # Header
@@ -422,7 +431,7 @@ def format_rich_telegram_message(
     sections.append("━━━━━━━━━━━━━━━━━━━━")
     
     # Trade Summary
-    sections.append(format_trade_summary(closed_trades or [], open_positions or []))
+    sections.append(format_trade_summary(closed_trades, open_positions))
     sections.append("━━━━━━━━━━━━━━━━━━━━")
     
     # Expected Metrics
@@ -436,7 +445,7 @@ def format_rich_telegram_message(
         sections.append("━━━━━━━━━━━━━━━━━━━━")
     
     # Issues & Fixes
-    sections.append(format_issues_and_fixes(issues or [], score_val))
+    sections.append(format_issues_and_fixes(issues, score_val))
     
     # Footer
     sections.append("━━━━━━━━━━━━━━━━━━━━")

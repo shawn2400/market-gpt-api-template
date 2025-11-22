@@ -61,6 +61,112 @@ The production environment runs on Render.com with 11 Background Workers and a N
 -   **N8N Workflow Automation**: External workflow integration, news ingestion.
 -   **Gunicorn**: Production-grade WSGI HTTP server.
 -   **Redis Cloud**: High-performance caching and temporary data storage.
+## v9.3.12 ENHANCED TELEGRAM FORMATTER - Rich Trade Reports ✨
+
+### NEW FEATURES
+**Enhanced Telegram Notifications System:**
+- 📊 **System Health Score (0-100)** with 5-factor breakdown:
+  - Profitability (last trades PnL)
+  - Win Rate (TP hits / total)
+  - Activity (trades executed today)
+  - API Health (errors/uptime)
+  - Protection (SL/TP active)
+  
+- 🧠 **AI Agents Status Display**:
+  - Shows all 7 agents: DeepSeek, Grok, Claude, Qwen, Gemini, Falcon, Mixtral
+  - Individual scores (0-10)
+  - Status: ✅ Active, ❌ No credits, ⚫ Inactive
+  - Error messages for debugging
+  
+- 📈 **Trade Summary Metrics**:
+  - Per-trade details: Symbol, Side, Entry/Exit, PnL $, PnL %, Leverage, Duration
+  - Total wins/losses/win-rate
+  - Closed vs open positions
+  
+- 🎯 **TP Hit Success Rates**:
+  - Success rates per TP level (TP1-5) with progress bars
+  - Historical performance tracking
+  
+- 💡 **Expected Profit Calculations**:
+  - Best case: Probability × Reward
+  - Risk scenario: Probability × Loss
+  - Net expected: Best - Risk
+  - Average time to TP hit
+  
+- ⚠️ **Issues Detection & Fixes**:
+  - Identifies problems (low API credits, margin insufficient, etc.)
+  - Suggests recommended actions
+  - Color-coded by severity (🟢 OK, 🟡 Warning, 🟠 Caution, 🔴 Critical)
+
+### FILES CREATED/UPDATED
+- **NEW:** `utils/enhanced_telegram_formatter.py`
+  - 10 powerful formatting functions
+  - 525 lines of rich message generation code
+  - Fallback support for simple messages
+  
+- **UPDATED:** `utils/telegram_digest.py`
+  - Integrated enhanced formatter
+  - Automatic fallback if formatter unavailable
+  - Rich trade digest messages every 30 min
+  
+- **FIXED:** `utils/telegram_notifier_core.py`
+  - Fixed type annotations for _fmt_pct()
+  - Proper None handling
+
+### TECHNICAL IMPROVEMENTS
+✅ **All LSP Errors Resolved** - get_latest_lsp_diagnostics = CLEAN
+✅ **Syntax Validation** - All Python files compile without errors
+✅ **Type Safety** - Proper Optional annotations, None checks
+✅ **Error Handling** - Try-except with intelligent fallbacks
+✅ **Bilingual Support** - Hebrew (בס״ד + בעזרת השם נעשה ונצליח) + English
+
+### TELEGRAM MESSAGE EXAMPLE
+```
+בס״ד
+
+🤖 AlgoGPT MetaBrain Status Report
+🟢 System Score: 78/100
+🕐 2025-11-22 22:40:00 UTC
+━━━━━━━━━━━━━━━━━━━━
+
+🧠 AI Agents Status
+  🧠 ✅ DeepSeek: 7.5/10
+  ⚡ ❌ Grok: No credits
+  🎯 ✅ Claude: 8.0/10
+  ...
+
+📊 Trade Summary
+1. ETHUSDT LONG 🟢
+   💰 2750.0 → 2800.0
+   📈 PnL: +50.00$ (+1.82%)
+   ⏱️ 15m | 🎯 TP1_HIT
+
+💡 Expected Metrics
+  Best case: +120.50$
+  Avg Time to TP: ~15 minutes
+
+🎯 TP Hit Success Rates
+  TP1: ██████████ 100%
+  TP2: ████░░░░░░ 40%
+  
+━━━━━━━━━━━━━━━━━━━━
+בעזרת השם נעשה ונצליח 🙏
+```
+
+### IMPACT
+✅ Rich, detailed trade reports sent to Telegram
+✅ System health visible at a glance
+✅ AI agent status transparency
+✅ Better decision-making with comprehensive metrics
+✅ Professional bilingual format (Hebrew + English)
+✅ Robust fallback system ensures reliability
+
+### DEPLOYMENT READY
+- Messages send every 30 min when TP/SL hits
+- Fallback to simple format if formatter unavailable
+- Full type safety and error handling
+- Bilingual support for Israeli user
+
 ## v9.3.11 CRITICAL UPDATE - Leverage CAP REMOVED 🔥
 
 ### THE PROBLEM

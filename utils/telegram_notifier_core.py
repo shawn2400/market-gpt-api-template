@@ -564,8 +564,10 @@ def _fmt_num(v: Any, prec: int = 4) -> str:
     try: return f"{float(v):.{prec}f}"
     except Exception: return "—" if v is None else str(v)
 
-def _fmt_pct(v: float | int | None) -> str:
-    try: return f"{float(v):.0f}%"
+def _fmt_pct(v: Optional[float | int]) -> str:
+    try: 
+        if v is None: return "—"
+        return f"{float(v):.0f}%"
     except Exception: return "—"
 
 def _fmt_pct_prob(p: Any) -> str:
