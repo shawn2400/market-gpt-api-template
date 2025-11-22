@@ -522,6 +522,11 @@ class ExecutionBot:
                         self.log.error(f"❌ Failed to get price for {symbol}: {price_err}")
                         return {"ok": False, "error": "price_unavailable", "detail": str(price_err)}
             
+            # 🔧 CRITICAL FIX: Validate qty > 0 BEFORE attempting order placement
+            if qty <= 0:
+                self.log.error(f"❌ CRITICAL: Quantity invalid after calculation for {symbol}: qty={qty}")
+                return {"ok": False, "error": "quantity_zero", "detail": f"Calculated quantity={qty}, must be > 0"}
+            
             if not (symbol and side in ("BUY", "SELL") and qty > 0 and leverage > 0):
                 missing = []
                 if not symbol: missing.append("symbol")
