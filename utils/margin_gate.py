@@ -25,9 +25,9 @@ from datetime import datetime, timedelta
 logger = logging.getLogger("margin_gate")
 
 # Minimum margin required to continue scanning
-MIN_MARGIN_USDT = 10.0  # Must have at least $10 margin available
-CHECK_INTERVAL_SEC = 30  # Check margin every 30 seconds
-SLEEP_WHEN_PAUSED_SEC = 60  # Sleep 60 seconds when paused
+MIN_MARGIN_USDT = 15.0  # Must have at least $15 margin available for trades
+CHECK_INTERVAL_SEC = 10  # Check margin every 10 seconds (fast response)
+SLEEP_WHEN_PAUSED_SEC = 30  # Sleep 30 seconds when paused
 
 
 class MarginGate:

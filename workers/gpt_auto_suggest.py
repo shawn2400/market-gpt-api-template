@@ -822,7 +822,7 @@ async def _emit(payload: Dict[str, Any]) -> bool:
             LOGGER.info(f"🔍 STANDALONE DEBUG {sym}: quality_score={quality_value}, keys={list(payload.keys())}")
             
             # 💰 DYNAMIC BUDGET FALLBACK: Use MIN budget if payload missing budget_usd
-            min_budget_fallback = float(os.getenv("BUDGET_MIN_USDT", "25.0"))
+            min_budget_fallback = float(os.getenv("BUDGET_MIN_USDT", "15.0"))
             
             # 🔧 FIX: Use dynamic leverage from payload (calculated by Dynamic Sizing Engine)
             # Default to 5x (middle of 1-35x range) ONLY if payload missing leverage
@@ -2440,8 +2440,8 @@ async def process_cycle():
         
         # Use 0.3x MIN budget as safety buffer for dynamic sizing
         # Changed from 1.0x to 0.3x to allow trading even with low balances
-        min_budget = float(os.getenv("BUDGET_MIN_USDT", "25.0"))  # $25 minimum reference
-        safety_buffer = min_budget * 0.3  # $7.50 minimum (allows trading with $4.44)
+        min_budget = float(os.getenv("BUDGET_MIN_USDT", "15.0"))  # $15 minimum reference
+        safety_buffer = min_budget * 0.3  # $4.50 minimum (allows trading with $15)
         if available < safety_buffer:
             LOGGER.warning(
                 f"⏸️ ON DEMAND MODE: Insufficient margin (${available:.2f} < ${safety_buffer:.2f}). "
@@ -2660,8 +2660,8 @@ async def process_cycle():
             
             # Use 0.3x MIN budget as safety buffer for dynamic sizing
             # Changed from 1.0x to 0.3x to allow trading even with low balances
-            min_budget = float(os.getenv("BUDGET_MIN_USDT", "25.0"))  # $25 minimum reference
-            safety_buffer = min_budget * 0.3  # $7.50 minimum (allows trading with $4.44)
+            min_budget = float(os.getenv("BUDGET_MIN_USDT", "15.0"))  # $15 minimum reference
+            safety_buffer = min_budget * 0.3  # $4.50 minimum (allows trading with $15)
             if available < safety_buffer:
                 LOGGER.warning(
                     f"⏸️ Insufficient margin (${available:.2f} < ${safety_buffer:.2f}) - skipping proposals temporarily"
