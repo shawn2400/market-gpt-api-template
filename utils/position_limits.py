@@ -166,22 +166,42 @@ class PositionLimitsManager:
             return LimitCheckResult(passed=True, symbol=symbol, reason=f"Check failed (allowed): {e}")
     
     def _check_total_open_orders(self) -> LimitCheckResult:
-        """Check total open orders across all symbols"""
+        """Check total open orders across all symbols - HARDENED v2"""
         try:
             from utils.binance_client import get_open_orders
+            import time
             
             orders = get_open_orders()
             
-            # 🔧 CRITICAL FIX: Filter only NEW/PARTIALLY_FILLED orders (exclude filled/cancelled)
-            active_orders = [
-                o for o in orders 
-                if (o.get("status") or "").upper() in ("NEW", "PARTIALLY_FILLED")
-            ]
+            # 🔧 CRITICAL FIX v2: AGGRESSIVE FILTERING
+            # Only count genuinely active orders that could affect new positions
+            # Exclude: FILLED, CANCELLED, REJECTED, EXPIRED, any order > 5 minutes old
+            current_timestamp = int(time.time() * 1000)  # Milliseconds
+            max_order_age_ms = 5 * 60 * 1000  # 5 minutes
+            
+            active_orders = []
+            for o in orders:
+                status = (o.get("status") or "").upper()
+                
+                # Skip non-active statuses
+                if status not in ("NEW", "PARTIALLY_FILLED"):
+                    continue
+                
+                # Skip stale orders (older than 5 mins = likely orphaned/filled elsewhere)
+                update_time = int(o.get("updateTime", current_timestamp))
+                order_age = current_timestamp - update_time
+                if order_age > max_order_age_ms:
+                    logger.debug(f"⏳ Skipping stale order (age={order_age/1000:.0f}s): {o.get('symbol')} #{o.get('orderId')}")
+                    continue
+                
+                # This is a REAL active order
+                active_orders.append(o)
+            
             count = len(active_orders)
             
             # 🔧 DEBUG: Log active order count
-            if count > 20:  # Only log when approaching limit
-                logger.debug(f"📊 Active orders: {count}/{MAX_TOTAL_OPEN_ORDERS} | Total orders in account: {len(orders)}")
+            if count > 20:
+                logger.debug(f"📊 REAL active orders: {count}/{MAX_TOTAL_OPEN_ORDERS} (total in API: {len(orders)}, filtered: {len(orders)-count})")
             
             if count > MAX_TOTAL_OPEN_ORDERS:
                 logger.warning(
@@ -193,7 +213,9 @@ class PositionLimitsManager:
                     reason=f"Max total orders exceeded ({count}/{MAX_TOTAL_OPEN_ORDERS})",
                     details={
                         "current_orders": count,
-                        "max_allowed": MAX_TOTAL_OPEN_ORDERS
+                        "max_allowed": MAX_TOTAL_OPEN_ORDERS,
+                        "api_returned": len(orders),
+                        "filtered_stale": len(orders) - count
                     }
                 )
             
