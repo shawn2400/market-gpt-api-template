@@ -173,14 +173,14 @@ class PositionLimitsManager:
             orders = get_open_orders()
             count = len(orders)
             
-            if count >= MAX_TOTAL_OPEN_ORDERS:
+            if count > MAX_TOTAL_OPEN_ORDERS:
                 logger.warning(
-                    f"⚠️ Max total orders reached {count}/{MAX_TOTAL_OPEN_ORDERS}"
+                    f"⚠️ Max total orders exceeded {count}/{MAX_TOTAL_OPEN_ORDERS}"
                 )
                 return LimitCheckResult(
                     passed=False,
                     symbol="ALL",
-                    reason=f"Max total orders reached ({count}/{MAX_TOTAL_OPEN_ORDERS})",
+                    reason=f"Max total orders exceeded ({count}/{MAX_TOTAL_OPEN_ORDERS})",
                     details={
                         "current_orders": count,
                         "max_allowed": MAX_TOTAL_OPEN_ORDERS

@@ -8,6 +8,13 @@ I prefer iterative development with clear, concise communication. Please ask for
 
 ## Recent Changes (Nov 22, 2025)
 
+### MetaBrain v9.2.5.2 - Position Limits Fix 🔧
+- **File**: `utils/position_limits.py` (line 179)
+- **Fix**: Changed `>=` to `>` in _check_total_open_orders()
+- **Issue**: System was blocking trades at exactly 25 orders (should allow 25, only block at 26+)
+- **Impact**: ACTUSDT execution now works with 25 open orders
+- **Status**: ✅ FIXED - Executions can now proceed normally
+
 ### MetaBrain v9.2.5.1 - AutoFix Validation Hotfix ✅
 - **Files**: `utils/critical_autofix_engine.py` (validation methods)
 - **Fixes**: 
