@@ -938,14 +938,25 @@ async def ensure_positions_protected() -> None:
                                             # Import required functions
                                             from utils.binance_client import futures_create_order, futures_cancel_order
                                             
-                                            # Cancel old TP orders (skip if order no longer exists)
+                                            # Cancel old TP orders (skip if order no longer exists - expected for filled orders)
                                             for tp_order in tp_orders[:3]:
                                                 try:
                                                     order_id = tp_order.get("orderId")
-                                                    futures_cancel_order(symbol, order_id)
+                                                    result = futures_cancel_order(symbol, order_id)
+                                                    if result.get("ok") == False:
+                                                        error_msg = result.get("error", "Unknown error")
+                                                        # -2011 = Order not found (filled/cancelled) - expected, skip
+                                                        if "-2011" in error_msg or "Unknown order" in error_msg:
+                                                            logger.debug(f"ℹ️ {symbol}: TP order {order_id} already filled/cancelled")
+                                                        else:
+                                                            logger.warning(f"⚠️ {symbol}: Failed to cancel TP order {order_id}: {error_msg}")
                                                 except Exception as cancel_err:
-                                                    # Order may already be filled or cancelled - this is OK
-                                                    logger.debug(f"⚠️ {symbol}: Could not cancel TP order {order_id}: {cancel_err}")
+                                                    error_code = getattr(cancel_err, "code", None)
+                                                    # -2011 = Order not found (filled/cancelled) - expected, skip
+                                                    if error_code == -2011 or "Unknown order" in str(cancel_err).lower():
+                                                        logger.debug(f"ℹ️ {symbol}: TP order {order_id} already filled/cancelled")
+                                                    else:
+                                                        logger.warning(f"⚠️ {symbol}: Could not cancel TP order {order_id}: {cancel_err}")
                                             
                                             # Place new TP orders
                                             exit_side = "SELL" if position_side == "LONG" else "BUY"
