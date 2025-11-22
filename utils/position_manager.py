@@ -485,9 +485,25 @@ async def manage_once(
 
     placed_tp: List[Dict[str, Any]] = []
     for i, (tp_price, qty_i) in enumerate(zip(targets, tp_quantities), start=1):
-        if qty_i <= 0: 
-            logger.warning(f"Skipping TP{i} - calculated qty={qty_i} is invalid")
-            continue
+        if qty_i <= 0:
+            # 🛡️ FALLBACK: Try to recover zero quantity
+            logger.warning(f"⚠️ TP{i} quantity is zero ({qty_i}), trying fallback recovery")
+            
+            # Level 1: Try using twice the remaining qty
+            remaining_qty = qty_abs - qty_sum
+            if remaining_qty > 0:
+                qty_i = _bn_round(remaining_qty / (len(tp_quantities) - i + 1), step)  # Split remaining evenly
+            
+            # Level 2: If still zero, try using entire remaining position
+            if qty_i <= 0:
+                qty_i = _bn_round(remaining_qty, step)
+            
+            # Level 3: If still zero, skip this TP
+            if qty_i <= 0:
+                logger.warning(f"⚠️ TP{i} quantity unrecoverable (remaining={remaining_qty}, step={step}), skipping")
+                continue
+            
+            logger.info(f"✅ TP{i} quantity recovered via fallback: {qty_i}")
         
         # HYBRID TP Strategy: TP1=TAKE_PROFIT_MARKET (fast), TP2+=LIMIT (precise)
         if i == 1:
