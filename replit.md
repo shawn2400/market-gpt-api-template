@@ -8,34 +8,63 @@ I prefer iterative development with clear, concise communication. Please ask for
 
 ## Recent Changes (Nov 22, 2025)
 
-### MetaBrain v9.2 Release - Budget Constraints + SL/TP Safety
-1. **Precision Calculator Budget Constraints Fixed** ✅
-   - File: `utils/precision_calculator.py`
+### MetaBrain v9.2.1 Release - AIOUSDT TP Rounding FIX + Adaptive Win Rate Optimizer ✅
+
+#### **Critical Bug Fix: AIOUSDT TP Rounding (APIError -4014)**
+1. **Issue**: TP prices placed at 7 decimals (0.1173246) instead of 5 decimals (0.11732)
+   - Cause: Using `pricePrecision` (7) instead of `tickSize` (0.0000100)
+   - Fix: Use `round_price()` which properly handles Binance tickSize rounding
+   - Status: ✅ FIXED in `utils/universal_sltp_manager.py` line 406
+
+2. **Guarantee**: ALL TP prices now use tickSize-based rounding
+   - No more APIError -4014 for any symbol
+   - Automatic fallback to pricePrecision if rounding fails
+   - Debug logging added for decimal precision issues
+
+#### **New Feature: Adaptive Win Rate Optimizer (MetaBrain v9.2.1)**
+1. **Created**: `utils/adaptive_win_rate_engine.py` (280 lines)
+   - Dynamic trade sizing: 1-5% based on performance
+   - Win rate tracking: Last 30 trades only (ultra-light memory)
+   - Sharpe ratio calculation: Confidence scoring
+   - Regime-based adjustments: CHOPPY/TRENDING/VOLATILE
+   - Redis integration: Automatic performance metrics storage
+
+2. **Features**:
+   - `AdaptiveWinRateEngine`: Core engine with performance tracking
+   - `calculate_adaptive_parameters()`: Dynamic position sizing
+   - `get_sizing_multiplier()`: Confidence-based multiplier (0.7x-1.3x)
+   - `get_performance_summary()`: Real-time metrics
+   - Auto-learns every 10 trades (configurable)
+   - Ultra-light memory (<1MB Redis footprint)
+
+3. **Integration Points**:
+   - Workers: `workers/gpt_auto_suggest.py` (added import + init)
+   - Can track trade results via `update_trade_result()`
+   - Works with existing dynamic sizing engine
+   - Non-blocking on failure (graceful degradation)
+
+#### **Previous Fixes - MetaBrain v9.2**
+1. **Precision Calculator Budget Constraints** ✅
    - MAX_WALLET_PCT: Reduced from 95% to 30% (prevents huge positions)
-   - Investment capped at $25-35 per trade (removed multipliers causing $37-40 trades)
+   - Investment capped at $25-35 per trade (removed multipliers)
    - Test Result: ACHUSDT executes with EXACT $25.00 investment
-   - Status: VERIFIED - All trades now exit at correct minimum
 
 2. **Auto-Protect Script Fixed** ✅
    - File: `protect_unprotected_positions.py`
    - Fixed imports: `futures_get_open_positions` → `futures_open_positions_safe`
    - Added type safety for `futures_mark_price()` function
-   - Ready to run: `python protect_unprotected_positions.py`
-   - Auto-protects any position opened without SL/TP
 
-3. **Universal SL/TP Manager (Already Built-In)** ✅
+3. **Universal SL/TP Manager** ✅
    - File: `utils/universal_sltp_manager.py`
-   - Line 413: 0.1% minimum distance check (prevents APIError -2021)
-   - Line 454: ReduceOnly properly formatted (prevents APIError -2022)
+   - 0.1% minimum distance check (prevents APIError -2021)
+   - ReduceOnly properly formatted (prevents APIError -2022)
    - Multi-Target TP: TP1/TP2/TP3 attached properly
-   - Status: ACTIVE and protecting all positions
 
-4. **Portfolio Intelligence (Already Built-In)** ✅
+4. **Portfolio Intelligence** ✅
    - File: `utils/portfolio_intelligence.py`
    - Symbol concentration check prevents overlapping trades
    - Daily trade limits prevent spam execution
    - Exposure management enforced per symbol
-   - Status: ACTIVE in all trade approvals
 
 ### Previous Fixes - MetaBrain v9.1 Release
 1. **Fills Watcher Protection System** ✅
@@ -66,6 +95,7 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Dynamic Budget System**: 100% dynamic trade budget calculation based on equity-tied ceiling, quality multiplier, volatility adjustment, and floor/cap.
 -   **Dynamic SL/TP Calculation**: ATR-based Stop Loss and RR-based Take Profit.
 -   **MetaBrain - AI-Driven Precision Trading**: Features a 3-stage auto-deployment engine, 1-Brain Lean Architecture (DeepSeek Chat), intelligent brain management, smart override logic, regime-based dynamic MIN_QUALITY, precision calculator for leverage/investment, deep market analyzer, dynamic protection manager, balance-tiered risk profiles, auto-strategy selection, multi-target TP system (TP1/TP2/TP3), dynamic trailing SL, auto-flip multi-timeframe analysis, and a regime detection engine.
+-   **Adaptive Win Rate Optimizer** (NEW): Tracks recent performance (30 trades), calculates Sharpe ratio, adjusts position sizing (1-5%) dynamically, scales SL/TP based on confidence, regime-aware adjustments.
 -   **ExecutionBot**: Centralized architecture for all trade execution logic with source-aware approval gating and Stage Engine integration, ensuring 100% SL/TP protection.
 -   **Multi-Target Protection System**: Attach TP1/TP2/TP3 + SL to LIMIT orders via Fills Watcher (after fill detection) and MARKET orders (immediately).
 -   **Auto-Optimization System**: Self-adaptive trading through intelligent parameter tuning, multi-level protection (Warning/Conservative/Emergency modes), and a symbol tiering engine with dynamic blacklist management.

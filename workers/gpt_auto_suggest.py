@@ -29,6 +29,7 @@ from utils.ai_tracker import log_prediction, MarketRegime, AIModel  # ← AI Per
 from utils.ai_trade_scorer import get_multi_ai_scorer  # ← Multi-AI Consensus (5 providers)
 from utils.strategy_orchestrator import get_strategy_orchestrator  # ← Strategy Orchestrator (Auto-select strategy)
 from utils.metabrain.dynamic_protection_manager import protection_manager  # ← Dynamic Protection Manager (Regime-based params)
+from utils.adaptive_win_rate_engine import get_adaptive_engine, initialize_adaptive_engine  # ← Adaptive Win Rate Optimizer (MetaBrain v9.2.1)
 
 # Grid helper
 try:
@@ -3058,6 +3059,15 @@ async def process_cycle():
     return True  # ✅ Successful scan completed
 
 async def main():
+    # 🧠 Initialize Adaptive Win Rate Engine (MetaBrain v9.2.1)
+    try:
+        redis_conn = RED
+        adaptive_engine = initialize_adaptive_engine(redis_client=redis_conn)
+        LOGGER.info("✅ Adaptive Win Rate Engine initialized - enabling dynamic trade sizing")
+    except Exception as e:
+        LOGGER.warning(f"⚠️ Adaptive Engine init failed (proceeding without): {e}")
+        adaptive_engine = None
+    
     # ========== MODULE VERSION VERIFICATION ==========
     # Verify get_klines module is loaded correctly (detect caching issues)
     try:
