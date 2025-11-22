@@ -466,32 +466,41 @@ async def ensure_positions_protected() -> None:
                         tp_config = protection_result.get("tp_config")
                         
                         if tp_config and isinstance(tp_config, dict):
+                            targets = tp_config.get('targets', [])
                             logger.info(
                                 f"✅ {symbol}: Multi-Target TP added: "
-                                f"{len(tp_orders_placed)} orders (TP1/TP2/TP3), "
+                                f"{len(tp_orders_placed)} orders (TP1-TP{len(targets)}), "
                                 f"RR={tp_config.get('risk_reward_ratio', 0):.1f}"
                             )
                             
-                            # Send Telegram notification if targets exist
-                            targets = tp_config.get('targets', [])
+                            # Send Telegram notification if targets exist (support up to 5 TPs)
                             if len(targets) >= 3:
-                                await send_telegram_message(
-                                    f"🎯 *Multi-Target TP Added*\n\n"
-                                    f"Symbol: `{symbol}`\n"
-                                    f"Side: {position_side}\n"
-                                    f"Entry: {entry_price:.6f}\n\n"
-                                    f"TP1: {targets[0]['price']:.6f} ({targets[0]['exit_percent']*100:.0f}%)\n"
-                                    f"TP2: {targets[1]['price']:.6f} ({targets[1]['exit_percent']*100:.0f}%)\n"
-                                    f"TP3: {targets[2]['price']:.6f} ({targets[2]['exit_percent']*100:.0f}%)\n\n"
-                                    f"Risk/Reward: {tp_config.get('risk_reward_ratio', 0):.1f}x"
-                                )
+                                tp_msg = f"🎯 *Multi-Target TP Added*\n\n"
+                                tp_msg += f"Symbol: `{symbol}`\n"
+                                tp_msg += f"Side: {position_side}\n"
+                                tp_msg += f"Entry: {entry_price:.6f}\n\n"
                                 
-                                # 🎯 INITIALIZE PROGRESSIVE SL LOCKER
+                                # Show all available TPs (3-5)
+                                for i, target in enumerate(targets[:5]):  # Up to 5 TPs
+                                    tp_msg += f"TP{i+1}: {target['price']:.6f} ({target['exit_percent']*100:.0f}%)\n"
+                                
+                                tp_msg += f"\nRisk/Reward: {tp_config.get('risk_reward_ratio', 0):.1f}x"
+                                
+                                await send_telegram_message(tp_msg)
+                                
+                                # 🎯 INITIALIZE PROGRESSIVE SL LOCKER (with all TPs)
                                 if progressive_sl_locker:
                                     try:
-                                        tp_prices = [t['price'] for t in targets[:3]]
-                                        progressive_sl_locker.init_tp_tracking(symbol, tp_prices[0], tp_prices[1], tp_prices[2])
-                                        logger.info(f"🎯 {symbol}: Progressive SL tracking initialized")
+                                        tp_prices = [t['price'] for t in targets]  # All TPs, not just 3
+                                        # Support 3-5 TPs
+                                        if len(tp_prices) >= 3:
+                                            progressive_sl_locker.init_tp_tracking(
+                                                symbol, 
+                                                tp_prices[0],  # TP1
+                                                tp_prices[1],  # TP2
+                                                tp_prices[2]   # TP3
+                                            )
+                                            logger.info(f"🎯 {symbol}: Progressive SL tracking initialized with {len(tp_prices)} TPs")
                                     except Exception as psl_err:
                                         logger.warning(f"⚠️ Progressive SL initialization failed for {symbol}: {psl_err}")
                         else:
@@ -1000,8 +1009,8 @@ async def ensure_positions_protected() -> None:
                                 )
                                 
                                 if tp_config and "targets" in tp_config and len(tp_config["targets"]) >= 3:
-                                    new_tp_prices = [t["price"] for t in tp_config["targets"][:3]]
-                                    old_tp_prices = [float(o.get("stopPrice", 0)) for o in tp_orders[:3]]
+                                    new_tp_prices = [t["price"] for t in tp_config["targets"][:5]]  # UP TO 5
+                                    old_tp_prices = [float(o.get("stopPrice", 0)) for o in tp_orders[:5]]  # UP TO 5
                                     
                                     # Check if TP prices changed significantly (> 0.01%)
                                     prices_changed = any(
@@ -1015,7 +1024,7 @@ async def ensure_positions_protected() -> None:
                                             from utils.binance_client import futures_create_order, futures_cancel_order
                                             
                                             # Cancel old TP orders (skip if order no longer exists - expected for filled orders)
-                                            for tp_order in tp_orders[:3]:
+                                            for tp_order in tp_orders[:5]:  # UP TO 5 TP ORDERS
                                                 try:
                                                     order_id = tp_order.get("orderId")
                                                     result = futures_cancel_order(symbol, order_id)
@@ -1058,7 +1067,7 @@ async def ensure_positions_protected() -> None:
                                             
                                             logger.info(
                                                 f"🎯 {symbol}: Dynamic TP updated | "
-                                                f"TP1={new_tp_prices[0]:.8f}, TP2={new_tp_prices[1]:.8f}, TP3={new_tp_prices[2]:.8f} | "
+                                                f"{''.join(f'TP{i+1}={tp:.8f}, ' for i, tp in enumerate(new_tp_prices))} | "
                                                 f"PnL={pnl_pct:+.2f}%, Vol={volatility*100:.1f}%"
                                             )
                                         except Exception as tp_update_err:

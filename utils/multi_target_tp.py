@@ -75,22 +75,26 @@ class MultiTargetTP:
         # Adjust RR based on regime
         rrr = self._adjust_rrr_for_regime(rrr, regime)
         
-        # Calculate TP prices - 🔧 INCREASED to wider targets for better profit margins
+        # Calculate TP prices - 🔧 EXTENDED to 5 LEVELS for maximum profit capture
         if side == "LONG":
-            tp1_price = entry_price + (risk_amount * rrr)          # 100% of RR (was 50%)
-            tp2_price = entry_price + (risk_amount * rrr * 1.5)    # 150% of RR (was 100%)
-            tp3_price = entry_price + (risk_amount * rrr * 2.5)    # 250% of RR (was 150%)
-            trailing_activation = tp1_price
+            tp1_price = entry_price + (risk_amount * rrr)          # 100% of RR
+            tp2_price = entry_price + (risk_amount * rrr * 1.5)    # 150% of RR
+            tp3_price = entry_price + (risk_amount * rrr * 2.5)    # 250% of RR
+            tp4_price = entry_price + (risk_amount * rrr * 3.5)    # 350% of RR (NEW)
+            tp5_price = entry_price + (risk_amount * rrr * 4.5)    # 450% of RR (NEW)
+            trailing_activation = tp3_price  # Only trigger after TP3
         else:  # SHORT
             tp1_price = entry_price - (risk_amount * rrr)
             tp2_price = entry_price - (risk_amount * rrr * 1.5)
             tp3_price = entry_price - (risk_amount * rrr * 2.5)
-            trailing_activation = tp1_price
+            tp4_price = entry_price - (risk_amount * rrr * 3.5)    # NEW
+            tp5_price = entry_price - (risk_amount * rrr * 4.5)    # NEW
+            trailing_activation = tp3_price  # Only trigger after TP3
         
         # Calculate trailing stop percentage (3-5% based on volatility)
         trailing_percent = self._calculate_trailing_percent(volatility)
         
-        # 🎯 DYNAMIC EXIT PERCENTAGES (not hardcoded!)
+        # 🎯 DYNAMIC EXIT PERCENTAGES (5 LEVELS now!)
         exit_percentages = self._calculate_dynamic_exit_percentages(
             volatility=volatility,
             regime=regime,
@@ -117,16 +121,28 @@ class MultiTargetTP:
                     "price": tp3_price,
                     "exit_percent": exit_percentages[2],  # DYNAMIC!
                     "description": f"TP3: {rrr*2.5:.1f}R ({(abs(tp3_price-entry_price)/entry_price*100):.1f}%)"
+                },
+                {
+                    "level": 4,
+                    "price": tp4_price,
+                    "exit_percent": exit_percentages[3] if len(exit_percentages) > 3 else 0.10,  # NEW!
+                    "description": f"TP4: {rrr*3.5:.1f}R ({(abs(tp4_price-entry_price)/entry_price*100):.1f}%)"
+                },
+                {
+                    "level": 5,
+                    "price": tp5_price,
+                    "exit_percent": exit_percentages[4] if len(exit_percentages) > 4 else 0.10,  # NEW!
+                    "description": f"TP5: {rrr*4.5:.1f}R ({(abs(tp5_price-entry_price)/entry_price*100):.1f}%)"
                 }
             ],
             "trailing_stop": {
-                "enabled": True,
+                "enabled": False,  # DISABLED - let TP grid handle it
                 "activation_price": trailing_activation,
                 "trailing_percent": trailing_percent,
-                "description": f"Trailing activates at TP1 ({trailing_percent*100:.0f}% trail)"
+                "description": f"Trailing disabled - use full TP grid to TP5"
             },
             "risk_reward_ratio": rrr,
-            "total_exit_percent": 1.0,  # 30% + 40% + 30% = 100%
+            "total_exit_percent": 1.0,  # Distributed across 5 levels
             "side": side
         }
     
@@ -178,12 +194,12 @@ class MultiTargetTP:
         win_rate: Optional[float]
     ) -> List[float]:
         """
-        Calculate DYNAMIC exit percentages for 3 TP levels.
+        Calculate DYNAMIC exit percentages for 5 TP levels.
         
         Base profiles:
-        - Balanced: [0.30, 0.40, 0.30] - balanced exits
-        - Front-loaded: [0.40, 0.35, 0.25] - take profits early (high volatility, bear market, mean-reversion)
-        - Back-loaded: [0.25, 0.35, 0.40] - hold for bigger targets (low volatility, bull market, breakout)
+        - Balanced: [0.20, 0.25, 0.30, 0.15, 0.10] - balanced across all 5 targets
+        - Front-loaded: [0.30, 0.25, 0.25, 0.12, 0.08] - take profits early
+        - Back-loaded: [0.15, 0.20, 0.30, 0.20, 0.15] - hold for bigger targets
         
         Args:
             volatility: ATR percentage (0.0-1.0)
@@ -194,20 +210,24 @@ class MultiTargetTP:
         Returns:
             List of 3 exit percentages that sum to 1.0
         """
-        # Start with balanced profile
-        tp1_pct = 0.30
-        tp2_pct = 0.40
-        tp3_pct = 0.30
+        # Start with balanced profile (5 levels)
+        tp1_pct = 0.20  # First target: 20%
+        tp2_pct = 0.25  # Second target: 25%
+        tp3_pct = 0.30  # Third target: 30%
+        tp4_pct = 0.15  # Fourth target: 15%
+        tp5_pct = 0.10  # Fifth target: 10%
         
         # Adjust based on volatility
         if volatility > 0.10:  # High volatility (>10%)
             # Front-load: Take profits faster before reversal
-            tp1_pct += 0.10  # 40%
-            tp3_pct -= 0.10  # 20%
+            tp1_pct += 0.10  # 30%
+            tp4_pct -= 0.05  # 10%
+            tp5_pct -= 0.05  # 5%
         elif volatility < 0.03:  # Very low volatility (<3%)
             # Back-load: Hold longer for bigger moves
-            tp1_pct -= 0.05  # 25%
+            tp1_pct -= 0.05  # 15%
             tp3_pct += 0.05  # 35%
+            tp4_pct += 0.05  # 20%
         
         # Adjust based on regime
         regime_upper = regime.upper() if regime else "CHOPPY"
@@ -242,35 +262,29 @@ class MultiTargetTP:
                 tp1_pct += 0.03
                 tp3_pct -= 0.03
         
-        # Ensure percentages are within reasonable bounds
-        tp1_pct = max(0.20, min(0.50, tp1_pct))  # 20-50%
-        tp3_pct = max(0.15, min(0.45, tp3_pct))  # 15-45%
-        tp2_pct = 1.0 - tp1_pct - tp3_pct  # Middle level gets remainder
+        # Ensure percentages are within reasonable bounds (5 levels)
+        tp1_pct = max(0.10, min(0.35, tp1_pct))  # 10-35%
+        tp2_pct = max(0.15, min(0.35, tp2_pct))  # 15-35%
+        tp3_pct = max(0.20, min(0.40, tp3_pct))  # 20-40%
+        tp4_pct = max(0.08, min(0.25, tp4_pct))  # 8-25%
+        tp5_pct = max(0.05, min(0.15, tp5_pct))  # 5-15%
         
-        # Ensure tp2 is at least 25%
-        if tp2_pct < 0.25:
-            deficit = 0.25 - tp2_pct
-            tp2_pct = 0.25
-            # Take from largest level
-            if tp1_pct > tp3_pct:
-                tp1_pct -= deficit
-            else:
-                tp3_pct -= deficit
-        
-        # Final validation: must sum to 1.0
-        total = tp1_pct + tp2_pct + tp3_pct
+        # Normalize to ensure exactly 1.0 across all 5 levels
+        total = tp1_pct + tp2_pct + tp3_pct + tp4_pct + tp5_pct
         if abs(total - 1.0) > 0.001:
             # Normalize to ensure exactly 1.0
             tp1_pct /= total
             tp2_pct /= total
             tp3_pct /= total
+            tp4_pct /= total
+            tp5_pct /= total
         
         self.logger.debug(
-            f"Dynamic TP splits: TP1={tp1_pct*100:.0f}%, TP2={tp2_pct*100:.0f}%, TP3={tp3_pct*100:.0f}% "
+            f"Dynamic TP splits (5 levels): TP1={tp1_pct*100:.0f}%, TP2={tp2_pct*100:.0f}%, TP3={tp3_pct*100:.0f}%, TP4={tp4_pct*100:.0f}%, TP5={tp5_pct*100:.0f}% "
             f"(vol={volatility*100:.1f}%, regime={regime}, strategy={strategy}, wr={win_rate*100 if win_rate else 'N/A'})"
         )
         
-        return [tp1_pct, tp2_pct, tp3_pct]
+        return [tp1_pct, tp2_pct, tp3_pct, tp4_pct, tp5_pct]
     
     def create_tp_orders(
         self,

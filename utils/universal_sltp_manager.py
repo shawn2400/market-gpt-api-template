@@ -382,7 +382,7 @@ async def attach_multi_target_protection(
             result["errors"].append(error_msg)
             logger.error(f"❌ {error_msg}", exc_info=True)
         
-        # Place TP orders (TP1, TP2, TP3) - use LIMIT orders for precision
+        # Place TP orders (TP1-TP5) - use LIMIT orders for precision
         for i, target in enumerate(tp_config["targets"], start=1):
             try:
                 tp_price = target["price"]
@@ -475,20 +475,19 @@ async def attach_multi_target_protection(
                 result["errors"].append(error_msg)
                 logger.error(f"❌ {error_msg}", exc_info=True)
         
-        # Check success
+        # Check success (need at least 3 TP orders, support up to 5)
         result["ok"] = (
             result["sl_order"] is not None and 
-            len(result["tp_orders"]) == 3
+            len(result["tp_orders"]) >= 3  # Allow 3-5 TP orders
         )
         
         if result["ok"]:
-            logger.info(
-                f"🛡️ Multi-Target Protection complete for {symbol}:\n"
-                f"   SL @ {sl_price:.{price_precision}f}\n"
-                f"   TP1 @ {tp_config['targets'][0]['price']:.{price_precision}f} ({tp_config['targets'][0]['exit_percent']*100:.0f}%)\n"
-                f"   TP2 @ {tp_config['targets'][1]['price']:.{price_precision}f} ({tp_config['targets'][1]['exit_percent']*100:.0f}%)\n"
-                f"   TP3 @ {tp_config['targets'][2]['price']:.{price_precision}f} ({tp_config['targets'][2]['exit_percent']*100:.0f}%)"
-            )
+            # Build dynamic logging for all TPs (3-5)
+            tp_log = f"🛡️ Multi-Target Protection complete for {symbol}:\n"
+            tp_log += f"   SL @ {sl_price:.{price_precision}f}\n"
+            for i, target in enumerate(tp_config['targets'][:5], start=1):  # Show up to 5 TPs
+                tp_log += f"   TP{i} @ {target['price']:.{price_precision}f} ({target['exit_percent']*100:.0f}%)\n"
+            logger.info(tp_log)
         else:
             logger.warning(f"⚠️ Partial protection for {symbol}: {len(result['errors'])} errors")
         
