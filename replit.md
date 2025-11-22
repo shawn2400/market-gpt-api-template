@@ -6,6 +6,31 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
+## Recent Changes (Nov 22, 2025)
+
+### Critical Fixes - MetaBrain v9.1 Release
+1. **Fills Watcher Protection System Fixed** ✅
+   - Migrated from deprecated `attach_sltp_protection()` to `attach_multi_target_protection()`
+   - Now attaches TP1/TP2/TP3 (3-tier progressive profit-locking) + SL for ALL fills
+   - File: `workers/fills_watcher.py` (lines 1296-1336)
+   - Status: RUNNING and actively watching for fills
+
+2. **Auto-Protect System Created** ✅
+   - New script: `protect_unprotected_positions.py`
+   - Scans for open positions without SL/TP and attaches protection automatically
+   - Used to protect AIOUSDT, ACEUSDT, and any other positions opened without protection
+   - Run: `python protect_unprotected_positions.py`
+
+3. **Precision Rounding Bugs Fixed** ✅
+   - File: `utils/binance_symbol_validator.py`
+   - Used `Decimal.quantize()` instead of `format()` to prevent 14+ decimal errors
+   - Fixes APIError -1111 (invalid symbol precision) and -4003 (invalid quantity)
+
+4. **Middleware HEAD Request Fixed** ✅
+   - File: `main.py` (lines 284+)
+   - Fixed "No response returned" error on HEAD requests
+   - Properly handles health checks and soft readiness endpoints
+
 ## System Architecture
 
 ### UI/UX
@@ -23,8 +48,9 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 -   **Risk Management**: Includes quality filters, dynamic filters, liquidity checks, cooldowns, daily trade caps, and a circuit breaker.
 -   **Dynamic Budget System**: 100% dynamic trade budget calculation based on equity-tied ceiling, quality multiplier, volatility adjustment, and floor/cap.
 -   **Dynamic SL/TP Calculation**: ATR-based Stop Loss and RR-based Take Profit.
--   **MetaBrain - AI-Driven Precision Trading**: Features a 3-stage auto-deployment engine, 1-Brain Lean Architecture (DeepSeek Chat), intelligent brain management, smart override logic, regime-based dynamic MIN_QUALITY, precision calculator for leverage/investment, deep market analyzer, dynamic protection manager, balance-tiered risk profiles, auto-strategy selection, multi-target TP system, dynamic trailing SL, auto-flip multi-timeframe analysis, and a regime detection engine.
+-   **MetaBrain - AI-Driven Precision Trading**: Features a 3-stage auto-deployment engine, 1-Brain Lean Architecture (DeepSeek Chat), intelligent brain management, smart override logic, regime-based dynamic MIN_QUALITY, precision calculator for leverage/investment, deep market analyzer, dynamic protection manager, balance-tiered risk profiles, auto-strategy selection, multi-target TP system (TP1/TP2/TP3), dynamic trailing SL, auto-flip multi-timeframe analysis, and a regime detection engine.
 -   **ExecutionBot**: Centralized architecture for all trade execution logic with source-aware approval gating and Stage Engine integration, ensuring 100% SL/TP protection.
+-   **Multi-Target Protection System**: Attach TP1/TP2/TP3 + SL to LIMIT orders via Fills Watcher (after fill detection) and MARKET orders (immediately).
 -   **Auto-Optimization System**: Self-adaptive trading through intelligent parameter tuning, multi-level protection (Warning/Conservative/Emergency modes), and a symbol tiering engine with dynamic blacklist management.
 -   **Insurance Monitor System**: Multi-layered account protection including Drawdown Protection, Margin Ratio Defense, Cross/Isolated Balancer, and a Circuit Breaker.
 -   **Validation & Safety Infrastructure**: Includes a Validation Pipeline, Fail-Closed Decision Gates, Monte Carlo simulations, Live Health Monitor, 3-Layer Emergency Protection System, Hedge Position Manager, Stop Order Validator, Order Hygiene System, and an enhanced SL/TP ENGINE.
