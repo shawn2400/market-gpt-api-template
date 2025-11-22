@@ -20,11 +20,11 @@ async def protect_unprotected_positions() -> Dict[str, Any]:
         Summary of protected positions
     """
     try:
-        from utils.binance_client import futures_position_information, get_price
+        from utils.binance_client import futures_open_positions_safe, futures_mark_price
         from utils.universal_sltp_manager import attach_multi_target_protection
         
         # Get all open positions
-        positions_raw = futures_position_information() or []
+        positions_raw = futures_open_positions_safe() or []
         open_positions = [p for p in positions_raw if float(p.get("positionAmt", 0)) != 0]
         
         if not open_positions:
@@ -64,7 +64,7 @@ async def protect_unprotected_positions() -> Dict[str, Any]:
                 # No protection - attach it!
                 logger.info(f"🛡️ {symbol} {side} qty={quantity} - UNPROTECTED - attaching SL/TP...")
                 
-                current_price = get_price(symbol) or entry_price
+                current_price = futures_mark_price(symbol) or entry_price
                 atr = current_price * 0.02  # 2% ATR
                 sl_price = entry_price - atr if side == "LONG" else entry_price + atr
                 
