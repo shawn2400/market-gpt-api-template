@@ -2450,10 +2450,10 @@ async def process_cycle():
         LOGGER.debug(f"Margin check failed (proceeding anyway): {e}")
 
     # בנה Pool חכם (משקלול איכות+היסטוריית winrate)
-    # 🎯 Two-Tier Strategy: High-quality core (6+) + Exploratory symbols (4-5)
-    # Smart Filter stage 2 will still block <6.0 setups, but we scan 50 symbols for market breadth
+    # 🎯 Two-Tier Strategy: High-quality core (5.5+) + Better symbols filtering
+    # Smart Filter stage 2 will block weak setups, focusing on quality over quantity
     try:
-        pool_syms = build_symbol_pool(k=topk, min_quality=4, include_anchor=True, include_shorts=True, balanced=True)  # 🔄 Lowered to 4 for market coverage
+        pool_syms = build_symbol_pool(k=topk, min_quality=5, include_anchor=True, include_shorts=True, balanced=True)  # 🔧 INCREASED to 5 for quality focus
     except Exception:
         wl = load_watchlist(min_quality=None)
         pool_syms = [it["symbol"] for it in wl if it.get("symbol")] or ["BTCUSDT","ETHUSDT"]
@@ -2765,14 +2765,14 @@ async def process_cycle():
                 LOGGER.info(f"❌ REJECTED by AI consensus: {symbol} ({ttype})")
                 return
             
-            # 🛡️ CRITICAL SAFETY CHECK: Enforce MIN_QUALITY floor (regime-aware: 4.0 default)
-            MIN_QUALITY_FLOOR = 4.0
+            # 🛡️ CRITICAL SAFETY CHECK: Enforce MIN_QUALITY floor (🔧 INCREASED to 5.5 for higher win rate)
+            MIN_QUALITY_FLOOR = 5.5
             final_score = consensus_result["final_score"]
             
             if final_score < MIN_QUALITY_FLOOR:
                 LOGGER.warning(
                     f"🚫 QUALITY FLOOR VIOLATION: {symbol} score={final_score:.1f} < {MIN_QUALITY_FLOOR:.1f} "
-                    f"(votes={consensus_result['approve_count']}/3) - REJECTED for safety"
+                    f"(votes={consensus_result['approve_count']}/3) - REJECTED for quality filter"
                 )
                 return
             

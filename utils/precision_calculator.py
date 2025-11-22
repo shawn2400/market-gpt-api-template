@@ -64,7 +64,7 @@ class PrecisionCalculator:
         # Hard limits (for safety only, NOT templates)
         self.MIN_LEVERAGE = 1.0
         self.MAX_LEVERAGE = 35.0  # Dynamic range 1-35x (aligned with DynamicLeverageCalculator)
-        self.MIN_INVESTMENT_USD = 25.0  # Minimum position size ($25 × 5x leverage = $125 notional, meets Binance $100 min)
+        self.MIN_INVESTMENT_USD = 50.0  # 🔧 INCREASED from $25 to $50 per trade for better profit margins
         self.MIN_WALLET_PCT = 1.0  # At least 1% of wallet
         self.MAX_WALLET_PCT = 30.0  # 🔧 FIX: Reduced from 95% to 30% to prevent excessive leverage and large position sizes
     
@@ -280,17 +280,17 @@ class PrecisionCalculator:
         Calculate EXACT investment amount in USD (not template percentage).
         
         Philosophy:
-        - High confidence + good trade → invest more (but CAPPED at $25)
-        - Low confidence → invest $25 (minimum)
-        - NEVER exceed $25 per trade (NO multipliers allowed!)
+        - High confidence + good trade → invest more (but CAPPED at $50)
+        - Low confidence → invest $50 (minimum)
+        - NEVER exceed $60 per trade (NO multipliers allowed!)
         
-        Returns precision values: $25.00 (minimum) only
+        Returns precision values: $50.00+ for better profit margins
         """
         import os
         
-        # 🔧 CRITICAL FIX: ALWAYS return exactly $25 minimum for risk management
-        # Previous logic was increasing to $37-40 which violates budget constraints
-        min_investment = float(os.getenv("MIN_INVESTMENT_USD", "25.0"))
+        # 🔧 INCREASED from $25 to $50 minimum for better profit margins and higher win amounts
+        # Allows $50 x 3-5x leverage = $150-250 notional (good Binance min)
+        min_investment = float(os.getenv("MIN_INVESTMENT_USD", "50.0"))
         
         # Only scale UP if balance is very high (>$1000), otherwise stay at minimum
         if balance > 1000.0 and confidence >= 0.8 and quality >= 7.0:
@@ -318,7 +318,7 @@ class PrecisionCalculator:
             
             # Calculate exact USD amount
             investment = (balance * base_pct / 100.0)
-            investment = max(min_investment, min(35.0, investment))  # Hard cap at $35
+            investment = max(min_investment, min(60.0, investment))  # 🔧 Hard cap increased to $60
         else:
             # Default: return minimum only
             investment = min_investment

@@ -75,16 +75,16 @@ class MultiTargetTP:
         # Adjust RR based on regime
         rrr = self._adjust_rrr_for_regime(rrr, regime)
         
-        # Calculate TP prices
+        # Calculate TP prices - 🔧 INCREASED to wider targets for better profit margins
         if side == "LONG":
-            tp1_price = entry_price + (risk_amount * rrr * 0.5)  # 50% of RR
-            tp2_price = entry_price + (risk_amount * rrr)        # 100% of RR
-            tp3_price = entry_price + (risk_amount * rrr * 1.5)  # 150% of RR
+            tp1_price = entry_price + (risk_amount * rrr)          # 100% of RR (was 50%)
+            tp2_price = entry_price + (risk_amount * rrr * 1.5)    # 150% of RR (was 100%)
+            tp3_price = entry_price + (risk_amount * rrr * 2.5)    # 250% of RR (was 150%)
             trailing_activation = tp1_price
         else:  # SHORT
-            tp1_price = entry_price - (risk_amount * rrr * 0.5)
-            tp2_price = entry_price - (risk_amount * rrr)
-            tp3_price = entry_price - (risk_amount * rrr * 1.5)
+            tp1_price = entry_price - (risk_amount * rrr)
+            tp2_price = entry_price - (risk_amount * rrr * 1.5)
+            tp3_price = entry_price - (risk_amount * rrr * 2.5)
             trailing_activation = tp1_price
         
         # Calculate trailing stop percentage (3-5% based on volatility)
@@ -104,19 +104,19 @@ class MultiTargetTP:
                     "level": 1,
                     "price": tp1_price,
                     "exit_percent": exit_percentages[0],  # DYNAMIC!
-                    "description": f"TP1: {rrr*0.5:.1f}R ({(abs(tp1_price-entry_price)/entry_price*100):.1f}%)"
+                    "description": f"TP1: {rrr:.1f}R ({(abs(tp1_price-entry_price)/entry_price*100):.1f}%)"
                 },
                 {
                     "level": 2,
                     "price": tp2_price,
                     "exit_percent": exit_percentages[1],  # DYNAMIC!
-                    "description": f"TP2: {rrr:.1f}R ({(abs(tp2_price-entry_price)/entry_price*100):.1f}%)"
+                    "description": f"TP2: {rrr*1.5:.1f}R ({(abs(tp2_price-entry_price)/entry_price*100):.1f}%)"
                 },
                 {
                     "level": 3,
                     "price": tp3_price,
                     "exit_percent": exit_percentages[2],  # DYNAMIC!
-                    "description": f"TP3: {rrr*1.5:.1f}R ({(abs(tp3_price-entry_price)/entry_price*100):.1f}%)"
+                    "description": f"TP3: {rrr*2.5:.1f}R ({(abs(tp3_price-entry_price)/entry_price*100):.1f}%)"
                 }
             ],
             "trailing_stop": {

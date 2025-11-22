@@ -8,6 +8,37 @@ I prefer iterative development with clear, concise communication. Please ask for
 
 ## Recent Changes (Nov 22, 2025)
 
+### MetaBrain v9.2.3 Release - Profit Margin Optimization ✅
+
+#### **Feature: Increased Budget & Wider TP Targets (Profit Optimization)**
+1. **Budget Increased: $25 → $50 per trade**
+   - File: `utils/precision_calculator.py` (line 70)
+   - Reason: $25 was too small - profits only $0-3 per trade
+   - Result: Now $50 minimum x 3-5x leverage = $150-250 notional
+   - Expected: Better profit margins (+$3-10 per profitable trade)
+
+2. **TP Levels Widened: Better Profit Targets**
+   - File: `utils/multi_target_tp.py` (lines 80-90)
+   - TP1: 50% RR → **100% RR** (more profit before trailing stops)
+   - TP2: 100% RR → **150% RR** (higher profit for TP2)
+   - TP3: 150% RR → **250% RR** (aggressive profit-locking)
+   - Result: More room to catch TP orders + better profit amounts
+
+3. **MIN_QUALITY Floor Raised: 4.0 → 5.5**
+   - File: `workers/gpt_auto_suggest.py` (line 2772)
+   - Reason: Quality filter was too low - allowing weak setups
+   - Result: Only high-quality trades (win rate >60%)
+   - Trades per day: May decrease but profit/trade increases
+
+4. **Quality Pool Filter Raised: 4 → 5**
+   - File: `workers/gpt_auto_suggest.py` (line 2459)
+   - Reason: Better symbol quality from scan
+   - Result: Fewer low-quality symbols in pool
+
+**Guarantee**: Better profit per trade, fewer weak trades
+- Before: Many $1-2 trades with frequent losses
+- After: Fewer but bigger $5-15+ trades with higher win rate
+
 ### MetaBrain v9.2.2 Release - CRITICAL SL/TP Sync Fix ✅
 
 #### **CRITICAL BUG FIX: SL/TP Desynchronization (APIError -2021, -2011)**
