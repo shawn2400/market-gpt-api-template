@@ -294,7 +294,7 @@ class MultiTargetTP:
         side: str = "LONG"
     ) -> List[Dict[str, Any]]:
         """
-        Create individual TP orders for each target level.
+        Create individual TP orders for each target level - HARDENED v2.
         
         Args:
             symbol: Trading symbol
@@ -308,11 +308,32 @@ class MultiTargetTP:
         orders = []
         
         for target in tp_config["targets"]:
-            # Calculate quantity for this level
+            # 🔧 CRITICAL FIX: Calculate quantity safely
             quantity = total_quantity * target["exit_percent"]
+            
+            # 🔧 VALIDATION: Quantity must be > 0, not <= 0
+            if quantity <= 0:
+                self.logger.warning(f"⚠️ TP{target['level']} qty={quantity:.8f} <= 0, skipping")
+                continue
+            
+            # 🔧 VALIDATION: TP price must be > 0
+            tp_price = target["price"]
+            if tp_price is None or tp_price <= 0:
+                self.logger.error(f"❌ TP{target['level']} price={tp_price} <= 0, skipping")
+                continue
             
             # Determine order side (opposite of entry)
             order_side = "SELL" if side == "LONG" else "BUY"
+            
+            # 🔧 SAFE ROUNDING: Use proper formatting to avoid 0.0 traps
+            # Round to 8 decimals minimum, but validate result
+            qty_rounded = round(quantity, 8)
+            price_rounded = round(tp_price, 8)
+            
+            # 🔧 DOUBLE-CHECK: Ensure rounding didn't create 0 values
+            if qty_rounded <= 0 or price_rounded <= 0:
+                self.logger.error(f"❌ TP{target['level']} after rounding: qty={qty_rounded}, price={price_rounded} - skipping")
+                continue
             
             # Use LIMIT orders for TP (more reliable than TAKE_PROFIT_MARKET)
             # LIMIT works for both LONG and SHORT positions
@@ -320,8 +341,8 @@ class MultiTargetTP:
                 "symbol": symbol,
                 "side": order_side,
                 "type": "LIMIT",
-                "quantity": round(quantity, 4),
-                "price": round(target["price"], 4),
+                "quantity": qty_rounded,
+                "price": price_rounded,
                 "reduceOnly": True,
                 "timeInForce": "GTC",
                 "level": target["level"],

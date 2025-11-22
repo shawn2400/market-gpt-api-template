@@ -96,18 +96,28 @@ class TPLadder:
             # Place TP orders
             placed_orders = []
             for i, (tp_price, tp_qty) in enumerate(zip(tp_prices, tp_quantities)):
+                # 🔧 CRITICAL VALIDATION v2: Check quantity FIRST
                 if tp_qty <= 0:
+                    log.debug(f"[TPLadder] {symbol} TP{i + 1} qty={tp_qty:.8f} <= 0 - SKIPPING PRE-ROUNDING")
                     continue
                 
-                # VALIDATION: Check if TP price is valid
+                # 🔧 CRITICAL VALIDATION: Check if TP price is valid BEFORE rounding
                 if tp_price is None or tp_price <= 0:
                     log.error(f"[TPLadder] {symbol} TP{i + 1} INVALID PRICE: {tp_price} (entry={entry_price}) - SKIPPING")
                     continue
 
-                # Round qty to step size
+                # 🔧 SAFE ROUNDING: Normalize qty & validate after rounding
                 tp_qty_str, tp_qty_float = self._normalize_qty(symbol, tp_qty)
+                
+                # 🔧 POST-ROUNDING VALIDATION: Ensure rounding didn't create zero/negative qty
                 if tp_qty_float <= 0:
-                    log.warning(f"[TPLadder] {symbol} TP{i + 1} qty too small after rounding")
+                    log.error(f"[TPLadder] {symbol} TP{i + 1} qty={tp_qty:.8f} → {tp_qty_float:.8f} after rounding <= 0 - SKIPPING")
+                    continue
+                
+                # 🔧 SAFE PRICE ROUNDING: Normalize price & validate
+                tp_price_str, tp_price_float = self._normalize_price(symbol, tp_price)
+                if tp_price_float <= 0:
+                    log.error(f"[TPLadder] {symbol} TP{i + 1} price={tp_price} → {tp_price_float} after rounding <= 0 - SKIPPING")
                     continue
 
                 try:
