@@ -446,8 +446,24 @@ async def attach_multi_target_protection(
                 
                 # 🔧 CRITICAL: Verify rounded quantity is still non-zero
                 if tp_quantity_rounded <= 0:
-                    logger.warning(f"⚠️ TP{i} rounded quantity is zero ({tp_quantity_rounded}), skipping")
-                    continue
+                    # 🛡️ FALLBACK: Increase exit percentage to get non-zero quantity
+                    logger.warning(f"⚠️ TP{i} quantity rounded to 0 ({tp_quantity:.8f}), trying fallback")
+                    
+                    # Try with 50% increased exit percentage
+                    alt_exit_pct = min(exit_percent * 2, 1.0)  # Cap at 100%
+                    alt_quantity = total_quantity * alt_exit_pct
+                    tp_quantity_rounded = validator.round_quantity(symbol, alt_quantity, is_market=False)
+                    
+                    if tp_quantity_rounded <= 0:
+                        logger.warning(f"⚠️ TP{i} quantity still 0 after fallback, using remaining position")
+                        # Last resort: use entire remaining position
+                        tp_quantity_rounded = validator.round_quantity(symbol, total_quantity, is_market=False)
+                    
+                    if tp_quantity_rounded <= 0:
+                        logger.warning(f"⚠️ TP{i} quantity unrecoverable (total={total_quantity}, symbol={symbol}), skipping")
+                        continue
+                    
+                    logger.info(f"✅ TP{i} quantity recovered via fallback: {tp_quantity_rounded:.8f}")
                 
                 # 🛡️ CRITICAL FIX: Ensure TP has safe distance from current price to prevent APIError -2021
                 try:

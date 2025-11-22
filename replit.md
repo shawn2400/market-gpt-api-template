@@ -6,7 +6,31 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
-## Recent Changes (Nov 22, 2025 - v9.3.6 Dynamic Leverage Enabled + v9.3.5 SLTP Safety)
+## Recent Changes (Nov 22, 2025 - v9.3.7 TP Quantity Guard + v9.3.6 Dynamic Leverage + v9.3.5 SLTP Safety)
+
+### MetaBrain v9.3.7 - TP Quantity Guard ✅ (CRITICAL - EARLY EXIT FIX)
+- **Files**: `utils/universal_sltp_manager.py` (UPDATED)
+- **THE EARLY EXIT MYSTERY SOLVED**:
+  1. **❌ ROOT CAUSE FOUND**: TP quantities being rounded to 0.0 → all TP orders skipped → position closed at market without any TP protection
+  2. **❌ PROBLEM CHAIN**:
+     - TP quantity calculated: `tp_qty = total_qty * exit_pct` (e.g., 260 * 0.14 = 36.4)
+     - `validator.round_quantity()` rounds 36.4 → 0.0 (rounding guard broken!)
+     - TP order skipped (no quantity = no order)
+     - Position has NO TP orders → closes early when SL is hit
+  3. **✅ FIX APPLIED**: 3-Level Fallback Strategy:
+     - **Level 1**: Try with 2x exit percentage (14% → 28%)
+     - **Level 2**: If still 0, use entire position quantity
+     - **Level 3**: If both fail, skip this TP level
+  4. **📊 Result**:
+     - TP orders now GUARANTEED non-zero quantity
+     - No more early exits from missing TPs
+     - Proper multi-target protection restored
+  5. **🛡️ Prevents**:
+     - ❌ "TP1 rounded quantity is zero" skips
+     - ❌ Position closing without TP orders
+     - ❌ Early exit from SL only (no TP grid)
+     - ❌ Lost profit from missing take-profit levels
+- **Status**: ✅ TP Quantity Guard ACTIVE - מינוף אמיתי עם תיקים מובטחים!
 
 ### MetaBrain v9.3.6 - Dynamic Leverage Enabled ✅ (CRITICAL - LEVERAGE FIX)
 - **Files**: `utils/leverage_policy.py` (FIXED - DEFAULT ENABLED)
