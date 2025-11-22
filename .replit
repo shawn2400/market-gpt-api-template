@@ -160,10 +160,6 @@ externalPort = 80
 localPort = 37091
 externalPort = 3000
 
-[[ports]]
-localPort = 43133
-externalPort = 3001
-
 # === Deployment (VM Target) ===
 [deployment]
 deploymentTarget = "vm"
@@ -202,3 +198,5 @@ AIX_BASE = "https://api.x.ai/v1"
 DEEPSEEK_BASE = "https://api.deepseek.com/v1"
 NODE_ID = "core-api"
 APP_VERSION = "3.6.0"
+MIN_INVESTMENT_USD = "15.0"
+MIN_QUALITY_FLOOR = "5.5"

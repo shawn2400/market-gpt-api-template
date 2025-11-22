@@ -30,6 +30,7 @@ from utils.ai_trade_scorer import get_multi_ai_scorer  # ← Multi-AI Consensus 
 from utils.strategy_orchestrator import get_strategy_orchestrator  # ← Strategy Orchestrator (Auto-select strategy)
 from utils.metabrain.dynamic_protection_manager import protection_manager  # ← Dynamic Protection Manager (Regime-based params)
 from utils.adaptive_win_rate_engine import get_adaptive_engine, initialize_adaptive_engine  # ← Adaptive Win Rate Optimizer (MetaBrain v9.2.1)
+from utils.adaptive_budget_engine import get_adaptive_budget_engine  # ← Adaptive Budget Engine (MetaBrain v9.2.4)
 
 # Grid helper
 try:
@@ -2449,11 +2450,30 @@ async def process_cycle():
     except Exception as e:
         LOGGER.debug(f"Margin check failed (proceeding anyway): {e}")
 
+    # 🎯 AUTO-DETECT BUDGET & SCALE ALL SETTINGS (MetaBrain v9.2.4)
+    # Detect current balance and auto-scale MIN_QUALITY, budget, and other parameters
+    try:
+        adaptive_budget = get_adaptive_budget_engine()
+        budget_config = await adaptive_budget.detect_and_scale()
+        os.environ['MIN_INVESTMENT_USD'] = str(budget_config['min_investment_usd'])
+        os.environ['MIN_QUALITY_FLOOR'] = str(budget_config['min_quality_floor'])
+        LOGGER.info(
+            f"💰 ADAPTIVE CONFIG: Balance=${budget_config['balance_usdt']:.2f}, "
+            f"MinInvest=${budget_config['min_investment_usd']:.2f}, "
+            f"MinQuality={budget_config['min_quality_floor']:.1f}, "
+            f"MaxLeverage={budget_config['max_leverage']:.1f}x, "
+            f"DailyCAP={budget_config['daily_trade_cap']}"
+        )
+    except Exception as e:
+        LOGGER.warning(f"⚠️ Adaptive budget detection failed: {e} - using env defaults")
+    
     # בנה Pool חכם (משקלול איכות+היסטוריית winrate)
     # 🎯 Two-Tier Strategy: High-quality core (5.5+) + Better symbols filtering
     # Smart Filter stage 2 will block weak setups, focusing on quality over quantity
     try:
-        pool_syms = build_symbol_pool(k=topk, min_quality=5, include_anchor=True, include_shorts=True, balanced=True)  # 🔧 INCREASED to 5 for quality focus
+        # Use adaptive pool quality filter
+        pool_quality_floor = int(float(os.getenv('MIN_QUALITY_FLOOR', '4.0')))
+        pool_syms = build_symbol_pool(k=topk, min_quality=pool_quality_floor, include_anchor=True, include_shorts=True, balanced=True)
     except Exception:
         wl = load_watchlist(min_quality=None)
         pool_syms = [it["symbol"] for it in wl if it.get("symbol")] or ["BTCUSDT","ETHUSDT"]
@@ -2765,8 +2785,8 @@ async def process_cycle():
                 LOGGER.info(f"❌ REJECTED by AI consensus: {symbol} ({ttype})")
                 return
             
-            # 🛡️ CRITICAL SAFETY CHECK: Enforce MIN_QUALITY floor (🔧 INCREASED to 5.5 for higher win rate)
-            MIN_QUALITY_FLOOR = 5.5
+            # 🛡️ CRITICAL SAFETY CHECK: Enforce MIN_QUALITY floor (Dynamic - auto-scales with balance)
+            MIN_QUALITY_FLOOR = float(os.getenv('MIN_QUALITY_FLOOR', '5.5'))  # 🔧 Now dynamic per balance!
             final_score = consensus_result["final_score"]
             
             if final_score < MIN_QUALITY_FLOOR:
