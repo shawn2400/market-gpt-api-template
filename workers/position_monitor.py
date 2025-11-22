@@ -15,8 +15,9 @@ from typing import Dict, Any, List
 # Add project root to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from utils.binance_client import _init_client as get_client, futures_cancel_all_orders
+from utils.binance_client import _init_client as get_client, futures_cancel_all_orders, futures_create_order
 from utils.alerts import send_telegram_message
+from utils.binance_symbol_validator import BinanceSymbolValidator
 
 # 🛡️ Auto-Ban-Shield Integration
 try:
@@ -1045,26 +1046,54 @@ async def ensure_positions_protected() -> None:
                                             
                                             # Place new TP orders
                                             exit_side = "SELL" if position_side == "LONG" else "BUY"
+                                            validator = BinanceSymbolValidator()
                                             for idx, tp_price in enumerate(new_tp_prices):
                                                 try:
                                                     tp_qty = abs(amt) * tp_config["targets"][idx]["exit_percent"]
+                                                    exit_percent = tp_config["targets"][idx]["exit_percent"]
                                                     
                                                     # 🔧 CRITICAL FIX: Validate quantity is positive and non-zero (prevent APIError -4003)
-                                                    if tp_qty is None or tp_qty <= 0 or tp_qty < 0.0001:
-                                                        logger.warning(f"⚠️ {symbol}: TP{idx+1} qty invalid ({tp_qty}), skipping")
-                                                        continue
+                                                    if tp_qty is None or tp_qty <= 0:
+                                                        logger.warning(f"⚠️ {symbol}: TP{idx+1} qty invalid ({tp_qty}), trying 3-level fallback")
+                                                        
+                                                        # Level 1: Try with 2x exit percentage (split remaining evenly among remaining TPs)
+                                                        alt_exit_pct = min(exit_percent * 2, 1.0)
+                                                        alt_qty = abs(amt) * alt_exit_pct
+                                                        
+                                                        if alt_qty > 0:
+                                                            tp_qty = alt_qty
+                                                            logger.info(f"✅ TP{idx+1} fallback L1: using {alt_exit_pct*100:.0f}% = {tp_qty:.8f}")
+                                                        else:
+                                                            # Level 2: Use entire remaining position
+                                                            tp_qty = abs(amt)
+                                                            logger.info(f"✅ TP{idx+1} fallback L2: using full qty = {tp_qty:.8f}")
+                                                        
+                                                        if tp_qty <= 0:
+                                                            # Level 3: Skip this TP
+                                                            logger.warning(f"⚠️ TP{idx+1} unrecoverable, skipping")
+                                                            continue
+                                                    
+                                                    # 🛡️ CRITICAL: Round quantity to symbol precision BEFORE sending to Binance
+                                                    tp_qty_rounded = validator.round_quantity(symbol, tp_qty, is_market=False)
+                                                    if tp_qty_rounded <= 0:
+                                                        logger.warning(f"⚠️ {symbol}: TP{idx+1} qty rounded to 0 ({tp_qty:.8f} → {tp_qty_rounded}), trying fallback")
+                                                        # Use entire remaining position as fallback
+                                                        tp_qty_rounded = validator.round_quantity(symbol, abs(amt), is_market=False)
+                                                        if tp_qty_rounded <= 0:
+                                                            logger.warning(f"⚠️ TP{idx+1} unrecoverable after rounding, skipping")
+                                                            continue
                                                     
                                                     # 🛡️ FIX: Validate TP price before placing (prevents APIError -4024/-4006)
                                                     if tp_price is None or tp_price <= 0:
                                                         logger.warning(f"⚠️ {symbol}: TP{idx+1} price invalid ({tp_price}), skipping")
                                                         continue
                                                     
-                                                    if tp_qty > 0 and tp_price and tp_price > 0:
+                                                    if tp_qty_rounded > 0 and tp_price and tp_price > 0:
                                                         futures_create_order(
                                                             symbol=symbol,
                                                             side=exit_side,
                                                             type="TAKE_PROFIT_MARKET",
-                                                            quantity=tp_qty,
+                                                            quantity=str(tp_qty_rounded),
                                                             stopPrice=tp_price,
                                                             reduceOnly=True,
                                                             positionSide=position_side

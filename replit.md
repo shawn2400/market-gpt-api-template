@@ -1,100 +1,10 @@
 # AlgoGPT - Algorithmic Trading Platform
 
 ## Overview
-AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/7 operation on Binance Futures. It analyzes 534 symbols, executing intelligent trades based on 7 integrated strategies and dynamic capital management. The platform's core is an AI-driven MetaBrain that eliminates hardcoded logic, ensuring all trade parameters are AI-determined. It aims for 4-10 high-quality daily trades, focusing on scalability, autonomous operation through a self-adaptive engine, and complete data persistence, optimized for diverse market conditions. The business vision is to provide a robust, self-optimizing algorithmic trading solution with high market potential due to its autonomous nature and AI-driven adaptability.
+AlgoGPT is an autonomous AI-driven algorithmic trading platform for 24/7 operation on Binance Futures. It analyzes 534 symbols, executing intelligent trades based on 7 integrated strategies and dynamic capital management. The platform features an AI-driven MetaBrain that determines all trade parameters, aiming for 4-10 high-quality daily trades. It prioritizes scalability, autonomous operation through a self-adaptive engine, and complete data persistence, optimized for diverse market conditions. The business vision is to provide a robust, self-optimizing algorithmic trading solution with high market potential due to its autonomous and AI-driven adaptability.
 
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
-
-## Recent Changes (Nov 22, 2025 - v9.3.7 TP Quantity Guard + v9.3.6 Dynamic Leverage + v9.3.5 SLTP Safety)
-
-### MetaBrain v9.3.7 - TP Quantity Guard ✅ (CRITICAL - EARLY EXIT FIX)
-- **Files**: `utils/universal_sltp_manager.py` (UPDATED), `utils/position_manager.py` (UPDATED)
-- **THE EARLY EXIT MYSTERY SOLVED**:
-  1. **❌ ROOT CAUSE FOUND**: TP quantities being rounded to 0.0 → all TP orders skipped → position closed at market without any TP protection
-  2. **❌ PROBLEM CHAIN**:
-     - TP quantity calculated: `tp_qty = total_qty * exit_pct` (e.g., 260 * 0.14 = 36.4)
-     - `validator.round_quantity()` or `_bn_round()` rounds 36.4 → 0.0 (rounding guard broken!)
-     - TP order skipped (no quantity = no order)
-     - Position has NO TP orders → closes early when SL is hit
-  3. **✅ FIX APPLIED**: 3-Level Fallback Strategy (BOTH files):
-     - **Level 1**: Try splitting remaining quantity evenly among remaining TP levels
-     - **Level 2**: If still 0, use entire remaining position quantity
-     - **Level 3**: If both fail, skip this TP level
-  4. **📊 Result**:
-     - TP orders now GUARANTEED non-zero quantity
-     - No more early exits from missing TPs
-     - Proper multi-target protection restored
-  5. **🛡️ Prevents**:
-     - ❌ "TP1 rounded quantity is zero" skips
-     - ❌ Position closing without TP orders
-     - ❌ Early exit from SL only (no TP grid)
-     - ❌ Lost profit from missing take-profit levels
-- **Status**: ✅ TP Quantity Guard ACTIVE (2 files) - מינוף אמיתי עם תיקים מובטחים!
-
-### MetaBrain v9.3.6 - Dynamic Leverage Enabled ✅ (CRITICAL - LEVERAGE FIX)
-- **Files**: `utils/leverage_policy.py` (FIXED - DEFAULT ENABLED)
-- **THE LEVERAGE MYSTERY SOLVED**:
-  1. **❌ ROOT CAUSE FOUND**: `leverage_policy.py` had `DYNAMIC_LEVERAGE_MODE = os.getenv("DYNAMIC_LEVERAGE_MODE", "0")` 
-     - Default was "0" (DISABLED) - עוד! המינוף לא היה דינמי כי הוא היה נטורל כברירת מחדל!
-  2. **✅ FIX APPLIED**: Changed default to "1" → **Dynamic Leverage NOW ENABLED BY DEFAULT**
-  3. **📊 What This Means**:
-     - Leverage now calculated by `DynamicLeverageCalculator` 
-     - Multi-factor confidence scoring (Quality, Market, Tier, WinRate, ATR)
-     - 4-Layer safety guards (Emergency, Volatility, Symbol, Portfolio)
-     - Market regime detection (TRENDING/VOLATILE/CHOPPY/CRASH)
-     - Recovery mode after losses
-     - Real-time performance tracking
-  4. **✅ Leverage Range**: 2-35x (fully dynamic, no more "static" leverage)
-- **Status**: ✅ Dynamic Leverage NOW ACTIVE - מינוף אמיתי דינמי 100%!
-
-### MetaBrain v9.3.5 - SLTP Safety Guard + TP Rounding Fix ✅ (CRITICAL FIXES)
-- **Files**: `utils/sltp_safety_guard.py` (NEW), `utils/sl_movement_freeze.py` (NEW), `utils/multi_target_tp.py` (UPDATED), `utils/tp_ladder.py` (UPDATED)
-- **CRITICAL FIXES** (סוף לשגיאות!):
-  1. **🛡️ SLTP Safety Guard** (NEW):
-     - Validates ALL SL/TP prices BEFORE sending to Binance
-     - SL must be > 0 AND logically correct for side (LONG/SHORT)
-     - TP must be > 0 AND logically correct for side
-     - BLOCKS orders with invalid prices (never sends bad orders)
-  2. **❄️ SL Movement Freeze** (NEW):
-     - Prevents loosening SL (moving away from breakeven)
-     - Only tightens SL if improvement > 5%
-     - Stops unnecessary SL changes (no more "every 5 seconds" updates)
-  3. **✅ TP Rounding Fix** (CRITICAL):
-     - Fixed: TP prices rounding to 0.0 (causing -4006 API errors)
-     - Guard in `_normalize_price()` prevents rounding to 0
-     - If rounding would destroy value, uses original unrounded price
-     - Prevents micro-cap tokens (A2ZUSDT, 1000RATSUSDT) from failing
-  4. **📊 Dynamic SL/TP Validation**:
-     - Entry price validation at calculation start
-     - Risk amount sanity checks (minimum 0.1%)
-     - Post-rounding validation for both SL and TP
-  5. **Prevents**:
-     - ❌ SL <= 0 orders
-     - ❌ TP <= 0 orders
-     - ❌ TP rounding to 0 (micro-cap fix)
-     - ❌ LONG SL >= Entry (must be below)
-     - ❌ SHORT SL <= Entry (must be above)
-     - ❌ Loosening position protection
-- **Status**: ✅ SLTP validation STRICT + Rounding Protection - Zero invalid orders!
-
-### MetaBrain v9.3.4 - Smart Token Budget Management ✅
-- **Files**: `utils/token_budget_manager.py` (NEW), `utils/ai_decision_maker.py` (UPDATED)
-- **SMART BRAIN SUSPENSION SYSTEM**:
-  1. **6 AI Brains Connected** (all cost-aware):
-     - Qwen 2.5 Turbo: FREE ✅ (always active)
-     - DeepSeek: $0.0001/call (ultra-cheap)
-     - Gemini 2 Pro: $0.00005/call (very cheap)
-     - GPT-4o Mini: $0.0005/call (cheap)
-     - Grok (XAI): $0.0008/call (mid-cost)
-     - Claude (Anthropic): $0.003/call (premium)
-  2. **Intelligent Suspension/Resume**:
-     - Balance < $5.0 → SUSPEND all paid brains (except Qwen)
-     - Balance ≥ $10.0 → RESUME in priority order (cheap→expensive)
-     - Qwen (FREE) always active
-  3. **Budget Tracking** - Every call tracked, no waste
-  4. **Dynamic Consensus** - Only active brains vote
-- **Status**: ✅ Smart budget management enabled - סוכנים וסוגרים בחוכמה!
 
 ## System Architecture
 

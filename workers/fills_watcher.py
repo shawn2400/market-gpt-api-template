@@ -298,12 +298,29 @@ def _check_and_extend_tp(symbol: str, current_price: float, entry_price: float, 
         
         for target in extended_config["targets"]:  # type: ignore
             tp_price = target["price"]  # type: ignore
-            tp_qty = remaining_qty * target["exit_percent"]  # type: ignore
+            exit_percent = target["exit_percent"]  # type: ignore
+            tp_qty = remaining_qty * exit_percent  # type: ignore
             
             # 🔧 CRITICAL FIX: Validate qty BEFORE rounding (prevent zero quantity)
             if tp_qty is None or tp_qty <= 0:
-                log.warning(f"⚠️ {symbol}: TP qty invalid ({tp_qty}), skipping")
-                continue
+                log.warning(f"⚠️ {symbol}: TP qty invalid ({tp_qty}), trying 3-level fallback")
+                
+                # Level 1: Try with 2x exit percentage
+                alt_exit_pct = min(exit_percent * 2, 1.0)
+                alt_qty = remaining_qty * alt_exit_pct
+                
+                if alt_qty > 0:
+                    tp_qty = alt_qty
+                    log.info(f"✅ TP fallback L1: using {alt_exit_pct*100:.0f}% = {tp_qty:.8f}")
+                else:
+                    # Level 2: Use entire remaining position
+                    tp_qty = remaining_qty
+                    log.info(f"✅ TP fallback L2: using full qty = {tp_qty:.8f}")
+                
+                if tp_qty <= 0:
+                    # Level 3: Skip this TP
+                    log.warning(f"⚠️ TP unrecoverable, skipping")
+                    continue
             
             # Round to symbol precision
             tp_price_rounded = validator.round_price(symbol, tp_price)  # type: ignore
