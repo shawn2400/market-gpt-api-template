@@ -14,7 +14,7 @@ Features:
 
 import logging
 import json
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional, Tuple, Union
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
@@ -29,7 +29,7 @@ class QuantumPatternEngine:
     def __init__(self, max_history: int = 100):
         self.max_history = max_history
         self.trade_history: List[Dict[str, Any]] = []
-        self.pattern_cache: Dict[str, Dict[str, float]] = defaultdict(lambda: {
+        self.pattern_cache: Dict[str, Any] = defaultdict(lambda: {
             "wins": 0, "losses": 0, "win_rate": 0.0, "last_seen": None
         })
         self.market_regimes = defaultdict(lambda: {
