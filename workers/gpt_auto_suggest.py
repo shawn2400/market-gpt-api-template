@@ -320,9 +320,9 @@ DEFAULT_INTERVAL  = os.getenv("DEFAULT_INTERVAL","15m")
 MIN_RR_TOP10 = float(os.getenv("MIN_RR_TOP10", "1.05"))  # 🎯 Lowered to 1.05 for single-brain config
 MIN_RR_ALT   = float(os.getenv("MIN_RR_ALT", "1.08"))  # 🎯 Lowered to 1.08 for single-brain config
 
-# גג מינוף להצעות GPT (ביטחון)
-SUGGEST_MAX_LEVERAGE = int(os.getenv("SUGGEST_MAX_LEVERAGE","10"))
-SUGGEST_MIN_LEVERAGE = max(1, int(os.getenv("SUGGEST_MIN_LEVERAGE","1")))
+# גג מינוף להצעות GPT (דינמי מלא - 3-35x)
+SUGGEST_MAX_LEVERAGE = int(os.getenv("SUGGEST_MAX_LEVERAGE","35"))
+SUGGEST_MIN_LEVERAGE = max(1, int(os.getenv("SUGGEST_MIN_LEVERAGE","3")))
 
 # ---------------- Helpers ----------------
 def validate_rr_smart(rr_ratio: float, min_rr: float, consensus_result: Optional[Dict], symbol: str) -> Tuple[bool, str]:
