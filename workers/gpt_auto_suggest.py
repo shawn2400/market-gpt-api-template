@@ -2598,6 +2598,12 @@ async def process_cycle():
         if not payload:
             return
         
+        # 🚫 REJECT TRADES < 0.05 USDT (too small to manage)
+        notional_usd = payload.get("notional_usd") or (payload.get("budget_usd", 0) * payload.get("leverage", 1))
+        if notional_usd and notional_usd < 0.05:
+            LOGGER.warning(f"❌ REJECTED {payload.get('symbol')} {payload.get('side')}: Position too small (${notional_usd:.6f} < $0.05 minimum)")
+            return
+        
         # 📊 CALCULATE ENHANCED QUALITY SCORE (MI + Position Score) - always run for telemetry
         symbol = payload.get("symbol", "")
         if ttype == "GRID":
