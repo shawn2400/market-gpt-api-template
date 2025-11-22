@@ -2924,6 +2924,71 @@ async def process_cycle():
                 LOGGER.info(f"🔁 Duplicate proposal blocked: {payload['symbol']} {ttype} (TTL={dedup_ttl}s)")
                 return
             
+            # 📊 GENERATE COMPREHENSIVE TRADE REPORT
+            # Calculate expected profit, hold time, and timeframe used
+            try:
+                entry_price = float(payload.get("entry") or 0)
+                tp1_price = float(payload.get("tp1") or 0)
+                tp2_price = float(payload.get("tp2") or 0)
+                tp3_price = float(payload.get("tp3") or 0)
+                sl_price = float(payload.get("sl") or 0)
+                success_pct = float(payload.get("success_pct") or 65)
+                quality_score = float(payload.get("quality_score") or 6.0)
+                
+                # חישוב רווח צפוי %
+                expected_profit_tp1 = ((tp1_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                expected_profit_tp2 = ((tp2_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                expected_profit_tp3 = ((tp3_price - entry_price) / entry_price * 100) if entry_price > 0 else 0
+                avg_expected_profit = (expected_profit_tp1 + expected_profit_tp2 + expected_profit_tp3) / 3.0
+                
+                # חישוב סיכון (SL distance)
+                risk_pct = ((entry_price - sl_price) / entry_price * 100) if entry_price > 0 else 0
+                
+                # חישוב זמן משוער (based on timeframe)
+                dominant_tf = ctx.get("dominant_timeframe") or payload.get("timeframe") or "15m"
+                if "4h" in dominant_tf.lower():
+                    estimated_hold_time = "4-8 hours"
+                elif "1h" in dominant_tf.lower():
+                    estimated_hold_time = "1-2 hours"
+                else:  # 15m
+                    estimated_hold_time = "15-30 minutes"
+                
+                # בניית דוח מלא
+                trade_report = f"""
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📊 TRADE PROPOSAL DETAILS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔹 Symbol: {symbol} | Side: {side}
+🔹 Quality Score: {quality_score:.1f}/10
+🔹 Success Probability: {success_pct:.0f}%
+
+📈 ENTRY & TARGETS:
+   Entry Price: ${entry_price:.8f}
+   SL Price: ${sl_price:.8f} (Risk: {risk_pct:.2f}%)
+   TP1: ${tp1_price:.8f} (Profit: {expected_profit_tp1:+.2f}%)
+   TP2: ${tp2_price:.8f} (Profit: {expected_profit_tp2:+.2f}%)
+   TP3: ${tp3_price:.8f} (Profit: {expected_profit_tp3:+.2f}%)
+   
+💰 EXPECTED PROFIT: {avg_expected_profit:+.2f}% (avg of TP1/TP2/TP3)
+⏱️  ESTIMATED HOLD TIME: {estimated_hold_time}
+📊 TIMEFRAME USED: {dominant_tf.upper()} (Multi-TF: 15M+1H+4H)
+
+✅ STATUS: Ready for execution via ExecutionBot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+"""
+                
+                LOGGER.info(trade_report)
+                
+                # Add report to payload for Telegram notification
+                payload["trade_report"] = trade_report
+                payload["estimated_profit_pct"] = avg_expected_profit
+                payload["risk_pct"] = risk_pct
+                payload["estimated_hold_time"] = estimated_hold_time
+                payload["dominant_timeframe"] = dominant_tf
+                
+            except Exception as e:
+                LOGGER.warning(f"⚠️ Failed to generate trade report for {symbol}: {e}")
+            
             # 🚀 Emit to ExecutionBot
             ok = await _emit(payload)
             
