@@ -1,0 +1,93 @@
+~/workspace$ 1. Open GitHub Desktop / GitHub Web UI
+2. Commit the1. Open GitHub Desktop / GitHub Web UI
+2. Commit these files:n_rate_engine.py
+   - utils/adaptive_win_rate_engine.py
+   - workers/gpt_auto_suggest.pyr.py
+   - utils/universal_sltp_manager.py
+   - utils/precision_calculator.py.py
+   - protect_unprotected_positions.py
+   - replit.md
+3. Commit Message:
+3. Commit Message:.1: AIOUSDT TP Rounding FIX + Adaptive Win Rate Optimizer
+"🔥 MetaBrain v9.2.1: AIOUSDT TP Rounding FIX + Adaptive Win Rate Optimizer
+CRITICAL FIXES:
+CRITICAL FIXES:ounding: APIError -4014 fixed (tickSize handling)
+✅ AIOUSDT TP Rounding: APIError -4014 fixed (tickSize handling)
+✅ Budget constraints: $25-35 per trade enforcedxed
+✅ Auto-protect script: imports + type safety fixed
+NEW FEATURE:
+NEW FEATURE:Win Rate Engine: Dynamic position sizing (1-5%)
+✅ Adaptive Win Rate Engine: Dynamic position sizing (1-5%)
+   - Tracks last 30 tradeste analysis
+   - Sharpe ratio + win rate analysis/TRENDING/VOLATILE)
+   - Regime-aware adjustments (CHOPPY/TRENDING/VOLATILE)
+   - Redis-backed persistence
+GUARANTEES:
+GUARANTEES:ices use Binance tickSize rounding
+- ALL TP prices use Binance tickSize rounding
+- ZERO unprotected positions trades"
+- 100% SL/TP coverage on all trades"
+4. Push to main
+4. Push to main
+bash: 1.: command not found
+bash: 2.: command not found
+bash: -: command not found
+bash: -: command not found
+bash: -: command not found
+bash: -: command not found
+bash: -: command not found
+bash: -: command not found
+bash: 3.: command not found
+bash: 🔥 MetaBrain v9.2.1: AIOUSDT TP Rounding FIX + Adaptive Win Rate Optimizer
+
+CRITICAL FIXES:
+✅ AIOUSDT TP Rounding: APIError -4014 fixed (tickSize handling)
+✅ Budget constraints: 5-35 per trade enforced
+✅ Auto-protect script: imports + type safety fixed
+
+NEW FEATURE:
+✅ Adaptive Win Rate Engine: Dynamic position sizing (1-5%)
+   - Tracks last 30 trades
+   - Sharpe ratio + win rate analysis
+   - Regime-aware adjustments (CHOPPY/TRENDING/VOLATILE)
+   - Redis-backed persistence
+
+GUARANTEES:
+- ALL TP prices use Binance tickSize rounding
+- ZERO unprotected positions
+- 100% SL/TP coverage on all trades: File name too long
+bash: 4.: command not found
+~/workspace$ 🔥 MetaBrain v9.2.1: AIOUSDT TP Rounding FIX + Adaptive Win Rate Optimizer
+
+CRITICAL FIXES:
+✅ AIOUSDT TP Rounding: APIError -4014 fixed (tickSize handling)
+✅ Budget constraints: $25-35 per trade enforced
+✅ Auto-protect script: imports + type safety fixed
+
+NEW FEATURE:
+✅ Adaptive Win Rate Engine: Dynamic position sizing (1-5%)
+   - Tracks last 30 trades
+   - Sharpe ratio + win rate analysis
+   - Regime-aware adjustments (CHOPPY/TRENDING/VOLATILE)
+   - Redis-backed persistence
+
+GUARANTEES:
+- ALL TP prices use Binance tickSize rounding
+- ZERO unprotected positions
+- 100% SL/TP coverage on all trades
+bash: 🔥: command not found
+bash: CRITICAL: command not found
+bash: syntax error near unexpected token `('
+bash: ✅: command not found
+bash: ✅: command not found
+bash: NEW: command not found
+bash: syntax error near unexpected token `('
+bash: -: command not found
+bash: -: command not found
+bash: syntax error near unexpected token `('
+bash: -: command not found
+bash: GUARANTEES:: command not found
+bash: -: command not found
+bash: -: command not found
+bash: -: command not found
+~/workspace$ 
