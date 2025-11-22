@@ -33,6 +33,7 @@ from utils.adaptive_win_rate_engine import get_adaptive_engine, initialize_adapt
 from utils.adaptive_budget_engine import get_adaptive_budget_engine  # ← Adaptive Budget Engine (MetaBrain v9.2.4)
 from utils.critical_autofix_engine import get_critical_autofix_engine  # ← Critical AutoFix Engine (MetaBrain v9.2.5)
 from utils.critical_issues_monitor import get_critical_issues_monitor  # ← Critical Issues Monitor (MetaBrain v9.2.5)
+from utils.quantum_council_engine import QuantumCouncilEngine  # ← Quantum Council - 7 AI Expert Members (v9.3.9)
 
 # Grid helper
 try:
@@ -3209,6 +3210,17 @@ async def process_cycle():
     return True  # ✅ Successful scan completed
 
 async def main():
+    # 🏛️ Initialize Quantum Council Engine (7 AI Expert Members - v9.3.9)
+    quantum_council = None
+    try:
+        quantum_council = QuantumCouncilEngine()
+        LOGGER.info("✅ Quantum Council initialized: 7 Expert Members Ready")
+        LOGGER.info("   🦅 DeepSeek-V3 (CEO) - 35% | 🐆 Grok-1 (COO) - 25% | 🦉 Claude (CSO) - 20%")
+        LOGGER.info("   🐉 Qwen-Turbo (Asia) - 10% | 🐬 Gemini (Data) - 5% | 🦅 Falcon (CTO) - 3% | 🐙 Mixtral (Innovation) - 2%")
+    except Exception as e:
+        LOGGER.warning(f"⚠️ Quantum Council init failed (proceeding without): {e}")
+        quantum_council = None
+    
     # 🧠 Initialize Adaptive Win Rate Engine (MetaBrain v9.2.1)
     try:
         redis_conn = RED
