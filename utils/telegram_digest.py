@@ -19,6 +19,17 @@ from datetime import datetime
 import json
 from pathlib import Path
 
+# Enhanced formatter import
+try:
+    from utils.enhanced_telegram_formatter import (
+        calculate_system_score,
+        format_rich_telegram_message,
+        format_compact_message
+    )
+    HAS_ENHANCED_FORMATTER = True
+except ImportError:
+    HAS_ENHANCED_FORMATTER = False
+
 logger = logging.getLogger("algogpt.telegram_digest")
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
@@ -454,16 +465,63 @@ class TelegramDigest:
             import httpx
             
             total_pnl = sum(e.pnl_usd for e in significant_events if e.pnl_usd is not None)
+            winners = sum(1 for e in significant_events if e.pnl_usd and e.pnl_usd > 0)
+            losers = sum(1 for e in significant_events if e.pnl_usd and e.pnl_usd < 0)
             
-            text = f"📈 <b>Trade Digest (30min)</b>\n\n"
-            text += f"<b>Total PnL:</b> ${total_pnl:.2f}\n"
-            text += f"<b>Events:</b> {len(significant_events)}\n\n"
-            
-            for event in significant_events[:5]:
-                pnl_str = f"${event.pnl_usd:.2f}" if event.pnl_usd else "N/A"
-                text += f"  • {event.symbol} - {event.event_type}: {pnl_str}\n"
-            
-            text += f"\n<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
+            # Enhanced message with rich formatting
+            if HAS_ENHANCED_FORMATTER:
+                # Convert events to trade format for rich formatting
+                trades_for_display = []
+                for event in significant_events:
+                    trades_for_display.append({
+                        "symbol": event.symbol,
+                        "side": "LONG" if event.details.get("side", "UNKNOWN") == "LONG" else "SHORT",
+                        "entry_price": event.details.get("entry_price", 0),
+                        "exit_price": event.price or 0,
+                        "pnl_usd": event.pnl_usd or 0,
+                        "pnl_pct": event.pnl_pct or 0,
+                        "duration_sec": event.details.get("duration_sec", 0),
+                        "leverage": event.details.get("leverage", 1),
+                        "entry_time": event.details.get("entry_time", time.time()),
+                        "exit_time": time.time(),
+                        "exit_reason": event.event_type,
+                        "tp_hit": "TP" in event.event_type
+                    })
+                
+                # Calculate system score
+                system_score = calculate_system_score(
+                    total_pnl=total_pnl,
+                    win_rate=(winners / len(significant_events) * 100) if significant_events else 0,
+                    api_errors=0,
+                    trades_executed=len(significant_events),
+                    protection_active=True
+                )
+                
+                # Create rich message
+                text = format_rich_telegram_message(
+                    system_score=system_score,
+                    active_brains=["deepseek"],  # Will be updated dynamically
+                    brain_scores={"deepseek": 7.0},
+                    error_msgs={},
+                    closed_trades=trades_for_display,
+                    open_positions=[],
+                    issues=[],
+                    win_rate=(winners / len(significant_events)) if significant_events else 0,
+                    avg_tp_time=15
+                )
+            else:
+                # Fallback simple message
+                text = f"📈 <b>Trade Digest (30min)</b>\n\n"
+                text += f"<b>Total PnL:</b> ${total_pnl:.2f}\n"
+                text += f"<b>Win Rate:</b> {(winners / len(significant_events) * 100):.1f}%\n"
+                text += f"<b>Wins:</b> {winners} | <b>Losses:</b> {losers}\n"
+                text += f"<b>Events:</b> {len(significant_events)}\n\n"
+                
+                for event in significant_events[:5]:
+                    pnl_str = f"${event.pnl_usd:.2f}" if event.pnl_usd else "N/A"
+                    text += f"  • {event.symbol} - {event.event_type}: {pnl_str}\n"
+                
+                text += f"\n<i>{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</i>"
             
             payload = {
                 "chat_id": TELEGRAM_CHAT_ID,
@@ -478,7 +536,7 @@ class TelegramDigest:
                     json=payload
                 )
                 if resp.status_code == 200:
-                    logger.info(f"Trade digest sent: {len(significant_events)} events")
+                    logger.info(f"Trade digest sent: {len(significant_events)} events (enriched format)")
                     self.trade_queue.clear()
                     self._save_queues()
                 else:
