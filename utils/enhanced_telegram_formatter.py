@@ -179,6 +179,7 @@ def format_trade_summary(
             exit_time = trade.get("exit_time", 0)
             exit_reason = trade.get("exit_reason", "unknown")
             tp_hit = trade.get("tp_hit", False)
+            timeframe = trade.get("timeframe", "15M")  # Default 15M candles
             
             total_pnl += pnl_usd
             total_pnl_pct += pnl_pct
@@ -192,7 +193,7 @@ def format_trade_summary(
             else:
                 emoji = "⚪"
             
-            # Duration formatting
+            # Duration formatting (כמה זמן הטרייד פתוח)
             if duration_sec < 60:
                 duration_str = f"{duration_sec:.0f}s"
             elif duration_sec < 3600:
@@ -204,10 +205,10 @@ def format_trade_summary(
             exit_emoji = "🎯" if tp_hit else "🛑" if "SL" in exit_reason else "❌"
             
             lines.append(
-                f"{idx}. {symbol} {side} {emoji}\n"
-                f"   💰 {entry:.6g} → {exit_price:.6g}\n"
-                f"   📈 PNL: +{pnl_usd:.2f}$ ({pnl_pct:+.2f}%) | {leverage}x\n"
-                f"   ⏱️ {duration_str} | {exit_emoji} {exit_reason}"
+                f"{idx}. {symbol} {side} {emoji} | 📊 {timeframe}\n"
+                f"   💰 {entry:.6g} → {exit_price:.6g} | {leverage}x\n"
+                f"   📈 PNL: {pnl_usd:+.2f}$ ({pnl_pct:+.2f}%)\n"
+                f"   {exit_emoji} {exit_reason} | ⏱️ {duration_str}"
             )
     
     # Open positions
@@ -223,6 +224,7 @@ def format_trade_summary(
             time_open = pos.get("time_open", 0)
             sl_price = pos.get("sl_price")
             tp_prices = pos.get("tp_prices", [])
+            timeframe = pos.get("timeframe", "15M")  # Default 15M candles
             
             # Current PNL emoji
             if pnl_pct > 0:
@@ -232,7 +234,7 @@ def format_trade_summary(
             else:
                 emoji = "⚪"
             
-            # Time open
+            # Time open (כמה זמן הפוזיציה פתוחה)
             if time_open < 60:
                 time_str = f"{time_open:.0f}s"
             elif time_open < 3600:

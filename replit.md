@@ -129,29 +129,44 @@ The production environment runs on Render.com with 11 Background Workers and a N
 🕐 2025-11-22 22:40:00 UTC
 ━━━━━━━━━━━━━━━━━━━━
 
-🧠 AI Agents Status
+🧠 AI Agents Status (7 סוכנים)
   🧠 ✅ DeepSeek: 7.5/10
   ⚡ ❌ Grok: No credits
   🎯 ✅ Claude: 8.0/10
-  ...
+  👤 ✅ Qwen: 7.0/10
+  🌐 ✅ Gemini: 6.5/10
+  🦅 ⚫ Falcon: Inactive
+  🎭 ⚫ Mixtral: Inactive
 
 📊 Trade Summary
-1. ETHUSDT LONG 🟢
-   💰 2750.0 → 2800.0
+✅ Closed Trades
+1. ETHUSDT LONG 🟢 | 📊 15M (timeframe)
+   💰 2750.0 → 2800.0 | 5x
    📈 PnL: +50.00$ (+1.82%)
-   ⏱️ 15m | 🎯 TP1_HIT
+   🎯 TP1_HIT | ⏱️ 15m (duration)
 
-💡 Expected Metrics
-  Best case: +120.50$
+2. BTCUSDT SHORT 🔴 | 📊 1H
+   💰 42500.0 → 42000.0 | 3x
+   📈 PnL: -100.00$ (-0.95%)
+   🛑 SL_HIT | ⏱️ 8m
+
+💡 Expected Metrics (פוזיציות פתוחות)
+  SOLANA: Risk $50 | Reward $150 | RR: 3.0
   Avg Time to TP: ~15 minutes
 
 🎯 TP Hit Success Rates
-  TP1: ██████████ 100%
-  TP2: ████░░░░░░ 40%
-  
+  TP1: ██████████ 100% (5/5)
+  TP2: ████░░░░░░ 40% (2/5)
+  TP3: ██░░░░░░░░ 20% (1/5)
+
 ━━━━━━━━━━━━━━━━━━━━
 בעזרת השם נעשה ונצליח 🙏
 ```
+
+**הסברים:**
+- **📊 15M** = Timeframe (candles של 15 דקות - סוג הניתוח)
+- **⏱️ 15m** = Duration (כמה זמן הטרייד פתוח בפועל)
+- **7 סוכנים AI**: DeepSeek, Grok, Claude, Qwen, Gemini, Falcon, Mixtral
 
 ### IMPACT
 ✅ Rich, detailed trade reports sent to Telegram
