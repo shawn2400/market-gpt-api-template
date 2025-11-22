@@ -6,7 +6,7 @@ from typing import Dict, Any, Optional, Tuple
 logger = logging.getLogger("algogpt.levpolicy")
 
 # Dynamic Leverage v2.0 integration
-DYNAMIC_LEVERAGE_MODE = os.getenv("DYNAMIC_LEVERAGE_MODE", "0").lower() in ("1", "true", "yes")
+DYNAMIC_LEVERAGE_MODE = os.getenv("DYNAMIC_LEVERAGE_MODE", "1").lower() in ("1", "true", "yes")
 
 if DYNAMIC_LEVERAGE_MODE:
     try:

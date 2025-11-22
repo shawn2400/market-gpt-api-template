@@ -6,9 +6,25 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
-## Recent Changes (Nov 22, 2025 - v9.3.5 SLTP Safety Guard + TP Rounding Fix)
+## Recent Changes (Nov 22, 2025 - v9.3.6 Dynamic Leverage Enabled + v9.3.5 SLTP Safety)
 
-### MetaBrain v9.3.5 - SLTP Safety Guard + TP Rounding Fix ✅ (LATEST - CRITICAL FIXES)
+### MetaBrain v9.3.6 - Dynamic Leverage Enabled ✅ (CRITICAL - LEVERAGE FIX)
+- **Files**: `utils/leverage_policy.py` (FIXED - DEFAULT ENABLED)
+- **THE LEVERAGE MYSTERY SOLVED**:
+  1. **❌ ROOT CAUSE FOUND**: `leverage_policy.py` had `DYNAMIC_LEVERAGE_MODE = os.getenv("DYNAMIC_LEVERAGE_MODE", "0")` 
+     - Default was "0" (DISABLED) - עוד! המינוף לא היה דינמי כי הוא היה נטורל כברירת מחדל!
+  2. **✅ FIX APPLIED**: Changed default to "1" → **Dynamic Leverage NOW ENABLED BY DEFAULT**
+  3. **📊 What This Means**:
+     - Leverage now calculated by `DynamicLeverageCalculator` 
+     - Multi-factor confidence scoring (Quality, Market, Tier, WinRate, ATR)
+     - 4-Layer safety guards (Emergency, Volatility, Symbol, Portfolio)
+     - Market regime detection (TRENDING/VOLATILE/CHOPPY/CRASH)
+     - Recovery mode after losses
+     - Real-time performance tracking
+  4. **✅ Leverage Range**: 2-35x (fully dynamic, no more "static" leverage)
+- **Status**: ✅ Dynamic Leverage NOW ACTIVE - מינוף אמיתי דינמי 100%!
+
+### MetaBrain v9.3.5 - SLTP Safety Guard + TP Rounding Fix ✅ (CRITICAL FIXES)
 - **Files**: `utils/sltp_safety_guard.py` (NEW), `utils/sl_movement_freeze.py` (NEW), `utils/multi_target_tp.py` (UPDATED), `utils/tp_ladder.py` (UPDATED)
 - **CRITICAL FIXES** (סוף לשגיאות!):
   1. **🛡️ SLTP Safety Guard** (NEW):
