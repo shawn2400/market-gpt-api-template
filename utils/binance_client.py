@@ -642,6 +642,42 @@ def futures_cancel_order(symbol: str, order_id: str | int) -> Dict[str, Any]:
         logger.warning("cancel_order failed %s/%s: %s", symbol, order_id, e)
         return {"ok": False, "error": str(e)}
 
+# ✅ Cancel only SL orders (STOP_MARKET) - preserves TP orders
+@observe_http(name="binance_cancel_sl", include_labels=["symbol"])
+def futures_cancel_sl_orders(symbol: str) -> Dict[str, Any]:
+    """
+    🎯 Cancel ONLY Stop Loss orders (STOP_MARKET type)
+    PRESERVES TP orders (TAKE_PROFIT, TAKE_PROFIT_MARKET) to maintain SL/TP sync
+    
+    Args:
+        symbol: Trading symbol (e.g., 'BTCUSDT')
+    
+    Returns:
+        Result dict with ok=True/False
+    """
+    try:
+        # Get all open orders
+        orders = futures_get_open_orders(symbol)
+        
+        cancelled_count = 0
+        for order in orders:
+            # Only cancel STOP_MARKET orders (Stop Loss)
+            if order.get("type") == "STOP_MARKET":
+                order_id = order.get("orderId")
+                try:
+                    futures_cancel_order(symbol, order_id)
+                    cancelled_count += 1
+                    logger.debug(f"✅ Cancelled SL order {order_id} for {symbol}")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to cancel SL order {order_id}: {e}")
+        
+        logger.info(f"🛡️ Cancelled {cancelled_count} SL orders for {symbol} (TP orders preserved)")
+        return {"ok": True, "cancelled": cancelled_count}
+        
+    except Exception as e:
+        logger.error(f"❌ futures_cancel_sl_orders failed for {symbol}: {e}")
+        return {"ok": False, "error": str(e)}
+
 # ✅ חדש: ביטול כל ההזמנות (לבקשת routes.grid)
 @observe_http(name="binance_cancel_all", include_labels=["symbol"])
 def futures_cancel_all_orders(symbol: str) -> Dict[str, Any]:

@@ -704,11 +704,11 @@ async def ensure_positions_protected() -> None:
                     # 🚀 LAYER 3: Check if should move SL to breakeven
                     should_be, be_price = risk_manager.should_activate_breakeven(pos)
                     if should_be:
-                        from utils.binance_client import futures_create_order, futures_cancel_all_orders
+                        from utils.binance_client import futures_create_order, futures_cancel_sl_orders
                         
                         try:
-                            # Cancel existing SL orders
-                            futures_cancel_all_orders(symbol)
+                            # Cancel existing SL orders (preserves TP orders)
+                            futures_cancel_sl_orders(symbol)
                             
                             # Place new STOP_MARKET at breakeven
                             close_side = "SELL" if position_side == "LONG" else "BUY"
@@ -759,7 +759,7 @@ async def ensure_positions_protected() -> None:
                         try:
                             atr = await calculate_symbol_atr(symbol, period=14)
                             if atr > 0:
-                                from utils.binance_client import futures_create_order, futures_cancel_all_orders
+                                from utils.binance_client import futures_create_order, futures_cancel_sl_orders
                                 
                                 # Calculate trailing distance (0.7x ATR for tighter trailing)
                                 trailing_distance = atr * 0.7
@@ -774,8 +774,8 @@ async def ensure_positions_protected() -> None:
                                     # Get the current SL from state (might be different than new_sl if rejected)
                                     current_sl = trailing_sl_state.get_current_sl(symbol, position_side)
                                     
-                                    # Place order on Binance
-                                    futures_cancel_all_orders(symbol)
+                                    # Place order on Binance (cancel only SL orders - preserves TP orders)
+                                    futures_cancel_sl_orders(symbol)
                                     close_side = "SELL" if position_side == "LONG" else "BUY"
                                     
                                     # 🛡️ FIX: Enforce breakeven floor - Trailing SL CANNOT go below entry price
@@ -831,7 +831,7 @@ async def ensure_positions_protected() -> None:
                     protected_sl = entry_price * 0.98 if position_side == "LONG" else entry_price * 1.02
                     
                     if atr > 0:
-                        from utils.binance_client import futures_create_order, futures_cancel_all_orders
+                        from utils.binance_client import futures_create_order, futures_cancel_sl_orders
                         
                         volatility = risk_manager.calculate_volatility(symbol, atr, mark_price)
                         protected_sl = risk_manager.calculate_protected_sl(
@@ -839,8 +839,8 @@ async def ensure_positions_protected() -> None:
                         )
                         
                         try:
-                            # Cancel existing SL orders
-                            futures_cancel_all_orders(symbol)
+                            # Cancel existing SL orders (preserves TP orders)
+                            futures_cancel_sl_orders(symbol)
                             
                             # Place new STOP_MARKET at protected SL
                             close_side = "SELL" if position_side == "LONG" else "BUY"
@@ -935,19 +935,17 @@ async def ensure_positions_protected() -> None:
                                     
                                     if prices_changed:
                                         try:
-                                            # Import required function
-                                            from utils.binance_client import futures_create_order
+                                            # Import required functions
+                                            from utils.binance_client import futures_create_order, futures_cancel_order
                                             
-                                            # Cancel old TP orders
+                                            # Cancel old TP orders (skip if order no longer exists)
                                             for tp_order in tp_orders[:3]:
                                                 try:
-                                                    # 🔧 FIX: Handle both parameter names for compatibility
-                                                    try:
-                                                        futures_cancel_order(symbol, order_id=tp_order.get("orderId"))
-                                                    except TypeError:
-                                                        futures_cancel_order(symbol, orderId=tp_order.get("orderId"))
-                                                except:
-                                                    pass  # Order may already be filled
+                                                    order_id = tp_order.get("orderId")
+                                                    futures_cancel_order(symbol, order_id)
+                                                except Exception as cancel_err:
+                                                    # Order may already be filled or cancelled - this is OK
+                                                    logger.debug(f"⚠️ {symbol}: Could not cancel TP order {order_id}: {cancel_err}")
                                             
                                             # Place new TP orders
                                             exit_side = "SELL" if position_side == "LONG" else "BUY"
