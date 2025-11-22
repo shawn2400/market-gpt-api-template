@@ -171,7 +171,17 @@ class PositionLimitsManager:
             from utils.binance_client import get_open_orders
             
             orders = get_open_orders()
-            count = len(orders)
+            
+            # 🔧 CRITICAL FIX: Filter only NEW/PARTIALLY_FILLED orders (exclude filled/cancelled)
+            active_orders = [
+                o for o in orders 
+                if (o.get("status") or "").upper() in ("NEW", "PARTIALLY_FILLED")
+            ]
+            count = len(active_orders)
+            
+            # 🔧 DEBUG: Log active order count
+            if count > 20:  # Only log when approaching limit
+                logger.debug(f"📊 Active orders: {count}/{MAX_TOTAL_OPEN_ORDERS} | Total orders in account: {len(orders)}")
             
             if count > MAX_TOTAL_OPEN_ORDERS:
                 logger.warning(

@@ -6,7 +6,22 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform for 24/7 operati
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
-## Recent Changes (Nov 22, 2025 - Final Update)
+## Recent Changes (Nov 22, 2025 - v9.3.0 Deep Fixes Applied)
+
+### MetaBrain v9.3.0 - Critical Validation & Protection Layer ✅ (NEW)
+- **Files**: `utils/universal_sltp_manager.py`, `workers/position_monitor.py`, `workers/fills_watcher.py`, `utils/position_limits.py`
+- **Comprehensive Fixes Applied**:
+  1. **SL Price Validation** - Type check + zero/negative validation before placement (prevents APIError -4006)
+  2. **TP Quantity Validation** - Pre-rounding & post-rounding checks (prevents APIError -4003)
+  3. **TP Price Validation** - Ensures TP prices > 0 before order placement (prevents APIError -4024)
+  4. **Position Limits Filtering** - Only counts NEW/PARTIALLY_FILLED orders (accurate 37/25 blocking)
+  5. **Error Handling** - Graceful skipping of invalid orders with detailed logging
+- **Critical Issues Addressed**:
+  - ✅ Stopped "Stop price less than zero" errors (A2ZUSDT)
+  - ✅ Stopped "Limit price invalid" errors (1000RATSUSDT)  
+  - ✅ Stopped zero quantity orders (AAVEUSDT)
+  - ✅ Fixed position limit miscounting (37/25 now accurate)
+- **Status**: ✅ ACTIVE - All 9 workflows running with enhanced validation layer
 
 ### MetaBrain v9.2.8 Final - Full TP Grid Extension + Dynamic Leverage + Quality Score Display ✅
 - **Files**: `utils/multi_target_tp.py`, `utils/universal_sltp_manager.py`, `workers/position_monitor.py`, `utils/trailing_tp.py`, `workers/gpt_auto_suggest.py`, `utils/telegram_notifier.py`

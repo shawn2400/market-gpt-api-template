@@ -359,8 +359,35 @@ async def attach_multi_target_protection(
         
         # Place SL order (STOP_MARKET for guaranteed execution)
         try:
+            # 🔧 CRITICAL FIX #1: Validate SL is not negative or zero
+            if sl_price is None or not isinstance(sl_price, (int, float)):
+                error_msg = f"CRITICAL: SL price is invalid type ({type(sl_price)}) for {symbol}"
+                result["errors"].append(error_msg)
+                logger.error(f"❌ {error_msg}")
+                return result
+            
+            if sl_price <= 0:
+                error_msg = f"CRITICAL: SL price is invalid ({sl_price} <= 0) for {symbol}"
+                result["errors"].append(error_msg)
+                logger.error(f"❌ {error_msg}")
+                return result
+            
             # 🔧 CRITICAL FIX: Use validator.round_price() for SL to handle micro-cap coins
-            sl_price_rounded = validator.round_price(symbol, sl_price)
+            try:
+                sl_price_rounded = validator.round_price(symbol, sl_price)
+            except Exception as round_err:
+                error_msg = f"CRITICAL: SL price rounding failed ({round_err}) for {symbol}"
+                result["errors"].append(error_msg)
+                logger.error(f"❌ {error_msg}")
+                return result
+            
+            # 🔧 CRITICAL FIX #2: Ensure rounded SL is still positive
+            if sl_price_rounded is None or sl_price_rounded <= 0:
+                error_msg = f"CRITICAL: Rounded SL price is invalid ({sl_price_rounded} <= 0) for {symbol}"
+                result["errors"].append(error_msg)
+                logger.error(f"❌ {error_msg}")
+                return result
+            
             sl_price_str = str(sl_price_rounded)
             
             logger.info(f"📤 Placing SL: {symbol} {sl_side} @ {sl_price_str} (STOP_MARKET)")

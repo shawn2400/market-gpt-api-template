@@ -1049,7 +1049,16 @@ async def ensure_positions_protected() -> None:
                                                 try:
                                                     tp_qty = abs(amt) * tp_config["targets"][idx]["exit_percent"]
                                                     
-                                                    # 🛡️ FIX: Validate TP price before placing (prevents APIError -4001)
+                                                    # 🔧 CRITICAL FIX: Validate quantity is positive and non-zero (prevent APIError -4003)
+                                                    if tp_qty is None or tp_qty <= 0 or tp_qty < 0.0001:
+                                                        logger.warning(f"⚠️ {symbol}: TP{idx+1} qty invalid ({tp_qty}), skipping")
+                                                        continue
+                                                    
+                                                    # 🛡️ FIX: Validate TP price before placing (prevents APIError -4024/-4006)
+                                                    if tp_price is None or tp_price <= 0:
+                                                        logger.warning(f"⚠️ {symbol}: TP{idx+1} price invalid ({tp_price}), skipping")
+                                                        continue
+                                                    
                                                     if tp_qty > 0 and tp_price and tp_price > 0:
                                                         futures_create_order(
                                                             symbol=symbol,

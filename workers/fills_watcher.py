@@ -300,9 +300,24 @@ def _check_and_extend_tp(symbol: str, current_price: float, entry_price: float, 
             tp_price = target["price"]  # type: ignore
             tp_qty = remaining_qty * target["exit_percent"]  # type: ignore
             
+            # 🔧 CRITICAL FIX: Validate qty BEFORE rounding (prevent zero quantity)
+            if tp_qty is None or tp_qty <= 0:
+                log.warning(f"⚠️ {symbol}: TP qty invalid ({tp_qty}), skipping")
+                continue
+            
             # Round to symbol precision
             tp_price_rounded = validator.round_price(symbol, tp_price)  # type: ignore
             tp_qty_rounded = validator.round_quantity(symbol, tp_qty)  # type: ignore
+            
+            # 🔧 CRITICAL FIX: Validate after rounding (prevent APIError -4003)
+            if not tp_qty_rounded or float(tp_qty_rounded) <= 0:
+                log.warning(f"⚠️ {symbol}: TP qty after rounding invalid ({tp_qty_rounded}), skipping")
+                continue
+            
+            # 🔧 CRITICAL FIX: Validate price is positive
+            if not tp_price_rounded or float(tp_price_rounded) <= 0:
+                log.warning(f"⚠️ {symbol}: TP price after rounding invalid ({tp_price_rounded}), skipping")
+                continue
             
             # Determine order side (opposite of position)
             order_side = "SELL" if side == "LONG" else "BUY"
