@@ -1049,7 +1049,7 @@ async def ensure_positions_protected() -> None:
                                             validator = BinanceSymbolValidator()
                                             
                                             # 🔧 v9.3.8+ FIX: Skip TP placement if position remnant is too small (< $0.05)
-                                            current_price = float(p.get("markPrice", p.get("entryPrice", 0)))
+                                            current_price = mark_price if mark_price > 0 else entry_price
                                             total_position_value = abs(amt) * current_price if current_price > 0 else 0
                                             min_position_value_usd = 0.05  # Don't bother with cents
                                             

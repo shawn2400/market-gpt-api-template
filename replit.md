@@ -6,7 +6,20 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform for 24/7 operati
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
-## Recent Changes (Nov 22, 2025 - v9.3.8 CRITICAL FIXES)
+## Recent Changes (Nov 22, 2025 - v9.3.8+ HOTFIX)
+
+### 🔥 v9.3.8+ HOTFIX - Critical Variable Scope Bug
+
+**EMERGENCY FIX: Position Monitor Variable Scope Error** 🐛
+- **File**: `workers/position_monitor.py` (line 1055)
+- **Bug**: Line 1052 referenced undefined variable `p.get("markPrice")` causing NameError exception
+- **Fix**: Changed to use available variables `mark_price` (from line 998 context) instead of undefined `p`
+  - Before: `current_price = float(p.get("markPrice", p.get("entryPrice", 0)))`
+  - After: `current_price = mark_price if mark_price > 0 else entry_price`
+- **Impact**: Position Monitor TP update was throwing exceptions repeatedly - now ✅ FIXED
+- **Status**: ✅ Verified working - zero errors in Position Monitor logs
+
+---
 
 ### ✅ v9.3.8 - 3 Critical Fixes (Leverage + Budget MAX + Position Remnants)
 
