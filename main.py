@@ -273,9 +273,14 @@ async def _head_compat_and_soft_readyz(request: Request, call_next):
             scope_copy = dict(request.scope); scope_copy["method"] = "GET"
             new_req = Request(scope_copy, receive=request.receive)
             resp = await call_next(new_req)
-            return StarletteResponse(status_code=resp.status_code, headers=dict(resp.headers), media_type=resp.media_type)
+            return StarletteResponse(
+                status_code=resp.status_code, 
+                headers=dict(resp.headers), 
+                media_type=resp.media_type,
+                content=b""  # Empty body for HEAD responses
+            )
         except Exception:
-            return StarletteResponse(status_code=200)
+            return StarletteResponse(status_code=200, content=b"")  # Empty body
     return await call_next(request)
 
 @app.get("/readyz")
