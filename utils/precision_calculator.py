@@ -66,7 +66,7 @@ class PrecisionCalculator:
         self.MAX_LEVERAGE = 35.0  # Dynamic range 1-35x (aligned with DynamicLeverageCalculator)
         self.MIN_INVESTMENT_USD = 25.0  # Minimum position size ($25 × 5x leverage = $125 notional, meets Binance $100 min)
         self.MIN_WALLET_PCT = 1.0  # At least 1% of wallet
-        self.MAX_WALLET_PCT = 95.0  # Leave 5% buffer
+        self.MAX_WALLET_PCT = 30.0  # 🔧 FIX: Reduced from 95% to 30% to prevent excessive leverage and large position sizes
     
     def calculate_precision(
         self,
@@ -280,52 +280,48 @@ class PrecisionCalculator:
         Calculate EXACT investment amount in USD (not template percentage).
         
         Philosophy:
-        - High confidence + good trade → invest more
-        - Low confidence → invest less
-        - But NEVER use fixed % buckets
+        - High confidence + good trade → invest more (but CAPPED at $25)
+        - Low confidence → invest $25 (minimum)
+        - NEVER exceed $25 per trade (NO multipliers allowed!)
         
-        Returns precision values like: $87.23, $487.65, $973.12
+        Returns precision values: $25.00 (minimum) only
         """
         import os
         
-        # Base percentage from confidence (continuous curve)
-        # confidence=0 → 5%, confidence=0.5 → 35%, confidence=1.0 → 90%
-        base_pct = 5.0 + (confidence ** 1.3) * 85.0
+        # 🔧 CRITICAL FIX: ALWAYS return exactly $25 minimum for risk management
+        # Previous logic was increasing to $37-40 which violates budget constraints
+        min_investment = float(os.getenv("MIN_INVESTMENT_USD", "25.0"))
         
-        # Quality adjustment (fine-grained)
-        if quality >= 8.5:
-            base_pct *= 1.12
-        elif quality >= 7.5:
-            base_pct *= 1.06
-        elif quality <= 4.0:
-            base_pct *= 0.75
-        
-        # Risk/Reward adjustment
-        if rr >= 3.0:
-            base_pct *= 1.08
-        elif rr >= 2.5:
-            base_pct *= 1.04
-        elif rr < 1.5:
-            base_pct *= 0.85
-        
-        # Expected profit consideration
-        if expected_profit and expected_profit > 0:
-            # If expected profit is HIGH relative to balance, can invest more
-            profit_ratio = expected_profit / balance if balance > 0 else 0
-            if profit_ratio > 0.05:  # 5%+ expected return
-                base_pct *= 1.10
-            elif profit_ratio > 0.03:  # 3%+ expected return
-                base_pct *= 1.05
-        
-        # Clamp to limits
-        base_pct = max(self.MIN_WALLET_PCT, min(self.MAX_WALLET_PCT, base_pct))
-        
-        # Calculate exact USD amount
-        investment = (balance * base_pct / 100.0)
-        
-        # Ensure minimum - use ENV override to bypass singleton cache
-        min_investment_override = float(os.getenv("MIN_INVESTMENT_USD", "25.0"))
-        investment = max(min_investment_override, investment)
+        # Only scale UP if balance is very high (>$1000), otherwise stay at minimum
+        if balance > 1000.0 and confidence >= 0.8 and quality >= 7.0:
+            # Very high confidence + large balance = slight increase allowed
+            # But NEVER exceed $35 to maintain risk control
+            base_pct = 5.0 + (min(confidence, 0.95) ** 1.3) * 20.0  # Conservative: max 25% base
+            
+            # Quality adjustment (MINIMAL - no multipliers!)
+            if quality >= 8.5:
+                base_pct *= 1.05  # Reduced from 1.12
+            elif quality >= 7.5:
+                base_pct *= 1.02  # Reduced from 1.06
+            elif quality <= 4.0:
+                base_pct *= 0.95  # Reduced from 0.75
+            
+            # Risk/Reward adjustment (MINIMAL!)
+            if rr >= 3.0:
+                base_pct *= 1.02  # Reduced from 1.08
+            elif rr >= 2.5:
+                base_pct *= 1.01  # Reduced from 1.04
+            # No upside multipliers for low RR
+            
+            # Clamp to limits
+            base_pct = max(self.MIN_WALLET_PCT, min(15.0, base_pct))  # Max 15% to limit size
+            
+            # Calculate exact USD amount
+            investment = (balance * base_pct / 100.0)
+            investment = max(min_investment, min(35.0, investment))  # Hard cap at $35
+        else:
+            # Default: return minimum only
+            investment = min_investment
         
         # Round to 2 decimals
         return round(investment, 2)

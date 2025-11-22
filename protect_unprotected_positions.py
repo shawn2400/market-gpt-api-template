@@ -20,11 +20,11 @@ async def protect_unprotected_positions() -> Dict[str, Any]:
         Summary of protected positions
     """
     try:
-        from utils.binance_client import futures_open_positions_safe, futures_mark_price
+        from utils.binance_client import futures_get_open_positions, futures_mark_price
         from utils.universal_sltp_manager import attach_multi_target_protection
         
         # Get all open positions
-        positions_raw = futures_open_positions_safe() or []
+        positions_raw = futures_get_open_positions() or []
         open_positions = [p for p in positions_raw if float(p.get("positionAmt", 0)) != 0]
         
         if not open_positions:
