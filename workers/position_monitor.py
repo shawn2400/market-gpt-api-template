@@ -777,6 +777,11 @@ async def ensure_positions_protected() -> None:
                             # Place new STOP_MARKET at breakeven
                             close_side = "SELL" if position_side == "LONG" else "BUY"
                             
+                            # 🛡️ CRITICAL: Validate SL price before sending to Binance
+                            if be_price <= 0:
+                                logger.error(f"❌ {symbol}: Invalid breakeven SL={be_price:.8f} (≤0)! Skipping order.")
+                                continue
+                            
                             sl_order = futures_create_order(
                                 symbol=symbol,
                                 side=close_side,
@@ -852,6 +857,14 @@ async def ensure_positions_protected() -> None:
                                         sl_price_to_place = min(sl_price_to_place, entry_price)  # SHORT: SL <= entry_price (don't go above entry)
                                     
                                     if sl_price_to_place and sl_price_to_place > 0:
+                                        # 🛡️ CRITICAL: Double-check SL is not negative/zero before Binance submission
+                                        if position_side == "LONG" and sl_price_to_place <= 0:
+                                            logger.error(f"❌ {symbol} LONG: Trailing SL={sl_price_to_place:.8f} is invalid (≤0)! Using entry price instead.")
+                                            sl_price_to_place = entry_price * 0.99  # 1% below entry as emergency SL
+                                        elif position_side == "SHORT" and sl_price_to_place <= 0:
+                                            logger.error(f"❌ {symbol} SHORT: Trailing SL={sl_price_to_place:.8f} is invalid (≤0)! Using entry price instead.")
+                                            sl_price_to_place = entry_price * 1.01  # 1% above entry as emergency SL
+                                        
                                         sl_order = futures_create_order(
                                             symbol=symbol,
                                             side=close_side,
