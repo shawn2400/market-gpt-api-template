@@ -3062,7 +3062,7 @@ async def main():
     # 🧠 Initialize Adaptive Win Rate Engine (MetaBrain v9.2.1)
     try:
         redis_conn = RED
-        adaptive_engine = initialize_adaptive_engine(redis_client=redis_conn)
+        adaptive_engine = initialize_adaptive_engine(redis_conn=redis_conn)
         LOGGER.info("✅ Adaptive Win Rate Engine initialized - enabling dynamic trade sizing")
     except Exception as e:
         LOGGER.warning(f"⚠️ Adaptive Engine init failed (proceeding without): {e}")

@@ -111,7 +111,7 @@ class AdaptiveWinRateEngine:
         market_regime: str = 'NEUTRAL',
         quality_score: float = 5.0,
         volatility_pct: float = 1.5
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Any]:
         """
         Calculate dynamic parameters based on:
         - Recent win rate
