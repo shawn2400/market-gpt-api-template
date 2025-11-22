@@ -104,6 +104,11 @@ class TPLadder:
                 # 🔧 CRITICAL VALIDATION: Check if TP price is valid BEFORE rounding
                 if tp_price is None or tp_price <= 0:
                     log.error(f"[TPLadder] {symbol} TP{i + 1} INVALID PRICE: {tp_price} (entry={entry_price}) - SKIPPING")
+                    # 🛡️ Use safety guard to validate
+                    from utils.sltp_safety_guard import validate_tp_price
+                    is_valid, error = validate_tp_price(symbol, tp_price, entry_price, side)
+                    if not is_valid:
+                        log.error(f"🛡️ GUARD REJECTED TP{i + 1}: {error}")
                     continue
 
                 # 🔧 SAFE ROUNDING: Normalize qty & validate after rounding
@@ -243,14 +248,28 @@ class TPLadder:
                 tick = 0.01
             steps = round(price / tick)
             normalized = steps * tick
+            
+            # 🛡️ CRITICAL: If rounding to 0 when original was > 0, use original
+            if normalized <= 0 and price > 0:
+                log.error(f"[TPLadder] {symbol} _normalize_price({price:.8f}) rounded to {normalized} with tick={tick} - USING ORIGINAL")
+                return f"{price:.8f}", price
+            
             # Calculate decimals
             if "." in str(tick):
                 dec_count = len(str(tick).split(".")[1].rstrip("0"))
             else:
                 dec_count = 0
             formatted = f"{normalized:.{dec_count}f}"
-            return formatted, float(formatted)
-        except Exception:
+            result = float(formatted)
+            
+            # 🛡️ SECONDARY GUARD: formatted string might have converted to 0
+            if result <= 0 and price > 0:
+                log.error(f"[TPLadder] {symbol} formatted {formatted} became {result} - USING ORIGINAL")
+                return f"{price:.8f}", price
+            
+            return formatted, result
+        except Exception as e:
+            log.warning(f"[TPLadder] {symbol} _normalize_price exception: {e} - using original price {price}")
             return f"{price:.8f}", price
 
     def _normalize_qty(self, symbol: str, qty: float) -> tuple[str, float]:

@@ -55,6 +55,20 @@ class MultiTargetTP:
         Returns:
             Dict with TP levels, DYNAMIC percentages, trailing stop config
         """
+        # 🛡️ CRITICAL: Validate input prices FIRST
+        if not entry_price or entry_price <= 0:
+            self.logger.error(f"CRITICAL: Invalid entry_price={entry_price}")
+            return {"targets": [], "error": f"entry_price={entry_price} invalid"}
+        
+        if not stop_loss or stop_loss <= 0:
+            self.logger.error(f"CRITICAL: Invalid stop_loss={stop_loss} for {side} (entry={entry_price})")
+            # Fallback: Use 2% SL for emergency
+            if side == "LONG":
+                stop_loss = entry_price * 0.98
+            else:
+                stop_loss = entry_price * 1.02
+            self.logger.warning(f"⚠️ SL fallback to {stop_loss:.8f}")
+        
         # Calculate risk amount
         if side == "LONG":
             risk_amount = entry_price - stop_loss
@@ -65,6 +79,11 @@ class MultiTargetTP:
             self.logger.error(f"Invalid risk amount: entry={entry_price}, sl={stop_loss}, side={side}")
             # Fallback to 2% risk
             risk_amount = entry_price * 0.02
+        
+        # 🛡️ CRITICAL: Ensure risk_amount is not too small
+        if risk_amount < entry_price * 0.001:  # Less than 0.1% risk
+            risk_amount = entry_price * 0.02
+            self.logger.warning(f"⚠️ Risk amount too small, using 2% fallback: {risk_amount:.8f}")
         
         # Base Risk/Reward ratio
         base_rrr = 2.0
@@ -90,6 +109,22 @@ class MultiTargetTP:
             tp4_price = entry_price - (risk_amount * rrr * 3.5)    # NEW
             tp5_price = entry_price - (risk_amount * rrr * 4.5)    # NEW
             trailing_activation = tp3_price  # Only trigger after TP3
+        
+        # 🛡️ CRITICAL: Validate TP prices IMMEDIATELY after calculation
+        tp_prices = [tp1_price, tp2_price, tp3_price, tp4_price, tp5_price]
+        for i, tp_price in enumerate(tp_prices, 1):
+            if tp_price is None or tp_price <= 0:
+                self.logger.error(f"❌ CRITICAL TP{i} is invalid: {tp_price} (entry={entry_price}, side={side})")
+                # DO NOT FIX - return empty targets
+                return {"targets": [], "error": f"TP{i}={tp_price} invalid"}
+            
+            # Cross-check with entry price
+            if side == "LONG" and tp_price <= entry_price:
+                self.logger.error(f"❌ CRITICAL TP{i}={tp_price} <= entry={entry_price} for LONG")
+                return {"targets": [], "error": f"TP{i} <= entry for LONG"}
+            elif side == "SHORT" and tp_price >= entry_price:
+                self.logger.error(f"❌ CRITICAL TP{i}={tp_price} >= entry={entry_price} for SHORT")
+                return {"targets": [], "error": f"TP{i} >= entry for SHORT"}
         
         # Calculate trailing stop percentage (3-5% based on volatility)
         trailing_percent = self._calculate_trailing_percent(volatility)

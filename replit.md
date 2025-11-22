@@ -6,27 +6,37 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
-## Recent Changes (Nov 22, 2025 - v9.3.5 SLTP Safety Guard)
+## Recent Changes (Nov 22, 2025 - v9.3.5 SLTP Safety Guard + TP Rounding Fix)
 
-### MetaBrain v9.3.5 - SLTP Safety Guard + SL Freeze ✅ (LATEST - CRITICAL FIXES)
-- **Files**: `utils/sltp_safety_guard.py` (NEW), `utils/sl_movement_freeze.py` (NEW)
+### MetaBrain v9.3.5 - SLTP Safety Guard + TP Rounding Fix ✅ (LATEST - CRITICAL FIXES)
+- **Files**: `utils/sltp_safety_guard.py` (NEW), `utils/sl_movement_freeze.py` (NEW), `utils/multi_target_tp.py` (UPDATED), `utils/tp_ladder.py` (UPDATED)
 - **CRITICAL FIXES** (סוף לשגיאות!):
-  1. **🛡️ SLTP Safety Guard**:
+  1. **🛡️ SLTP Safety Guard** (NEW):
      - Validates ALL SL/TP prices BEFORE sending to Binance
      - SL must be > 0 AND logically correct for side (LONG/SHORT)
      - TP must be > 0 AND logically correct for side
      - BLOCKS orders with invalid prices (never sends bad orders)
-  2. **❄️ SL Movement Freeze**:
+  2. **❄️ SL Movement Freeze** (NEW):
      - Prevents loosening SL (moving away from breakeven)
      - Only tightens SL if improvement > 5%
      - Stops unnecessary SL changes (no more "every 5 seconds" updates)
-  3. **Prevents**:
+  3. **✅ TP Rounding Fix** (CRITICAL):
+     - Fixed: TP prices rounding to 0.0 (causing -4006 API errors)
+     - Guard in `_normalize_price()` prevents rounding to 0
+     - If rounding would destroy value, uses original unrounded price
+     - Prevents micro-cap tokens (A2ZUSDT, 1000RATSUSDT) from failing
+  4. **📊 Dynamic SL/TP Validation**:
+     - Entry price validation at calculation start
+     - Risk amount sanity checks (minimum 0.1%)
+     - Post-rounding validation for both SL and TP
+  5. **Prevents**:
      - ❌ SL <= 0 orders
      - ❌ TP <= 0 orders
+     - ❌ TP rounding to 0 (micro-cap fix)
      - ❌ LONG SL >= Entry (must be below)
      - ❌ SHORT SL <= Entry (must be above)
      - ❌ Loosening position protection
-- **Status**: ✅ SLTP validation STRICT - Zero invalid orders!
+- **Status**: ✅ SLTP validation STRICT + Rounding Protection - Zero invalid orders!
 
 ### MetaBrain v9.3.4 - Smart Token Budget Management ✅
 - **Files**: `utils/token_budget_manager.py` (NEW), `utils/ai_decision_maker.py` (UPDATED)
