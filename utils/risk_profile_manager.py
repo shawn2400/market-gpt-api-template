@@ -31,56 +31,67 @@ class RiskProfile:
 
 
 # Define risk profile tiers (from conservative to aggressive)
+# 🔥 v9.3.11 UPDATE: Leverage now DYNAMIC 3-35x (was capped at 8x)
 RISK_PROFILES = [
     RiskProfile(
         name="MICRO",
         min_balance=0,
-        max_balance=500,
+        max_balance=200,
         max_positions=3,
         position_size_percent=0.20,  # 20% - larger % but smaller absolute value
-        max_leverage=3,
+        max_leverage=5,  # Was 3, now 5x (adaptive tier 1)
         daily_risk_limit=0.03,  # 3%
         max_risk_per_trade=0.05  # 5%
     ),
     RiskProfile(
         name="CONSERVATIVE",
-        min_balance=500,
-        max_balance=1000,
+        min_balance=200,
+        max_balance=500,
         max_positions=4,
         position_size_percent=0.15,  # 15%
-        max_leverage=4,
+        max_leverage=8,  # Was 4, now 8x (adaptive tier 2)
         daily_risk_limit=0.04,  # 4%
         max_risk_per_trade=0.06  # 6%
     ),
     RiskProfile(
         name="BALANCED",
-        min_balance=1000,
-        max_balance=5000,
+        min_balance=500,
+        max_balance=1000,
         max_positions=6,
         position_size_percent=0.12,  # 12%
-        max_leverage=5,
+        max_leverage=10,  # Was 5, now 10x (adaptive tier 3)
         daily_risk_limit=0.05,  # 5%
         max_risk_per_trade=0.08  # 8%
     ),
     RiskProfile(
         name="GROWTH",
-        min_balance=5000,
-        max_balance=10000,
+        min_balance=1000,
+        max_balance=2000,
         max_positions=8,
         position_size_percent=0.10,  # 10%
-        max_leverage=6,
+        max_leverage=15,  # Was 6, now 15x (adaptive tier 4)
         daily_risk_limit=0.06,  # 6%
         max_risk_per_trade=0.10  # 10%
     ),
     RiskProfile(
         name="AGGRESSIVE",
-        min_balance=10000,
-        max_balance=float('inf'),
+        min_balance=2000,
+        max_balance=5000,
         max_positions=10,
         position_size_percent=0.08,  # 8% - smaller % but larger absolute value
-        max_leverage=8,
+        max_leverage=25,  # Was 8, now 25x (adaptive tier 5)
         daily_risk_limit=0.07,  # 7%
         max_risk_per_trade=0.10  # 10%
+    ),
+    RiskProfile(
+        name="WHALE",  # NEW TIER - High roller
+        min_balance=5000,
+        max_balance=float('inf'),
+        max_positions=12,
+        position_size_percent=0.06,  # 6% - aggressive but controlled
+        max_leverage=35,  # NEW - Full 35x for whale accounts
+        daily_risk_limit=0.08,  # 8%
+        max_risk_per_trade=0.12  # 12%
     )
 ]
 

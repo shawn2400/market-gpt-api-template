@@ -61,3 +61,30 @@ The production environment runs on Render.com with 11 Background Workers and a N
 -   **N8N Workflow Automation**: External workflow integration, news ingestion.
 -   **Gunicorn**: Production-grade WSGI HTTP server.
 -   **Redis Cloud**: High-performance caching and temporary data storage.
+## v9.3.11 CRITICAL UPDATE - Leverage CAP REMOVED 🔥
+
+### THE PROBLEM
+- Risk profile WAS hard-capping leverage at 8x max
+- Even with SUGGEST_MAX_LEVERAGE=35, system blocked it
+- Caused: No high leverage trades (always 5x or less in practice)
+
+### THE SOLUTION
+Updated `utils/risk_profile_manager.py`:
+- MICRO ($0-200): 5x max_leverage
+- CONSERVATIVE ($200-500): 8x max_leverage
+- BALANCED ($500-1k): 10x max_leverage ⭐ UP from 5x
+- GROWTH ($1k-2k): 15x max_leverage ⭐ UP from 6x
+- AGGRESSIVE ($2k-5k): 25x max_leverage ⭐ UP from 8x
+- WHALE ($5k+): 35x max_leverage ⭐ NEW TIER
+
+### IMPACT
+✅ Leverage now TRULY dynamic (3-35x)
+✅ High-quality signals can use full leverage
+✅ Large accounts finally enabled for 35x
+✅ Better risk/reward ratios on premium trades
+
+### FILES CHANGED
+- `workers/gpt_auto_suggest.py`: SUGGEST_MAX_LEVERAGE=35 ✅
+- `utils/risk_profile_manager.py`: Removed cap, added WHALE tier ✅
+- `EXTERNAL_SERVICES_REGISTRY.md`: Created ✅
+- `replit.md`: Updated (this file) ✅
