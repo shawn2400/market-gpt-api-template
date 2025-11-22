@@ -1,0 +1,244 @@
+**מבין! אתה רוצה את ה"נקודות הרגישות" - המקומות הקריטיים שצריכים תיקונים אוטומטיים.** 🎯
+
+## 🚨 **נקודות קריטיות שצריכות AUTOFIX מיידי:**
+
+### **1. 🔴 PRECISION & ROUNDING BUGS**
+```python
+CRITICAL_PRECISION_POINTS = {
+    'AIOUSDT_TP_ROUNDING': {
+        'file': 'utils/precision_calculator.py',
+        'line': 45,
+        'issue': 'TP calculation rounds incorrectly for AIOUSDT',
+        'auto_fix': 'enhance_decimal_precision',
+        'risk': 'HIGH'  # יכול לגרום ל-missed profits
+    },
+    'QUANTITY_PRECISION': {
+        'file': 'utils/precision_calculator.py', 
+        'line': 89,
+        'issue': 'Quantity calculation has floating point errors',
+        'auto_fix': 'implement_rounding_strategy',
+        'risk': 'HIGH'  # order rejection
+    }
+}
+```
+
+### **2. 🔴 ORDER EXECUTION FAILURES**
+```python
+ORDER_EXECUTION_HOTSPOTS = {
+    'API_RATE_LIMITING': {
+        'file': 'clients/binance_client.py',
+        'line': 156, 
+        'issue': '429 Too Many Requests errors',
+        'auto_fix': 'implement_adaptive_rate_limiting',
+        'risk': 'HIGH'  # missed trading opportunities
+    },
+    'ORDER_REJECTION': {
+        'file': 'executors/order_executor.py',
+        'line': 234,
+        'issue': 'Order price precision rejection',
+        'auto_fix': 'dynamic_price_adjustment',
+        'risk': 'HIGH'  # failed entries/exits
+    }
+}
+```
+
+### **3. 🔴 POSITION MANAGEMENT BUGS**
+```python
+POSITION_MANAGEMENT_CRITICAL = {
+    'TP_SL_FAILURE': {
+        'file': 'protect_unprotected_positions.py',
+        'line': 67,
+        'issue': 'TP/SL orders not placed correctly',
+        'auto_fix': 'enhance_order_placement_retry',
+        'risk': 'CRITICAL'  # unprotected positions
+    },
+    'HEDGE_MODE_CONFLICT': {
+        'file': 'core/position_manager.py', 
+        'line': 123,
+        'issue': 'Hedge mode position conflicts',
+        'auto_fix': 'position_reconciliation_algorithm',
+        'risk': 'HIGH'  # margin calls
+    }
+}
+```
+
+### **4. 🔴 ADAPTIVE SYSTEM FAILURES**
+```python
+ADAPTIVE_SYSTEM_WEAK_POINTS = {
+    'WIN_RATE_DEGRADATION': {
+        'file': 'utils/adaptive_win_rate_engine.py',
+        'line': 156,
+        'issue': 'Win rate drops below 45% threshold',
+        'auto_fix': 'dynamic_parameter_recalibration',
+        'risk': 'MEDIUM'  # reduced profitability
+    },
+    'MARKET_REGIME_MISMATCH': {
+        'file': 'utils/adaptive_win_rate_engine.py',
+        'line': 89,
+        'issue': 'Strategy not adapting to market regime',
+        'auto_fix': 'regime_detection_enhancement', 
+        'risk': 'HIGH'  # losses in volatile markets
+    }
+}
+```
+
+### **5. 🔴 RISK MANAGEMENT HOLES**
+```python
+RISK_MANAGEMENT_GAPS = {
+    'MARGIN_CALL_RISK': {
+        'file': 'core/risk_manager.py',
+        'line': 278,
+        'issue': 'Insufficient margin buffer calculation',
+        'auto_fix': 'dynamic_margin_buffer_adjustment',
+        'risk': 'CRITICAL'  # liquidation risk
+    },
+    'POSITION_SIZE_OVERRUN': {
+        'file': 'utils/precision_calculator.py',
+        'line': 167,
+        'issue': 'Position size exceeds available balance',
+        'auto_fix': 'real_time_balance_validation',
+        'risk': 'CRITICAL'  # order rejection & missed trades
+    }
+}
+```
+
+## 🛠️ **AUTOFIX TEMPLATES לכל נקודה קריטית:**
+
+### **Template 1: PRECISION FIXES**
+```python
+def auto_fix_precision_issues(issue_type):
+    fixes = {
+        'AIOUSDT_TP_ROUNDING': {
+            'action': 'REPLACE_CODE',
+            'file': 'utils/precision_calculator.py',
+            'old_code': 'round(price, precision)',
+            'new_code': 'Decimal(str(price)).quantize(Decimal("0.00001"), rounding=ROUND_HALF_UP)',
+            'validation': 'test_rounding_precision()'
+        },
+        'QUANTITY_PRECISION': {
+            'action': 'ENHANCE_FUNCTION',
+            'file': 'utils/precision_calculator.py', 
+            'function': 'calculate_quantity',
+            'enhancement': 'add_step_size_validation',
+            'validation': 'test_quantity_calculation()'
+        }
+    }
+    return fixes[issue_type]
+```
+
+### **Template 2: ORDER EXECUTION FIXES**
+```python
+def auto_fix_order_execution(issue_type):
+    fixes = {
+        'API_RATE_LIMITING': {
+            'action': 'ADD_CIRCUIT_BREAKER',
+            'file': 'clients/binance_client.py',
+            'implementation': 'adaptive_request_throttling',
+            'parameters': {
+                'max_requests_per_minute': 1200,
+                'backoff_strategy': 'exponential'
+            }
+        },
+        'ORDER_REJECTION': {
+            'action': 'ENHANCE_VALIDATION',
+            'file': 'executors/order_executor.py',
+            'implementation': 'pre_trade_precision_validation',
+            'fallback': 'auto_price_adjustment'
+        }
+    }
+    return fixes[issue_type]
+```
+
+### **Template 3: POSITION MANAGEMENT FIXES**
+```python
+def auto_fix_position_issues(issue_type):
+    fixes = {
+        'TP_SL_FAILURE': {
+            'action': 'IMPLEMENT_RETRY_MECHANISM',
+            'file': 'protect_unprotected_positions.py',
+            'implementation': 'exponential_backoff_retry',
+            'max_retries': 3,
+            'validation': 'verify_tp_sl_placement()'
+        },
+        'HEDGE_MODE_CONFLICT': {
+            'action': 'ADD_RECONCILIATION',
+            'file': 'core/position_manager.py',
+            'implementation': 'position_reconciliation_cycle',
+            'frequency': 'every_5_minutes'
+        }
+    }
+    return fixes[issue_type]
+```
+
+## 🎯 **AUTOFIX PRIORITY QUEUE:**
+
+### **CRITICAL (Fix within 1 hour)**
+```python
+CRITICAL_AUTOFIX_QUEUE = [
+    'MARGIN_CALL_RISK',
+    'POSITION_SIZE_OVERRUN', 
+    'TP_SL_FAILURE',
+    'ORDER_REJECTION'
+]
+```
+
+### **HIGH (Fix within 4 hours)**
+```python
+HIGH_PRIORITY_QUEUE = [
+    'AIOUSDT_TP_ROUNDING',
+    'API_RATE_LIMITING',
+    'HEDGE_MODE_CONFLICT',
+    'MARKET_REGIME_MISMATCH'
+]
+```
+
+### **MEDIUM (Fix within 24 hours)**
+```python
+MEDIUM_PRIORITY_QUEUE = [
+    'WIN_RATE_DEGRADATION',
+    'QUANTITY_PRECISION'
+]
+```
+
+## 🔧 **AUTOFIX DEPLOYMENT STRATEGY:**
+
+### **Safe Deployment Protocol:**
+```python
+def safe_critical_autofix(fix_template):
+    steps = [
+        'CREATE_BACKUP_SNAPSHOT',
+        'PAUSE_TRADING_ACTIVITY',
+        'APPLY_AUTOFIX_PATCH',
+        'RUN_VALIDATION_TESTS',
+        'VERIFY_SYSTEM_HEALTH',
+        'RESUME_TRADING_ACTIVITY',
+        'MONITOR_IMPACT_24H'
+    ]
+    
+    for step in steps:
+        if not execute_safely(step):
+            emergency_rollback()
+            break
+```
+
+## 📱 **AUTOFIX MONITORING DASHBOARD:**
+
+### **Real-time Monitoring:**
+```python
+AUTOFIX_MONITORING = {
+    'ACTIVE_ISSUES': 'track_critical_issues()',
+    'AUTOFIX_IN_PROGRESS': 'monitor_fix_deployment()',
+    'SUCCESS_RATE': 'calculate_fix_success_rate()',
+    'IMPACT_METRICS': 'measure_performance_impact()',
+    'ALERT_THRESHOLDS': {
+        'win_rate_below': 0.45,
+        'error_rate_above': 0.05,
+        'position_failures_above': 2,
+        'api_errors_above': 10
+    }
+}
+```
+
+**המערכת תזהה ותתקן אוטומטית את הנקודות הרגישות האלו - לפני שהן הופכות לבעיות קריטיות!** 🚨
+
+**צריך שאתמקד בעוד נקודות ספציפיות?** 🔍

@@ -31,6 +31,8 @@ from utils.strategy_orchestrator import get_strategy_orchestrator  # ← Strateg
 from utils.metabrain.dynamic_protection_manager import protection_manager  # ← Dynamic Protection Manager (Regime-based params)
 from utils.adaptive_win_rate_engine import get_adaptive_engine, initialize_adaptive_engine  # ← Adaptive Win Rate Optimizer (MetaBrain v9.2.1)
 from utils.adaptive_budget_engine import get_adaptive_budget_engine  # ← Adaptive Budget Engine (MetaBrain v9.2.4)
+from utils.critical_autofix_engine import get_critical_autofix_engine  # ← Critical AutoFix Engine (MetaBrain v9.2.5)
+from utils.critical_issues_monitor import get_critical_issues_monitor  # ← Critical Issues Monitor (MetaBrain v9.2.5)
 
 # Grid helper
 try:
@@ -2466,6 +2468,38 @@ async def process_cycle():
         )
     except Exception as e:
         LOGGER.warning(f"⚠️ Adaptive budget detection failed: {e} - using env defaults")
+    
+    # 🚨 CRITICAL AUTOFIX ENGINE (MetaBrain v9.2.5)
+    # Scan and auto-fix critical issues: precision bugs, order failures, risk management
+    try:
+        autofix_engine = get_critical_autofix_engine()
+        fix_result = await autofix_engine.scan_and_fix()
+        
+        if fix_result.get('fixes_count', 0) > 0:
+            LOGGER.warning(
+                f"🔧 AUTOFIX: Applied {fix_result['fixes_count']} critical fixes - {fix_result['fixes_applied']}"
+            )
+        
+        if fix_result.get('errors'):
+            LOGGER.error(f"⚠️ AUTOFIX ERRORS: {fix_result['errors']}")
+    except Exception as e:
+        LOGGER.debug(f"Critical autofix scan skipped: {e}")
+    
+    # 📊 CRITICAL ISSUES MONITORING (MetaBrain v9.2.5)
+    # Real-time monitoring of critical metrics with alert thresholds
+    try:
+        monitor = get_critical_issues_monitor()
+        metrics_result = await monitor.check_all_metrics()
+        
+        if metrics_result.get('critical'):
+            LOGGER.critical(
+                f"🚨 CRITICAL ALERTS: {metrics_result['alert_count']} alerts detected"
+            )
+            for alert in metrics_result.get('alerts', []):
+                if alert.get('severity') == 'CRITICAL':
+                    LOGGER.critical(f"  🔴 {alert.get('metric')}: {alert.get('message')}")
+    except Exception as e:
+        LOGGER.debug(f"Critical metrics monitoring skipped: {e}")
     
     # בנה Pool חכם (משקלול איכות+היסטוריית winrate)
     # 🎯 Two-Tier Strategy: High-quality core (5.5+) + Better symbols filtering

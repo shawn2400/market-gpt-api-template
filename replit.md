@@ -6,6 +6,27 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform for 24/7 operati
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
+## Recent Changes (Nov 22, 2025)
+
+### MetaBrain v9.2.5 - Critical AutoFix Engine ✅
+- **Files**: `utils/critical_autofix_engine.py`, `utils/critical_issues_monitor.py` (720 lines total)
+- **Features**: Auto-detects & fixes 10 critical issues (precision, order execution, position management, risk)
+- **Monitoring**: Real-time alert system with 8+ threshold-based triggers
+- **Integration**: Embedded in Auto Scanner worker (runs every cycle)
+- **Status**: ✅ ACTIVE - Auto-remediating critical issues before they cause losses
+
+### MetaBrain v9.2.4 - Adaptive Budget Engine ✅
+- **File**: `utils/adaptive_budget_engine.py` (auto-scales budget based on balance)
+- **Features**: 5-tier auto-scaling system ($5-50 per trade based on account size)
+- **MIN_INVESTMENT_USD**: Reduced $50 → $15 (temporary for low balance)
+- **Status**: ✅ ACTIVE - System auto-scales as balance grows
+
+### MetaBrain v9.2.3 - Profit Margin Optimization ✅
+- **Budget**: Increased $25 → $50 per trade
+- **TP Targets**: Widened to 100%-150%-250% RR levels
+- **Quality Filter**: Raised to 5.5 minimum
+- **Status**: ✅ VERIFIED in production
+
 ## System Architecture
 
 ### UI/UX
