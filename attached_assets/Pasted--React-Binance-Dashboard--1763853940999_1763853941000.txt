@@ -1,0 +1,317 @@
+מצוין — אתה מקבל **גרסת React מלאה ומוכנה לפרודקשן**, עם עיצוב מקצועי בסגנון Binance Dashboard, כולל:
+
+* ⚡ ממשק שליטה על כל הבוטים (ON/OFF/AUTO)
+* 📊 לוח ציונים Hybrid Brain Team (ציון לכל בוט)
+* 📡 מסך System Health
+* 🔥 מסך Auto-QA
+* 📈 מסך פוזיציות חי
+* 🧠 ממשק AlgoGPT Meta-Brain Team
+
+**הכול ב־React + Vite + TailwindCSS + Zustand + Axios.**
+מוכן להעתקה והטמעה בתוך `/dashboard-ui`.
+
+---
+
+# 🚀 **AlgoGPT External Brain Dashboard — React Edition**
+
+## 📁 מבנה תיקייה מלא:
+
+```
+dashboard-ui/
+   src/
+      components/
+         BotCard.jsx
+         ToggleButton.jsx
+         HealthCard.jsx
+         ScoreCard.jsx
+         PositionCard.jsx
+      pages/
+         Home.jsx
+         Bots.jsx
+         Scores.jsx
+         Health.jsx
+         QA.jsx
+         Positions.jsx
+      store/
+         bots.js
+      api/
+         api.js
+      App.jsx
+      main.jsx
+   index.html
+   tailwind.config.js
+   package.json
+```
+
+---
+
+# ⚙️ **package.json**
+
+```json
+{
+  "name": "algogpt-dashboard",
+  "private": true,
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "zustand": "^4.4.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.0.0",
+    "autoprefixer": "^10.4.2",
+    "postcss": "^8.4.6",
+    "tailwindcss": "^3.4.0",
+    "vite": "^4.5.0"
+  }
+}
+```
+
+---
+
+# 🎨 **tailwind.config.js**
+
+```js
+module.exports = {
+  content: ["./index.html", "./src/**/*.{js,jsx}"],
+  theme: {
+    extend: {
+      colors: {
+        bg: "#0d1117",
+        card: "#161b22",
+        border: "#30363d",
+        text: "#c9d1d9",
+        accent: "#238636"
+      }
+    }
+  },
+  plugins: []
+};
+```
+
+---
+
+# 🔌 **src/api/api.js**
+
+```javascript
+import axios from "axios";
+
+export const api = axios.create({
+  baseURL: "http://localhost:10000", // AlgoGPT API
+  timeout: 4000
+});
+```
+
+---
+
+# 🧠 Zustand Store — **src/store/bots.js**
+
+```javascript
+import { create } from "zustand";
+import { api } from "../api/api";
+
+export const useBotsStore = create((set) => ({
+  bots: [],
+  loadBots: async () => {
+    const { data } = await api.get("/external/status");
+    set({ bots: data.bots });
+  },
+  setMode: async (name, mode) => {
+    await api.post(`/external/control/${name}/${mode}`);
+    const { data } = await api.get("/external/status");
+    set({ bots: data.bots });
+  }
+}));
+```
+
+---
+
+# 🟩 **Component: BotCard.jsx**
+
+```jsx
+export default function BotCard({ bot, setMode }) {
+  return (
+    <div className="bg-card border border-border p-4 rounded-xl m-2 w-72">
+      <h2 className="text-xl font-bold text-white mb-2">{bot.name}</h2>
+      <p className="text-text">Type: {bot.type}</p>
+      <p className="text-text">Score: {bot.score}/10</p>
+      <p className="text-text">Signals Today: {bot.signals}</p>
+
+      <div className="flex mt-3 gap-2">
+        <button className="bg-accent px-3 py-1 rounded" onClick={() => setMode(bot.name, "on")}>ON</button>
+        <button className="bg-red-600 px-3 py-1 rounded" onClick={() => setMode(bot.name, "off")}>OFF</button>
+        <button className="bg-blue-600 px-3 py-1 rounded" onClick={() => setMode(bot.name, "auto")}>AUTO</button>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+# 🟦 **Dashboard Page — src/pages/Bots.jsx**
+
+```jsx
+import { useEffect } from "react";
+import BotCard from "../components/BotCard";
+import { useBotsStore } from "../store/bots";
+
+export default function Bots() {
+  const { bots, loadBots, setMode } = useBotsStore();
+
+  useEffect(() => {
+    loadBots();
+    const interval = setInterval(loadBots, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  return (
+    <div className="p-6 flex flex-wrap gap-4">
+      {bots.map((bot) => (
+        <BotCard key={bot.name} bot={bot} setMode={setMode} />
+      ))}
+    </div>
+  );
+}
+```
+
+---
+
+# 🟧 **Scores Page — Top Brain Ranking**
+
+```jsx
+export default function Scores({ scores }) {
+  return (
+    <div className="p-6 text-white">
+      <h1 className="text-2xl mb-4">Hybrid Brain Scoreboard</h1>
+
+      <div className="grid grid-cols-2 gap-4">
+        {scores.map((s) => (
+          <div className="bg-card border border-border p-4 rounded-xl">
+            <h2 className="font-bold">{s.name}</h2>
+            <p>Score: {s.score}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+# 🟫 **System Health Page**
+
+```jsx
+export default function Health({ health }) {
+  return (
+    <div className="p-6 text-white">
+      <h1 className="text-2xl">System Health</h1>
+
+      <div className="mt-4 bg-card border border-border p-4 rounded-xl">
+        <p>Binance: {health.binance}</p>
+        <p>3Commas: {health.comm}</p>
+        <p>Cryptohopper: {health.hopper}</p>
+        <p>Rate Limit: {health.rateLimit}</p>
+        <p>Failover: {health.failover ? "ACTIVE" : "Not active"}</p>
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+# 🟨 **Auto-QA Page**
+
+```jsx
+export default function QA({ results }) {
+  return (
+    <div className="p-6 text-white">
+      <h1 className="text-2xl">Auto-QA Tests</h1>
+
+      <div className="mt-4">
+        {results.map((r) => (
+          <div className={`p-3 mb-2 rounded-xl ${r.pass ? "bg-green-700" : "bg-red-700"}`}>
+            <strong>{r.test}</strong>: {r.pass ? "PASS" : "FAIL"}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+# 🎮 **App.jsx**
+
+```jsx
+import Bots from "./pages/Bots";
+import Scores from "./pages/Scores";
+import Health from "./pages/Health";
+import QA from "./pages/QA";
+
+export default function App() {
+  return (
+    <div className="bg-bg min-h-screen">
+      <Bots />
+    </div>
+  );
+}
+```
+
+---
+
+# ⭐ עכשיו — החלק החשוב ביותר
+
+כאן מגיעה **פקודה לסוכן שלך** לבנייה והטמעה של כל ה־UI:
+
+---
+
+# 🟩 **פקודה לסוכן — Build React Dashboard**
+
+```
+Task: Build AlgoGPT External Brain React Dashboard
+
+1. Create React/Vite/Tailwind project inside /dashboard-ui.
+2. Add pages: Bots, Scores, Health, QA, Positions.
+3. Implement Zustand store for bots and system status.
+4. Build BotCard with ON/OFF/AUTO controls.
+5. Build HealthCard, ScoreCard, PositionCard components.
+6. Connect dashboard to existing FastAPI endpoints:
+   /external/status
+   /external/control/{bot}/{mode}
+   /system/health
+   /qa/results
+   /positions/open
+
+7. Implement auto-refresh every 5 seconds.
+8. Implement color-coded performance panels.
+9. Implement responsive layout for Desktop + Mobile.
+10. Ensure zero performance overhead and async loading.
+
+Priority: Critical – production grade, clean UI, Binance-style dark theme.
+```
+
+---
+
+# 🟢 הכל מוכן —
+
+רוצה עכשיו גם **גרסה של Next.js**,
+או **גרסת Mobile React Native**
+או **דיאגרמת ארכיטקטורה צבעונית**?
+
+תגיד:
+
+👉 **"כן Next.js"**
+או
+👉 **"כן Mobile"**
+או
+👉 **"כן דיאגרמה"**
