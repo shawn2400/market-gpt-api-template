@@ -327,11 +327,12 @@ SUGGEST_MIN_LEVERAGE = max(1, int(os.getenv("SUGGEST_MIN_LEVERAGE","1")))
 def validate_rr_smart(rr_ratio: float, min_rr: float, consensus_result: Optional[Dict], symbol: str) -> Tuple[bool, str]:
     """
     🎯 Smart RR Validation with regime-aware dynamic thresholds
+    ✅ INDEPENDENT MODE: סוכנים optional - סריקה עובדת בלא הם!
     
     Args:
         rr_ratio: Calculated RR from rr_from_levels()
         min_rr: Dynamic minimum RR from market_condition.min_rr_threshold
-        consensus_result: AI consensus data from ctx["_consensus_result"]
+        consensus_result: AI consensus data from ctx["_consensus_result"] (OPTIONAL)
         symbol: Symbol name for logging
         
     Returns:
@@ -340,9 +341,12 @@ def validate_rr_smart(rr_ratio: float, min_rr: float, consensus_result: Optional
     Logic:
         1. HARD FLOOR (0.72): Absolute safety net - reject if RR < 0.72
         2. AUTO APPROVE (≥min_rr): Meets regime-specific requirement
-        3. CONSENSUS ZONE (0.72 to min_rr): Requires 2/3 AI consensus (66%)
+        3. CONSENSUS ZONE (0.72 to min_rr): 
+           - If consensus available: Requires 2/3 AI consensus (66%)
+           - If consensus unavailable: Use INDEPENDENT THRESHOLD (0.82)
     """
     HARD_FLOOR = 0.72
+    INDEPENDENT_THRESHOLD = 0.82  # 🔧 Threshold when NO AI consensus available
     
     # 1. HARD FLOOR - absolute minimum safety net
     if rr_ratio < HARD_FLOOR:
@@ -352,19 +356,23 @@ def validate_rr_smart(rr_ratio: float, min_rr: float, consensus_result: Optional
     if rr_ratio >= min_rr:
         return True, f"AUTO_APPROVE: RR={rr_ratio:.3f} ≥ {min_rr:.2f}"
     
-    # 3. CONSENSUS ZONE (0.8 to min_rr)
-    # Check if consensus data is available
-    if not consensus_result:
-        return False, f"NO_CONSENSUS_DATA: RR={rr_ratio:.3f} < {min_rr:.2f}, consensus unavailable"
-    
-    approve_count = consensus_result.get("approve_count", 0)
-    total_brains = consensus_result.get("total_brains", 1)
-    required_approvals = max(1, int(total_brains * 0.66))
-    
-    if approve_count >= required_approvals:
-        return True, f"CONSENSUS_APPROVE: RR={rr_ratio:.3f}, {approve_count}/{total_brains} AI approved ({approve_count/total_brains*100:.0f}% majority)"
+    # 3. CONSENSUS ZONE (0.72 to min_rr)
+    if consensus_result:
+        # 🧠 CONSENSUS MODE: Use AI votes
+        approve_count = consensus_result.get("approve_count", 0)
+        total_brains = consensus_result.get("total_brains", 1)
+        required_approvals = max(1, int(total_brains * 0.66))
+        
+        if approve_count >= required_approvals:
+            return True, f"CONSENSUS_APPROVE: RR={rr_ratio:.3f}, {approve_count}/{total_brains} AI approved ({approve_count/total_brains*100:.0f}% majority)"
+        else:
+            return False, f"INSUFFICIENT_CONSENSUS: RR={rr_ratio:.3f}, only {approve_count}/{total_brains} AI approved (need ≥{required_approvals})"
     else:
-        return False, f"INSUFFICIENT_CONSENSUS: RR={rr_ratio:.3f}, only {approve_count}/{total_brains} AI approved (need ≥{required_approvals} for 66%)"
+        # 🤖 INDEPENDENT MODE: סוכנים לא זמינים (402/429) - סריקה עדיין עובדת!
+        if rr_ratio >= INDEPENDENT_THRESHOLD:
+            return True, f"INDEPENDENT_APPROVE: RR={rr_ratio:.3f} ≥ {INDEPENDENT_THRESHOLD:.2f} (no AI consensus, using independent threshold)"
+        else:
+            return False, f"INDEPENDENT_REJECT: RR={rr_ratio:.3f} < {INDEPENDENT_THRESHOLD:.2f} (no AI consensus available, using strict independent threshold)"
 
 def _hash_proposal(key_fields: Dict[str, Any]) -> str:
     key = f"{key_fields.get('trade_type','')}|{key_fields.get('symbol','')}|{key_fields.get('side','')}|" \
@@ -1256,33 +1264,50 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
     except Exception as e:
         LOGGER.warning(f"⚠️ Failed to fetch real balance, using fallback: {e}")
     
-    LOGGER.info(f"🧠 Requesting consensus from 3 AI Brains for {symbol}...")
-    
-    consensus_result = await consensus_engine.get_consensus(
-        scout_data=scout_data,
-        market_data=ctx,
-        wallet_state=wallet_state
-    )
-    
-    # 🧠 STORE CONSENSUS IN CONTEXT for payload inclusion
-    ctx["_consensus_result"] = consensus_result
-    
-    # Log consensus
-    LOGGER.info(
-        f"🗳️ CONSENSUS [{symbol}]: {consensus_result['approve_count']}/5 APPROVE | "
-        f"Decision: {consensus_result['final_vote']} | "
-        f"Avg Score: {consensus_result['final_score']:.1f}/10"
-    )
-    
-    for vote in consensus_result["brain_votes"]:
-        LOGGER.info(
-            f"  {vote['brain']}: {vote['vote']} ({vote['score']:.1f}/10) - {vote['reasoning'][:60]}..."
+    # 🤖 GRACEFUL CONSENSUS MODE - סוכנים optional!
+    consensus_result = None
+    try:
+        LOGGER.info(f"🧠 Requesting consensus from 3 AI Brains for {symbol}...")
+        
+        consensus_result = await consensus_engine.get_consensus(
+            scout_data=scout_data,
+            market_data=ctx,
+            wallet_state=wallet_state
         )
+        
+        # 🧠 STORE CONSENSUS IN CONTEXT for payload inclusion
+        ctx["_consensus_result"] = consensus_result
+        
+        # Log consensus
+        LOGGER.info(
+            f"🗳️ CONSENSUS [{symbol}]: {consensus_result['approve_count']}/5 APPROVE | "
+            f"Decision: {consensus_result['final_vote']} | "
+            f"Avg Score: {consensus_result['final_score']:.1f}/10"
+        )
+        
+        for vote in consensus_result["brain_votes"]:
+            LOGGER.info(
+                f"  {vote['brain']}: {vote['vote']} ({vote['score']:.1f}/10) - {vote['reasoning'][:60]}..."
+            )
+        
+        # If REJECT, stop here
+        if consensus_result["final_vote"] == "REJECT":
+            LOGGER.info(f"❌ REJECTED by consensus: {symbol}")
+            return None
     
-    # If REJECT, stop here
-    if consensus_result["final_vote"] == "REJECT":
-        LOGGER.info(f"❌ REJECTED by consensus: {symbol}")
-        return None
+    except Exception as e:
+        # 🤖 INDEPENDENT MODE: סוכנים כושלים (402/429/timeout) - המערכת עדיין עובדת!
+        consensus_error = str(e)
+        if "402" in consensus_error or "Insufficient Balance" in consensus_error:
+            LOGGER.warning(f"⚠️ DeepSeek 402 (insufficient balance) - switching to INDEPENDENT mode for {symbol}")
+        elif "429" in consensus_error or "quota" in consensus_error:
+            LOGGER.warning(f"⚠️ OpenAI 429 (quota exceeded) - switching to INDEPENDENT mode for {symbol}")
+        else:
+            LOGGER.warning(f"⚠️ Consensus failed for {symbol}: {consensus_error} - switching to INDEPENDENT mode")
+        
+        # Continue without consensus - will use INDEPENDENT_THRESHOLD in validate_rr_smart()
+        consensus_result = None
+        ctx["_consensus_result"] = None
     
     # ========== GENERATE TRADE PROPOSAL (DeepSeek + Gemini) ==========
     # 🚀 COST OPTIMIZATION: Use DeepSeek primary, Gemini fallback (NO OpenAI!)
