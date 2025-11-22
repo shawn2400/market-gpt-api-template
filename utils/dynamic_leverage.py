@@ -420,25 +420,36 @@ class DynamicLeverageCalculator:
         """
         Map confidence score to leverage range
         
-        Score 9.0-10.0: 28-35x (TRENDING + Quality 9+ + Tier A)
-        Score 8.0-8.9:  20-28x (VOLATILE + Quality 8+ + Tier B)
-        Score 7.0-7.9:  15-20x (CHOPPY + Quality 7+ + Tier B)
-        Score 6.0-6.9:  10-15x (Quality 6+ + Tier C)
-        Score 5.0-5.9:  5-10x  (Quality 5+ + Recovery Mode)
-        Score < 5.0:    2-5x   (Low Quality/Recovery)
+        🔥 MORE AGGRESSIVE LEVERAGE MAPPING (v9.3.8+)
+        
+        Score 9.5-10.0: 32-35x (HIGHEST CONVICTION)
+        Score 9.0-9.4:  28-32x (TRENDING + Quality 9+ + Tier A)
+        Score 8.5-8.9:  24-30x (STRONG + Quality 8.5+ + Good Regime)
+        Score 8.0-8.4:  20-25x (SOLID + Quality 8+ + Tier B)
+        Score 7.5-7.9:  18-22x (GOOD + Quality 7.5+ + Tier B)
+        Score 7.0-7.4:  15-20x (MEDIUM + Quality 7+ + Tier B)
+        Score 6.0-6.9:  12-18x (MODERATE + Quality 6+ + Tier C)
+        Score 5.0-5.9:  8-12x  (CAUTIOUS + Recovery Mode)
+        Score < 5.0:    3-6x   (DEFENSIVE - Low Quality)
         """
-        if confidence_score >= 9.0:
-            return (28, 35)
+        if confidence_score >= 9.5:
+            return (32, 35)
+        elif confidence_score >= 9.0:
+            return (28, 32)
+        elif confidence_score >= 8.5:
+            return (24, 30)
         elif confidence_score >= 8.0:
-            return (20, 28)
+            return (20, 25)
+        elif confidence_score >= 7.5:
+            return (18, 22)
         elif confidence_score >= 7.0:
             return (15, 20)
         elif confidence_score >= 6.0:
-            return (10, 15)
+            return (12, 18)
         elif confidence_score >= 5.0:
-            return (5, 10)
+            return (8, 12)
         else:
-            return (2, 5)
+            return (3, 6)
     
     def _apply_safety_guards(
         self,

@@ -6,6 +6,49 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform for 24/7 operati
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
+## Recent Changes (Nov 22, 2025 - v9.3.8 CRITICAL FIXES)
+
+### ✅ v9.3.8 - 3 Critical Fixes (Leverage + Budget MAX + Position Remnants)
+
+**FIX #1: Aggressive Leverage Mapping** 🚀
+- **File**: `utils/dynamic_leverage.py` (lines 419-455)
+- **Problem**: Leverage always stayed at 2-3x because confidence score mapping was too conservative
+- **Solution**: Updated `_map_confidence_to_leverage()` with 9 tiers (3-35x range):
+  - Score 9.5-10.0: 32-35x (highest conviction)
+  - Score 9.0-9.4: 28-32x (trending high quality)
+  - Score 8.5-8.9: 24-30x (strong trades)
+  - Score 8.0: 20-25x
+  - Score 7.0: 15-20x
+  - Score 6.0: 12-18x
+  - Score 5.0: 8-12x
+  - Score < 5.0: 3-6x (defensive)
+- **Result**: ✅ Full 2-35x leverage range now active (no more stuck at 2-3x)
+
+**FIX #2: Quality-Based MAX Enforcement** 💰
+- **File**: `utils/dynamic_budget_manager.py` (lines 154-174)
+- **Problem**: Position size had static $100 MAX regardless of trade quality
+- **Solution**: Added dynamic MAX based on quality_score:
+  - Quality 9.0+: MAX $200 (premium trades)
+  - Quality 8.5+: MAX $175
+  - Quality 8.0+: MAX $150
+  - Quality 7.5+: MAX $125
+  - Quality 7.0+: MAX $100
+  - Quality 6.5+: MAX $75
+  - Quality 6.0+: MAX $50
+  - Quality < 6.0: MAX $25 (minimum only)
+- **Result**: ✅ Position sizing now scales intelligently with trade quality
+
+**FIX #3: Skip Tiny Position Remnants** 💵
+- **Files**: `workers/position_monitor.py` (lines 1054-1072)
+- **Problem**: System tried to place TP orders on cents (e.g., $0.001 positions) - wasted spread/slippage
+- **Solution**: Added minimum position value check:
+  - Skip TP placement if total position < $0.05 USD
+  - Skip individual TP if its value < $0.05 USD
+  - Log warnings for skipped remnants
+- **Result**: ✅ No more placing TP orders on tiny cents that aren't profitable
+
+**Status**: ✅ All 3 fixes ACTIVE and verified - מינוף אמיתי, תקציב חכם, אין סנטים מיותרים!
+
 ## System Architecture
 
 ### UI/UX

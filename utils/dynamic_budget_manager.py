@@ -120,6 +120,8 @@ class DynamicBudgetManager:
         """
         Calculate optimal position size based on wallet and trade parameters.
         
+        ✅ v9.3.8+ FIX: Dynamic MAX enforcement based on quality score
+        
         Args:
             quality_score: Trade quality (5.5-10.0)
             volatility_atr_pct: ATR as percentage (e.g., 2.5 = 2.5%)
@@ -146,9 +148,31 @@ class DynamicBudgetManager:
                     "allowed": False
                 }
             
+            # 🔧 CRITICAL FIX v9.3.8: Quality-based MAX enforcement
+            # Higher quality = higher max position size
+            if quality_score >= 9.0:
+                max_position = 200.0  # Premium trades: up to $200
+            elif quality_score >= 8.5:
+                max_position = 175.0  # High quality: up to $175
+            elif quality_score >= 8.0:
+                max_position = 150.0  # Good quality: up to $150
+            elif quality_score >= 7.5:
+                max_position = 125.0  # Medium-high: up to $125
+            elif quality_score >= 7.0:
+                max_position = 100.0  # Medium: up to $100
+            elif quality_score >= 6.5:
+                max_position = 75.0   # Medium-low: up to $75
+            elif quality_score >= 6.0:
+                max_position = 50.0   # Low: up to $50
+            else:
+                max_position = self.min_trade_usdt  # Minimum only: $25
+            
+            # Still respect static max from config
+            max_position = min(max_position, self.max_trade_usdt)
+            
             base_size = min(
                 available * 0.05,
-                self.max_trade_usdt
+                max_position
             )
             
             quality_multiplier = (quality_score - 5.0) / 5.0
@@ -172,7 +196,7 @@ class DynamicBudgetManager:
             
             position_size = base_size * quality_multiplier * rr_multiplier * volatility_factor * regime_multiplier
             
-            position_size = max(self.min_trade_usdt, min(position_size, self.max_trade_usdt))
+            position_size = max(self.min_trade_usdt, min(position_size, max_position))
             position_size = min(position_size, available * 0.15)
             
             leverage = self._calculate_leverage(

@@ -1047,10 +1047,26 @@ async def ensure_positions_protected() -> None:
                                             # Place new TP orders
                                             exit_side = "SELL" if position_side == "LONG" else "BUY"
                                             validator = BinanceSymbolValidator()
+                                            
+                                            # 🔧 v9.3.8+ FIX: Skip TP placement if position remnant is too small (< $0.05)
+                                            current_price = float(p.get("markPrice", p.get("entryPrice", 0)))
+                                            total_position_value = abs(amt) * current_price if current_price > 0 else 0
+                                            min_position_value_usd = 0.05  # Don't bother with cents
+                                            
+                                            if total_position_value < min_position_value_usd:
+                                                logger.warning(f"⚠️ {symbol}: Position value ${total_position_value:.4f} < ${min_position_value_usd}, skipping TP placement (not worth spread)")
+                                                continue
+                                            
                                             for idx, tp_price in enumerate(new_tp_prices):
                                                 try:
                                                     tp_qty = abs(amt) * tp_config["targets"][idx]["exit_percent"]
                                                     exit_percent = tp_config["targets"][idx]["exit_percent"]
+                                                    
+                                                    # 🔧 v9.3.8+ FIX: Check if TP quantity value is worth trading
+                                                    tp_qty_value_usd = tp_qty * tp_price if tp_price > 0 else 0
+                                                    if tp_qty_value_usd < min_position_value_usd:
+                                                        logger.warning(f"⚠️ {symbol}: TP{idx+1} value ${tp_qty_value_usd:.4f} < ${min_position_value_usd}, skipping (too small)")
+                                                        continue
                                                     
                                                     # 🔧 CRITICAL FIX: Validate quantity is positive and non-zero (prevent APIError -4003)
                                                     if tp_qty is None or tp_qty <= 0:
