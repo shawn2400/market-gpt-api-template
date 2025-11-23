@@ -33,6 +33,10 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "").strip()
 XAI_API_KEY = os.getenv("XAI_API_KEY", "").strip()
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 
+# Feature flags
+ENABLE_DEEPSEEK = os.getenv("ENABLE_DEEPSEEK", "1") == "1" and bool(DEEPSEEK_API_KEY)
+ENABLE_XAI = os.getenv("ENABLE_XAI", "1") == "1" and bool(XAI_API_KEY)
+
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-5-2025-08-07")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash-exp")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
@@ -91,9 +95,9 @@ class AIPostTradeReviewer:
             tasks.append(self._review_with_openai(review_prompt))
         if GEMINI_API_KEY:
             tasks.append(self._review_with_gemini(review_prompt))
-        if DEEPSEEK_API_KEY:
+        if ENABLE_DEEPSEEK and DEEPSEEK_API_KEY:
             tasks.append(self._review_with_deepseek(review_prompt))
-        if XAI_API_KEY:
+        if ENABLE_XAI and XAI_API_KEY:
             tasks.append(self._review_with_grok(review_prompt))
         if ANTHROPIC_API_KEY:
             tasks.append(self._review_with_claude(review_prompt))
@@ -260,6 +264,9 @@ Be critical and actionable. Focus on what could be improved."""
         """Get review from DeepSeek"""
         import time as _t
         start = _t.time()
+        
+        if not ENABLE_DEEPSEEK:
+            raise ValueError("DeepSeek is disabled (ENABLE_DEEPSEEK=0)")
         
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:

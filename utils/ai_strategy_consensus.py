@@ -33,8 +33,10 @@ except ImportError:
 
 try:
     from utils.llm_client import llm_chat_completion
+    ENABLE_DEEPSEEK = os.getenv("ENABLE_DEEPSEEK", "1") == "1"
 except ImportError:
     llm_chat_completion = None
+    ENABLE_DEEPSEEK = False
 
 try:
     from utils.xai_client import call_xai, ENABLE_XAI
@@ -99,7 +101,7 @@ class AIStrategySelector:
         # GPT-5 and Claude DISABLED to avoid $500/month costs
         self.brains_available = {
             "Gemini": ENABLE_GEMINI and call_gemini,
-            "DeepSeek": bool(self.deepseek_key) and llm_chat_completion,
+            "DeepSeek": ENABLE_DEEPSEEK and bool(self.deepseek_key) and llm_chat_completion,
             "Grok": ENABLE_XAI and call_xai
         }
         
@@ -217,7 +219,7 @@ Your analysis:"""
     async def _call_deepseek(self, prompt: str) -> Optional[StrategyVote]:
         """DeepSeek strategy vote"""
         try:
-            if not self.deepseek_key or not llm_chat_completion:
+            if not ENABLE_DEEPSEEK or not self.deepseek_key or not llm_chat_completion:
                 return None
             
             response = await llm_chat_completion(

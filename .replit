@@ -157,6 +157,10 @@ localPort = 5000
 externalPort = 80
 
 [[ports]]
+localPort = 35711
+externalPort = 3001
+
+[[ports]]
 localPort = 37091
 externalPort = 3000
 
@@ -200,3 +204,5 @@ NODE_ID = "core-api"
 APP_VERSION = "3.6.0"
 MIN_INVESTMENT_USD = "15.0"
 MIN_QUALITY_FLOOR = "5.5"
+ENABLE_DEEPSEEK = "0"
+ENABLE_QWEN = "1"

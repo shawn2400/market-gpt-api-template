@@ -37,8 +37,10 @@ except ImportError:
 
 try:
     from utils.llm_client import llm_chat_completion
+    ENABLE_DEEPSEEK = os.getenv("ENABLE_DEEPSEEK", "1") == "1"
 except ImportError:
     llm_chat_completion = None
+    ENABLE_DEEPSEEK = False
 
 try:
     from utils.xai_client import call_xai, ENABLE_XAI
@@ -331,7 +333,7 @@ class DeepSeekBrain(AIBrain):
     async def vote(self, scout_data, market_data, wallet_state) -> Dict[str, Any]:
         """DeepSeek analyzes and votes."""
         try:
-            if not self.api_key or not llm_chat_completion:
+            if not ENABLE_DEEPSEEK or not self.api_key or not llm_chat_completion:
                 return self._mock_vote(scout_data)
             
             prompt = self._build_prompt(scout_data, market_data, wallet_state)
@@ -487,14 +489,21 @@ class AIConsensusEngine:
         if self.token_budget:
             self.logger.info("💰 Token Budget Manager enabled - intelligent brain suspension")
         
-        self.brain_classes = {
-            "deepseek": DeepSeekBrain(),
-            "qwen": QwenBrain(),
-            "gemini": GeminiBrain(),
-            "grok": GrokBrain(),
-            "claude": ClaudeBrain(),
-            "gpt4o_mini": GPT4oMiniBrain()
-        }
+        self.brain_classes = {}
+        
+        # Only add enabled brains
+        if ENABLE_DEEPSEEK:
+            self.brain_classes["deepseek"] = DeepSeekBrain()
+        if ENABLE_QWEN:
+            self.brain_classes["qwen"] = QwenBrain()
+        if ENABLE_GEMINI:
+            self.brain_classes["gemini"] = GeminiBrain()
+        if ENABLE_XAI:
+            self.brain_classes["grok"] = GrokBrain()
+        if ENABLE_ANTHROPIC:
+            self.brain_classes["claude"] = ClaudeBrain()
+        
+        self.brain_classes["gpt4o_mini"] = GPT4oMiniBrain()
         
         if self.brain_manager:
             active_count = self.brain_manager.get_active_count()
@@ -505,7 +514,19 @@ class AIConsensusEngine:
             )
         else:
             self.logger.warning("Brain Manager not available, using fallback mode")
-            self.brains = [DeepSeekBrain(), QwenBrain(), GeminiBrain()]
+            self.brains = []
+            
+            # Only add enabled brains in fallback mode
+            if ENABLE_DEEPSEEK:
+                self.brains.append(DeepSeekBrain())
+            if ENABLE_QWEN:
+                self.brains.append(QwenBrain())
+            if ENABLE_GEMINI:
+                self.brains.append(GeminiBrain())
+            
+            if not self.brains:
+                self.logger.error("❌ No AI brains enabled! At least one ENABLE_* flag must be set.")
+            
             self.logger.info(f"AI Consensus Engine initialized with {len(self.brains)} brains (fallback)")
     
     async def get_consensus(

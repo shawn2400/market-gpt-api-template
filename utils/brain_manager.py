@@ -68,11 +68,18 @@ class BrainManager:
     
     def _initialize_brains(self):
         """Initialize available AI brains"""
+        import os
         try:
             from utils.llm_client import llm_chat_completion
             from utils.qwen_client import call_qwen, ENABLE_QWEN
             from utils.gemini_client import call_gemini, ENABLE_GEMINI
             from utils.xai_client import call_xai, ENABLE_XAI
+            
+            # Read environment variables for brain availability
+            enable_deepseek = os.getenv("ENABLE_DEEPSEEK", "1") == "1"
+            enable_qwen = ENABLE_QWEN
+            enable_gemini = ENABLE_GEMINI
+            enable_xai = ENABLE_XAI
             
             self.brains = {
                 "deepseek": BrainConfig(
@@ -81,7 +88,8 @@ class BrainManager:
                     model="deepseek-chat",
                     cost_per_call=0.0001,
                     max_tokens=300,
-                    status=BrainStatus.ACTIVE,
+                    status=BrainStatus.ACTIVE if enable_deepseek else BrainStatus.DISABLED,
+                    enabled_env_var="ENABLE_DEEPSEEK",
                     call_function=llm_chat_completion
                 ),
                 "qwen": BrainConfig(
@@ -90,7 +98,7 @@ class BrainManager:
                     model="qwen-turbo",
                     cost_per_call=0.0,
                     max_tokens=300,
-                    status=BrainStatus.SUSPENDED,
+                    status=BrainStatus.ACTIVE if enable_qwen else BrainStatus.SUSPENDED,
                     enabled_env_var="ENABLE_QWEN",
                     call_function=call_qwen
                 ),
@@ -100,7 +108,7 @@ class BrainManager:
                     model="gemini-2.0-flash-exp",
                     cost_per_call=0.00005,
                     max_tokens=300,
-                    status=BrainStatus.SUSPENDED,
+                    status=BrainStatus.ACTIVE if enable_gemini else BrainStatus.SUSPENDED,
                     enabled_env_var="ENABLE_GEMINI",
                     call_function=call_gemini
                 ),
@@ -110,14 +118,20 @@ class BrainManager:
                     model="grok-2-latest",
                     cost_per_call=0.001,
                     max_tokens=300,
-                    status=BrainStatus.SUSPENDED,
+                    status=BrainStatus.ACTIVE if enable_xai else BrainStatus.SUSPENDED,
                     enabled_env_var="ENABLE_XAI",
                     call_function=call_xai
                 )
             }
             
             active_count = self.get_active_count()
-            self.logger.info(f"🧠 Brain Manager initialized: {active_count} active brains")
+            self.logger.info(
+                f"🧠 Brain Manager initialized: {active_count} active brains "
+                f"(DeepSeek={'ON' if enable_deepseek else 'OFF'}, "
+                f"Qwen={'ON' if enable_qwen else 'OFF'}, "
+                f"Gemini={'ON' if enable_gemini else 'OFF'}, "
+                f"XAI={'ON' if enable_xai else 'OFF'})"
+            )
             
         except ImportError as e:
             self.logger.error(f"Failed to import AI clients: {e}")
