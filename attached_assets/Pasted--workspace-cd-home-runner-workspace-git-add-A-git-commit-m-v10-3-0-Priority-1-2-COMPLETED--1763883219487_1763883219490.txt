@@ -1,0 +1,80 @@
+~/workspace$ cd /home/runner/workspace
+git add -A
+git commit -m "v10.3.0: Priority 1+2 COMPLETED - SL/TP Stages + Multi-User + Telegram Auth + RBAC" 
+git push
+[main 7358588e] v10.3.0: Priority 1+2 COMPLETED - SL/TP Stages + Multi-User + Telegram Auth + RBAC
+ 27 files changed, 5401 insertions(+), 10 deletions(-)
+ create mode 100644 attached_assets/Pasted---1763881327707_1763881327707.txt
+ create mode 100644 attached_assets/Pasted---1763881452200_1763881452200.txt
+ create mode 100644 attached_assets/Pasted---1763881712462_1763881712462.txt
+ create mode 100644 attached_assets/Pasted--1-Stealth-1763881497841_1763881497842.txt
+ create mode 100644 attached_assets/Pasted--3-Production-Grade-Grafana-dashboard--1763882077319_1763882077319.txt
+ create mode 100644 attached_assets/Pasted--3-Production-Grade-Grafana-dashboard--1763882164999_1763882164999.txt
+ create mode 100644 attached_assets/Pasted--4--1763882178306_1763882178306.txt
+ create mode 100644 attached_assets/Pasted--5-1-Auto--1763882240692_1763882240693.txt
+ create mode 100644 attached_assets/Pasted--5-5-D-1763882335708_1763882335709.txt
+ create mode 100644 attached_assets/Pasted--6-Profit-Share-Auto-Withdra-1763882392865_1763882392866.txt
+ create mode 100644 attached_assets/Pasted--EXACTLY--1763882432978_1763882432979.txt
+ create mode 100644 attached_assets/Pasted--FULL-ULTRA-1-2-3-4-5--1763881806135_1763881806136.txt
+ create mode 100644 attached_assets/Pasted--LIVE-DASHBOARD-AUTO-OPTIMIZE--1763881916706_1763881916707.txt
+ create mode 100644 attached_assets/Pasted--MASTER-3-1-Heatmap--1763881052675_1763881052676.txt
+ create mode 100644 attached_assets/Pasted--ML-Heatmap-Auto-Freeze--1763881887471_1763881887472.txt
+ create mode 100644 attached_assets/Pasted--UI-API-React--1763882030605_1763882030606.txt
+ create mode 100644 attached_assets/Pasted--ULTRA-PLUS--1763881374298_1763881374298.txt
+ create mode 100644 attached_assets/Pasted--V4-Grafana--1763882274609_1763882274610.txt
+ create mode 100644 attached_assets/Pasted--V4-Grafana--1763882296354_1763882296354.txt
+ create mode 100644 routes/user_auth.py
+ create mode 100644 utils/rbac.py
+ create mode 100644 utils/user_models.py
+Enumerating objects: 59, done.
+Counting objects: 100% (59/59), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (34/34), done.
+Writing objects: 100% (35/35), 58.53 KiB | 422.00 KiB/s, done.
+Total 35 (delta 12), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (12/12), completed with 12 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   91b416d8..7358588e  main -> main
+~/workspace$ cd /home/runner/workspace
+git add -A
+git commit -m "v10.3.1: Priority 1+2+3 COMPLETE - SL/TP Stages + Multi-User + RBAC + Dashboard KPIs - Fixed LSP errors + Type hints"
+git push
+On branch main
+Your branch is ahead of 'origin/main' by 2 commits.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+Enumerating objects: 54, done.
+Counting objects: 100% (54/54), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (26/26), done.
+Writing objects: 100% (28/28), 9.93 KiB | 4.96 MiB/s, done.
+Total 28 (delta 21), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (21/21), completed with 13 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   7358588e..7e644178  main -> main
+~/workspace$ cd /home/runner/workspace
+git status
+On branch main
+Your branch is ahead of 'origin/main' by 1 commit.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+~/workspace$ git add -A
+git commit -m "v10.3.1: Priority 1+2+3 COMPLETE - SL/TP Stages + Multi-User + RBAC + Dashboard KPIs + LSP Fixes"
+git push
+On branch main
+Your branch is ahead of 'origin/main' by 1 commit.
+  (use "git push" to publish your local commits)
+
+nothing to commit, working tree clean
+Enumerating objects: 11, done.
+Counting objects: 100% (11/11), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (4/4), done.
+Writing objects: 100% (5/5), 1.57 KiB | 1.57 MiB/s, done.
+Total 5 (delta 2), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (2/2), completed with 2 local objects.
+To https://github.com/shawn2400/market-gpt-api-template
+   7e644178..c540a737  main -> main
+~/workspace$ 
