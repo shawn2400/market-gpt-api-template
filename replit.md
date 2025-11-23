@@ -6,6 +6,10 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically. All features must activate dynamically/automatically when system is ready.
 
+**Frontend**: React + Vite dashboard with live Terminal, AI Chat, Status Bar
+**Backend**: FastAPI + Gunicorn AlgoGPT trading engine
+**Infrastructure**: ALGO-REPLIT Core Control Server for system management
+
 ## System Architecture
 
 ### UI/UX
@@ -42,20 +46,58 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 The production environment runs on Render.com with Background Workers and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development with ALGO-REPLIT self-hosted development infrastructure running on port 8000.
 
 ### Current System Status (Development)
-- **AlgoGPT Server**: Running on port 5000 (Gunicorn + FastAPI)
-- **ALGO-REPLIT Core Control Server**: Running on port 8000 (FastAPI + Uvicorn)
-  - Provides infrastructure management, code editing, and AI integration
-  - Three core modules: core_control_server.py (main controller), ollama_ai_agent.py (local AI), scale_manager.py (resource scaling)
-  - Auto-activation enabled - all features activate dynamically when resources available ("הכול יופעל דינמי אוטומטי")
+
+✅ **PRODUCTION-READY SETUP**
+
+**1. ALGO-REPLIT Frontend Dashboard** (🔴 **PRIMARY UI**)
+   - **Port**: 5000 (Webview - visible to user)
+   - **Tech**: React 18 + Vite + Tailwind CSS
+   - **Status**: ✅ RUNNING
+   - **Components**:
+     - 🖥️ Terminal - Live command execution
+     - 💬 AI Chat - Natural language interface
+     - 📊 Status Bar - Real-time system metrics
+     - 🗂️ File Explorer - Code navigation
+     - 📋 Project Manager - Multi-project support
+   - **Architecture**: Modular, HMR-enabled, CORS-ready
+
+**2. AlgoGPT Server (Backend)** (🔴 **TRADING ENGINE**)
+   - **Port**: 8008 (Internal API)
+   - **Tech**: FastAPI + Gunicorn + Uvicorn
+   - **Status**: ✅ RUNNING 24/7
+   - **Capabilities**:
+     - Core trading engine (Binance Futures)
+     - Market scanning & AI consensus voting
+     - Dynamic leverage (3-35x)
+     - Auto-execution with approval workflow
+     - Full position management (TP/SL/ATR trailing)
+   - **Database**: PostgreSQL (Neon) + Redis
+
+**3. ALGO-REPLIT Core Control Server** (🟡 **INFRASTRUCTURE**)
+   - **Port**: 8000 (Manual start)
+   - **Tech**: FastAPI + Uvicorn
+   - **Modules**: 
+     - core_control_server.py (main controller)
+     - ollama_ai_agent.py (local LLM support)
+     - scale_manager.py (resource auto-scaling)
+   - **Status**: Ready for deployment
+   - **Auto-activation**: "הכול יופעל דינמי אוטומטי"
 
 ### Active Workflows in Replit
-Currently optimized to 2 workflows (due to port constraints):
-1. **AlgoGPT Server** (port 5000) - Main trading system
-2. **ALGO-REPLIT Core Control Server** (port 8000) - Development infrastructure
+**Currently Deployed: 2 Core Workflows**
+1. ✅ **ALGO-REPLIT Frontend Dashboard** → `cd frontend && npm run dev` (port 5000)
+2. ✅ **AlgoGPT Server (Backend)** → Gunicorn (port 8008)
 
-Consolidated workflows (can be re-enabled):
-- Auto Scanner, Fills Watcher, GPT-5 Central Brain, Position Monitor, Sentinel Security, Auto Health Monitor
-- Daily Meeting 00:00, Telegram Digest Reporter (scheduled tasks)
+**Consolidated (can be re-enabled)**:
+- Auto Scanner, Fills Watcher, GPT-5 Central Brain, Position Monitor, Sentinel Security
+- Daily Meeting 00:00, Telegram Digest Reporter (scheduled)
+
+### Development Ready
+✅ Full stack integrated
+✅ React frontend with proxy to backend
+✅ Trading engine operational
+✅ Database connectivity verified
+✅ Dashboard functional with error handling graceful fallback
 
 ## External Dependencies
 

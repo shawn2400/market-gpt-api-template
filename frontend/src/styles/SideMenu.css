@@ -1,0 +1,180 @@
+.side-menu {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: #0D1117;
+  padding: 16px;
+  color: #E1E8ED;
+}
+
+.menu-header {
+  padding: 16px 0;
+  border-bottom: 1px solid #1e2839;
+  margin-bottom: 20px;
+}
+
+.menu-header h2 {
+  font-size: 18px;
+  margin: 0 0 8px 0;
+  color: #fff;
+}
+
+.version {
+  font-size: 12px;
+  color: #6a737d;
+}
+
+.menu-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 24px;
+}
+
+.nav-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #8b949e;
+  padding: 10px 12px;
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.2s;
+  font-size: 14px;
+}
+
+.nav-btn:hover {
+  background: #1e2839;
+  color: #E1E8ED;
+}
+
+.nav-btn.active {
+  background: #0366d6;
+  color: white;
+  border-color: #0366d6;
+}
+
+.menu-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 0;
+}
+
+.projects-list,
+.status-list,
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.projects-list h3,
+.status-list h3,
+.settings-panel h3 {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  color: #6a737d;
+  margin-top: 8px;
+}
+
+.project-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #161b22;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.2s;
+  font-size: 13px;
+}
+
+.project-item:hover {
+  background: #1e2839;
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status-dot.running {
+  background: #28a745;
+  box-shadow: 0 0 8px #28a745;
+}
+
+.status-dot.ready {
+  background: #ffa500;
+}
+
+.status-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 12px;
+  background: #161b22;
+  border-radius: 4px;
+  font-size: 13px;
+}
+
+.badge {
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.badge.running {
+  background: #28a74533;
+  color: #3fb950;
+}
+
+.badge.ready {
+  background: #ffa50033;
+  color: #ffa500;
+}
+
+.setting-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 0;
+}
+
+.setting-item label {
+  font-size: 12px;
+  color: #6a737d;
+}
+
+.setting-item input {
+  background: #0D1117;
+  border: 1px solid #1e2839;
+  color: #E1E8ED;
+  padding: 6px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.menu-footer {
+  padding-top: 16px;
+  border-top: 1px solid #1e2839;
+}
+
+.btn-logout {
+  width: 100%;
+  padding: 10px;
+  background: #d73a49;
+  color: white;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.btn-logout:hover {
+  background: #b32424;
+}

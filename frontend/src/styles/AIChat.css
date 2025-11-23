@@ -1,0 +1,154 @@
+.ai-chat-container {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  background: #0B0F17;
+  overflow: hidden;
+}
+
+.chat-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: #0D1117;
+  border-bottom: 1px solid #1e2839;
+  flex-shrink: 0;
+}
+
+.chat-header h3 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.chat-messages {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.message {
+  display: flex;
+  gap: 10px;
+  animation: slideIn 0.3s ease;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.message-user {
+  justify-content: flex-end;
+}
+
+.message-assistant {
+  justify-content: flex-start;
+}
+
+.message-error {
+  justify-content: flex-start;
+}
+
+.role-badge {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.message p {
+  max-width: 70%;
+  padding: 10px 14px;
+  border-radius: 6px;
+  margin: 0;
+  word-wrap: break-word;
+  line-height: 1.4;
+  font-size: 13px;
+}
+
+.message-user p {
+  background: #0366d6;
+  color: white;
+}
+
+.message-assistant p {
+  background: #1e2839;
+  color: #E1E8ED;
+}
+
+.message-error p {
+  background: #d73a4933;
+  color: #f85149;
+}
+
+.chat-messages::-webkit-scrollbar {
+  width: 8px;
+}
+
+.chat-messages::-webkit-scrollbar-track {
+  background: #0B0F17;
+}
+
+.chat-messages::-webkit-scrollbar-thumb {
+  background: #1e2839;
+  border-radius: 4px;
+}
+
+.chat-input-box {
+  display: flex;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #0D1117;
+  border-top: 1px solid #1e2839;
+  flex-shrink: 0;
+}
+
+.chat-input-box input {
+  flex: 1;
+  background: #0B0F17;
+  border: 1px solid #1e2839;
+  color: #E1E8ED;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 13px;
+  outline: none;
+}
+
+.chat-input-box input:focus {
+  border-color: #0366d6;
+}
+
+.chat-input-box input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.chat-input-box button {
+  background: #0366d6;
+  color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: all 0.2s;
+}
+
+.chat-input-box button:hover:not(:disabled) {
+  background: #0355c4;
+}
+
+.chat-input-box button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}

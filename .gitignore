@@ -46,3 +46,6 @@ node_modules/
 
 static/cache/ws_prices.json
 static/cache/ws_prices.json
+node_modules/
+frontend/dist/
+.env.local

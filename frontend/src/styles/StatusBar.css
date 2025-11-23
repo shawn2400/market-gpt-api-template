@@ -1,0 +1,46 @@
+.status-bar {
+  display: flex;
+  gap: 24px;
+  align-items: center;
+  background: #0D1117;
+  padding: 12px 24px;
+  border-top: 1px solid #1e2839;
+}
+
+.status-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.label {
+  color: #8b949e;
+  font-weight: 500;
+}
+
+.value {
+  color: #E1E8ED;
+  font-weight: 600;
+  font-family: 'Monaco', monospace;
+}
+
+.status-online {
+  color: #28a745;
+  text-shadow: 0 0 8px #28a745;
+}
+
+@media (max-width: 768px) {
+  .status-bar {
+    gap: 12px;
+    padding: 8px 16px;
+  }
+
+  .status-item {
+    font-size: 12px;
+  }
+
+  .status-item:nth-child(n+3) {
+    display: none;
+  }
+}
