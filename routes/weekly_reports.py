@@ -7,9 +7,9 @@ from fastapi import APIRouter, Query, Depends, HTTPException
 from typing import Optional, Dict, Any
 from datetime import datetime
 import logging
+from contextlib import suppress
 
 from utils.weekly_reporter import get_weekly_reporter
-from utils.kpi_tracker import get_kpi_tracker
 
 logger = logging.getLogger(__name__)
 
@@ -30,20 +30,19 @@ async def get_weekly_report_status() -> Dict[str, Any]:
 
 
 @router.post("/generate")
-async def generate_weekly_report(trades: list = None) -> Dict[str, Any]:
+async def generate_weekly_report(trades: Optional[list] = None) -> Dict[str, Any]:
     """
     Manually trigger weekly report generation.
     Useful for testing or force-running reports.
     """
     reporter = get_weekly_reporter()
-    kpi = get_kpi_tracker()
     
     if not reporter.enabled:
         raise HTTPException(status_code=400, detail="Weekly reporter is disabled")
     
-    # Get trades from KPI system if not provided
-    if not trades:
-        trades = kpi.get_recent_trades(limit=100)
+    # Use provided trades or empty list
+    if trades is None:
+        trades = []
     
     try:
         report = reporter.generate_report(trades)

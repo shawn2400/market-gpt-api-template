@@ -75,10 +75,10 @@ class WeeklyReporter:
         total_profit = sum([p for p in pnls if p > 0])
         total_loss = sum([p for p in pnls if p < 0])
         
-        import numpy as np
+        sharpe: float = 0.0
         with suppress(Exception):
-            sharpe = np.mean(pnls) / (np.std(pnls) + 1e-6) if len(pnls) > 1 else 0.0
-        sharpe = 0.0
+            import numpy as np
+            sharpe = float(np.mean(pnls) / (np.std(pnls) + 1e-6)) if len(pnls) > 1 else 0.0
         
         symbols = list(set([t.get("symbol") for t in trades if t.get("symbol")]))
         

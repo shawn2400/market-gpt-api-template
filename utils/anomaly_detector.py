@@ -32,7 +32,7 @@ class AnomalyDetector:
         self.anomaly_count = 0
         self.last_anomaly = None
     
-    def add_trade(self, pnl: float, symbol: str = "", side: str = "") -> None:
+    def add_trade(self, pnl: float, symbol: Optional[str] = None, side: Optional[str] = None) -> None:
         """
         Add a completed trade to the anomaly detection window.
         
@@ -43,8 +43,8 @@ class AnomalyDetector:
         """
         self.trades.append({
             "pnl": pnl,
-            "symbol": symbol,
-            "side": side
+            "symbol": symbol or "UNKNOWN",
+            "side": side or "UNKNOWN"
         })
     
     def detect_full_red(self) -> bool:

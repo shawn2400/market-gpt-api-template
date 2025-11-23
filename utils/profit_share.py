@@ -17,6 +17,7 @@ ENABLE_PROFIT_SHARE = os.getenv("ENABLE_PROFIT_SHARE", "1") == "1"
 PROFIT_SHARE_RATE = float(os.getenv("PROFIT_SHARE_RATE", "0.18"))  # 18%
 BILLING_DAY = int(os.getenv("BILLING_DAY", "6"))  # 6 = Sunday
 BILLING_HOUR = int(os.getenv("BILLING_HOUR", "23"))  # 23:00 UTC
+COLD_WALLET_ADDRESS = os.getenv("COLD_WALLET_ADDRESS", "")  # User should provide
 
 
 class ProfitShareManager:
@@ -30,6 +31,7 @@ class ProfitShareManager:
         self.profit_share_rate = PROFIT_SHARE_RATE
         self.billing_history: Dict[str, list] = {}  # user_id -> list of billing events
         self.pending_payments: Dict[str, Dict] = {}  # user_id -> {amount, since_ts}
+        self.cold_wallet: str = COLD_WALLET_ADDRESS or ""
     
     def calculate_share(self, weekly_pnl: float) -> float:
         """
