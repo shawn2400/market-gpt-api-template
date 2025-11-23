@@ -6,14 +6,16 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
-## Recent Changes (v10.1.1 - DeepSeek API Disabled)
-- **Disabled DeepSeek API Calls**: Added ENABLE_DEEPSEEK=0 environment variable to stop all DeepSeek API 402 errors (insufficient balance)
-- **Implemented AI Provider Gating**: Updated ai_decision_maker.py, brain_manager.py, ai_strategy_consensus.py, and ai_post_trade_review.py to respect ENABLE_DEEPSEEK flag
-- **Added Qwen as Primary AI**: Switched ENABLE_QWEN=1 to use Qwen 2.5 Turbo (FREE) instead of DeepSeek ($0.0001/call)
-- **Fail-Safe Implementation**: Code now gracefully skips disabled AI providers, ensuring system operates 24/7 without API call failures
-- **Issue**: DeepSeek API returning 402 "Insufficient Balance" errors despite having balance
-- **Solution**: Completely disabled DeepSeek at code level, switching to Qwen for full consensus voting
-- **Previous**: v10.1 Fixed Market Directional Bias with EMA alignment tie-breaker + strengthened BTC hard gate
+## Recent Changes (v10.2.0 - Dynamic SL/TP Stages Implementation + Multi-User Infrastructure Planning)
+- **Priority 1 COMPLETED: SL/TP Dynamic Stages 1-3**: 
+  - Created `utils/sltp_stages_manager.py` (270+ lines) - Full Stage 1-3 implementation
+  - Stage 1: Move SL to BE+ (entry * 1.0006) after TP1 hit
+  - Stage 2: Trailing SL auto-updates (ATR-based) while locking profit permanently
+  - Stage 3: Exit at TP2/TP3 or SL
+  - Position state persisted in Redis with automatic cleanup
+- **Enhanced trailing_sl_state.py**: Added Stage info methods (be_done, last_trail_high, locked_profit tracking)
+- **Infrastructure Ready**: Database schema prepared for User model, RBAC, and per-user routing
+- **Previous**: v10.1.1 DeepSeek API Disabled + Qwen as Primary AI
 
 ## System Architecture
 

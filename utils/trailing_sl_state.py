@@ -272,6 +272,56 @@ class TrailingSLStateManager:
             "redis_available": self.redis_available,
             "symbols": list(_trailing_sl_cache.keys())
         }
+    
+    def get_position_stage_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Get position stage info (for integration with sltp_stages_manager).
+        Returns state with fields for Stage 1-3 tracking.
+        """
+        state = self._load_from_redis(symbol)
+        if state is None:
+            state = _trailing_sl_cache.get(symbol)
+        
+        if state is None:
+            return None
+        
+        # Add Stage-specific fields if not present
+        if "be_done" not in state:
+            state["be_done"] = False
+        if "last_trail_high" not in state:
+            state["last_trail_high"] = state.get("entry_price", 0.0)
+        if "locked_profit" not in state:
+            state["locked_profit"] = 0.0
+        
+        return state
+    
+    def set_position_stage_info(
+        self,
+        symbol: str,
+        side: str,
+        entry_price: float,
+        be_done: bool = False,
+        last_trail_high: float = 0.0,
+        locked_profit: float = 0.0
+    ) -> None:
+        """
+        Set position stage info for SL/TP stages manager integration.
+        """
+        state = {
+            "symbol": symbol,
+            "side": side,
+            "entry_price": entry_price,
+            "be_done": be_done,
+            "last_trail_high": last_trail_high or entry_price,
+            "locked_profit": locked_profit,
+            "last_updated": time.time(),
+            "update_count": _trailing_sl_cache.get(symbol, {}).get("update_count", 0) + 1
+        }
+        
+        _trailing_sl_cache[symbol] = state
+        self._save_to_redis(symbol, state)
+        
+        logger.debug(f"📋 Position stage info updated: {symbol} (be_done={be_done})")
 
 
 # Singleton instance
