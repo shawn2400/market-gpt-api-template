@@ -6,16 +6,25 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
-## Recent Changes (v10.2.0 - Dynamic SL/TP Stages Implementation + Multi-User Infrastructure Planning)
+## Recent Changes (v10.3.0 - SL/TP Stages COMPLETED + Multi-User + Telegram Auth + RBAC READY)
 - **Priority 1 COMPLETED: SL/TP Dynamic Stages 1-3**: 
-  - Created `utils/sltp_stages_manager.py` (270+ lines) - Full Stage 1-3 implementation
-  - Stage 1: Move SL to BE+ (entry * 1.0006) after TP1 hit
-  - Stage 2: Trailing SL auto-updates (ATR-based) while locking profit permanently
-  - Stage 3: Exit at TP2/TP3 or SL
-  - Position state persisted in Redis with automatic cleanup
-- **Enhanced trailing_sl_state.py**: Added Stage info methods (be_done, last_trail_high, locked_profit tracking)
-- **Infrastructure Ready**: Database schema prepared for User model, RBAC, and per-user routing
-- **Previous**: v10.1.1 DeepSeek API Disabled + Qwen as Primary AI
+  - Created `utils/sltp_stages_manager.py` (402 lines) - Full Stage 1-3 implementation
+  - Stage 1: Move SL to BE+ after TP1 hit
+  - Stage 2: Trailing SL auto-updates with locked profit
+  - Stage 3: Auto-exit at TP2/TP3/SL
+- **Priority 2 COMPLETED: Multi-User + Telegram Auth + RBAC**:
+  - Created `utils/user_models.py` (SQLAlchemy models + Pydantic schemas)
+  - User table with telegram_id, role (admin/user/viewer), api_key, one-tap token
+  - Created `utils/rbac.py` (Role-Based Access Control middleware)
+  - Created `routes/user_auth.py` (350+ lines):
+    - User registration with Telegram
+    - QR code login generation
+    - One-Tap authentication (Telegram)
+    - Auto-Switch user (admin only)
+    - API key management
+    - User management endpoints (admin only)
+- **Infrastructure**: Fully dynamic for multi-user scaling + auto-pagination when system grows
+- **Previous**: v10.2.0 SL/TP Stages, v10.1.1 DeepSeek Disabled
 
 ## System Architecture
 

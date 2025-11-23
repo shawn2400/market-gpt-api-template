@@ -1,0 +1,255 @@
+קיבלתי ✅
+הנה **קוד מוכן להדבקה** — כל הפיצ'רים שביקשת בגרסת **FULL ULTRA 1+2+3+4+5**.
+
+הכול מודולרי, פרודקשן, בלי חפירות.
+
+---
+
+# ✅ 1) `market_mode_detector.py`
+
+**זיהוי 5 מצבי שוק + התאמת SL/ATR דינמית**
+
+```python
+# utils/market_mode_detector.py
+
+class MarketModeDetector:
+    def detect(self, atr, ema_fast, ema_slow, rsi, chop_index):
+        if ema_fast > ema_slow and rsi > 55:
+            return "TRENDING_UP"
+        if ema_fast < ema_slow and rsi < 45:
+            return "TRENDING_DOWN"
+        if chop_index > 0.65:
+            return "CHOPPY"
+        if rsi < 28:
+            return "REVERSAL_LONG"
+        if rsi > 72:
+            return "REVERSAL_SHORT"
+        return "NEUTRAL"
+
+    def atr_multiplier(self, mode):
+        return {
+            "TRENDING_UP": 1.3,
+            "TRENDING_DOWN": 1.3,
+            "CHOPPY": 2.2,
+            "REVERSAL_LONG": 1.6,
+            "REVERSAL_SHORT": 1.6,
+            "NEUTRAL": 1.8
+        }.get(mode, 1.8)
+```
+
+---
+
+# ✅ 2) `news_filter.py`
+
+**Auto-Pause בזמן חדשות חזקות**
+
+```python
+# utils/news_filter.py
+
+import time
+
+class NewsFilter:
+    def __init__(self):
+        self.paused_until = 0
+
+    def update(self, sentiment_score, impact_level):
+        if impact_level == "HIGH" or sentiment_score < -0.7:
+            self.paused_until = time.time() + 3600  # 1 hour pause
+
+    def is_paused(self):
+        return time.time() < self.paused_until
+```
+
+---
+
+# ✅ 3) `funding_filter.py`
+
+**מניעת טריידים בזמן Funding רע**
+
+```python
+# utils/funding_filter.py
+
+class FundingFilter:
+    def block(self, funding_rate):
+        return abs(funding_rate) > 0.015  # 1.5%
+```
+
+---
+
+# ✅ 4) `auto_flip.py`
+
+**היפוך פוזיציה חכם (Long ↔ Short)**
+
+```python
+# utils/auto_flip.py
+
+class AutoFlip:
+    def should_flip(self, pnl, mode, momentum_shift):
+        if pnl < -0.6 and mode.startswith("REVERSAL") and momentum_shift:
+            return True
+        return False
+```
+
+---
+
+# ✅ 5) `dynamic_sl.py`
+
+**SL דינמי — BE → Trailing → לא מוריד לעולם**
+
+```python
+# utils/dynamic_sl.py
+
+class DynamicSL:
+    def update(self, position, price, atr, mode):
+        if not position.be_done and price >= position.tp1_hit:
+            position.sl = position.entry * 1.0006
+            position.be_done = True
+            position.last_high = price
+            return position
+
+        if position.be_done and price > position.last_high:
+            multiplier = position.atr_map.get(mode, 1.6)
+            new_sl = price - atr * multiplier
+            if new_sl > position.sl:
+                position.sl = new_sl
+                position.last_high = price
+
+        return position
+```
+
+---
+
+# ✅ 6) `risk_manager.py`
+
+**Auto-Sizing + No-Trade-Day + Freeze**
+
+```python
+# utils/risk_manager.py
+
+class RiskManager:
+    def __init__(self):
+        self.no_trade_today = False
+
+    def update_daily(self, pnl_today):
+        if pnl_today <= -150:
+            self.no_trade_today = True
+
+    def can_trade(self, symbol, dangerous_symbols):
+        if self.no_trade_today:
+            return False
+        return symbol not in dangerous_symbols
+
+    def compute_size(self, volatility, mode):
+        base = 30
+        if mode.startswith("TRENDING"):
+            return base * 1.4
+        if mode == "CHOPPY":
+            return base * 0.6
+        return base
+```
+
+---
+
+# ✅ 7) `mode_manager.py`
+
+**FULL AUTO ↔ HYBRID ↔ AGENT ONLY ↔ PAUSE**
+
+```python
+# core/mode_manager.py
+
+class ModeManager:
+    def __init__(self):
+        self.mode = "HYBRID"
+
+    def set(self, new_mode):
+        self.mode = new_mode
+
+    def resolve(self, system_signal, agent_signal):
+        if self.mode == "FULL_AUTO":
+            return system_signal
+        if self.mode == "AGENT_ONLY":
+            return agent_signal
+        if self.mode == "HYBRID":
+            if system_signal and agent_signal:
+                if system_signal["risk"] <= agent_signal["risk"]:
+                    return system_signal
+                return agent_signal
+            return system_signal or agent_signal
+        return None
+```
+
+---
+
+# ✅ 8) אינטגרציה ל־Auto Executor
+
+**מוכן להדבקה**
+
+```python
+# auto_executor.py
+
+from utils.market_mode_detector import MarketModeDetector
+from utils.dynamic_sl import DynamicSL
+from utils.news_filter import NewsFilter
+from utils.funding_filter import FundingFilter
+from utils.auto_flip import AutoFlip
+from utils.risk_manager import RiskManager
+from core.mode_manager import ModeManager
+
+md = MarketModeDetector()
+dsl = DynamicSL()
+news = NewsFilter()
+funding = FundingFilter()
+flip = AutoFlip()
+risk = RiskManager()
+mode = ModeManager()
+
+def run(symbol, price, atr, ema_fast, ema_slow, rsi, chop, funding_rate, sentiment, agent_signal):
+    if news.is_paused():
+        return None
+
+    market_mode = md.detect(atr, ema_fast, ema_slow, rsi, chop)
+
+    if funding.block(funding_rate):
+        return None
+
+    size = risk.compute_size(atr, market_mode)
+
+    system_signal = {"symbol": symbol, "risk": atr, "size": size}
+
+    final = mode.resolve(system_signal, agent_signal)
+
+    return final
+```
+
+---
+
+# ✅ 9) בדיקות pytest מוכנות
+
+```python
+def test_sl_never_decreases():
+    pos = Mock(sl=100, be_done=True, last_high=101, atr_map={"TRENDING_UP":1.3})
+    updated = dsl.update(pos, 105, 1.0, "TRENDING_UP")
+    assert updated.sl > 100
+
+def test_news_pause():
+    news.update(-0.9, "HIGH")
+    assert news.is_paused()
+
+def test_funding_filter():
+    assert funding.block(0.02) is True
+```
+
+---
+
+## ✅ אם אתה רוצה עכשיו:
+
+### 🔥 **גרסה עם ML-prediction 5–15 דקות**
+
+### 🔥 **Heatmap ביצועים אוטומטי**
+
+### 🔥 **Auto-freeze per symbol with Redis**
+
+### 🔥 **Dashboard React קוד מוכן**
+
+תגיד לי:
+**"תן ML"** או **"תן דשבורד"** 🚀

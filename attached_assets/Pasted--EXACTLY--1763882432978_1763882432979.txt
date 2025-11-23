@@ -1,0 +1,267 @@
+✅ קיבלתי — **הנה EXACTLY מה שביקשת**
+הכול-ביחד, בהודעה אחת, מסודר, מוכן להעתקה לסוכן.
+הגרסה הכי מלאה שנבנתה עד היום.
+
+---
+
+# 🚨 **פקודה לסוכן — FULL AI AUTO-PILOT V3 ULTRA-PLUS**
+
+**Task:** להקים, להפעיל ולבדוק מערכת Auto-Pilot מלאה לפי המפרט הבא — בלי רגרסיות, בלי עומסים, 100% דינמית ואוטומטית.
+
+---
+
+## ✅ **1) Core System — תמיד פעיל**
+
+### יש ליישם:
+
+* Auto-Executor חי לבינאנס בלבד
+* Failover מלא לבורסות נוספות (Bybit → OKX)
+* Fallback סמלים דינמי (20–40 סמלים)
+* Kill-Switch חכם (פאניקה / תקלה)
+* Circuit-Breaker מתקדם (2 פוז’ בלי SL/TP → Pause)
+
+### תנאים:
+
+* אין Market Orders
+* Limit / Stop-Limit בלבד
+* Reduce-Only תמיד ב-SL/TP
+* No-Chasing > 0.3%
+* Auto-Cancel אם לא התמלא תוך 3 שעות
+
+---
+
+## ✅ **2) Dynamic SL/TP — Ultra Mode (דינמי 100%)**
+
+### יש ליישם 5 מצבי שוק:
+
+1. Trending Up
+2. Trending Down
+3. Choppy
+4. Reversal
+5. High-Volatility Panic
+
+### כללים:
+
+* SL מתחיל ב-swing ± 0.6×ATR
+* TP1 = 1.8×ATR
+* TP2 = 3.2×ATR
+* Move-to-BE תמיד אחרי TP1
+* Trailing אוטומטי *אחרי* BE לפי:
+
+  * ATR-adaptive
+  * OR אחוז-based (לפי שוק)
+
+### אינטגרציה:
+
+* חייב להיות מסונכרן עם Auto-Flip
+* אסור למחוק SL לפני אישור Binance
+* Lock-profit חובה — אין מצב שה-SL יתקע
+
+---
+
+## ✅ **3) Auto-Flip / Reverse Mode**
+
+### יש ליישם:
+
+* זיהוי כישלון מגמה → Reverse
+* Long→Short / Short→Long
+* OR המרה לגריד במקום יציאה
+
+### חוקים:
+
+* מותר רק אם:
+
+  * quality ≥ 8.5
+  * אין חדשות אדומות
+  * funding לא חריג
+
+---
+
+## ✅ **4) Auto-Hedging & Insurance-Mode**
+
+### יש ליישם:
+
+* Hedge אוטומטי בזמן:
+
+  * funding קיצוני
+  * תנודתיות חריגה
+  * drawdown מהיר
+* Scaling לפי חשיפה
+
+### מצבים:
+
+* Hedge-On (חלקי)
+* Reduce-Exposure
+* Full-Freeze לסמלים מסוכנים
+
+---
+
+## ✅ **5) Cross-Exchange Balancing**
+
+### יש ליישם:
+
+אם Binance נכשל →
+
+* מעבר אוטומטי ל-Bybit
+* ללא Restart
+* ללא הזמנות כפולות
+* Failover logging
+
+---
+
+## ✅ **6) Auto-Pause לפי זמן ואירועים**
+
+### יש להגדיר חלונות זמן:
+
+* אין מסחר לפני CPI / FOMC / NFP
+* חדשות אדומות → pause 45 דקות
+* אחרי התייצבות → auto-resume
+
+### יש להוסיף:
+
+* Auto-Detect News Impact
+* AI Sentiment Filter
+
+---
+
+## ✅ **7) Profit-Share Billing אוטומטי**
+
+### שבועי:
+
+* חישוב רווחים לכל משתמש
+* 18% אוטומטי
+* שליחת הודעה:
+
+  * פירוט רווח/הפסד לכל בורסה
+  * מספר טריידים
+  * Win-Rate
+  * סכום לתשלום
+* אי תשלום אחרי 24h → auto-suspend
+
+### בלי לגעת בכספי המשתמש.
+
+---
+
+## ✅ **8) Auto-Withdraw Profit Buffer**
+
+### כל יום 03:00:
+
+* אם USDT > 500
+* משאיר 300
+* שולח אוטומטי ל-cold wallet
+
+---
+
+## ✅ **9) Fraud / Anomaly Detector**
+
+### מפעיל:
+
+* Pause אוטומטי אם:
+
+  * 5 הפסדים רצופים
+  * הפסד מצטבר > 12%
+  * התנהגות לא תקינה
+
+---
+
+## ✅ **10) Multi-Account Orchestration**
+
+### יש לתמוך:
+
+* עד 7 משתמשים
+* ניהול הרשאות:
+
+  * Activate / Suspend / Replace
+* לכל משתמש:
+
+  * API משלו
+  * הגבלת סיכון נפרדת
+  * מעקב PnL נפרד
+
+---
+
+## ✅ **11) Dashboards**
+
+### יש לבנות **2 דשבורדים**:
+
+#### ✅ Master Dashboard (Admin)
+
+מכיל:
+
+* מצב מערכת חי (ON / OFF / AUTO)
+* מצב שוק (5 משטרים)
+* Auto-Flip state
+* Hedging state
+* Funding impact
+* Risk level
+* Error flags
+* Skip-Trading-Today indicator
+* Manual override buttons:
+
+  * FORCE-PAUSE
+  * FORCE-RESUME
+  * DISABLE-AUTO
+  * ENABLE-AUTO
+
+#### ✅ Grafana Dashboard (JSON)
+
+מכיל:
+
+* Win-Rate חי
+* PnL over time
+* Heatmap לכל מצב שוק
+* Hedge events
+* Exchange failovers
+* Quality score trend
+
+---
+
+## ✅ **12) ML-Prediction (5–15 דקות קדימה)**
+
+### יש להפעיל:
+
+* מודל קל → לא כבד
+* משמש רק ל:
+
+  * filtering
+  * לא להיכנס בזמן רע
+
+לא מחליף את המערכת — רק מוסיף veto.
+
+---
+
+## ✅ **13) Auto-Recovery אחרי כשל**
+
+### יש ליישם:
+
+אם המערכת נעצרת:
+
+* מזהה סיבה
+* מנסה self-heal
+* בדיקה מחדש
+* רק אם בטוח → חוזר לפעולה
+
+---
+
+## ✅ **14) תנאי סיום**
+
+✔ אין עומס
+✔ אין הזמנות כפולות
+✔ SL/TP תמיד בבורסה
+✔ כל מה שדינמי — באמת דינמי
+✔ כל פיצ’ר עובד אוטומטי
+✔ אין רגרסיות
+✔ כל הטסטים עוברים
+
+---
+
+### ✅ סוף פקודה.
+
+אם אתה רוצה עכשיו:
+
+✅ קוד מלא לכל המערכת (ZIP מוכן)
+✅ או חלוקה לפי קבצים
+✅ או דיאגרמה גרפית צבעונית
+
+כתוב רק:
+**"תן קוד מלא"** 🚀

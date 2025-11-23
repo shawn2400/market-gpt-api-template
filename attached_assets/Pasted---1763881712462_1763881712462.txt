@@ -1,0 +1,239 @@
+קיבלתי ✅
+הנה מה שביקשת — **הכול, בהודעה אחת, מלאה, סופית, מוכנה להעתקה לסוכן.**
+
+תעתיק כמו שזה:
+
+---
+
+# ✅ **פקודה לסוכן — ליצור מצב 1+2+3+4+5 ביחד (FULL ULTRA SYSTEM)**
+
+Task: Implement COMPLETE autonomous trading mode combining ALL 5 modes into one unified GOD-MODE system.
+
+המערכת חייבת לעבוד כך:
+
+---
+
+## ✅ **1) FULL-AUTO תמיד פעיל**
+
+המערכת מסוגלת לסחור לבד בלי הסוכן:
+
+* סריקה חיה
+* החלטות טרייד
+* SL/TP דינמי מלא
+* Auto-Flip
+* Auto-Sizing
+* Auto-Pause בחדשות
+* No-Trade Day אם שוק רע
+* ללא צורך באישור חיצוני
+
+חייב לפעול גם אם הסוכן מנותק.
+
+---
+
+## ✅ **2) AUTO עם OVERRIDE אדמין**
+
+להוסיף בדשבורד:
+
+### כפתורים:
+
+* **AUTO**
+* **HYBRID**
+* **AGENT-ONLY**
+* **FULL-AUTO**
+* **OFF / PAUSE-ALL**
+* **EMERGENCY-CLOSE**
+
+כל שינוי חייב לעבוד **ללא ריסט**, בזמן אמת.
+
+---
+
+## ✅ **3) AUTO-MODE רק כשהסוכן מחובר**
+
+אם הסוכן פעיל:
+
+```
+use hybrid decision engine
+agent_score + system_score → merge
+```
+
+אם הסוכן נופל:
+
+```
+auto_switch = TRUE
+system returns to FULL-AUTO safely
+risk reduced automatically
+```
+
+אין מצב שהמערכת נעצרת או נתקעת.
+
+---
+
+## ✅ **4) HYBRID INTELLIGENCE**
+
+כאשר גם הסוכן וגם המערכת ON:
+
+Decision flow:
+
+```
+system_signal + agent_signal → consensus
+
+IF agree → execute
+IF conflict → follow risk-lower option
+IF high-risk conflict → auto-pause symbol
+```
+
+כל זה **אוטומטי 100%**.
+
+---
+
+## ✅ **5) GOD-MODE (ברירת מחדל)**
+
+סופר-מצב עם כל הרכיבים הבאים פעילים תמיד:
+
+* 5 מצבי שוק:
+
+  * Trending
+  * Choppy
+  * Reversal
+  * Breakout
+  * Exhaustion
+* Dynamic ATR auto-tuning
+* Auto-Flip long↔short
+* Funding-regime filter
+* AI-sentiment (5–15m)
+* News-impact blocking
+* Dangerous-symbol freeze
+* PnL-adaptive quality gate
+* Auto-sizing לפי תנאי שוק
+* Auto-pause ב-CPI/FOMC/NFP
+* Resume-logic עם קירור
+* Heatmap ביצועים לכל מצב
+* Intelligent no-trade days
+
+הכול **דינמי אוטומטי ללא לחיצות**.
+
+---
+
+## ✅ **התנהגות מערכת (חייב כך)**
+
+### ✅ אם הכול תקין:
+
+```
+HYBRID mode
+auto-execute
+auto-manage
+auto-trail
+auto-flip
+```
+
+### ✅ אם הסוכן נפל:
+
+```
+switch to FULL-AUTO
+reduce leverage
+widen SL
+pause high-risk symbols
+notify admin
+```
+
+### ✅ אם חדשות קיצוניות:
+
+```
+auto-pause all new trades
+keep managing open positions only
+resume after volatility cooldown
+```
+
+### ✅ אם יום עם הפסד/שוק רע:
+
+```
+daily_loss_cap hit → STOP trading
+no-trade day activated
+resume next session automatically
+```
+
+---
+
+## ✅ **דשבורד – דרישות חובה**
+
+### תצוגה חיה:
+
+* Current Mode
+* Auto-Switch Status
+* Flip Status
+* Funding regime
+* News impact
+* Risk level meter
+* Active freezes
+* No-trade day ON/OFF
+* Open positions state
+
+### כפתורים:
+
+* AUTO
+* HYBRID
+* FULL AUTO
+* AGENT ONLY
+* PAUSE ALL
+* RESUME
+* EMERGENCY CLOSE
+
+שינוי חייב להיות **מיידי**.
+
+---
+
+## ✅ **כללים שלא נשברים**
+
+* לא מפסיקים ניהול פוזיציות בשום מצב
+* אין מחיקה של SL לפני אישור Binance
+* אין עבודה ללא SL
+* Auto-Flip עובד רק אם מצב שוק מתאים
+* Manual override תמיד חזק יותר מה-AI
+* אם admin סוגר מערכת — כל הסוכנים קופאים
+
+---
+
+## ✅ **בדיקות חובה**
+
+Create pytest tests:
+
+```
+test_mode_switch_live()
+test_auto_switch_on_agent_drop()
+test_news_auto_pause()
+test_no_trade_day_activation()
+test_hybrid_conflict_resolution()
+test_auto_flip_conditions()
+test_risk_reduction_on_failover()
+test_sl_never_decreases()
+test_dynamic_trailing_progress()
+test_funding_filter_blocks()
+test_dangerous_symbol_freeze()
+```
+
+כל הבדיקות **חייבות לעבור**.
+
+---
+
+## ✅ **סיום משימה רק כאשר**
+
+✔ כל 5 המצבים עובדים יחד
+✔ כפתורי דשבורד שולטים בזמן אמת
+✔ אין ריסטים, אין עצירה, אין תקיעה
+✔ FULL-AUTO פועל גם בלי סוכן
+✔ HYBRID פועל עם סוכן
+✔ Auto-switch בטוח ולא קבוע
+✔ המערכת תמיד מגנה לפני תוקפת
+✔ הכול דינמי אוטומטי 100%
+
+---
+
+✅ זהו — זו ההודעה המלאה שביקשת.
+אם אתה רוצה עכשיו:
+
+**דיאגרמת מערכת צבעונית מלאה**
+או
+**קוד מוכן להדבקה לכל הפיצ'רים**
+
+תגיד:
+**"תן דיאגרמה"** או **"תן קוד מלא"** 🚀

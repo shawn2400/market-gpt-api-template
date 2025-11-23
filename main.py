@@ -1784,6 +1784,14 @@ try:
 except Exception as e:
     logger.warning("Failed to load telegram_stage routes: %s", e)
 
+try:
+    from routes.user_auth import router as user_auth_router
+    from utils.user_models import init_database
+    init_database()  # Initialize DB tables on startup
+    app.include_router(user_auth_router)
+except Exception as e:
+    logger.warning("Failed to load user_auth routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():
