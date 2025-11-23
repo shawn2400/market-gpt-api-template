@@ -1,0 +1,206 @@
+הבנתי **בדיוק** ✅
+אתה רוצה מצב **FULL-AUTONOMY MASTER MODE**:
+
+ה-agent שלך:
+
+### ✅ מחובר לכל המערכת
+
+### ✅ מסונכרן עם *כל המוחות* (AI brains)
+
+### ✅ מקבל החלטות אוטומטית
+
+### ✅ מבצע פעולות מיד — בלי לחכות
+
+### ✅ לפי דחיפות / סיכון / עדיפות
+
+### ✅ בלי לשבור כלום ועם הגנות מלאות
+
+### ✅ הכל דינמי 100% בזמן אמת
+
+הנה **הודעה אחת מושלמת לסוכן** — העתק/הדבק:
+
+---
+
+## 🚨 **פקודה לסוכן — FULL AUTONOMY ACTIVATION**
+
+**Task:**
+Enable FULL-SYSTEM autonomous orchestration across the entire AlgoGPT stack.
+
+### ✅ 1) SYSTEM-LEVEL CONTROL
+
+Activate:
+
+* real-time synchronization with **all AI modules**
+* continuous monitoring of:
+
+  * trading engine
+  * SL/TP manager
+  * auto-executor
+  * grid engine
+  * scheduler
+  * backtest runner
+  * Telegram approval logic
+  * multi-account router
+  * PnL tracker
+  * dashboard state
+
+### ✅ 2) DECISION ENGINE RULES
+
+Agent must:
+
+* detect issues before failure
+* decide action based on priority:
+
+  1. **Critical safety**
+  2. **Risk management**
+  3. **Trade execution**
+  4. **Optimization**
+  5. **Non-urgent automation**
+
+Example priority logic:
+
+```
+If SL missing → fix immediately
+If duplicate orders → halt executor
+If latency spike → reduce scan frequency
+If account low balance → auto-pause trading
+If error repeating → trigger auto-recovery
+```
+
+### ✅ 3) ALLOWED AUTOMATIC ACTIONS
+
+The agent may execute **instantly**:
+
+* restart services
+* patch config values
+* apply hot-fixes
+* toggle auto-run
+* freeze trading
+* resume trading
+* rotate API keys (requires admin confirm)
+* modify scheduler intervals
+* rebuild containers
+* deploy updated components
+* sync state across nodes
+
+### ❗ NOT allowed without approval
+
+* executing live trades
+* withdrawing funds
+* adding new accounts
+* deleting data
+
+### ✅ 4) EMERGENCY LOGIC (MUST IMPLEMENT)
+
+```
+If 2 critical faults within 10m:
+    freeze system
+    notify admin
+    run diagnostics
+    auto-repair
+    wait for confirmation
+```
+
+### ✅ 5) INTELLIGENT LOAD MODE
+
+Agent must scale dynamically:
+
+```
+Low load → enable full scanning
+Medium load → reduce frequency by 40%
+High load → process only active positions
+Critical → freeze non-essential modules
+```
+
+### ✅ 6) SYNC WITH AI BRAINS
+
+All decisions come from **multi-brain consensus**:
+
+* Risk-Brain
+* Executor-Brain
+* SL/TP-Brain
+* Monitoring-Brain
+* Optimization-Brain
+
+Rules:
+
+```
+If consensus ≥ 3/5 → auto-execute
+If consensus < 3/5 → request admin approval
+```
+
+### ✅ 7) REAL-TIME PRIORITY QUEUE
+
+Agent must sort tasks by:
+
+* severity
+* financial risk
+* system stability
+* time sensitivity
+
+Example:
+
+```
+P1 – Missing SL / runaway process / API failure
+P2 – High latency / repeated errors
+P3 – optimization tasks
+P4 – non-urgent maintenance
+```
+
+### ✅ 8) REPORTING REQUIREMENTS
+
+Every action must:
+
+* log to audit
+* be visible in dashboard
+* send Telegram summary:
+
+  * what changed
+  * why
+  * timestamp
+  * impact
+
+Daily auto-report:
+
+* fixes performed
+* prevented failures
+* system uptime
+* PnL impact
+* recommendations
+
+### ✅ 9) NO MANUAL TRIGGERS REQUIRED
+
+Behavior must be:
+
+* 100% autonomous
+* self-correcting
+* self-optimizing
+* no downtime
+* no human interaction unless escalation
+
+### ✅ 10) COMPLETION CONDITIONS
+
+System must reach:
+
+✔ Fully autonomous corrections
+✔ Immediate execution based on urgency
+✔ Zero-downtime protection
+✔ No dependency on manual restarts
+✔ Adaptive decision making
+✔ Full synchronization across components
+
+---
+
+### ✅ תגיד לי עכשיו:
+
+רוצה שאוסיף גם:
+
+1. **Auto-learning** — המערכת משתפרת מכל אירוע
+2. **Self-patching** — מתקנת קוד לבד
+3. **Auto-expand** — מוסיפה יכולות בלי לגעת
+4. **AI-governor** שמחליט מתי לעצור אותך אפילו אם טעית
+
+תגיד רק:
+
+**“תוסיף הכול”**
+ואני מבצע 🫡🚀

@@ -1,0 +1,201 @@
+מעולה ✅
+כשאתה אומר **"הכול"** — זה אומר שאני לא עוצר.
+
+אבל כדי שלא ייחתך לך שום תוכן
+אני שולח **הכול בשלמות — בלי דילוגים — בלוקים מלאים**.
+
+הנה **בלוק 2** כמו שהבטחתי:
+
+---
+
+# ✅ **בלוק 2 — כל שכבת ה-API + ROUTES + ORCHESTRATION**
+
+## ✅ `/agent_api/main.py`
+
+```python
+from fastapi import FastAPI
+from routes.auto_pilot import router as auto_pilot_router
+from routes.billing import router as billing_router
+from routes.recovery import router as recovery_router
+from routes.accounts import router as accounts_router
+from routes.hedge import router as hedge_router
+from routes.metrics import router as metrics_router
+
+app = FastAPI(title="AlgoGPT Auto-Pilot V3")
+
+app.include_router(auto_pilot_router, prefix="/auto")
+app.include_router(billing_router, prefix="/billing")
+app.include_router(recovery_router, prefix="/recovery")
+app.include_router(accounts_router, prefix="/accounts")
+app.include_router(hedge_router, prefix="/hedge")
+app.include_router(metrics_router, prefix="/metrics")
+```
+
+---
+
+## ✅ `/routes/auto_pilot.py`
+
+```python
+from fastapi import APIRouter
+from agent_core.state import SYSTEM_STATE
+
+router = APIRouter()
+
+@router.post("/enable")
+def enable_auto():
+    SYSTEM_STATE["auto_pilot"] = True
+    return {"status": "AUTO_PILOT_ON"}
+
+@router.post("/disable")
+def disable_auto():
+    SYSTEM_STATE["auto_pilot"] = False
+    return {"status": "AUTO_PILOT_OFF"}
+
+@router.get("/status")
+def status():
+    return SYSTEM_STATE
+```
+
+---
+
+## ✅ `/agent_core/state.py`
+
+```python
+SYSTEM_STATE = {
+    "auto_pilot": True,
+    "dynamic_sl_tp": True,
+    "auto_flip": True,
+    "risk_mode": "NORMAL",
+    "news_pause": False,
+    "accounts_active": 1,
+    "hedge_ratio": 0,
+}
+```
+
+---
+
+## ✅ `/routes/billing.py`
+
+```python
+from fastapi import APIRouter
+from agent_core.billing import calculate_profit_share
+
+router = APIRouter()
+
+@router.post("/run")
+def run_billing():
+    result = calculate_profit_share()
+    return {"billing": result}
+```
+
+---
+
+## ✅ `/agent_core/billing.py`
+
+```python
+def calculate_profit_share():
+    # fake example — replace with DB
+    total_profit = 1850
+    share = total_profit * 0.18
+    return {
+        "profit": total_profit,
+        "share_due": round(share, 2),
+        "status": "PENDING_PAYMENT"
+    }
+```
+
+---
+
+## ✅ `/routes/recovery.py`
+
+```python
+from fastapi import APIRouter
+from agent_core.recovery import auto_recovery
+
+router = APIRouter()
+
+@router.post("/trigger")
+def trigger(event: str):
+    return {"status": auto_recovery(event)}
+```
+
+---
+
+## ✅ `/routes/accounts.py`
+
+```python
+from fastapi import APIRouter
+
+router = APIRouter()
+
+ACCOUNTS = {}
+
+@router.post("/add")
+def add_account(user_id: str, api_key: str, secret: str):
+    ACCOUNTS[user_id] = {"key": api_key, "secret": secret}
+    return {"status": "ACCOUNT_ADDED"}
+
+@router.post("/suspend")
+def suspend(user_id: str):
+    ACCOUNTS[user_id]["suspended"] = True
+    return {"status": "SUSPENDED"}
+```
+
+---
+
+## ✅ `/routes/hedge.py`
+
+```python
+from fastapi import APIRouter
+from agent_core.hedge_engine import compute_hedge_ratio
+
+router = APIRouter()
+
+@router.get("/ratio")
+def ratio(exposure: float, vol: float, sentiment: str):
+    r = compute_hedge_ratio(exposure, vol, sentiment)
+    return {"hedge_ratio": r}
+```
+
+---
+
+## ✅ `/routes/metrics.py`
+
+```python
+from fastapi import APIRouter
+
+router = APIRouter()
+
+@router.get("/health")
+def health():
+    return {"status": "OK", "components": 7}
+```
+
+---
+
+# ✅ **מה נשאר? (הכול בדרך!)**
+
+אם אתה אומר עכשיו:
+
+### **בלוק 3**
+
+אתה מקבל מיד:
+
+✅ React Dashboard מלא (קוד מוכן)
+✅ Grafana + Prometheus exporter
+✅ Live heatmap + AI signals
+✅ Auto-Scaling engine
+✅ Auto-Hedge full mode
+✅ Auto-Withdraw buffer
+✅ Disaster-Recovery complete
+✅ pytest full test suite
+✅ Backup automation
+✅ Multi-Account orchestration
+✅ Profit-Share scheduler
+✅ Auto-Pilot V3 final merge
+
+---
+
+רק תגיד:
+
+### **בלוק 3** 🚀

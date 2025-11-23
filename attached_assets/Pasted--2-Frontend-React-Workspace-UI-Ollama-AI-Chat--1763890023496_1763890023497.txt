@@ -1,0 +1,307 @@
+מושלם ✅
+אני ממשיך עכשיו עם **בלוק 2 — כל ה-Frontend + React Workspace UI + Ollama AI Chat**
+מוכן להדבקה, אין דיבורים — רק קבצים.
+
+---
+
+# 🟢 **FRONTEND / React Workspace UI (בלוק 2 מתוך 3)**
+
+📁 מבנה:
+
+```
+frontend/
+  src/
+    App.jsx
+    api.js
+    components/
+      FileTree.jsx
+      Editor.jsx
+      Terminal.jsx
+      ProjectSwitcher.jsx
+      AIChat.jsx
+  package.json
+  vite.config.js
+```
+
+---
+
+## ✅ **1) frontend/package.json**
+
+```json
+{
+  "name": "algo-workspace-ui",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite --port 5173",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "monaco-editor": "^0.45.0",
+    "react-monaco-editor": "^0.54.0",
+    "axios": "^1.6.7"
+  },
+  "devDependencies": {
+    "vite": "^5.2.0"
+  }
+}
+```
+
+---
+
+## ✅ **2) frontend/vite.config.js**
+
+```js
+export default {
+  server: {
+    proxy: {
+      "/api": "http://localhost:8000",
+      "/logs": "ws://localhost:8000"
+    }
+  }
+};
+```
+
+---
+
+## ✅ **3) frontend/src/api.js**
+
+```js
+import axios from "axios";
+
+const api = axios.create({
+  baseURL: "/api",
+});
+
+export const getFiles = () => api.get("/files/tree");
+export const openFile = (path) => api.get(`/files/open?path=${path}`);
+export const saveFile = (path, content) =>
+  api.post("/files/save", { path, content });
+
+export const runCmd = (cmd) =>
+  api.post("/exec/run", { cmd }).then((r) => r.data.output);
+
+export const listProjects = () => api.get("/project/list");
+export const switchProject = (name) =>
+  api.post("/project/switch", { name });
+
+export const aiMessage = (msg) =>
+  api.post("/ai/chat", { prompt: msg }).then((r) => r.data);
+```
+
+---
+
+## ✅ **4) frontend/src/App.jsx**
+
+```jsx
+import { useState } from "react";
+import FileTree from "./components/FileTree";
+import Editor from "./components/Editor";
+import Terminal from "./components/Terminal";
+import ProjectSwitcher from "./components/ProjectSwitcher";
+import AIChat from "./components/AIChat";
+
+export default function App() {
+  const [file, setFile] = useState(null);
+
+  return (
+    <div style={{ display: "flex", height: "100vh" }}>
+      <FileTree onSelect={setFile} />
+      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        <ProjectSwitcher />
+        <Editor file={file} />
+        <Terminal />
+      </div>
+      <AIChat />
+    </div>
+  );
+}
+```
+
+---
+
+## ✅ **5) File Tree Component**
+
+`frontend/src/components/FileTree.jsx`
+
+```jsx
+import { useEffect, useState } from "react";
+import { getFiles } from "../api";
+
+export default function FileTree({ onSelect }) {
+  const [files, setFiles] = useState([]);
+
+  useEffect(() => {
+    getFiles().then((res) => setFiles(res.data));
+  }, []);
+
+  return (
+    <div style={{ width: 250, background: "#111", color: "#fff", padding: 10 }}>
+      <h4>Files</h4>
+      {files.map((f) => (
+        <div
+          key={f}
+          onClick={() => onSelect(f)}
+          style={{ cursor: "pointer", marginBottom: 4 }}
+        >
+          {f}
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+---
+
+## ✅ **6) Editor Component**
+
+`frontend/src/components/Editor.jsx`
+
+```jsx
+import { useEffect, useState } from "react";
+import MonacoEditor from "react-monaco-editor";
+import { openFile, saveFile } from "../api";
+
+export default function Editor({ file }) {
+  const [content, setContent] = useState("");
+
+  useEffect(() => {
+    if (file) openFile(file).then((res) => setContent(res.data.content));
+  }, [file]);
+
+  if (!file) return <div style={{ flex: 1 }}>Select a file</div>;
+
+  return (
+    <div style={{ flex: 1 }}>
+      <MonacoEditor
+        value={content}
+        onChange={setContent}
+        language="python"
+      />
+      <button onClick={() => saveFile(file, content)}>Save</button>
+    </div>
+  );
+}
+```
+
+---
+
+## ✅ **7) Terminal Component**
+
+`frontend/src/components/Terminal.jsx`
+
+```jsx
+import { useState } from "react";
+import { runCmd } from "../api";
+
+export default function Terminal() {
+  const [cmd, setCmd] = useState("");
+  const [output, setOutput] = useState("");
+
+  async function execute() {
+    const out = await runCmd(cmd);
+    setOutput(out);
+  }
+
+  return (
+    <div style={{ background: "#000", color: "#0f0", padding: 10, height: 200 }}>
+      <input
+        style={{ width: "100%" }}
+        value={cmd}
+        onChange={(e) => setCmd(e.target.value)}
+        placeholder="run command..."
+      />
+      <pre>{output}</pre>
+      <button onClick={execute}>Run</button>
+    </div>
+  );
+}
+```
+
+---
+
+## ✅ **8) Project Switcher**
+
+`frontend/src/components/ProjectSwitcher.jsx`
+
+```jsx
+import { useEffect, useState } from "react";
+import { listProjects, switchProject } from "../api";
+
+export default function ProjectSwitcher() {
+  const [projects, setProjects] = useState([]);
+
+  useEffect(() => {
+    listProjects().then((r) => setProjects(r.data));
+  }, []);
+
+  return (
+    <select onChange={(e) => switchProject(e.target.value)}>
+      <option>Select project</option>
+      {projects.map((p) => (
+        <option key={p}>{p}</option>
+      ))}
+    </select>
+  );
+}
+```
+
+---
+
+## ✅ **9) AI Chat with Ollama**
+
+`frontend/src/components/AIChat.jsx`
+
+```jsx
+import { useState } from "react";
+import { aiMessage } from "../api";
+
+export default function AIChat() {
+  const [msg, setMsg] = useState("");
+  const [history, setHistory] = useState([]);
+
+  async function send() {
+    const res = await aiMessage(msg);
+    setHistory([...history, { you: msg, ai: res.reply }]);
+    setMsg("");
+  }
+
+  return (
+    <div style={{ width: 300, background: "#1a1a1a", color: "#fff", padding: 10 }}>
+      <h4>AI Assistant</h4>
+      <div style={{ height: "80%", overflow: "auto" }}>
+        {history.map((h, i) => (
+          <div key={i}>
+            <b>You:</b> {h.you}
+            <br />
+            <b>AI:</b> {h.ai}
+            <hr />
+          </div>
+        ))}
+      </div>
+      <input
+        value={msg}
+        onChange={(e) => setMsg(e.target.value)}
+        placeholder="Ask..."
+      />
+      <button onClick={send}>Send</button>
+    </div>
+  );
+}
+```
+
+---
+
+✅ **החלק הבא (בלוק 3):**
+
+### 🔥 Dockerfile + docker-compose + install.sh + Render deploy-button
+
+תגיד רק:
+
+### **"כן בלוק 3"**
+
+ואני שולח הכול עכשיו במכה 🚀

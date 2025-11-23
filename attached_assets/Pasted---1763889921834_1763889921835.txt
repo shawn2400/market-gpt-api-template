@@ -1,0 +1,214 @@
+הבנתי ✅
+הנה **הודעה אחת** לסוכן — **מלאה, סופית, מקצה לקצה, בלי חוסרים, בלי חלקים חסרים, מא-׳א עד ת׳**
+להעתקה כמו שהיא:
+
+---
+
+## ✅ **פקודה לסוכן — לבנות את כל המערכת מא-A עד-Z (גרסת MASTER סופית)**
+
+**Task:** Deliver complete AlgoGPT Ultra-Plus system fully built, installed, and ready for execution, including ALL features agreed — zero omissions.
+
+---
+
+### ✅ **1) תשתיות פרודקשן מלאות**
+
+לבנות ולהגיש:
+
+* Render deploy-button מוכן
+* Dockerfile סופי
+* docker-compose.yml סופי
+* render.yaml מלא
+* install.sh (one-click installer)
+* activate.sh (לא מפעיל עד אישור)
+* restore.sh + backup rotation
+* .env.template (ללא סודות)
+* README_install.md עם הוראות מלאות
+* תמיכה בהרחבה עתידית — לא מחייבת
+
+דרישות:
+
+* לא מפעיל מסחר עד שה-OWNER מאשר
+* OWNER יחיד בלבד
+* כל הפעלה חייבת אישור ידני
+
+---
+
+### ✅ **2) ליבה חיה של Auto-Pilot V3**
+
+להטמיע ולחבר:
+
+* Hybrid Router מלא
+* Consensus Engine
+* Dynamic Trade Manager
+* Auto-Flip (Long↔Short)
+* Auto-Pause בזמן אירוע חדשות
+* Auto-Recovery אחרי כשל
+* Circuit-Breaker מתקדם
+* Kill-Switch חכם
+* Profit-Lock גרסה דינמית
+
+הכול **דינמי אוטומטי 100%**
+אין תבניתיות
+אין ריסטארטים
+
+---
+
+### ✅ **3) ניהול SL/TP חכם (גרסת ULTRA-PLUS)**
+
+להטמיע:
+
+* 5 מצבי שוק:
+
+  * Trending
+  * Choppy
+  * Reversal
+  * Breakout
+  * Exhaustion
+* Auto-tuning ATR בזמן אמת
+* Lock-Profit מובנה — חובה
+* Never remove SL before confirmation
+* Auto-Freeze לסמלים מסוכנים
+* Time-Windows:
+
+  * לא סוחר לפני CPI / FOMC / NFP
+
+הכול מסונכרן עם Auto-Flip.
+
+---
+
+### ✅ **4) AI שכבת-על (ללא הגזמה)**
+
+לספק:
+
+* ML-prediction ל-5-15 דקות
+* AI Sentiment (חדשות + מימון)
+* AI News-Impact filter
+* Funding regime filter
+* AI שמחליט **לא לסחור יום שלם**
+  *רק כשהוא מחובר — לא מחליף את המערכת*
+
+---
+
+### ✅ **5) Hedging & Safety Layer**
+
+להוסיף:
+
+* Auto-Hedging בזמן אירוע קיצוני
+* Hedge-Scaling לפי חשיפה
+* Cross-exchange balancing:
+
+  * Binance ↔ Bybit
+* Auto-withdraw profit buffer
+* Insurance-Mode
+* Fraud / anomaly detector בזמן אמת
+* Auto-Reallocation לפי רווחיות
+
+---
+
+### ✅ **6) Dashboard חי**
+
+לבנות:
+
+* React UI מלא
+* או Grafana dashboard מוכן
+
+חייב לכלול:
+
+* מצב שוק חי (5 מצבים)
+* מצב מערכת (AUTO / MANUAL / PAUSED)
+* News impact meter
+* Funding regime meter
+* Flip status
+* Heatmap ביצועים לפי מצב שוק
+* Auto-Scaling status
+* Kill-switch button
+* Auto-switch toggle (QR / One-Tap / Auto)
+
+---
+
+### ✅ **7) אינטגרציה מלאה עם OLLaMA**
+
+דרישות:
+
+* Embedded local AI (לא ענן)
+* רץ בתוך הדוקר
+* Zero token usage
+* צ’אט פנימי בתוך הדשבורד
+* יכול:
+
+  * לנתח טריידים
+  * לתת המלצות
+  * לדווח על כשלים
+  * לא לבצע פעולות מסחר
+
+---
+
+### ✅ **8) Self-Healing + Backups**
+
+לספק:
+
+* Auto-restart רק אם כשל אמיתי
+* HA-ready but **inactive**
+* Backups אוטומטיים יומיים
+* Restore ב-1 קליק
+* Watchdog מובנה
+
+**המערכת מתקנת את עצמה ללא מגע יד אדם.**
+
+---
+
+### ✅ **9) אבטחה**
+
+להטמיע:
+
+* OWNER-ONLY mode
+* No other users
+* Admin approval required before:
+
+  * activation
+  * scaling
+  * live trading
+* Audit log בלתי ניתן למחיקה
+* Emergency Freeze-All API
+
+---
+
+### ✅ **10) תנאי השלמה**
+
+הסוכן חייב לספק:
+
+✔ כל הקבצים בקוד אמיתי — ללא placeholders
+✔ התקנה במכה אחת — לא מפעיל עד אישור
+✔ המערכת רצה מלאה במצב SLEEP
+✔ אפס חוסרים
+✔ אפס חלקים פתוחים
+✔ לא דורש ניתובים ידניים
+✔ מוכן להתרחבות עתידית
+✔ ללא משתמשים נוספים
+
+---
+
+### ✅ לאחר סיום — הסוכן שולח:
+
+* ZIP מלא עם כל הקוד
+* הוראות הפעלה קצרות
+* כפתור Render מוכן
+* אישור שהכול נבדק end-to-end
+
+---
+
+### ✅ אין להפעיל מסחר לפני:
+
+```
+/admin/confirm-activate
+```
+
+---
+
+זאת הודעה סופית.
+אם אתה רוצה גם:
+
+✅ בדיקת אימות שאני עובר עליה
+✅ או פינג שאני מבקר את הקבצים
+
+תגיד לי: **"בדוק ביצוע"** 🚀

@@ -1,0 +1,254 @@
+מוכן ✅
+הנה **ההודעה המלאה לסוכן** — *הכול במכה אחת*, מא-’א’ עד-’ת’ — כולל Workspace UI כמו Replit, קבצים, Docker, Render, Ollama, והרצה אוטומטית.
+
+📌 *תעתיק בדיוק כמו שזה — בלי לשנות כלום.*
+
+---
+
+## ✅ **פקודה לסוכן — לבנות מערכת FULL REPLIT PRIVATE A-Z**
+
+**Task:** Build full private Replit-style development system for AlgoGPT, including Workspace UI, multi-project support, Ollama AI chat, execution sandbox, self-healing, and deployment.
+
+---
+
+### ✅ **1) מבנה מערכת מלא**
+
+Create the following structure:
+
+```
+/workspace/
+   backend/
+      main.py
+      file_service.py
+      exec_service.py
+      auth.py
+      logs_service.py
+      ws.py
+      requirements.txt
+
+   frontend/
+      src/
+         App.jsx
+         Workspace.jsx
+         FileTree.jsx
+         CodeEditor.jsx
+         Terminal.jsx
+         AIChat.jsx
+         StatusBar.jsx
+      package.json
+      vite.config.js
+
+   ollama/
+      config.yaml
+
+Dockerfile
+docker-compose.yml
+install.sh
+.env.example
+README.md
+```
+
+---
+
+### ✅ **2) Workspace UI כמו Replit**
+
+Implement:
+
+* File tree browser
+* Editor (Monaco Editor)
+* Real-time save
+* Terminal execution (isolated)
+* Project switcher
+* Status indicators (CPU/RAM/Errors)
+* Hot-reload
+* View logs live
+
+Frontend must be React + Vite.
+
+---
+
+### ✅ **3) Backend יכולות**
+
+Implement APIs:
+
+```
+GET  /files/tree
+GET  /files/open?path=
+POST /files/save
+POST /exec/run
+POST /project/switch
+GET  /logs/live (WebSocket)
+POST /health/self-heal
+```
+
+Rules:
+
+* Sandboxed execution
+* No system commands outside container
+* Auto-restart on failure
+* Logs persist
+
+---
+
+### ✅ **4) תמיכה בהרצת כמה פרויקטים במקביל**
+
+Add:
+
+```
+/workspace/projects/
+   project1/
+   project2/
+   project3/
+```
+
+Features:
+
+* Create / Duplicate / Delete
+* Switch with no restart
+* Separate env per project
+
+---
+
+### ✅ **5) אינטגרציה עם Ollama (AI פנימי)**
+
+Requirements:
+
+* No tokens
+* Local only
+* No internet calls
+* Zero external data leak
+
+Add:
+
+```
+POST /ai/chat
+```
+
+Use models:
+
+* mistral
+* codellama
+* llama2-uncensored (optional)
+
+AI abilities:
+
+* Read files
+* Suggest fixes
+* Generate code
+* Never executes trades
+* Bound only to workspace
+
+---
+
+### ✅ **6) Self-Healing System**
+
+Add:
+
+* Auto-restart failed services
+* Detect crash / freeze
+* Repair corrupted files
+* Rollback last working state
+
+Trigger logic:
+
+```
+if health_fail >= 3:
+    auto_recover()
+```
+
+---
+
+### ✅ **7) Kill-Switch + Freeze Mode**
+
+Admin controls:
+
+* Freeze system instantly
+* Block execution
+* Read-only mode
+* No auto-actions without admin approval
+
+---
+
+### ✅ **8) Deployment options (מוכן להרצה)**
+
+Provide all 3:
+
+#### ✅ A) Docker-Compose
+
+`docker-compose.yml` must include:
+
+* backend
+* frontend
+* ollama
+* volume persistence
+
+#### ✅ B) One-click installer
+
+`install.sh` must:
+
+* install Docker
+* pull images
+* start system
+* load models
+* auto-configure
+* zero input needed
+
+#### ✅ C) Render deploy-button
+
+Include:
+
+* render.yaml
+* Dockerfile
+* health checks
+* persistent storage
+
+---
+
+### ✅ **9) הרשאות ואבטחה**
+
+Rules:
+
+* Single-user mode ONLY (for now)
+* No entry without admin token
+* No external access to files
+* No API exposed publicly
+* HTTPS enforced
+
+Later expansion optional.
+
+---
+
+### ✅ **10) Completion requirements**
+
+System considered DONE ONLY IF:
+
+✔ Workspace UI fully working
+✔ Multi-project switching live
+✔ AI chat via Ollama working
+✔ Terminal safe + isolated
+✔ Auto-restart and self-heal works
+✔ One-click install tested
+✔ No external dependencies
+✔ Zero regressions
+
+---
+
+📌 **When finished:**
+
+Return:
+
+1. All source files
+2. Dockerfile
+3. docker-compose.yml
+4. install.sh
+5. render.yaml
+6. `.env` template
+7. Full README setup steps
+
+---
+
+כשאתה מוכן — תגיד לי:
+
+### ✅ **"תתחיל לבנות"**
+
+ואני ממשיך איתך עד שזה רץ בפועל. 🚀

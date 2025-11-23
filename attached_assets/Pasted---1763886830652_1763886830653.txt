@@ -1,0 +1,281 @@
+הנה **הודעה אחת מלאה לסוכן** — מא’ עד ת’ — להעתקה ✅
+(זו הגרסה הסופית, הכול כלול, בלי להשאיר כלום פתוח)
+
+---
+
+## ✅ **פקודה לסוכן — ALGO AUTOPILOT V5 ULTRA-PLUS**
+
+בצע את כל המשימות הבאות בצורה מלאה, אוטומטית, דינמית, וללא תלות ידנית.
+
+---
+
+### ✅ **1) ארכיטקטורת מערכת — FULL STACK**
+
+בנה והפעל:
+
+* FastAPI Production backend
+* Redis + Postgres/Neon
+* Docker Compose + Render + אפשרות HA בעתיד
+* Self-healing services
+* Health checks / readiness / liveness
+* Zero-downtime deploy
+* Auto-restart on failure
+* One-click rollback
+
+תנאי הצלחה:
+
+* כל רכיב מתאושש לבד
+* בלי שיהיו מצבים תקועים
+* לוגים נגישים ומרוכזים
+
+---
+
+### ✅ **2) AUTO-PILOT V5 — FULL DYNAMIC MODE**
+
+המערכת חייבת לעבוד ב-100% אוטומטי:
+
+#### מצב־שוק דינמי (5 מצבים):
+
+1. Trending-Up
+2. Trending-Down
+3. Choppy (Range)
+4. High-Volatility
+5. Reversal-Setup
+
+#### מערכת מחליטה לבד:
+
+* לאיזה מצב לעבור
+* מתי לעצור מסחר
+* מתי להקטין סיכון
+* מתי לחזור לפעילות
+
+טריגרים:
+
+* ATR regime
+* ADX strength
+* RSI pressure
+* Market structure
+* Funding rate
+* AI sentiment
+* AI news impact
+* Volume anomalies
+
+---
+
+### ✅ **3) SL/TP — ULTRA-PLUS AUTO SYSTEM**
+
+לממש **ניהול מלא דינמי**:
+
+#### שלבים:
+
+1. **Auto-BE** אחרי TP1
+2. **Trailing חכם** לפי:
+
+   * ATR × dynamic factor
+   * Progress threshold ≥ 0.5R
+3. **Profit-Lock חובה**
+
+   * SL לא יורד לעולם
+4. **Auto Freeze**
+
+   * אם תנודה חריגה
+5. **Auto-Flip**
+
+   * רק במצבים מאושרים
+
+אין למחוק SL לפני אישור Binance.
+
+---
+
+### ✅ **4) HEDGING & PROTECTION**
+
+להטמיע:
+
+* Auto-Hedge בזמן אירוע קיצוני
+* Hedge-Scaling לפי חשיפה
+* Cross-Exchange balancing (Binance ↔ Bybit)
+* Insurance-Mode (hedge + reduce exposure)
+* Auto-pause לפני:
+
+  * CPI
+  * FOMC
+  * High-Impact news
+
+טריגרים מופעלים **אוטומטית**.
+
+---
+
+### ✅ **5) MULTI-ACCOUNT ORCHESTRATION**
+
+הפעל תמיכה מלאה:
+
+* עד 7 משתמשים
+* כל משתמש מזין API של הבורסה שלו
+* אדמין יכול:
+
+  * להקפיא
+  * להחליף
+  * לכבות/להדליק
+* אין סחר ללא אישור אדמין אם מוגדר
+
+מצב דיפולט:
+
+* המערכת עובדת אוטומטית
+* אדמין יכול לעקוף בלחיצה
+
+---
+
+### ✅ **6) PROFIT-SHARE BILLING (AUTOMATIC)**
+
+לממש מערכת חיוב אוטומטית:
+
+* פעם בשבוע
+* חישוב 18% מהרווח בלבד
+* לפי כל בורסה בנפרד:
+
+  * כמות טריידים
+  * אחוז הצלחה
+  * רווח/הפסד
+* שליחת הודעה למשתמש:
+
+  * סכום לתשלום
+  * ארנק USDT
+  * אישור בלחיצה
+* לא משלם תוך 24 שעות:
+
+  * חשבון מושעה אוטומטית
+
+אדמין יכול לשחרר/לבטל.
+
+---
+
+### ✅ **7) AUTO-SCALING & RESOURCE LOGIC**
+
+המערכת מבצעת:
+
+* Auto-Reallocation לפי רווחיות
+* Auto-Scaling לפי סמלים מצליחים
+* Auto-Pause כשאין תקציב פנוי
+* Auto-Resume כשנסגר טרייד
+
+אין סריקה מיותרת כשאין תקציב.
+
+---
+
+### ✅ **8) FAILOVER & SELF-HEALING**
+
+להחיל:
+
+* Auto-Recovery אחרי קריסה
+* Failover אם Binance נופלת
+* שימוש ב-fallback lists
+* Retry strategy חכם
+* Circuit-Breaker מתקדם
+
+Kill-Switch:
+
+* סוגר הכול מיד
+* ללא סחר
+* נדרש אישור אדמין לפתיחה
+
+---
+
+### ✅ **9) BACKUP & SECURITY**
+
+לממש:
+
+* Backups אוטומטיים יומיים
+* שחזור ב-1 קליק
+* Audit-log בלתי ניתן למחיקה
+* סימן מים לכל פעולה של הסוכן
+* HMAC + nonce anti-replay
+* מפתח אדמין שני (emergency)
+
+---
+
+### ✅ **10) DASHBOARD + GRAFANA**
+
+להקים:
+
+#### דשבורד חי:
+
+* Mode (Market State)
+* News Impact
+* Funding regime
+* SL/TP status
+* Auto-Flip active
+* Hedge status
+* Kill-switch state
+* Users state
+* Symbol performance heatmap
+
+#### אינטגרציות:
+
+* Grafana panels
+* Prometheus metrics
+* Web-console actions
+
+#### יכולות אדמין:
+
+* Freeze all
+* Enable/disable autopilot
+* Force flip
+* Force pause
+* Add/remove user
+
+---
+
+### ✅ **11) AI INTEGRATION**
+
+להוסיף:
+
+* OLLAMA chat בתוך הדשבורד
+* Post-trade AI evaluator
+* ML prediction טווח 5–15 דקות
+* AI שמחליט:
+
+  * להגדיל/להקטין ATR
+  * מתי לא לסחור יום שלם (רק כשהוא מחובר)
+
+---
+
+### ✅ **12) TEST SUITE**
+
+לספק בדיקות מוכנות:
+
+* pytest + integration
+* test_sl_trailing()
+* test_auto_flip()
+* test_market_mode_switch()
+* test_news_pause()
+* test_profit_share()
+* test_failover()
+* test_kill_switch()
+* כל הבדיקות חייבות לעבור ✅
+
+---
+
+### ✅ **13) DELIVERY CONDITIONS**
+
+המשימה נחשבת מושלמת כש:
+
+✔ הכול רץ בפרודקשן
+✔ הכול אוטומטי 100%
+✔ אין תלות ידנית
+✔ אין עומסים מיותרים
+✔ אין מצבים תקועים
+✔ dashboard + grafana חיים
+✔ profit-share עובד
+✔ self-healing פעיל
+✔ failover תקין
+✔ אין רגרסיות
+
+---
+
+אם אתה רוצה עכשיו:
+
+✅ קוד מוכן להדבקה — תגיד:
+**"תן קוד מלא"**
+
+✅ או שנמשיך לבניית הענף הראשון ב-GitHub — תגיד:
+**"תתחיל שלב ביצוע"** 🚀

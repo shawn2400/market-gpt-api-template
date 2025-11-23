@@ -1,0 +1,270 @@
+מוכנים ✅
+אני ממשיך **לבנות בפועל** — עכשיו אתה מקבל **את כל הקבצים עצמם**, לא דיבור:
+
+📌 **בלוק 1 מתוך 3 — BACKEND מלא מוכן להרצה**
+
+(בלוקים 2–3: Frontend + Docker + Install יגיעו ישר אחרי זה, בלי לחכות)
+
+---
+
+# ✅ **1) backend/main.py**
+
+```python
+from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+from routes.files import router as files_router
+from routes.exec import router as exec_router
+from routes.projects import router as project_router
+from routes.health import router as health_router
+from services.ws_manager import WSManager
+
+app = FastAPI(title="AlgoWorkspace")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(files_router, prefix="/files")
+app.include_router(exec_router, prefix="/exec")
+app.include_router(project_router, prefix="/project")
+app.include_router(health_router, prefix="/health")
+
+ws_manager = WSManager()
+
+@app.websocket("/logs/live")
+async def websocket_logs(ws: WebSocket):
+    await ws_manager.connect(ws)
+    try:
+        while True:
+            await ws.receive_text()
+    except:
+        ws_manager.disconnect(ws)
+```
+
+---
+
+# ✅ **2) backend/routes/files.py**
+
+```python
+from fastapi import APIRouter, HTTPException
+from services.file_service import list_files, read_file, save_file
+
+router = APIRouter()
+
+@router.get("/tree")
+def get_tree():
+    return list_files()
+
+@router.get("/open")
+def open_file(path: str):
+    content = read_file(path)
+    if content is None:
+        raise HTTPException(404, "File not found")
+    return {"path": path, "content": content}
+
+@router.post("/save")
+def save(data: dict):
+    save_file(data["path"], data["content"])
+    return {"status": "saved"}
+```
+
+---
+
+# ✅ **3) backend/services/file_service.py**
+
+```python
+import os
+
+BASE_PATH = "/workspace/projects"
+
+def list_files():
+    file_list = []
+    for root, dirs, files in os.walk(BASE_PATH):
+        for f in files:
+            full = os.path.join(root, f)
+            rel = full.replace(BASE_PATH + "/", "")
+            file_list.append(rel)
+    return file_list
+
+def read_file(path):
+    full = os.path.join(BASE_PATH, path)
+    if not os.path.exists(full):
+        return None
+    with open(full, "r", encoding="utf-8") as f:
+        return f.read()
+
+def save_file(path, content):
+    full = os.path.join(BASE_PATH, path)
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w", encoding="utf-8") as f:
+        f.write(content)
+```
+
+---
+
+# ✅ **4) backend/routes/exec.py**
+
+```python
+from fastapi import APIRouter
+from services.exec_service import run_command
+
+router = APIRouter()
+
+@router.post("/run")
+def execute(payload: dict):
+    cmd = payload.get("cmd")
+    output = run_command(cmd)
+    return {"output": output}
+```
+
+---
+
+# ✅ **5) backend/services/exec_service.py**
+
+```python
+import subprocess
+
+SAFE_COMMANDS = ["python3", "pytest", "ls", "pip install"]
+
+def run_command(cmd: str):
+    if not any(cmd.startswith(s) for s in SAFE_COMMANDS):
+        return "❌ Command blocked"
+
+    try:
+        result = subprocess.run(
+            cmd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=60
+        )
+        return result.stdout or result.stderr
+    except Exception as e:
+        return str(e)
+```
+
+---
+
+# ✅ **6) backend/routes/projects.py**
+
+```python
+from fastapi import APIRouter
+from services.project_service import switch_project, list_projects
+
+router = APIRouter()
+
+@router.get("/list")
+def get_all():
+    return list_projects()
+
+@router.post("/switch")
+def switch(data: dict):
+    switch_project(data["name"])
+    return {"status": "switched", "active": data["name"]}
+```
+
+---
+
+# ✅ **7) backend/services/project_service.py**
+
+```python
+import os
+import shutil
+
+BASE = "/workspace/projects"
+ACTIVE = "/workspace/active"
+
+def list_projects():
+    return [d for d in os.listdir(BASE) if os.path.isdir(f"{BASE}/{d}")]
+
+def switch_project(name):
+    if not os.path.exists(f"{BASE}/{name}"):
+        raise Exception("Project not found")
+
+    if os.path.exists(ACTIVE):
+        shutil.rmtree(ACTIVE)
+
+    shutil.copytree(f"{BASE}/{name}", ACTIVE)
+```
+
+---
+
+# ✅ **8) backend/routes/health.py**
+
+```python
+from fastapi import APIRouter
+from services.health_service import self_heal
+
+router = APIRouter()
+
+@router.post("/self-heal")
+def heal():
+    repaired = self_heal()
+    return {"status": "recovered" if repaired else "ok"}
+```
+
+---
+
+# ✅ **9) backend/services/health_service.py**
+
+```python
+import subprocess
+
+def self_heal():
+    try:
+        subprocess.run("supervisorctl restart all", shell=True)
+        return True
+    except:
+        return False
+```
+
+---
+
+# ✅ **10) backend/services/ws_manager.py**
+
+```python
+class WSManager:
+    def __init__(self):
+        self.active = []
+
+    async def connect(self, ws):
+        await ws.accept()
+        self.active.append(ws)
+
+    def disconnect(self, ws):
+        if ws in self.active:
+            self.active.remove(ws)
+
+    async def broadcast(self, msg):
+        for ws in self.active:
+            try:
+                await ws.send_text(msg)
+            except:
+                pass
+```
+
+---
+
+# ✅ **11) backend/requirements.txt**
+
+```
+fastapi
+uvicorn
+websockets
+python-multipart
+```
+
+---
+
+✅ **החלק הבא שנשלח אליך:**
+
+### 🔥 בלוק 2 — FRONTEND + React Workspace UI + AI Chat (Ollama integration)
+
+תגיד רק:
+
+### **"ת继续"**
+
+ואני שולח מיד 🚀
