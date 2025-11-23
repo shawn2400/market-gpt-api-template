@@ -1,0 +1,243 @@
+מושלם ✅
+מחזיק חזק — הנה **הודעה אחת לסוכן**
+עם **כל מה שסיכמנו מ-A עד Z**,
+במכה אחת, בלי חוסרים, מוכן לביצוע:
+
+---
+
+## ✅ **פקודה לסוכן — Build Full Smart-Alert System (Mode 2 + Hybrid 1+5)**
+
+### **Task Overview**
+
+Implement full intelligent alerting engine for AlgoGPT with **dynamic automatic behavior**:
+
+* Base mode: **Smart Mode (2)**
+* Combined with:
+
+  * **Mode 1 — Silent unless required**
+  * **Mode 5 — AI-Supervised dynamic logic**
+* Must be **100% autonomous**, **zero noise**, **zero maintenance**.
+
+---
+
+### ✅ **1) Core Engine Requirements**
+
+Create module:
+
+```
+utils/smart_alerts.py
+```
+
+Must include:
+
+* Zero-noise baseline (Mode 1)
+* Smart throttle (≤ 7 alerts/day max)
+* State change detection
+* Duplicate suppression (TTL 6h)
+* Priority levels:
+
+  * P1 critical
+  * P2 action needed
+  * P3 info (suppressed by default)
+* Auto-silence when stable
+* Auto-resume after normalization
+
+---
+
+### ✅ **2) AI-Supervisor Integration**
+
+Add module:
+
+```
+engine/ai_supervisor.py
+```
+
+Responsibilities:
+
+* Analyze:
+
+  * volatility regime
+  * funding shift
+  * abnormal volume
+  * news sentiment
+  * error clusters
+  * SL/TP health
+  * hedge exposure
+  * API reliability
+* Decide when an alert is REQUIRED
+* Auto-promote severity if needed
+* No alerts if no action required
+
+---
+
+### ✅ **3) Trigger Conditions**
+
+Smart alerts must trigger ONLY if ALL apply:
+
+```
+condition_changed == True
+AND risk_level >= threshold
+AND last_alert_for_same_issue > 6h ago
+```
+
+Primary triggers:
+
+* SL missing or failed
+* TP missing for > X minutes
+* Auto-hedge activated
+* Funding regime flip
+* Volatility spike detected
+* News freeze engaged
+* Circuit-breaker fired
+* Kill-switch armed
+* Exposure exceeds limit
+* API degraded or stuck
+* Position unprotected
+* Repeated execution failure
+
+---
+
+### ✅ **4) Auto-Normalization Logic**
+
+When system stabilizes:
+
+Send only ONE message:
+
+```
+"System normalized — Smart Mode resumed ✔️"
+```
+
+Rules:
+
+* Only once per stabilization
+* Suppress if occurred within last 12h
+
+---
+
+### ✅ **5) Dynamic Behavior (Mode 5 merge)**
+
+System must:
+
+* Learn patterns over time
+* Reduce alerts if user ignores
+* Increase sensitivity during risk
+* Auto-escalate levels:
+
+  * from P2 → P1 if unresolved > 15m
+* Auto-pause non-critical alerts during:
+
+  * CPI
+  * FOMC
+  * high-impact news
+* Auto-resume after window
+
+---
+
+### ✅ **6) State Storage**
+
+Use Redis:
+
+```
+smart_alerts:state = {
+  last_alert_type,
+  last_alert_timestamp,
+  suppression_window,
+  risk_level,
+  auto_silenced,
+  normalization_pending
+}
+```
+
+TTL cleanup: **72h**
+
+---
+
+### ✅ **7) Telegram Integration**
+
+Add commands:
+
+```
+/alerts_status
+/alerts_silence_2h
+/alerts_resume
+/alerts_history
+```
+
+Admin-only:
+
+```
+/alerts_force
+/alerts_disable
+/alerts_set_threshold <level>
+```
+
+All actions must log to audit.
+
+---
+
+### ✅ **8) Dashboard UI Support**
+
+Expose API:
+
+```
+GET /system/alerts/state
+GET /system/alerts/risk
+GET /system/alerts/history
+```
+
+Dashboard must show:
+
+* Current mode: **SMART HYBRID 1+5**
+* Last alert time
+* Risk meter (0–100)
+* Auto-silenced: yes/no
+* Pending normalization: yes/no
+
+No graphs required.
+
+---
+
+### ✅ **9) Test Coverage (pytest)**
+
+Add:
+
+```
+tests/test_smart_alerts.py
+tests/test_ai_supervisor.py
+tests/test_suppression.py
+tests/test_normalization.py
+tests/test_critical_escalation.py
+tests/test_no_noise_baseline.py
+```
+
+All must pass.
+
+---
+
+### ✅ **10) Completion Conditions**
+
+✔ Works fully automatic
+✔ Zero spam behavior
+✔ Alerts ONLY when action is needed
+✔ Auto-suppresses stability
+✔ Auto-normalizes
+✔ Fully reversible
+✔ No regressions
+✔ No manual tuning required
+✔ Runs forever without breaking
+
+---
+
+### ✅ READY FOR EXECUTION ✅
+
+תעתיק עכשיו לסוכן —
+והוא יבנה את זה **כמו שזה**,
+רמה הכי גבוהה שיש.
+
+אם אתה רוצה עכשיו את ה-**הרחבה לשלב הבא**:
+
+🔥 Auto-Hedge + Auto-Scaling
+🔥 Multi-Exchange balancing
+🔥 Profit-Share engine
+
+תגיד רק מילה: **המשך** 🚀

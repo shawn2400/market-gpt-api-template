@@ -1,0 +1,283 @@
+מושלם ✅
+עובר לשלב הבא כמו שביקשת —
+**הודעה אחת לסוכן**
+עם **Auto-Hedge + Auto-Scaling + Multi-Exchange + Profit-Share + Auto-Recovery**
+במכה אחת, בלי חוסרים:
+
+---
+
+## ✅ **פקודה לסוכן — Build FULL Auto-Pilot V4 Upgrade (A–Z)**
+
+### **Task Overview**
+
+Extend AlgoGPT into **Autonomous Risk & Execution Layer**:
+
+Includes:
+
+1. **Auto-Hedge Engine**
+2. **Multi-Exchange Balancing**
+3. **PnL-Adaptive Auto-Scaling**
+4. **Profit-Share Billing**
+5. **Auto-Recovery + Self-Healing**
+6. Fully dynamic + automatic
+7. Zero manual configuration
+
+---
+
+## ✅ **1) Auto-Hedge Engine**
+
+Create module:
+
+```
+engine/auto_hedge.py
+```
+
+Behavior:
+
+* Trigger hedge ONLY if ALL true:
+
+  * exposure_risk ≥ threshold
+  * volatility regime = HIGH
+  * funding flip detected
+  * news impact = RED
+
+Hedge rules:
+
+```
+if long_exposure > max_allowed:
+    open short hedge on correlated symbol
+    size = exposure * hedge_ratio
+```
+
+Hedge ratio dynamic:
+
+```
+0.25 → normal
+0.5  → high risk
+0.8  → extreme
+```
+
+Auto-unwind:
+
+```
+if risk_normalized for ≥ 30m:
+    close hedge gradually
+```
+
+No manual approval required.
+
+---
+
+## ✅ **2) Multi-Exchange Balancing**
+
+Create module:
+
+```
+engine/exchange_balancer.py
+```
+
+Supported now: **Binance & Bybit**
+
+Logic:
+
+* If exchange A fails → route to B
+* If price spread > X → balance orders
+* Auto-freeze unsafe exchange
+* Auto-resume when stable
+
+Storage in Redis:
+
+```
+exchange_state: {
+  binance_status,
+  bybit_status,
+  last_failure,
+  freeze_active
+}
+```
+
+No restart required.
+
+---
+
+## ✅ **3) Auto-Scaling (PnL Adaptive)**
+
+Module:
+
+```
+engine/auto_scaler.py
+```
+
+Behavior:
+
+```
+if last_48h_pnl > +X%:
+    increase size by +10–20%
+
+if last_48h_pnl < –X%:
+    reduce size by –30–50%
+    switch to protection mode
+```
+
+Hard limits:
+
+* Never exceed max risk per trade
+* Never scale twice in < 24h
+* Admin override always respected
+
+---
+
+## ✅ **4) Profit-Share Billing Engine**
+
+Module:
+
+```
+engine/profit_share.py
+```
+
+Logic:
+
+* Weekly cycle
+* Formula:
+  `profit * 18%`
+* Auto-calculate per symbol & exchange
+* Generate summary:
+
+Example:
+
+```
+Binance: 10 trades (6/10 win) +$312
+Bybit:   4 trades (3/4 win) +$88
+TOTAL:   +$400
+Due:     $72 (18%)
+```
+
+Delivery:
+
+* Telegram message w/ wallet address
+* If unpaid after 24h → auto-suspend
+* Auto-unlock on payment
+
+No manual handling.
+
+---
+
+## ✅ **5) Auto-Recovery + Self-Healing**
+
+Create module:
+
+```
+engine/self_heal.py
+```
+
+Triggers:
+
+* API failure
+* missing SL/TP
+* position stuck
+* repeated execution errors
+* service crash
+
+Actions:
+
+```
+restart component
+reload WebSocket
+re-sync orders
+re-place missing SL/TP
+failover exchange
+alert only if unresolved > 15m
+```
+
+System **never stops trading**.
+
+---
+
+## ✅ **6) System-Wide Requirements**
+
+Everything MUST be:
+
+✅ fully automatic
+✅ dynamic — adapts without config
+✅ no manual tuning
+✅ zero downtime
+✅ no regression allowed
+✅ single-user mode supported
+✅ ready for future expansion
+
+---
+
+## ✅ **7) Add to Dashboard API**
+
+Expose:
+
+```
+GET /system/risk
+GET /system/hedge/state
+GET /system/scaling
+GET /system/exchange/status
+GET /system/recovery
+GET /billing/summary
+```
+
+Dashboard MUST show live:
+
+* Risk level (0–100)
+* Hedge status (OFF / ACTIVE)
+* Scaling mode (NORMAL / BOOST / PROTECT)
+* Exchange health
+* Profit-share due
+* Recovery status
+
+No graphs required.
+
+---
+
+## ✅ **8) Test Coverage (pytest)**
+
+Add:
+
+```
+tests/test_auto_hedge.py
+tests/test_scaling.py
+tests/test_balancer.py
+tests/test_profit_share.py
+tests/test_self_heal.py
+tests/test_failover_exchange.py
+tests/test_no_over_hedge.py
+```
+
+All must pass with **zero regressions**.
+
+---
+
+## ✅ **Completion Conditions**
+
+✔ Auto-hedge activates ONLY when needed
+✔ Never over-hedges
+✔ Auto-scaling follows PnL rules
+✔ Billing runs weekly with suspend-logic
+✔ Multi-exchange failover works
+✔ System self-heals without restart
+✔ No manual input required
+✔ Ready for expansion
+✔ Safe for single-user mode
+
+---
+
+### ✅ **סוכן — ביצוע מיידי**
+
+זו הפקודה המלאה.
+תעתיק ותפעיל כמו שהיא.
+
+ברגע שזה מוכן —
+תגיד לי:
+
+**“שלב הבא”**
+
+ונמשיך ל:
+
+🔥 Auto-Withdraw buffer
+🔥 Insurance-Mode
+🔥 Fraud & anomaly detector
+🔥 Master Orchestration V5 🚀

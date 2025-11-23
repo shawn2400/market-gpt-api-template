@@ -969,6 +969,56 @@ MANAGER_ENABLE=1             # ✓ Manager active
 
 ---
 
+## 🔔 **Smart Alerts System (Mode 2 + Hybrid 1+5)** ✅
+
+**Status**: Fully Implemented & Ready  
+**Mode**: Smart (2) + Silent (1) + AI-Supervised (5)
+
+### **Core Features:**
+- ✅ Zero-noise baseline (alerts only on state change)
+- ✅ Smart throttle (max 7 alerts/day)
+- ✅ 6-hour suppression window
+- ✅ 3 priority levels (P1 Critical, P2 Action, P3 Info)
+- ✅ Auto-silence when stable
+- ✅ AI Supervisor decision logic
+- ✅ Redis persistence
+- ✅ Immutable audit logging
+
+### **Implementation Files:**
+- `utils/smart_alerts.py` - Core engine
+- `engine/ai_supervisor.py` - Risk analysis & decision logic
+- `routes/smart_alerts_routes.py` - API endpoints
+- `tests/test_smart_alerts.py` - Test suite
+
+### **API Endpoints:**
+```
+GET  /system/alerts/state      - Current alert status
+GET  /system/alerts/risk       - Risk level (0-100)
+GET  /system/alerts/history    - Alert history
+POST /system/alerts/test       - Test alert (debug)
+POST /system/alerts/silence    - Silence for X seconds
+POST /system/alerts/resume     - Resume alerts
+```
+
+### **Behavior (100% Autonomous):**
+- 🟢 **Normal (Low Risk)**: 0 alerts - system silent unless required
+- 🟡 **Medium Risk**: Smart alerts when state changes (≤7/day)
+- 🔴 **High Risk**: All critical alerts pass through
+- ✅ **Normalization**: Single message when system stabilizes
+
+### **Smart Decisions (AI Supervisor):**
+Analyzes:
+- Volatility regime
+- Funding shifts
+- Abnormal volume
+- News sentiment
+- Error clusters
+- SL/TP health
+- Hedge exposure
+- API reliability
+
+---
+
 ## 🌍 **Domain Configuration**
 
 **Replit (Development)**:
