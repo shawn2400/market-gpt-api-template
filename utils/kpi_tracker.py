@@ -19,10 +19,13 @@ import logging
 logger = logging.getLogger("algogpt.kpi_tracker")
 
 # Redis for fast KPI tracking
+REDIS_AVAILABLE = False
+aioredis = None
 try:
     import redis.asyncio as aioredis
     REDIS_AVAILABLE = True
 except ImportError:
+    aioredis = None
     REDIS_AVAILABLE = False
 
 REDIS_URL = os.getenv("REDIS_URL") or os.getenv("VALKEY_URL") or ""
@@ -38,7 +41,7 @@ class KPITracker:
     
     async def init(self):
         """Initialize Redis connection"""
-        if not REDIS_AVAILABLE or not REDIS_URL:
+        if not REDIS_AVAILABLE or not REDIS_URL or not aioredis:
             logger.warning("Redis not available for KPI tracking")
             return
         

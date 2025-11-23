@@ -8,7 +8,8 @@ Reads from trades database and populates live_kpis table with historical data.
 import os
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
+from contextlib import suppress
 from utils.db import _conn, _is_postgres, DB_URL, USE_DB
 
 logging.basicConfig(
@@ -90,41 +91,45 @@ def get_closed_positions(days: int) -> List[Dict[str, Any]]:
     is_pg = _is_postgres(DB_URL)
     cutoff_ts = (datetime.now() - timedelta(days=days)).timestamp()
     
-    positions = []
-    with _conn() as con:
-        cur = con.cursor()
-        
-        if is_pg:
-            cur.execute("""
-                SELECT id, ts_open, ts_close, symbol, side, qty, entry, exit, pnl, status
-                FROM positions
-                WHERE status = 'CLOSED' 
-                  AND ts_close >= to_timestamp(%s)
-                ORDER BY ts_close DESC
-            """, (cutoff_ts,))
-        else:
-            cur.execute("""
-                SELECT id, ts_open, ts_close, symbol, side, qty, entry, exit, pnl, status
-                FROM positions
-                WHERE status = 'CLOSED' 
-                  AND ts_close >= ?
-                ORDER BY ts_close DESC
-            """, (cutoff_ts,))
-        
-        rows = cur.fetchall()
-        for row in rows:
-            positions.append({
-                "id": row[0],
-                "ts_open": row[1],
-                "ts_close": row[2],
-                "symbol": row[3],
-                "side": row[4],
-                "qty": row[5],
-                "entry": row[6],
-                "exit": row[7],
-                "pnl": row[8],
-                "status": row[9]
-            })
+    positions: List[Dict[str, Any]] = []
+    try:
+        with suppress(Exception):
+            with _conn() as con:
+                cur = con.cursor()
+                
+                if is_pg:
+                    cur.execute("""
+                        SELECT id, ts_open, ts_close, symbol, side, qty, entry, exit, pnl, status
+                        FROM positions
+                        WHERE status = 'CLOSED' 
+                          AND ts_close >= to_timestamp(%s)
+                        ORDER BY ts_close DESC
+                    """, (cutoff_ts,))
+                else:
+                    cur.execute("""
+                        SELECT id, ts_open, ts_close, symbol, side, qty, entry, exit, pnl, status
+                        FROM positions
+                        WHERE status = 'CLOSED' 
+                          AND ts_close >= ?
+                        ORDER BY ts_close DESC
+                    """, (cutoff_ts,))
+                
+                rows = cur.fetchall()
+                for row in rows:
+                    positions.append({
+                        "id": row[0],
+                        "ts_open": row[1],
+                        "ts_close": row[2],
+                        "symbol": row[3],
+                        "side": row[4],
+                        "qty": row[5],
+                        "entry": row[6],
+                        "exit": row[7],
+                        "pnl": row[8],
+                        "status": row[9]
+                    })
+    except Exception as e:
+        logger.error(f"Failed to get closed positions: {e}")
     
     return positions
 
@@ -143,47 +148,51 @@ def insert_or_update_kpi(day: str, kpis_7d: Dict[str, Any], kpis_30d: Dict[str, 
     
     is_pg = _is_postgres(DB_URL)
     
-    with _conn() as con:
-        cur = con.cursor()
-        
-        if is_pg:
-            cur.execute("""
-                INSERT INTO live_kpis (day, winrate_7d, winrate_30d, exp_rr_30d, dd_7d, consec_sl, updated_at)
-                VALUES (%s, %s, %s, %s, %s, %s, NOW())
-                ON CONFLICT (day) 
-                DO UPDATE SET 
-                    winrate_7d = EXCLUDED.winrate_7d,
-                    winrate_30d = EXCLUDED.winrate_30d,
-                    exp_rr_30d = EXCLUDED.exp_rr_30d,
-                    dd_7d = EXCLUDED.dd_7d,
-                    consec_sl = EXCLUDED.consec_sl,
-                    updated_at = NOW()
-            """, (
-                day,
-                kpis_7d["winrate"],
-                kpis_30d["winrate"],
-                kpis_30d["avg_rr"],
-                abs(kpis_7d["total_pnl"]) if kpis_7d["total_pnl"] < 0 else 0.0,
-                max(kpis_7d["consec_sl"], kpis_30d["consec_sl"])
-            ))
-        else:
-            cur.execute("""
-                INSERT OR REPLACE INTO live_kpis 
-                (day, winrate_7d, winrate_30d, exp_rr_30d, dd_7d, consec_sl, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
-            """, (
-                day,
-                kpis_7d["winrate"],
-                kpis_30d["winrate"],
-                kpis_30d["avg_rr"],
-                abs(kpis_7d["total_pnl"]) if kpis_7d["total_pnl"] < 0 else 0.0,
-                max(kpis_7d["consec_sl"], kpis_30d["consec_sl"])
-            ))
-        
-        if not is_pg:
-            con.commit()
-        
-        logger.info(f"Updated KPIs for {day}: Win%[7d]={kpis_7d['winrate']:.1f}%, Win%[30d]={kpis_30d['winrate']:.1f}%")
+    try:
+        with suppress(Exception):
+            with _conn() as con:
+                cur = con.cursor()
+            
+                if is_pg:
+                    cur.execute("""
+                        INSERT INTO live_kpis (day, winrate_7d, winrate_30d, exp_rr_30d, dd_7d, consec_sl, updated_at)
+                        VALUES (%s, %s, %s, %s, %s, %s, NOW())
+                        ON CONFLICT (day) 
+                        DO UPDATE SET 
+                            winrate_7d = EXCLUDED.winrate_7d,
+                            winrate_30d = EXCLUDED.winrate_30d,
+                            exp_rr_30d = EXCLUDED.exp_rr_30d,
+                            dd_7d = EXCLUDED.dd_7d,
+                            consec_sl = EXCLUDED.consec_sl,
+                            updated_at = NOW()
+                    """, (
+                        day,
+                        kpis_7d["winrate"],
+                        kpis_30d["winrate"],
+                        kpis_30d["avg_rr"],
+                        abs(kpis_7d["total_pnl"]) if kpis_7d["total_pnl"] < 0 else 0.0,
+                        max(kpis_7d["consec_sl"], kpis_30d["consec_sl"])
+                    ))
+                else:
+                    cur.execute("""
+                        INSERT OR REPLACE INTO live_kpis 
+                        (day, winrate_7d, winrate_30d, exp_rr_30d, dd_7d, consec_sl, updated_at)
+                        VALUES (?, ?, ?, ?, ?, ?, strftime('%s', 'now'))
+                    """, (
+                        day,
+                        kpis_7d["winrate"],
+                        kpis_30d["winrate"],
+                        kpis_30d["avg_rr"],
+                        abs(kpis_7d["total_pnl"]) if kpis_7d["total_pnl"] < 0 else 0.0,
+                        max(kpis_7d["consec_sl"], kpis_30d["consec_sl"])
+                    ))
+                
+                if not is_pg:
+                    con.commit()
+            
+            logger.info(f"Updated KPIs for {day}: Win%[7d]={kpis_7d['winrate']:.1f}%, Win%[30d]={kpis_30d['winrate']:.1f}%")
+    except Exception as e:
+        logger.error(f"Failed to insert/update KPI: {e}")
 
 def populate_kpis():
     """
