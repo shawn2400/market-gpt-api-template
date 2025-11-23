@@ -1,50 +1,33 @@
 """
-HyperTrader Client — Fast Execution Integration
+🚫 HyperTrader Client — DEPRECATED v10.0
+
+❌ NOT SUPPORTED IN v10.0+
+This integration has been removed. Only official 6 integrations supported:
+1. Binance API
+2. Bybit API
+3. 3Commas API
+4. Cryptohopper API
+5. WunderTrading API
+6. TradingView Webhooks
+
+If you were using this, please migrate to one of the supported integrations.
 """
-import os
-from typing import Dict, Any
+
+import logging
+
+logger = logging.getLogger("algogpt.hyper_client")
 
 class HyperTraderClient:
-    ptype = "execution"
-
-    def __init__(self, capabilities: Dict[str, Any]):
-        self.cap = capabilities
-        self.api_key = os.getenv("HYPER_KEY", "demo")
-        self.enabled = True
-        self.last_error = None
-        self.score = 0
-
-    async def execute(self, order: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute order with HyperTrader"""
-        try:
-            if not self.enabled:
-                return {"error": "disabled"}
-            
-            return {
-                "source": "HyperTrader",
-                "latency": self.cap.get("latency", "normal"),
-                "result": "ok",
-                "order": order
-            }
-        except Exception as e:
-            self.last_error = str(e)
-            return {"error": str(e)}
-
-    def disable(self):
-        self.enabled = False
+    """DEPRECATED - Use official integrations instead"""
     
-    def enable(self):
-        self.enabled = True
-    
-    def set_score(self, score: float):
-        self.score = max(0, min(10, score))
-    
-    def get_status(self) -> Dict[str, Any]:
-        return {
-            "name": "hyper",
-            "type": self.ptype,
-            "enabled": self.enabled,
-            "score": self.score,
-            "capabilities": self.cap,
-            "last_error": self.last_error
-        }
+    def __init__(self, capabilities=None):
+        raise NotImplementedError(
+            "❌ HyperTrader is NOT SUPPORTED in v10.0+\n"
+            "Use one of the 6 official integrations:\n"
+            "  1. Binance API\n"
+            "  2. Bybit API\n"
+            "  3. 3Commas API\n"
+            "  4. Cryptohopper API\n"
+            "  5. WunderTrading API\n"
+            "  6. TradingView Webhooks"
+        )
