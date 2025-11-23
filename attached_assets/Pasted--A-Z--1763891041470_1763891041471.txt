@@ -1,0 +1,201 @@
+מושלם ✅
+הנה **הודעה אחת מושלמת** — להעתיק כמו שהיא לסוכן.
+זו גרסת **A-Z מלאה**, בלי חוסרים, מוכנה לביצוע.
+
+---
+
+# ✅ **פקודה לסוכן — Build ALGO-REPLIT System (A-Z Full Execution)**
+
+```
+TASK: Build a full self-hosted ALGO-REPLIT development system, identical in capability to Replit, fully automated, single-user, zero-token, integrated with AlgoGPT. Execute from A-Z.
+
+====================================================
+1) CORE SYSTEM SETUP
+====================================================
+- Create central backend service named: core-control-server
+- Stack: FastAPI + WebSockets + Redis + Postgres (optional)
+- Features required:
+  ✅ Single-user auth (admin only)
+  ✅ Session persistence
+  ✅ Real-time events channel
+  ✅ File-system access layer (sandboxed root: /workspaces)
+  ✅ Process manager (start/stop/restart projects)
+  ✅ Logs streaming over WebSocket
+  ✅ API for AI-agent command execution
+
+Security rules:
+  - No external access except through admin token
+  - No trading execution capabilities
+  - Read/write only inside managed folders
+  - Full audit logging on every operation
+
+====================================================
+2) OLLAMA AI INTEGRATION
+====================================================
+- Install Ollama locally
+- Enable models: llama3, codellama, mistral
+- Expose local endpoint: http://localhost:11434
+- Create module: ai_agent.py
+
+Capabilities required:
+  ✅ Code generation
+  ✅ Code modification
+  ✅ Diff-based editing
+  ✅ Error explanation
+  ✅ Project scaffolding
+  ✅ Test generation
+
+AI must NEVER:
+  ⛔ trigger trading actions
+  ⛔ modify live AlgoGPT runtime without admin confirmation
+
+====================================================
+3) WEB IDE DASHBOARD (REPLIT-STYLE)
+====================================================
+Create full UI web interface:
+
+Frontend stack:
+  - React + Vite
+  - Tailwind
+  - WebSocket live terminal
+
+UI components required:
+  ✅ File Explorer (tree)
+  ✅ Code Editor (Monaco)
+  ✅ Integrated Terminal
+  ✅ Logs Viewer
+  ✅ Project Switcher
+  ✅ Start/Stop buttons per service
+  ✅ Health status indicators
+  ✅ AI Chat panel (Ollama-powered)
+
+All UI must update live without refresh.
+
+====================================================
+4) PROJECT WORKSPACE SYSTEM
+====================================================
+Create root directory: /workspaces
+
+Capabilities:
+  ✅ Create new project via UI
+  ✅ Clone from GitHub
+  ✅ Duplicate existing workspace
+  ✅ Delete / rename safely
+  ✅ Run multiple projects in parallel
+  ✅ Each project isolated in its own venv or container
+
+Each workspace must include:
+  - requirements.txt auto-install
+  - run.sh start script
+  - auto-restart on crash
+
+====================================================
+5) DOCKER DEPLOYMENT (SINGLE COMMAND)
+====================================================
+Generate files:
+
+Dockerfile
+docker-compose.yml
+install.sh
+
+Requirements:
+  ✅ Zero manual config
+  ✅ One-command bootstrap
+  ✅ Auto-start services after reboot
+  ✅ Mount persistent volume for /workspaces
+
+====================================================
+6) ALGO-GPT INTEGRATION (READ/WRITE)
+====================================================
+Do NOT execute trades.
+
+Allowed capabilities:
+  ✅ Modify AlgoGPT codebase
+  ✅ Create new modules (ex: trade_manager_v2)
+  ✅ Run local tests
+  ✅ Deploy updates ONLY after admin approval
+
+Add API endpoints:
+  - /algogpt/files
+  - /algogpt/run_tests
+  - /algogpt/apply_patch (requires confirmation)
+
+====================================================
+7) AUTO-SCALING & EXPANSION READY
+====================================================
+System must SUPPORT future upgrades:
+  ✅ Multi-project parallel execution
+  ✅ Resource expansion without downtime
+  ✅ Add containers without rebuild
+  ✅ Plug-in architecture for future agents
+
+No load balancers needed now.
+
+Single-user mode ONLY.
+
+====================================================
+8) BACKUP & RECOVERY (MANDATORY)
+====================================================
+Implement:
+  ✅ Automatic nightly backup of /workspaces
+  ✅ Retain 7 days rolling
+  ✅ One-click restore via dashboard
+  ✅ Zip export option
+
+Store backups locally for now.
+
+====================================================
+9) EMERGENCY SAFETY
+====================================================
+Must include:
+  ✅ Freeze switch (instant stop of ALL processes)
+  ✅ No deletion without confirmation
+  ✅ No remote execution without audit logging
+  ✅ Every agent action tagged with watermark
+
+====================================================
+10) COMPLETION REQUIREMENTS
+====================================================
+System is COMPLETE when:
+
+✔ Dashboard fully functional
+✔ AI agent edits code and runs tasks
+✔ Multiple projects can be created and run
+✔ Zero-token local AI operational
+✔ One-command deployment works
+✔ No trading capabilities exist
+✔ Admin-only access enforced
+✔ Backup + restore functional
+✔ Everything synchronized and stable
+
+====================================================
+FINAL DELIVERABLES
+====================================================
+Provide:
+
+✅ Full source code
+✅ Dockerfile + docker-compose + install.sh
+✅ README with setup instructions
+✅ Admin login bootstrap details
+✅ UI build instructions
+✅ Test validation steps
+
+Execute now and deliver in structured parts.
+```
+
+---
+
+### ✅ מוכן להמשך
+
+כשאתה רוצה:
+
+* לקבל את **הקוד בפועל**
+* או **Docker bundle הורדה**
+* או **UI מוכן**
+* או **Install script בשורה אחת**
+
+תגיד לי:
+
+**"שלח חלק 1"**
+
+ואני מתחיל לשלוח את הכול בשלבים — בלי השהייה, בלי דילוגים.

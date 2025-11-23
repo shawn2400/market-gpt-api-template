@@ -1,0 +1,358 @@
+╔════════════════════════════════════════════════════════════════╗
+║                ALGO-REPLIT v1.0 Installation Guide            ║
+║           Complete Self-Hosted IDE for AlgoGPT                ║
+╚════════════════════════════════════════════════════════════════╝
+
+✅ SYSTEM BUILD COMPLETE - ALL FILES READY
+
+WHAT WAS BUILT:
+===============
+
+Backend (FastAPI):
+  ✓ core_control_server.py - Main API server with WebSockets
+  ✓ ollama_ai_agent.py - Local AI integration (no API keys!)
+  ✓ backup_manager.py - Auto-backup with 7-day retention
+  ✓ scale_manager.py - Dormant scaling (activates on demand)
+  ✓ safety_manager.py - Audit logging + emergency controls
+  ✓ algogpt_integration.py - Direct AlgoGPT file editing
+  ✓ main_router.py - Unified API routes
+
+Frontend (React + Vite):
+  ✓ App.jsx - Main dashboard
+  ✓ ProjectManager.jsx - Create/manage projects
+  ✓ CodeEditor.jsx - Monaco editor integration
+  ✓ Terminal.jsx - Live terminal view
+  ✓ AIChat.jsx - Chat with local AI
+  ✓ Tailwind CSS styling
+  ✓ WebSocket support for logs
+
+Docker (Complete Stack):
+  ✓ Dockerfile - Multi-stage build
+  ✓ docker-compose.yml - Full services (Redis, PostgreSQL, Ollama)
+  ✓ install.sh - One-command bootstrap
+
+Documentation:
+  ✓ README.md - Complete feature guide
+  ✓ SETUP.md - Detailed setup instructions
+  ✓ ARCHITECTURE.md - System design & scaling strategy
+
+Configuration:
+  ✓ requirements-algoreplit.txt - All Python deps
+  ✓ .gitignore - Proper version control setup
+  ✓ .env template - Pre-configured
+
+FEATURES READY:
+================
+
+NOW (Single-User Mode):
+  🎯 Web IDE with file explorer, editor, terminal
+  🤖 Local AI (Ollama) - code generation, debugging, chat
+  📦 Project management (create, run, test, delete)
+  💾 Auto-backup with 7-day retention & restore
+  🔒 Admin authentication + audit logging
+  🔐 Emergency freeze (stop everything instantly)
+  📊 Real-time resource monitoring (CPU, memory, disk)
+  🔗 Direct AlgoGPT code editing & integration
+
+DORMANT (Activate on Demand):
+  👥 Multi-user isolation (set ENABLE_SCALE_MODE=true)
+  ⚖️  Load balancing infrastructure
+  🔄 Multi-node replication ready
+  💰 Wallet separation (multi-wallet support)
+  🎁 Profit-share automation
+  🔐 Per-user API isolation
+
+AUTO-SCALING TRIGGERS:
+  • CPU > 80% → Expansion ready
+  • Memory > 85% → Expansion ready
+  • Queue overflows → Expansion ready
+  • Manual: Set ENABLE_SCALE_MODE=true
+
+QUICK START (3 Steps):
+=======================
+
+Step 1: Navigate to installation
+  cd algo-replit-system/docker
+
+Step 2: Run bootstrap (installs everything)
+  bash install.sh
+
+Step 3: Open dashboard
+  http://localhost:5173
+
+That's it! The script will:
+  ✅ Check Docker/Docker Compose
+  ✅ Create directories
+  ✅ Build images
+  ✅ Start services (Redis, PostgreSQL, Ollama, API)
+  ✅ Download AI models
+  ✅ Display access URLs
+
+ACCESS POINTS:
+================
+
+Dashboard:        http://localhost:5173
+API Documentation: http://localhost:8001/docs
+Ollama:           http://localhost:11434
+Redis:            localhost:6379
+PostgreSQL:       localhost:5432
+
+FIRST TIME LOGIN:
+=================
+
+1. Open http://localhost:5173
+2. Enter admin token (shown by install.sh from .env)
+3. Click Login
+4. Create first project:
+   - Name: "my-first-project"
+   - Template: "python"
+5. Start developing!
+
+CONFIGURATION (.env file):
+============================
+
+Generated automatically, customize as needed:
+
+  ADMIN_TOKEN=your_secure_token_here
+    → Change this! Used for all authentication
+
+  ENABLE_SCALE_MODE=false
+    → Set to true to activate multi-user features
+
+  OLLAMA_MODEL=llama2
+    → Options: llama2 (default), mistral, codellama
+
+  POSTGRES_PASSWORD=change_me_in_production
+    → Secure database password
+
+  LOG_LEVEL=INFO
+    → Options: DEBUG, INFO, WARNING, ERROR
+
+WORKFLOWS:
+===========
+
+Create Python Project:
+  1. Dashboard → Projects → Create New
+  2. Name: "data-processor"
+  3. Template: python
+  4. Click Create
+  5. Files created: src/main.py, requirements.txt, run.sh
+
+Use AI to Generate Code:
+  1. AI Chat → "Create FastAPI app"
+  2. AI generates code
+  3. Apply to project
+  4. Save
+  5. Run
+
+Edit AlgoGPT Code:
+  1. File Explorer → /algogpt
+  2. Select file
+  3. Edit in Monaco editor
+  4. Save (syncs to AlgoGPT)
+
+Run Tests:
+  1. Terminal → pytest (or npm test)
+  2. See results live
+  3. Fix issues
+  4. Re-run
+
+Backup & Restore:
+  1. Dashboard → Backup → Create
+  2. Automatic every 24h
+  3. Restore anytime
+  4. Safe restore backs up current state
+
+MONITORING:
+===========
+
+Dashboard shows real-time:
+  • CPU usage (%)
+  • Memory usage (%)
+  • Disk usage (%)
+  • Running services
+  • Project count
+  • Backup status
+
+Check system health:
+  curl http://localhost:8001/health
+
+View audit logs:
+  Dashboard → Audit Logs (or API)
+
+Emergency actions:
+  Dashboard → Emergency Freeze (stops everything)
+  Dashboard → Emergency Unfreeze (resumes)
+
+TROUBLESHOOTING:
+=================
+
+Services won't start?
+  docker-compose logs -f core-control-server
+
+Out of memory?
+  docker-compose stats
+  (Increase Docker memory limits)
+
+AI not responding?
+  docker-compose logs ollama
+  docker-compose exec ollama ollama pull llama2
+
+Database error?
+  docker-compose logs postgres
+  (Check PostgreSQL is running)
+
+Files not saving?
+  Check disk space: df -h
+  Check permissions: ls -la /workspaces
+
+Can't access dashboard?
+  Check API: curl http://localhost:8001/health
+  Check frontend: docker-compose logs core-control-server
+
+PRODUCTION TIPS:
+=================
+
+Before using in production:
+
+1. Change ADMIN_TOKEN in .env
+   openssl rand -hex 32
+
+2. Change POSTGRES_PASSWORD
+   openssl rand -hex 32
+
+3. Disable debug logging
+   LOG_LEVEL=INFO (not DEBUG)
+
+4. Set up SSL/TLS
+   Use nginx reverse proxy in front
+
+5. Regular backups
+   Automatic every 24h, kept 7 days
+
+6. Monitor resources
+   CPU/memory alerts recommended
+
+7. Update Docker images
+   docker-compose pull
+   docker-compose up -d
+
+SCALING TO MULTI-USER:
+=======================
+
+When you need multi-user features:
+
+1. Edit .env file
+   ENABLE_SCALE_MODE=true
+
+2. Restart system
+   docker-compose down
+   docker-compose up -d
+
+3. Features activated:
+   ✓ Multi-user isolation
+   ✓ Wallet separation
+   ✓ Load balancing
+   ✓ Permission tiers
+   ✓ API per-user keys
+
+4. Add more users
+   API: POST /users/create
+
+5. For multiple servers
+   Use Kubernetes or Docker Swarm
+
+DOCUMENTATION:
+================
+
+Complete guides available:
+
+  README.md        - Feature overview & examples
+  SETUP.md         - Detailed setup & configuration
+  ARCHITECTURE.md  - System design & scaling strategy
+  API docs         - Interactive: http://localhost:8001/docs
+
+API Examples:
+
+  Create project:
+    curl -X POST http://localhost:8001/projects/create \
+      -H "Content-Type: application/json" \
+      -d '{"name":"test","template":"python","token":"YOUR_TOKEN"}'
+
+  List projects:
+    curl http://localhost:8001/projects?token=YOUR_TOKEN
+
+  Run tests:
+    curl -X POST http://localhost:8001/algogpt/run_tests?token=YOUR_TOKEN
+
+  Create backup:
+    curl -X POST http://localhost:8001/backup/create?token=YOUR_TOKEN
+
+  Emergency freeze:
+    curl -X POST http://localhost:8001/emergency/freeze?token=YOUR_TOKEN
+
+DIRECTORY STRUCTURE:
+=====================
+
+After installation:
+
+  algo-replit-system/
+  ├── backend/              - FastAPI server
+  ├── frontend/             - React dashboard
+  ├── docker/              - Docker files
+  ├── docs/                - Documentation
+  ├── workspaces/          - User projects (created on first run)
+  ├── backups/             - Auto-backups (created on first run)
+  └── logs/                - System logs (created on first run)
+
+SUPPORT & HELP:
+================
+
+Dashboard features:
+  • Live logs streaming
+  • File browser with editor
+  • Terminal execution
+  • AI chat assistant
+  • Backup/restore
+  • Emergency controls
+  • Audit trail
+
+If something fails:
+  1. Check logs: docker-compose logs
+  2. Review audit: Dashboard → Audit Logs
+  3. Test health: curl http://localhost:8001/health
+  4. Restart services: docker-compose restart
+
+For AlgoGPT issues:
+  • Check /algogpt files editable
+  • Run tests: /algogpt/run_tests API
+  • Review configuration
+  • Telegram notifications show status
+
+NEXT STEPS:
+===========
+
+1. Run installation script
+   bash algo-replit-system/docker/install.sh
+
+2. Wait for services to start
+   (Takes ~30 seconds)
+
+3. Open dashboard
+   http://localhost:5173
+
+4. Create first project
+
+5. Start developing!
+
+6. When ready to scale:
+   Set ENABLE_SCALE_MODE=true in .env
+
+════════════════════════════════════════════════════════════════
+
+Built with ❤️ for AlgoGPT Trading Platform
+
+"הכול יופעל דינמי אוטומטי"
+All features activate dynamically as the system grows.
+
+Ready to deploy? → bash algo-replit-system/docker/install.sh

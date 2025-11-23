@@ -1,0 +1,85 @@
+version: '3.8'
+
+services:
+  # Redis for caching and session management
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Core Control Server (FastAPI)
+  core-control-server:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    ports:
+      - "8001:8001"
+      - "5173:5173"
+    environment:
+      REDIS_URL: "redis://redis:6379"
+      WORKSPACES_ROOT: "/workspaces"
+      ALGOGPT_ROOT: "/algogpt"
+      LOG_LEVEL: "INFO"
+      ALGO_REPLIT_ADMIN_TOKEN: "${ADMIN_TOKEN:-change_me_in_production}"
+      ENABLE_SCALE_MODE: "${ENABLE_SCALE_MODE:-false}"
+      OLLAMA_BASE_URL: "http://ollama:11434"
+    volumes:
+      - ./workspaces:/workspaces
+      - ./backups:/backups
+      - ../../../:/algogpt:ro
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Ollama AI local inference
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    environment:
+      OLLAMA_HOST: 0.0.0.0:11434
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # PostgreSQL (optional - if using separate DB instead of Neon)
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-algoreplit}
+      POSTGRES_USER: ${POSTGRES_USER:-admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-admin}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  redis_data:
+  ollama_data:
+  postgres_data:
+
+networks:
+  default:
+    name: algoreplit_network

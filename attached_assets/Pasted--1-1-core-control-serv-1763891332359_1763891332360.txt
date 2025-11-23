@@ -1,0 +1,240 @@
+מעולה ✅
+מתחילים עכשיו **חלק 1** — בלי לחכות, בלי דילוגים.
+
+---
+
+# ✅ **חלק 1 — core-control-server (קוד מלא ומוכן להרצה)**
+
+זה ה־Backend המרכזי של הסוכן (כמו Replit), כולל:
+
+✔ FastAPI
+✔ WebSockets
+✔ Terminal execution
+✔ File access
+✔ Single-user auth
+✔ Audit log
+✔ Zero-trading
+
+---
+
+## 📁 **מבנה תיקיות**
+
+```
+core-control-server/
+ ├─ app/
+ │   ├─ main.py
+ │   ├─ auth.py
+ │   ├─ file_manager.py
+ │   ├─ exec_manager.py
+ │   ├─ websocket_manager.py
+ │   ├─ audit.py
+ │   └─ settings.py
+ ├─ requirements.txt
+ └─ run.sh
+```
+
+---
+
+## ✅ **app/settings.py**
+
+```python
+import os
+
+class Settings:
+    ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "CHANGE_ME")
+    ROOT_WORKSPACE = "/workspaces"
+    AUDIT_LOG = "/workspaces/_audit.log"
+
+settings = Settings()
+```
+
+---
+
+## ✅ **app/auth.py**
+
+```python
+from fastapi import Request, HTTPException
+from .settings import settings
+
+def verify_admin(request: Request):
+    token = request.headers.get("Authorization", "").replace("Bearer ", "")
+    if token != settings.ADMIN_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+```
+
+---
+
+## ✅ **app/audit.py**
+
+```python
+from datetime import datetime
+from .settings import settings
+
+def audit(event: str):
+    with open(settings.AUDIT_LOG, "a") as f:
+        f.write(f"{datetime.utcnow()} | {event}\n")
+```
+
+---
+
+## ✅ **app/file_manager.py**
+
+```python
+import os
+from fastapi import HTTPException
+from .settings import settings
+from .audit import audit
+
+def list_files():
+    audit("LIST_FILES")
+    files = []
+    for root, _, filenames in os.walk(settings.ROOT_WORKSPACE):
+        for f in filenames:
+            files.append(os.path.join(root, f))
+    return files
+
+def read_file(path: str):
+    full = settings.ROOT_WORKSPACE + "/" + path
+    if not os.path.exists(full):
+        raise HTTPException(404, "File not found")
+    audit(f"READ_FILE {path}")
+    with open(full, "r") as f:
+        return f.read()
+
+def write_file(path: str, content: str):
+    full = settings.ROOT_WORKSPACE + "/" + path
+    audit(f"WRITE_FILE {path}")
+    os.makedirs(os.path.dirname(full), exist_ok=True)
+    with open(full, "w") as f:
+        f.write(content)
+    return {"status": "ok"}
+```
+
+---
+
+## ✅ **app/exec_manager.py**
+
+```python
+import subprocess
+from .audit import audit
+
+def run_command(cmd: str):
+    audit(f"RUN_CMD {cmd}")
+    result = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+    return {
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "code": result.returncode
+    }
+```
+
+---
+
+## ✅ **app/websocket_manager.py**
+
+```python
+from fastapi import WebSocket
+from .audit import audit
+import subprocess
+import asyncio
+
+async def terminal_session(ws: WebSocket):
+    await ws.accept()
+    audit("WS_TERMINAL_START")
+
+    process = await asyncio.create_subprocess_shell(
+        "/bin/bash",
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE
+    )
+
+    async def read_output():
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                break
+            await ws.send_text(line.decode())
+
+    asyncio.create_task(read_output())
+
+    while True:
+        data = await ws.receive_text()
+        process.stdin.write(data.encode() + b"\n")
+        await process.stdin.drain()
+```
+
+---
+
+## ✅ **app/main.py**
+
+```python
+from fastapi import FastAPI, Request, WebSocket
+from .auth import verify_admin
+from .file_manager import list_files, read_file, write_file
+from .exec_manager import run_command
+from .websocket_manager import terminal_session
+
+app = FastAPI()
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    if request.url.path.startswith("/ws"):
+        return await call_next(request)
+    verify_admin(request)
+    return await call_next(request)
+
+@app.get("/files")
+def api_list_files():
+    return list_files()
+
+@app.get("/files/{path:path}")
+def api_read_file(path: str):
+    return {"content": read_file(path)}
+
+@app.post("/files/{path:path}")
+def api_write_file(path: str, payload: dict):
+    return write_file(path, payload.get("content", ""))
+
+@app.post("/run")
+def api_run(payload: dict):
+    return run_command(payload.get("cmd"))
+
+@app.websocket("/ws/terminal")
+async def websocket_endpoint(ws: WebSocket):
+    await terminal_session(ws)
+```
+
+---
+
+## ✅ **requirements.txt**
+
+```
+fastapi
+uvicorn
+```
+
+---
+
+## ✅ **run.sh**
+
+```bash
+#!/bin/bash
+uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+---
+
+### ✅ מה עכשיו?
+
+אם אתה רוצה:
+
+### 📌 **חלק 2 — React Dashboard (Replit UI)**
+
+תגיד: **"שלח חלק 2"**
+
+### 📌 **או התקנה במכה אחת (Docker + install.sh)**
+
+תגיד: **"שלח התקנה"**
+
+אני מוכן 💪🚀
