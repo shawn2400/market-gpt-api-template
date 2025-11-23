@@ -1,0 +1,149 @@
+הבאתי לך **תרשים מלא, צבעוני, מסודר — כמו שביקשת**
+ממש ברמה של ארכיטקטורה להדבקה במסמך או לשלוח לצוות.
+
+---
+
+## 🧬 **AlgoGPT — Full System Architecture (With Multi-User + Dynamic SL + Auto-Switch)**
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                         🧠  ALGO-GPT CORE ENGINE                      │
+│  (Scanner → Signal Scoring → Risk Filters → Trade Decision Maker)    │
+└──────────────────────────────────────────────────────────────────────┘
+                 │
+                 │  ✅ החלטת טרייד אחת מאוחדת
+                 ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                        🔀 HYBRID EXECUTION ROUTER                    │
+│  • Routes per-user                                                    │
+│  • No mixing between accounts                                         │
+│  • Priority = Binance native                                           │
+└──────────────────────────────────────────────────────────────────────┘
+                 │
+                 │  ✅ ביצוע חי + הצמדת SL/TP
+                 ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                        ⚙️  TRADE MANAGER (REALTIME)                  │
+│  • Stage 1 → Move to BE+ after TP1                                    │
+│  • Stage 2 → Trailing SL auto + ATR/percent rules                     │
+│  • Stage 3 → Close TP2/TP3 or SL safely                               │
+│  • NEVER remove SL before confirm                                     │
+│  • SL always locks profit after TP1                                   │
+└──────────────────────────────────────────────────────────────────────┘
+                 │
+                 │  ✅ שליחת פקודות לבורסה לפי משתמש
+                 ▼
+┌─────────────────────────────┐     ┌──────────────────────────────┐
+│   🟡 USER #1 BINANCE        │ ... │   🟢 USER #7 BINANCE         │
+│   • API KEY (personal)      │     │   • API KEY (personal)       │
+│   • Trades isolated         │     │   • Trades isolated          │
+│   • PnL separate            │     │   • PnL separate             │
+└─────────────────────────────┘     └──────────────────────────────┘
+
+──────────────────────────────────────────────────────────────────────────
+
+                     🔄  POSITION FEEDBACK LOOP (LIVE)
+```
+
+```
+        Binance Price Stream (WS) ────────────────┐
+                                                   │
+                                                   ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                  📌 REALTIME UPDATE ENGINE (Every X sec)              │
+│   • Reads current price / ATR                                         │
+│   • Updates SL only UP                                                │
+│   • Locks profit permanently after BE                                 │
+│   • Sends replace-order only when VALID                               │
+│   • If reject → keeps old SL (never without SL)                       │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🧑‍💻 **ACCESS & SECURITY LAYER**
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                         🛡️ TELEGRAM AUTH ONLY                        │
+│   Modes:                                                              │
+│     • QR_ONLY                                                         │
+│     • ONE_TAP_ONLY                                                    │
+│     • AUTO_SWITCH (default)                                           │
+│                                                                      │
+│   Admin Controls:                                                     │
+│     ✅ Force QR                                                       │
+│     ✅ Force One-Tap                                                  │
+│     ✅ Disable Auto-Switch                                            │
+│     ✅ Suspend user instantly                                         │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 📊 **ADMIN DASHBOARD (NO PASSWORDS)**
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│                               📌 KPIs                                │
+│   • Auto-Switch triggers                                             │
+│   • SL-Saves count                                                   │
+│   • Trailing updates                                                 │
+│   • Missed trades                                                    │
+│   • Per-exchange stats:                                              │
+│       - trades                                                       │
+│       - win rate                                                     │
+│       - PnL                                                          │
+│   • Locked profit total                                              │
+│                                                                      │
+│   Controls (Admin only):                                             │
+│       ON / OFF / AUTO                                                │
+│       Reset metrics                                                  │
+│       Replace user                                                   │
+│       Suspend user                                                   │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🧾 **WEEKLY AUTOMATION**
+
+```
+Scheduler → Sunday 23:55 (Jerusalem)
+    ▼
+Generate PDF:
+    • Trades per exchange
+    • Win rate
+    • PnL totals
+    • Missed trades
+    • SL-saves
+    • Auto-switch triggers
+    • Top gainers/losers
+Send to Admin via Telegram
+```
+
+---
+
+## ✅ **מה אתה מקבל בפועל**
+
+✔ מערכת **100% דינמית**
+✔ אין סיסמאות — רק Telegram
+✔ SL תמיד **נועל רווח אחרי TP1**
+✔ Trailing **ממשיך לבד**
+✔ עד 7 משתמשים מבודדים
+✔ אתה **שולט מהדשבורד**
+✔ Auto-switch מציל משתמשים אבל **רק אם אתה מאשר**
+✔ דוחות, מדדים, ניטור — בלי עומס
+
+---
+
+אם אתה רוצה עכשיו:
+
+✅ תרשים גרפי אמיתי (PNG / SVG)
+✅ גרסה צבעונית בסגנון Figma / Lucidchart
+✅ תרשים נוסף של זרימת SL בלבד
+✅ תרשים Multi-Account Execution Flow
+
+תכתוב לי:
+
+**"תרשים גרפי"** או **איזה סגנון אתה רוצה** 🚀

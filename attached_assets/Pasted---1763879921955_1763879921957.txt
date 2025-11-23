@@ -1,0 +1,494 @@
+מעולה, עכשיו אני נותן לך **מסמך מאסטר אחד**
+שאתה יכול **להעתיק כמו שהוא לסוכן** – כולל:
+
+* לוגיקת SL/TP דינמית + נעילת רווח
+* Multi-User עד 7 משתמשים
+* כניסה דרך טלגרם: QR + One-Tap + Auto-Switch
+* RBAC (ADMIN/USER/VIEWER)
+* KPI + מדדים + דשבורד
+* Auto-Switch עם שליטה שלך
+* הכול דינמי, אוטומטי, בלי סיסמאות
+
+הכול ממוקד, תכל’ס, Production.
+
+---
+
+## ✅ פקודה לסוכן — AlgoGPT Access + Risk + Metrics — Spec מלא
+
+```
+Task: Implement full Admin + Auth + Risk + Metrics system for AlgoGPT,
+including dynamic SL/TP, multi-user, Telegram-only login, auto-switch,
+KPIs and dashboard — as specified below.
+
+================================================
+1) ROLES & USERS (RBAC, UP TO 7 USERS)
+================================================
+
+1.1 Roles
+- Implement 3 roles:
+    • ADMIN   → full control (owner only)
+    • USER    → can trade via their API account only, no system config
+    • VIEWER  → read-only, no actions
+
+1.2 User model
+- Store per user:
+    - user_id
+    - display_name
+    - role: "ADMIN" | "USER" | "VIEWER"
+    - status: "active" | "suspended"
+    - exchange_accounts (per user):
+        • binance_futures_api_key
+        • binance_futures_api_secret
+        • (optionally) other exchanges in future
+    - telegram_user_id (for auth binding)
+
+- Hard limit: MAX 7 active USERS (excluding admin).
+- No self-signup — only ADMIN can create/replace users.
+
+1.3 Permissions
+- ADMIN can:
+    • change system mode (ON/OFF/AUTO)
+    • enable/disable Auto-Switch
+    • suspend/replace users
+    • reset metrics
+    • view all PnL / all KPIs
+    • trigger/reset circuit-breaker
+
+- USER can:
+    • view their own trades, PnL, positions
+    • receive billing/summary messages
+    • cannot see other users
+    • cannot change modes, cannot reset metrics
+
+- VIEWER can:
+    • view read-only dashboard subset
+    • no trades, no actions.
+
+1.4 Suspension & replace
+- If user.status == "suspended":
+    • Auth blocked immediately (no dashboard, no login)
+    • Auto Executor must skip this user in routing.
+- Replace user:
+    • ADMIN can wipe their API keys + telegram_id
+    • assign new details and rebind via Telegram login.
+
+================================================
+2) LOGIN & AUTH — TELEGRAM ONLY (NO PASSWORDS)
+================================================
+
+2.1 No passwords at all
+- Remove any username/password login.
+- No email-based or form-based login.
+- All access via Telegram bot only.
+
+2.2 Login modes
+- System must support 3 modes:
+
+    LOGIN_MODE:
+      - QR_ONLY
+      - ONE_TAP_ONLY
+      - AUTO_SWITCH  (default)
+
+- ADMIN can change mode from dashboard (see section 3).
+
+2.3 QR Login (MODE: QR_ONLY or AUTO_SWITCH)
+- Endpoint: GET /auth/qr
+    • Generates one-time token (JWT, 256-bit random, exp=90s)
+    • Encodes token_id only (no secrets)
+    • Returns QR image (or URL) including the token
+
+Flow:
+1) Admin/user opens dashboard login page → sees QR.
+2) Scans QR with Telegram bot (e.g. /auth <token>).
+3) Bot calls backend:
+    POST /auth/telegram-confirm
+    {
+      token,
+      telegram_user_id
+    }
+4) Backend:
+    - verifies token (not expired, not used)
+    - finds matching user by telegram_user_id
+    - checks user.status != suspended
+    - creates session (JWT 24h) for that user
+5) Dashboard opens as authenticated.
+
+Rules:
+- Token single-use.
+- Expire after 90 seconds.
+- If invalid/expired → error back to bot: "Token expired".
+
+2.4 One-Tap Login (MODE: ONE_TAP_ONLY or AUTO_SWITCH)
+- Telegram command: /login
+Flow:
+1) User sends /login in bot.
+2) Bot sends backend:
+    POST /auth/one-tap
+    {
+      telegram_user_id,
+      signed_nonce
+    }
+3) Backend:
+    - validates nonce (random 256-bit, single-use, exp=30s)
+    - matches telegram_user_id → user
+    - checks not suspended
+    - creates 24h session
+4) Bot replies with dashboard URL for that user:
+    "✅ Login approved — tap to open dashboard"
+
+2.5 Session rules
+- Session token:
+    • JWT, exp=24h
+    • refreshed on activity
+- Session must be invalidated when:
+    • user suspended
+    • user replaced
+    • ADMIN manually invalidates all sessions.
+
+================================================
+3) AUTO-SWITCH BETWEEN QR ↔ ONE-TAP + DASHBOARD CONTROL
+================================================
+
+3.1 Auto-switch logic
+Active when LOGIN_MODE == AUTO_SWITCH.
+
+- IF current_mode_effective == QR_ONLY AND:
+    - QR scan fails by timeout (60s)
+    OR
+    - 3 failed QR attempts in 10 minutes
+
+THEN:
+    auto_switch_active = true
+    effective mode → ONE_TAP temporarily
+    notify:
+        user: "QR login failed — one-tap login enabled automatically."
+        admin: "AUTO-SWITCH triggered due to QR failures."
+
+- This does NOT permanently change LOGIN_MODE.
+- Auto-switch is temporary until:
+    • ADMIN overrides OR
+    • successful login OR
+    • ADMIN disables auto-switch.
+
+3.2 Admin controls (Dashboard)
+- In Settings → Login Control:
+
+[ Login Mode ]
+   ○ QR ONLY
+   ○ ONE-TAP ONLY
+   ● AUTO-SWITCH (default)
+
+Buttons:
+    - APPLY
+    - DISABLE AUTO-SWITCH
+    - FORCE BACK TO QR
+    - FORCE ONE-TAP
+
+- No restart required — mode takes effect immediately.
+
+3.3 User experience rules
+- User never sees both options simultaneously.
+- UI behavior:
+    IF effective mode == QR → show QR login only.
+    IF effective mode == ONE_TAP → show "Login via Telegram" only.
+- Suspended users:
+    - Block login in any mode instantly.
+
+3.4 State tracking (Redis)
+- Store:
+
+system_state = {
+  login_mode: "QR_ONLY" | "ONE_TAP_ONLY" | "AUTO_SWITCH",
+  auto_switch_active: true/false,
+  last_qr_failure_count: int,
+  last_auto_trigger_timestamp: datetime
+}
+
+- Keep in Redis with TTL or cleanup as needed.
+
+================================================
+4) TELEGRAM BOT COMMANDS (AUTH + CONTROL)
+================================================
+
+Add / update bot commands:
+
+- /auth <token>       → used for QR flow
+- /login              → one-tap login
+- /show_mode          → returns current LOGIN_MODE + auto_switch_active
+- /enable_auto        → ADMIN only (turns AUTO-SWITCH on)
+- /disable_auto       → ADMIN only
+- /force_qr           → ADMIN only (effective mode QR)
+- /force_one_tap      → ADMIN only (effective mode ONE-TAP)
+
+All admin-only commands:
+    - verify sender is ADMIN
+    - log to audit (user_id, timestamp, action)
+
+================================================
+5) TRADING LOGIC — DYNAMIC SL/TP WITH LOCKED PROFIT
+================================================
+
+5.1 On trade entry
+Per position store:
+    - entry_price
+    - atr (for symbol / timeframe)
+    - tp1, tp2, tp3 (according to system ATR rules)
+    - sl_initial (swing ± 0.6 × ATR)
+    - state:
+        be_done = False
+        last_trail_high = entry_price
+
+SL/TP must be immediately sent to Binance after position open.
+
+5.2 Stage 1 — Move to BE+ after TP1
+When TP1 filled (or price ≥ tp1 and condition met):
+
+    position.sl = entry_price * 1.0006   # BE+
+    position.be_done = True
+    position.last_trail_high = current_price
+
+Rule: from this moment and on, SL must NEVER go back to ≤ entry_price.
+
+5.3 Stage 2 — Trailing SL upwards (dynamic, auto)
+On every price update / periodic tick:
+
+    if position.be_done and price > position.last_trail_high:
+        new_sl = price - atr * 1.2   # ATR-based trailing
+
+        min_locked = entry_price * 1.0006  # always lock profit
+
+        if new_sl > position.sl:
+            position.sl = max(new_sl, min_locked)
+            position.last_trail_high = price
+
+Rules:
+- SL only moves UP, never down.
+- SL never drops below min_locked > entry_price.
+- Always keep SL at profit zone after BE_DONE=True.
+
+5.4 Stage 3 — Exit
+- If TP2 / TP3 hit → close as per ladder logic.
+- If SL hit → position closed at profit or minimal loss before BE.
+- After position closed:
+    - stop managing SL/TP for that position
+    - update metrics (win/loss, R multiple, KPIs).
+
+5.5 Critical constraints
+- Never cancel old SL on Binance until:
+    • new SL order passes Binance validation
+    • "would trigger immediately" errors handled safely:
+        - keep older SL instead of leaving no SL.
+- SL/TP logic must be fully automatic, no manual clicks.
+
+================================================
+6) MULTI-USER TRADING ARCHITECTURE (UP TO 7)
+================================================
+
+6.1 Per-user routing
+- Each USER has its own exchange API keys.
+- Auto Executor must:
+    • for each active user:
+        - get signals (AlgoGPT core)
+        - apply risk rules (user-specific budget/leverage)
+        - send orders to that user’s Binance account ONLY.
+
+6.2 Isolation
+- No mixing between users.
+- One user cannot see or affect other users’ positions.
+
+6.3 External bots
+- External bots (3Commas, Cryptohopper, etc.) used ONLY as signal/data sources.
+- No direct execution from external bots.
+- All executions must go through AlgoGPT → Binance API.
+
+Execution priority:
+    1) Binance native client
+    2) Internal fallback logic if needed
+
+================================================
+7) DASHBOARD (ADMIN VIEW) + KPIs
+================================================
+
+7.1 Admin dashboard panels
+Add numeric KPIs (no heavy charts):
+
+- AUTO-SWITCH TRIGGERS (last 7 days)
+- APPROVAL SUCCESS RATE (%)
+- SL-SAVES (count)
+- TRAILING EVENTS (count)
+- PER-EXCHANGE SUMMARY:
+    - trades
+    - win_rate
+    - PnL total
+- MISSED TRADES:
+    - total
+    - last 24h
+- LOCKED PROFIT:
+    - per closed trade (show in trade details)
+    - aggregated "locked profit total" per period
+
+Auto-refresh: every 30 seconds.
+
+Color coding (example):
+- Green: good
+- Yellow: warning
+- Red: critical
+
+7.2 Metrics storage (Redis)
+- Keys:
+    metric:auto_switch_triggers
+    metric:approval_success
+    metric:approval_total
+    metric:sl_saves
+    metric:trailing_events
+    metric:pnl:<exchange>
+    metric:wins:<exchange>
+    metric:trades:<exchange>
+    metric:missed_trades
+    (optional) metric:missed:<reason>
+
+7.3 Reset controls (ADMIN only)
+- Endpoints:
+    POST /metrics/reset/all
+    POST /metrics/reset/<metric_name>
+
+- Available only to ADMIN.
+- Used to reset counters when desired.
+
+================================================
+8) MISSED TRADES KPI
+================================================
+
+Definition:
+"Missed trade" = high-quality opportunity detected by AlgoGPT but NOT executed because:
+    - insufficient balance
+    - approval timeout
+    - circuit breaker active
+    - exchange error
+    - slippage too high (beyond threshold)
+    - risk rules blocked it
+
+Logic:
+- In Auto Executor:
+    if candidate_trade.valid and not executed for reason in above:
+        inc_missed_trade(reason)
+
+API:
+    GET /metrics/missed-trades
+    → {
+        "total": X,
+        "last_24h": Y,
+        "reasons": {
+           "no_balance": ...,
+           "cb_active": ...,
+           ...
+        }
+      }
+
+================================================
+9) WEEKLY PDF REPORT (ADMIN)
+================================================
+
+9.1 Scheduler
+- Weekly job:
+    • Every Sunday 23:55 (TZ = Asia/Jerusalem).
+
+9.2 Content
+- Trades per exchange (count, win_rate, PnL)
+- Total PnL
+- Auto-switch triggers count
+- SL-saves count
+- trailing_events
+- missed_trades
+- locked_profit_total
+- top 3 best symbols
+- top 3 worst symbols
+
+9.3 Delivery
+- Generate via existing export_utils / pdf_export
+- Send to ADMIN via:
+    • Telegram (PDF attachment or link)
+    • Email (if configured)
+
+9.4 Manual trigger:
+    POST /reports/weekly  (ADMIN only).
+
+================================================
+10) TELEGRAM ALERTS (SYSTEM HEALTH)
+================================================
+
+Add automatic alerts to ADMIN:
+
+- If auto_switch_triggers > 10 in 24h:
+    "⚠️ AUTO-SWITCH SPIKE — check login stability / infra."
+
+- If global win_rate < 50% over last N trades:
+    "⚠️ WIN-RATE DROPPED to {X}% — review strategy."
+
+- If sl_saves == 0 for >48h:
+    "⚠️ No SL saves detected — check trailing SL engine."
+
+- On each SL update that locks new profit:
+    "🔒 SL updated — profit locked: +X USDT (+Y%)"
+
+- On weekly PDF generated:
+    "📄 Weekly report ready."
+
+================================================
+11) TESTING REQUIREMENTS
+================================================
+
+Add tests for:
+
+- Auth / login:
+    test_qr_generation()
+    test_qr_single_use()
+    test_qr_expiration()
+    test_one_tap_nonce_expiration()
+    test_one_tap_single_use()
+    test_blocked_user_cannot_login_any_mode()
+    test_auto_switch_on_failure()
+    test_auto_switch_temp_only()
+    test_admin_forces_mode()
+    test_disable_auto_switch()
+    test_auto_switch_resets_after_success()
+
+- Roles & permissions:
+    test_admin_only_controls()
+    test_user_cannot_change_mode()
+    test_suspended_user_blocked()
+
+- SL/TP logic:
+    test_be_move_after_tp1()
+    test_sl_never_below_entry_after_be()
+    test_trailing_moves_only_up()
+    test_sl_keeps_profit_locked()
+
+- Metrics:
+    test_metric_increment_persist()
+    test_reset_requires_admin()
+    test_missed_trade_increments()
+    test_exchange_summary_api()
+    test_weekly_pdf_generates()
+
+All existing tests must still pass. Zero regressions.
+
+================================================
+12) COMPLETION CONDITIONS
+================================================
+
+✔ Login 100% via Telegram (QR / One-Tap) — no passwords  
+✔ Auto-Switch עובד רק כשצריך, תחת שליטת ADMIN  
+✔ SL/TP דינמי, אוטומטי, תמיד נועל רווח אחרי TP1  
+✔ Multi-user עד 7, מופרדים, עם API אישי לכל אחד  
+✔ Dashboard מציג KPIs, כולל Auto-Switch, SL-Saves, Missed Trades  
+✔ Weekly PDF עובד אוטומטית + ידנית  
+✔ כל הפיצ'רים עובדים בלי עומס, בלי לשבור את AlgoGPT הקיים.
+```
+
+---
+
+זה בדיוק מה שביקשת:
+📦 מסמך אחד, מלא, מפורט, כולל **צורת עבודה בפועל** לכל חלק.
+
+אם תרצה גם גרסת **PDF יפה** או **תרשים צבעוני** של כל הארכיטקטורה — אני מכין לך תבנית שאתה יכול לתת למעצב/סוכן UI.
