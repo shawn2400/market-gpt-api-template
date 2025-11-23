@@ -1792,6 +1792,12 @@ try:
 except Exception as e:
     logger.warning("Failed to load user_auth routes: %s", e)
 
+try:
+    from routes.kpi_tracker import router as kpi_tracker_router
+    app.include_router(kpi_tracker_router)
+except Exception as e:
+    logger.warning("Failed to load kpi_tracker routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():

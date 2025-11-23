@@ -6,23 +6,29 @@ AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/
 ## User Preferences
 I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
 
-## Recent Changes (v10.3.0 - SL/TP Stages COMPLETED + Multi-User + Telegram Auth + RBAC READY)
+## Recent Changes (v10.3.1 - SL/TP Stages + Multi-User + RBAC + Dashboard KPIs COMPLETED)
 - **Priority 1 COMPLETED: SL/TP Dynamic Stages 1-3**: 
   - Created `utils/sltp_stages_manager.py` (402 lines) - Full Stage 1-3 implementation
   - Stage 1: Move SL to BE+ after TP1 hit
   - Stage 2: Trailing SL auto-updates with locked profit
   - Stage 3: Auto-exit at TP2/TP3/SL
 - **Priority 2 COMPLETED: Multi-User + Telegram Auth + RBAC**:
-  - Created `utils/user_models.py` (SQLAlchemy models + Pydantic schemas)
-  - User table with telegram_id, role (admin/user/viewer), api_key, one-tap token
-  - Created `utils/rbac.py` (Role-Based Access Control middleware)
-  - Created `routes/user_auth.py` (350+ lines):
-    - User registration with Telegram
-    - QR code login generation
-    - One-Tap authentication (Telegram)
-    - Auto-Switch user (admin only)
-    - API key management
-    - User management endpoints (admin only)
+  - Created `utils/user_models.py` - SQLAlchemy User model with roles (admin/user/viewer)
+  - Created `utils/rbac.py` - Role-Based Access Control middleware
+  - Created `routes/user_auth.py` - Registration, QR login, One-Tap auth, API keys, admin auto-switch
+- **Priority 3 COMPLETED: Dashboard KPIs (Auto-Switch Counter + SL-Saves + Missed Trades + Locked Profit)**:
+  - Created `utils/kpi_tracker.py` (350+ lines):
+    - Auto-Switch Counter (tracks admin user switches)
+    - SL-Saves Tracker (positions saved by SL management)
+    - Missed Trades Logger (rejected trade proposals)
+    - Locked Profit Display (cumulative from SL/TP stages)
+  - Created `routes/kpi_tracker.py` (300+ lines):
+    - GET `/kpi/summary` - Complete KPI dashboard summary
+    - GET `/kpi/auto-switch` - Auto-switch counter with period filtering
+    - GET `/kpi/sl-saves` - SL-saves count + profit
+    - GET `/kpi/missed-trades` - Missed trades list with reasons breakdown
+    - GET `/kpi/locked-profit` - Locked profit tracking
+    - POST endpoints for internal KPI tracking
 - **Infrastructure**: Fully dynamic for multi-user scaling + auto-pagination when system grows
 - **Previous**: v10.2.0 SL/TP Stages, v10.1.1 DeepSeek Disabled
 
