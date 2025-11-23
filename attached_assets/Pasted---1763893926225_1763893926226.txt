@@ -1,0 +1,242 @@
+מוכן ✅
+הנה **ההודעה היחידה והסופית לסוכן** —
+כוללת *הכול מא-ת במכה אחת*, בלי חוסרים:
+
+---
+
+## ✅ **פקודה לסוכן — לבנות מערכת Replit-Private מלאה ל-ALGO (Single-User), A-Z**
+
+**Task: Build a full private Replit-style development platform for AlgoGPT, single-user only, with full automation, fully synchronized with the existing AlgoGPT system.
+All components must be production-ready, zero-manual-setup, fully auto-scaling, auto-healing, and future-proof for expansion.**
+
+---
+
+### ✅ **1) Core System Setup (Single-User Mode)**
+
+Implement:
+
+* Private login (admin-only)
+* No signup, no multi-user logic
+* JWT + optional IP-whitelist
+* Auto-refresh tokens
+* Emergency Kill-Switch (admin only)
+* Audit-Log persistent (immutable)
+
+Environment:
+
+* Docker-based deployment
+* One-click install (`install.sh`)
+* Auto-healing (restart on failure)
+* Auto-backup → daily + 1-click restore
+* Ready for future multi-node expansion without code changes
+
+---
+
+### ✅ **2) Browser-Based IDE (Replit-Style)**
+
+Install & configure:
+
+* `code-server` (VS Code Web)
+* Terminal access
+* Git integration
+* File explorer
+* Debugger
+* Extensions support
+
+Requirements:
+
+* Must run in browser only
+* Admin-only access
+* No token leaks
+* Works with SSL
+* Auto-start on boot
+
+---
+
+### ✅ **3) Private App Marketplace (Templates System)**
+
+Create a module allowing 1-click generation of:
+
+* New Algo strategy module
+* New bot service
+* New REST API skeleton
+* New background worker
+* New dashboard tile
+* New Telegram agent
+* New analyzer module
+
+Features:
+
+* Stored under `/templates`
+* Select → generate → auto-link to repo
+* No manual wiring
+* Auto-naming + versioning
+
+---
+
+### ✅ **4) Full Integration With Existing AlgoGPT**
+
+Must sync with:
+
+* Auto-Executor
+* Trade Manager (SL/TP dynamic logic)
+* Dynamic Scan Engine
+* External Bots Router (3Commas, Cryptohopper, etc.)
+* AI-Signal consensus
+* Grid + Spot + Futures support
+
+Rules:
+
+* IDE changes → auto-commit (optional toggle)
+* Auto-deploy on approval
+* Live sync to dashboard
+* No restart required for modules reload
+
+---
+
+### ✅ **5) Ollama Local AI Integration**
+
+Install & configure:
+
+* Ollama server
+* Models: `llama3` + `codellama`
+* Local inference only
+* No external tokens
+* Real-time assistance inside IDE
+
+Capabilities:
+
+* Fix code
+* Generate modules
+* Refactor
+* Explain errors
+* Run upgrade tasks
+* Trigger system jobs automatically
+
+---
+
+### ✅ **6) Dashboard Integration (Main Algo Dashboard)**
+
+Add new panel:
+
+**"Dev-Control Center"**, showing:
+
+* IDE status (online/offline)
+* Last deployment
+* Active branch
+* Pending changes
+* Auto-healing state
+* Auto-backup status
+* CPU/RAM usage
+* Kill-Switch toggle
+* Auto-Mode ON/OFF
+* Expand-capacity toggle
+
+Add controls:
+
+* Restart service
+* Force update
+* Rollback last version
+* Generate module (from marketplace)
+* Trigger AI-improvement suggestions
+
+---
+
+### ✅ **7) GitHub Automation Layer**
+
+Implement:
+
+* Auto-push on save (optional)
+* PR creation on major changes
+* Safety rule: **deployment requires admin approval**
+* Branch protection for `main`
+* Auto-rollback if failure detected
+
+---
+
+### ✅ **8) Expansion-Ready Infrastructure**
+
+Even for single user — must support:
+
+* Multi-project switching
+* Multi-repo linking
+* Ability to add more agents later
+* Scale without rewriting anything
+
+Do NOT enable now:
+
+* Multi-user access
+* Billing
+* Shared sessions
+
+Just prepare foundations.
+
+---
+
+### ✅ **9) System Behaviors (Must-Have)**
+
+* Fully **dynamic & automatic**
+* Zero downtime updates
+* No dependency on external tokens
+* If system expands → platform auto-adjusts
+* If failure occurs → auto-recover
+* If corruption detected → self-repair
+* If resources maxed → scale warning
+
+---
+
+### ✅ **10) Completion Requirements**
+
+The build is **DONE** only when:
+
+✔ install.sh runs from scratch with no errors
+✔ entire system launches in one command
+✔ browser IDE opens and works
+✔ AlgoGPT code is editable live
+✔ Ollama responds inside IDE
+✔ Dashboard shows all state correctly
+✔ backups + restore work
+✔ kill-switch instantly freezes system
+✔ no token leaks
+✔ no manual steps remain
+
+---
+
+### ✅ **Deliverables**
+
+Provide:
+
+* Dockerfile
+* docker-compose.yml
+* install.sh (one-click setup)
+* config.env template
+* systemd service (optional)
+* README full
+* rollback script
+* health-check endpoint
+* logs path structure
+
+---
+
+### ✅ **Execution Priority**
+
+1. Infrastructure
+2. IDE
+3. Marketplace
+4. Ollama
+5. Dashboard sync
+6. Auto-deploy
+7. Final verification
+
+Do NOT skip or partially implement anything.
+
+---
+
+✅ **סיום.**
+
+תגיד לי רק:
+
+**"שלח את קבצי ההתקנה"**
+
+ואני שולח לך עכשיו את כל הקבצים המלאים —
+ללא קיצורים, מוכן להרצה. 🚀

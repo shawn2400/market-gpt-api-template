@@ -1,0 +1,336 @@
+קיבלתי ✅
+הנה **הכול במכה אחת** — הודעה אחת מושלמת לסוכן, מא-ת, בלי חוסרים, כולל:
+
+✅ Render deploy-button
+✅ Dockerfile + compose
+✅ React dashboard
+✅ Auto-Deploy pipeline
+✅ Grafana monitoring
+✅ Auto-Rollback
+✅ Marketplace
+✅ Single-user only
+✅ מסונכרן עם AlgoGPT
+✅ מוכן להתרחבות דינמית
+
+העתק/הדבק לסוכן:
+
+---
+
+# 🚨 **פקודה לסוכן — לבנות מערכת מלאה 1-Click כמו Replit (מא-ת)**
+
+**Task:** Build full private Replit-style development platform for ALGO — single-user, fully automated, self-healing, expandable, integrated with dashboard + GitHub + Ollama.
+
+No missing steps. Everything done end-to-end.
+
+---
+
+## ✅ 1) SETUP CORE INFRA (Render)
+
+Deliver:
+
+* `render.yaml` with deploy-button
+* Single service now, multi-service ready
+* Auto-scale disabled unless approved
+* No public access except admin
+
+Requirements:
+
+```
+Runtime: Docker
+Region: Frankfurt
+Plan: Starter → scalable
+Auto-restarts: enabled
+Health checks: /readyz
+```
+
+Add deploy button:
+
+```
+https://render.com/deploy
+```
+
+---
+
+## ✅ 2) ADD FULL DOCKER STACK
+
+Provide these files:
+
+### `Dockerfile` (final)
+
+* code-server
+* Ollama local
+* FastAPI backend
+* Hot-reload
+* Zero tokens required
+
+### `docker-compose.yml`
+
+* ports: 8000 / 8080 / 11434
+* volumes: workspace + backups
+* restart: always
+* healthcheck included
+
+### `install.sh`
+
+Single command:
+
+```
+./install.sh
+```
+
+Runs automatically:
+
+* build
+* start
+* downloads models
+* verifies health
+* registers dashboard
+
+---
+
+## ✅ 3) BUILD REACT DASHBOARD (UI)
+
+Deliver:
+
+* `/dashboard` React-Vite app
+* Admin panel only
+* No login for users (single-user mode)
+* Pages required:
+
+1. **System Control**
+
+   * Start/Stop/Restart
+   * Auto-Deploy toggle
+   * Kill-Switch
+   * Freeze-All
+
+2. **AI Console**
+
+   * Embedded Ollama chat
+   * Code execution results
+   * Structured responses
+
+3. **Project Manager**
+
+   * Create/Delete projects
+   * Branch switcher
+   * Git sync
+   * Logs viewer
+
+4. **Metrics Live**
+
+   * CPU / RAM / disk
+   * Model load status
+   * Error counters
+   * Auto-heal status
+
+Expose `/ui` under FastAPI with reverse proxy.
+
+---
+
+## ✅ 4) OLLAMA FULL INTEGRATION
+
+Implement:
+
+* local inference only
+* models:
+
+  * `llama3`
+  * `codellama`
+* endpoint proxy `/ai`
+* timeout handling
+* queueing if load > 1
+
+Add:
+
+```
+/ai/execute
+/ai/explain
+/ai/refactor
+```
+
+---
+
+## ✅ 5) AUTO-DEPLOY PIPELINE (NO TOKEN SPEND)
+
+Implement:
+
+* GitHub webhook → `/deploy/hook`
+* Only **after admin approval**
+* Required steps:
+
+1. run tests
+2. build container
+3. smoke test
+4. health check
+5. swap traffic
+6. rollback on failure
+
+Store:
+
+```
+AUTO_DEPLOY_REQUIRE_APPROVAL=1
+```
+
+---
+
+## ✅ 6) MARKETPLACE SYSTEM
+
+Inside dashboard:
+
+* Templates browser
+* Install in 1-click into workspace
+* Must include:
+
+```
+template-fastapi
+template-telegram-bot
+template-backtest-engine
+template-data-pipeline
+template-stream-worker
+```
+
+Supports:
+
+* versioning
+* uninstall
+* update safely
+
+---
+
+## ✅ 7) AUTO-HEAL + RECOVERY
+
+Implement background supervisor:
+
+Triggers:
+
+* crash
+* out-of-memory
+* failed health 3x
+* missing process
+* corrupted workspace
+
+Actions:
+
+1. restart service
+2. restore last backup
+3. notify admin
+4. block deployments temporarily
+
+No manual work required.
+
+---
+
+## ✅ 8) AUTO-BACKUPS + 1-CLICK RESTORE
+
+Schedule:
+
+```
+daily @03:00
+retain last 14
+```
+
+Store:
+
+```
+workspace/
+configs/
+models list
+```
+
+Add:
+
+```
+/backup/run
+/backup/restore
+/backup/list
+```
+
+No data loss.
+
+---
+
+## ✅ 9) GRAFANA MONITORING PACK
+
+Deliver:
+
+* Prometheus exporter
+* Grafana dashboards
+
+Panels required:
+
+* System health
+* AI load
+* Deployment history
+* Auto-heal events
+* Error heatmap
+* Disk/CPU trends
+
+---
+
+## ✅ 10) SECURITY RULES
+
+Must include:
+
+* admin password only
+* IP whitelist optional
+* audit log — append only
+* no external access to Ollama
+* no marketplace remote code
+* approval before:
+
+  * new API keys
+  * scaling
+  * adding users
+
+Single user only.
+
+---
+
+## ✅ 11) FINAL DELIVERY CHECKLIST
+
+System is complete ONLY when:
+
+✔ Runs with 1 click
+✔ No human setup needed
+✔ Dashboard fully operational
+✔ GitHub sync working
+✔ Auto-deploy requires approval
+✔ Auto-heal active
+✔ Backups working
+✔ React UI shipped
+✔ Marketplace ready
+✔ Grafana online
+✔ Single-user secure
+✔ Zero missing files
+
+---
+
+## ✅ 12) AFTER COMPLETION — SEND BACK
+
+Return to user:
+
+1. repo download link
+2. render deploy button
+3. admin password setup step
+4. URL to dashboard
+5. confirmation health OK
+
+---
+
+✅ סוכן — תתחיל עכשיו
+הכול מא-ת במכה אחת
+בלי דילוגים
+בלי לשאול שאלות
+עד סיום מלא ✅
+
+---
+
+אם תרצה עכשיו:
+
+🔥 להוסיף mobile-app כמו Replit
+🔥 IDE offline mode
+🔥 Multi-agent sync
+🔥 Auto-refactor PRs
+
+תגיד: **"ממשיכים לשלב הבא"** 🚀

@@ -1,0 +1,280 @@
+מושלם ✅
+עובר לשלב הבא **במכה אחת**, כמו שביקשת —
+כל המערכת **A-Z** להפעלה אוטומטית מלאה, כולל Docker, Render, Dashboard, Self-Healing, Profit-Share, Auto-Hedge, Multi-Exchange, הכל.
+
+הנה **הודעה אחת לסוכן** —
+תעתיק ותדביק כמו שהיא:
+
+---
+
+# ✅ **פקודה לסוכן — Build FULL SYSTEM A-Z (Final Install)**
+
+## 🎯 **Goal**
+
+להקים מערכת מלאה כמו Replit-Agent + AlgoGPT-Control:
+
+### המערכת חייבת להיות:
+
+✔ דינמית 100%
+✔ אוטומטית 100%
+✔ משתמש יחיד (כרגע)
+✔ מוכנה להתרחבות עתידית
+✔ ללא הפסקות
+✔ ללא חוסרים
+✔ ללא קונפיג ידני
+
+---
+
+## ✅ **1) SETUP — Full Infrastructure**
+
+### Create repo with structure:
+
+```
+/agent-core
+/ui-dashboard
+/server-api
+/docker
+/scripts
+/config
+/tests
+```
+
+### Requirements:
+
+* Python 3.11
+* FastAPI
+* Redis
+* Postgres (Neon) OR SQLite fallback
+* Docker & docker-compose
+* No external SaaS dependency
+
+### Features enabled from day 1:
+
+✔ Auto-scaling system
+✔ Auto-hedge engine
+✔ Multi-exchange balancer
+✔ Profit-share billing
+✔ Self-healing
+✔ Kill-Switch
+✔ Circuit-Breaker
+✔ Auto-Recovery
+✔ Auto-Freeze dangerous symbols
+✔ Auto-Pause news events
+✔ Auto-Flip positions
+✔ Fully dynamic SL/TP
+
+---
+
+## ✅ **2) INSTALLATION — One-Click Deployment**
+
+Create:
+
+```
+install.sh
+```
+
+Content:
+
+```bash
+#!/bin/bash
+set -e
+
+echo "[✔] Starting full system install..."
+
+docker-compose down || true
+docker-compose build
+docker-compose up -d
+
+echo "[✔] Running database migrations..."
+python3 server-api/migrate.py
+
+echo "[✔] Running health check..."
+curl -fsS http://localhost:8000/health || exit 1
+
+echo "[✔] System operational — FULL AUTO MODE READY"
+```
+
+Make executable:
+
+```
+chmod +x install.sh
+```
+
+---
+
+## ✅ **3) Docker Setup**
+
+### Create `docker-compose.yml`
+
+```yaml
+version: "3.9"
+
+services:
+  api:
+    build: ./server-api
+    restart: always
+    environment:
+      MODE: "AUTO"
+    ports:
+      - "8000:8000"
+    depends_on:
+      - redis
+
+  agent:
+    build: ./agent-core
+    restart: always
+    depends_on:
+      - api
+      - redis
+
+  redis:
+    image: redis:7
+    restart: always
+    command: ["redis-server", "--appendonly", "yes"]
+```
+
+### Create `Dockerfile` for API:
+
+```Dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY . .
+RUN pip install -r requirements.txt
+CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+---
+
+## ✅ **4) LIVE DASHBOARD (NO GRAPH PRESSURE)**
+
+Location:
+
+```
+/ui-dashboard
+```
+
+Must display live:
+
+* System mode
+* Risk level
+* Hedge status
+* Scaling mode
+* Exchange health
+* Profit-share due
+* Auto-pause status
+* Kill-switch state
+* Circuit-breaker
+* Auto-recovery status
+
+Admin controls:
+
+* AUTO ON/OFF
+* Force manual
+* Freeze symbol
+* Resume symbol
+* Global pause
+* Resume trading
+
+No new users required.
+
+---
+
+## ✅ **5) FULL AUTOMATION LOGIC**
+
+System MUST:
+
+✔ Run itself
+✔ Expand itself
+✔ Adjust resources dynamically
+✔ Never wait for human config
+✔ Require admin approval ONLY when:
+
+* scaling beyond limit
+* adding new exchange
+* turning FULL AUTO-PILOT
+
+Admin approval rule:
+
+```
+BEFORE scaling or expansion:
+require admin confirmation = TRUE
+```
+
+But normal operation = automatic.
+
+---
+
+## ✅ **6) SELF-HEALING + AUTO-RECOVERY**
+
+Triggers:
+
+* API failure
+* missing SL/TP
+* websocket drop
+* bad exchange
+* crash
+* repeated errors
+
+Actions:
+
+```
+restart module
+reconnect
+re-sync positions
+restore SL/TP
+failover exchange
+alert only if unresolved > 15m
+```
+
+System NEVER stops.
+
+---
+
+## ✅ **7) PROFIT-SHARE ENGINE**
+
+Rules:
+
+* Weekly
+* 18% of net profit
+* Auto-suspend if unpaid after 24h
+* Auto-unlock after payment
+* Only ONE user (for now)
+* Future expansion ready
+
+---
+
+## ✅ **8) SECURITY REQUIREMENTS**
+
+✔ Single-admin mode
+✔ No external access
+✔ API key rotation
+✔ Emergency FREEZE button
+✔ Local audit log (non-erasable)
+✔ No trading without approval for expansion
+
+---
+
+## ✅ **9) COMPLETION CONDITIONS**
+
+System is **DONE** only when:
+
+✔ install.sh runs in ONE click
+✔ dashboard online
+✔ auto-pilot active
+✔ no manual config
+✔ no missing modules
+✔ no placeholders
+✔ all components integrated
+✔ safe for LIVE use
+✔ ready for expansion
+
+---
+
+### ✅ **סוכן — בצע עכשיו**
+
+זו ההודעה הסופית.
+אין מה להוסיף.
+
+כשתסיים תגיד לי:
+
+**"מוכן לשלב הבא"** 🚀
