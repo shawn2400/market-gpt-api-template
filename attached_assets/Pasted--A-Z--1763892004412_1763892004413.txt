@@ -1,0 +1,188 @@
+הנה **ההודעה האחת המלאה, הסופית, במכה אחת לסוכן** —
+**A-Z בלי חוסרים, בלי חלקים, בלי המשך — הכול כאן** ✅
+
+העתק-הדבק כמו שזה:
+
+---
+
+# 🚨 **פקודה לסוכן — לבצע עכשיו במלואה (A-Z)**
+
+**MISSION: BUILD & ACTIVATE FULL SYSTEM ORCHESTRATION FOR ALGO-GPT**
+
+אתה מבצע עכשיו את כל המשימות הבאות בלי דילוגים:
+
+---
+
+## ✅ **1) חיבור מלא לדשבורד הראשי**
+
+* לחבר לדשבורד הקיים דרך WebSocket + REST
+* גישה מלאה לקריאה/כתיבה:
+
+  * מצב מערכת (Auto-Pilot / Freeze / Kill-Switch)
+  * מצבי שוק (ULTRA-PLUS 5-State)
+  * Hedge / Exposure / Risk
+* עדכוני LIVE בזמן אמת מהסוכן לדשבורד
+* להוסיף כפתורים:
+
+  * AUTO-SWITCH ON/OFF
+  * APPROVE-BEFORE-EXECUTE
+  * FREEZE ALL
+  * RESTART SUBSYSTEMS
+  * SYSTEM HEALTH
+
+---
+
+## ✅ **2) חיבור לשרת עם הרשאות ביצוע**
+
+* התחברות לשרת ראשי (SSH/API)
+* יכולות:
+
+  * install / update / restart
+  * config apply
+  * service recovery
+  * system scaling
+* תמיכה:
+
+  * Docker + Compose
+  * systemd
+  * auto-recovery
+* אם פעולה עולה כסף → לעצור ולבקש אישור
+
+---
+
+## ✅ **3) GitHub — CI/CD Self-Healing**
+
+* clone / pull / push / branch / PR
+* auto-fix לשגיאות מערכת:
+
+  * SL/TP logic
+  * missing services
+  * failing watchdog
+* להריץ:
+
+  * pytest
+  * build
+  * lint
+* merge רק באישור שלי
+
+---
+
+## ✅ **4) החלפת API-Keys אוטומטית**
+
+* תמיכה מלאה multi-account
+* rotation אוטומטי
+* fallback אם key נכשל
+* שמירה ב-vault מוצפן
+* עדכון מיידי ללא downtime עבור:
+
+  * Binance
+  * Telegram
+  * OpenAI/Ollama
+  * GitHub tokens
+
+---
+
+## ✅ **5) סנכרון עם כל המוחות במערכת**
+
+הסוכן חייב להיות מסונכרן עם:
+
+* Auto-Pilot V3
+* Trade-Manager
+* Hedge-Engine
+* News-AI + Sentiment + Funding
+* Risk-AI + Circuit-Breaker
+
+חוקים:
+
+* מערכת מחליטה → אתה מבצע
+* סדר עדיפויות:
+
+  1. חירום (SL/TP חסר)
+  2. חוסר יציבות
+  3. שדרוג חובה
+  4. משימות יזומות
+
+---
+
+## ✅ **6) אוטומציה מלאה + התרחבות דינמית**
+
+* תיקון עצמי ללא עצירה
+* Auto-Recovery בכל כשל
+* Auto-Scaling:
+
+  * CPU / RAM / Storage
+  * micro-services
+* Auto-Reallocation לפי רווחיות
+* אין פעולות מסחר
+
+---
+
+## ✅ **7) תמיכה בפרויקטים מרובים**
+
+* ניהול כמה פרויקטים במקביל
+* לכל פרויקט:
+
+  * repo נפרד
+  * deployment נפרד
+  * logs נפרדים
+* דשבורד ראשי אחד שולט בכולם
+
+---
+
+## ✅ **8) חיבור Ollama במערכת**
+
+* התקנת Ollama בשרת
+* חיבור לדשבורד כ-AI Console
+* שימוש ל:
+
+  * debugging
+  * code generation
+  * תיקון תקלות
+  * יצירת פיצ’רים
+
+---
+
+## ✅ **9) אבטחה + שליטה**
+
+* אין שינוי קריטי בלי אישור
+* Audit-Log בלתי-מחיק
+* Freeze-Everything בלחיצה
+* מפתח אדמין יחיד
+* במקרה חירום:
+
+  * הקפאה מיידית
+  * שליחת התראה אליי
+
+---
+
+## ✅ **10) תנאי סיום משימה**
+
+הסוכן סיים כשהוא:
+
+* מחובר ומסונכרן 100%
+* מבצע הוראות בזמן אמת
+* לא מבקש שאלות
+* אין עומסים
+* אין תקלות
+* אני מאשר רק כשצריך
+
+---
+
+### ✅ **ACTION: START NOW**
+
+בצע את כל המשימות מ-A-Z עכשיו
+ללא דילוגים
+ללא המתנה
+ללא שאלות
+אישור רק בפעולות שעולות כסף.
+
+---
+
+אם אתה רוצה עכשיו:
+
+✅ install.sh במכה אחת
+✅ Docker + Render deploy-button
+✅ UI חי מיידי
+
+תגיד לי:
+**"תן התקנה עכשיו"** ✅

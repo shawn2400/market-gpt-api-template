@@ -39,7 +39,23 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 - **External Brain Integration System**: A 6-bot cooperative trading team (Cryptohopper, 3Commas, WunderTrading, HyperTrader, Bybit Signals, TradingView) with dynamic capabilities, failover, and self-learning.
 
 ### Deployment Architecture
-The production environment runs on Render.com with Background Workers and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development.
+The production environment runs on Render.com with Background Workers and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development with ALGO-REPLIT self-hosted development infrastructure running on port 8000.
+
+### Current System Status (Development)
+- **AlgoGPT Server**: Running on port 5000 (Gunicorn + FastAPI)
+- **ALGO-REPLIT Core Control Server**: Running on port 8000 (FastAPI + Uvicorn)
+  - Provides infrastructure management, code editing, and AI integration
+  - Three core modules: core_control_server.py (main controller), ollama_ai_agent.py (local AI), scale_manager.py (resource scaling)
+  - Auto-activation enabled - all features activate dynamically when resources available ("הכול יופעל דינמי אוטומטי")
+
+### Active Workflows in Replit
+Currently optimized to 2 workflows (due to port constraints):
+1. **AlgoGPT Server** (port 5000) - Main trading system
+2. **ALGO-REPLIT Core Control Server** (port 8000) - Development infrastructure
+
+Consolidated workflows (can be re-enabled):
+- Auto Scanner, Fills Watcher, GPT-5 Central Brain, Position Monitor, Sentinel Security, Auto Health Monitor
+- Daily Meeting 00:00, Telegram Digest Reporter (scheduled tasks)
 
 ## External Dependencies
 

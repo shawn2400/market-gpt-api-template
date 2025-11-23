@@ -1,0 +1,144 @@
+מושלם ✅
+הנה מה שביקשת — **UI כמו Replit**
+במכה אחת, קוד מלא, מוכן להעתקה, **A-Z**.
+
+---
+
+# ✅ **PART 1 — יצירת דשבורד כמו Replit (React + Vite)**
+
+## 📂 מבנה הפרויקט
+
+```
+frontend/
+  src/
+    components/
+      Terminal.js
+      Editor.js
+      StatusBar.js
+      SideMenu.js
+      AIChat.js
+    pages/
+      Dashboard.js
+    api/
+      client.js
+  package.json
+  vite.config.js
+```
+
+---
+
+# ✅ **PART 2 — פקודת התקנה במכה אחת**
+
+הדבק במסוף:
+
+```bash
+mkdir frontend && cd frontend
+npm create vite@latest . --template react
+npm install axios react-router-dom xterm xterm-addon-fit
+```
+
+---
+
+# ✅ **PART 3 — client API (חיבור לסוכן)**
+
+📌 `src/api/client.js`
+
+```javascript
+import axios from "axios";
+
+export const api = axios.create({
+  baseURL: import.meta.env.VITE_AGENT_URL,
+  headers: {
+    Authorization: `Bearer ${import.meta.env.VITE_AGENT_TOKEN}`
+  }
+});
+```
+
+---
+
+# ✅ **PART 4 — מסך ראשי כמו Replit**
+
+📌 `src/pages/Dashboard.js`
+
+```javascript
+import SideMenu from "../components/SideMenu";
+import Terminal from "../components/Terminal";
+import AIChat from "../components/AIChat";
+import StatusBar from "../components/StatusBar";
+
+export default function Dashboard() {
+  return (
+    <div style={{ display: "flex", height: "100vh", background: "#0B0F17" }}>
+      <SideMenu />
+      <div style={{ flex: 1, display: "flex", flexDirection: "column" }}>
+        <Terminal />
+        <AIChat />
+        <StatusBar />
+      </div>
+    </div>
+  );
+}
+```
+
+---
+
+# ✅ **PART 5 — Terminal חי (כמו Replit)**
+
+📌 `src/components/Terminal.js`
+
+```javascript
+import { useEffect, useRef } from "react";
+import { Terminal as XTerm } from "xterm";
+import { FitAddon } from "xterm-addon-fit";
+import { api } from "../api/client";
+
+export default function Terminal() {
+  const termRef = useRef(null);
+
+  useEffect(() => {
+    const term = new XTerm({ theme: { background: "#0B0F17" } });
+    const fit = new FitAddon();
+    term.loadAddon(fit);
+    term.open(termRef.current);
+    fit.fit();
+
+    term.write("✅ Connected to Algo-Agent\n");
+
+    term.onData(async (cmd) => {
+      if (cmd === "\r") {
+        term.write("\n");
+        const res = await api.post("/exec", { command: "" });
+        term.write(res.data.output + "\n");
+      } else {
+        term.write(cmd);
+      }
+    });
+  }, []);
+
+  return <div ref={termRef} style={{ height: "50%" }} />;
+}
+```
+
+---
+
+# ✅ **PART 6 — Chat AI כמו Replit sidebar**
+
+📌 `src/components/AIChat.js`
+
+```javascript
+import { useState } from "react";
+import { api } from "../api/client";
+
+export default function AIChat() {
+  const [msg, setMsg] = useState("");
+  const [log, setLog] = useState([]);
+
+  const send = async () => {
+    const res = await api.post("/ai", { prompt: msg });
+    setLog([...log, { user: msg, ai: res.data.response }]);
+    setMsg("");
+  };
+
+  return (
+    <div style={{ background: "#111
+```
