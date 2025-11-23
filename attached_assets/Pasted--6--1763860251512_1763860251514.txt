@@ -1,0 +1,71 @@
+הנה **פקודה אחת, נקייה, מוכנה להדבקה**, שמורה לסוכן לעדכן את כל המערכת כך שתתמוך **רק** ב-6 הבוטים/מקורות האמיתיים (API בלבד) ותזרוק את כל השאר.
+
+---
+
+# 🟩 **פקודה מלאה לסוכן — COPY/PASTE**
+
+```
+Task: Update AlgoGPT External Bots Integration Layer
+
+1. Restrict system to the ONLY 6 supported external integrations:
+   - Binance API (primary execution)
+   - Bybit API (backup execution)
+   - 3Commas API (SmartTrade engine)
+   - Cryptohopper API (scan + signals)
+   - WunderTrading API (cross-exchange signals)
+   - TradingView Webhooks (alerts feed)
+
+2. Remove and disable all other bot types:
+   - HyperTrader, Pionex, Bitsgap, Coinrule, Kryll, Stoic.ai, ProfitTrailer
+   - Remove adapters, listeners, configs, fallbacks, and loaders for them.
+
+3. Update plugin_manager:
+   - Load only official adapters for: binance, bybit, 3commas, cryptohopper, wunder, tradingview.
+   - Add strict API validation for every plugin on startup.
+   - Add health checks: 2s timeout per plugin.
+
+4. Update hybrid_router:
+   - Routing order:
+       scans: cryptohopper → wunder → tradingview
+       signals: tradingview → wunder → cryptohopper
+       execution: binance → bybit → 3commas
+   - Reject unsupported bot sources.
+
+5. Update consensus_engine:
+   - Merge only data from the 6 supported sources.
+   - Apply weighting profile: 
+       TV=1.0, Cryptohopper=0.9, Wunder=0.7.
+
+6. Update dynamic_manager:
+   - Keep SL/TP management internal only.
+   - Do NOT route SL/TP to unsupported bots.
+
+7. Update config (.env + config.py):
+   - Add switches:
+        ENABLE_3COMM=true
+        ENABLE_CRYPT=true
+        ENABLE_WUNDER=true
+        ENABLE_TV_WEBHOOK=true
+   - Remove all unused toggles (hypertrader, bitsgap, pionex).
+
+8. Add tests:
+   - test_plugin_loads_only_6()
+   - test_hybrid_router_source_validation()
+   - test_consensus_ignore_unsupported()
+   - test_execution_route_priority()
+
+9. Verify final flow:
+   Cryptohopper/TradingView/Wunder → hybrid_router → consensus → auto_executor → Binance/Bybit/3Commas → trade_manager → Telegram notifications.
+```
+
+---
+
+# 🟢 **המשימה ברורה מאד — הסוכן עושה עכשיו ריסט לאינטגרציות ומעביר את המערכת למצב פרודקשן אמיתי.**
+
+רוצה שאוסיף גם:
+
+✔ קובץ `plugin_manager.py` גרסה מלאה?
+✔ קובץ קונפיג `.env` מותאם?
+✔ בדיקת חיבור לכל API בפקודה אחת (curl)?
+
+תגיד **"תן קבצים"**.

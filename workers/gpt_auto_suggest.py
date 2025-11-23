@@ -3275,6 +3275,31 @@ async def process_cycle():
     return True  # ✅ Successful scan completed
 
 async def main():
+    # 🔍 CHECK: Only enable AUTO trading if AI providers are available
+    ai_providers_available = {
+        "DeepSeek": bool(os.getenv("DEEPSEEK_API_KEY")),
+        "Grok": bool(os.getenv("XAI_API_KEY")),
+        "Gemini": bool(os.getenv("GEMINI_API_KEY")),
+        "Claude": bool(os.getenv("ANTHROPIC_API_KEY")),
+        "OpenAI": bool(os.getenv("OPENAI_API_KEY")),
+    }
+    
+    available_count = sum(1 for v in ai_providers_available.values() if v)
+    enable_auto_run_without_ai = os.getenv("ENABLE_AUTO_RUN_WITHOUT_AI", "0") == "1"
+    
+    LOGGER.info(f"🔍 AI Provider Check: {available_count}/5 providers available")
+    for provider, available in ai_providers_available.items():
+        status = "✅" if available else "❌"
+        LOGGER.info(f"  {status} {provider}")
+    
+    # Auto-trading decision
+    if available_count > 0:
+        LOGGER.info(f"✅ AUTO_RUN ENABLED: {available_count} AI providers connected")
+    elif enable_auto_run_without_ai:
+        LOGGER.warning(f"⚠️ AUTO_RUN ENABLED: Technical-only fallback mode (NO AI providers)")
+    else:
+        LOGGER.warning(f"⚠️ AUTO_RUN DISABLED: No AI providers available (set ENABLE_AUTO_RUN_WITHOUT_AI=1 to enable technical-only trades)")
+    
     # 🏛️ Initialize Quantum Council Engine (7 AI Expert Members - v9.3.9)
     quantum_council = None
     try:
