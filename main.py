@@ -1798,6 +1798,48 @@ try:
 except Exception as e:
     logger.warning("Failed to load kpi_tracker routes: %s", e)
 
+# ============= Priority 4 & ULTRA-PLUS Feature Integration =============
+
+# Initialize all ULTRA-PLUS systems with dynamic auto-activation
+try:
+    from utils.weekly_reporter import get_weekly_reporter
+    from utils.ml_predictor import get_ml_predictor
+    from utils.freeze_manager import get_freeze_manager
+    from utils.performance_heatmap import get_performance_heatmap
+    from utils.profit_share import get_profit_share_manager
+    from utils.auto_withdraw import get_auto_withdraw_manager
+    from utils.insurance_mode import get_insurance_mode
+    from utils.anomaly_detector import get_anomaly_detector
+    
+    # Initialize singletons (lazy-loaded, auto-activation based on env config)
+    _weekly_reporter = get_weekly_reporter()
+    _ml_predictor = get_ml_predictor()
+    _freeze_manager = get_freeze_manager()
+    _heatmap = get_performance_heatmap()
+    _profit_share = get_profit_share_manager()
+    _auto_withdraw = get_auto_withdraw_manager()
+    _insurance = get_insurance_mode()
+    _anomaly = get_anomaly_detector()
+    
+    logger.info("✅ All ULTRA-PLUS systems initialized (dynamic auto-activation enabled)")
+except Exception as e:
+    logger.warning("⚠️  Some ULTRA-PLUS systems failed to initialize: %s", e)
+
+# Mount Priority 4 & ULTRA-PLUS routes
+try:
+    from routes.weekly_reports import router as weekly_reports_router
+    app.include_router(weekly_reports_router)
+    logger.info("✅ Weekly Reports routes loaded")
+except Exception as e:
+    logger.warning("Failed to load weekly_reports routes: %s", e)
+
+try:
+    from routes.ultra_plus import router as ultra_plus_router
+    app.include_router(ultra_plus_router)
+    logger.info("✅ ULTRA-PLUS routes loaded")
+except Exception as e:
+    logger.warning("Failed to load ultra_plus routes: %s", e)
+
 # ============= Root & health & AI test =============
 @app.get("/")
 async def root():

@@ -1,0 +1,224 @@
+{
+  "dashboard": {
+    "title": "AlgoGPT Ultra Live Dashboard",
+    "panels": [
+      {
+        "id": 1,
+        "type": "stat",
+        "title": "System Mode",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 0},
+        "targets": [
+          {
+            "expr": "system_mode_state",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 2,
+        "type": "gauge",
+        "title": "Win Rate %",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 0},
+        "targets": [
+          {
+            "expr": "trades_win_rate",
+            "refId": "A"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "min": 0,
+            "max": 100,
+            "unit": "percent"
+          }
+        }
+      },
+      {
+        "id": 3,
+        "type": "stat",
+        "title": "Total PNL (USD)",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 0},
+        "targets": [
+          {
+            "expr": "pnl_total_usd",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "type": "stat",
+        "title": "Frozen Symbols",
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 0},
+        "targets": [
+          {
+            "expr": "freeze_manager_frozen_count",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "type": "graph",
+        "title": "PNL Over Time (24h)",
+        "gridPos": {"h": 8, "w": 12, "x": 0, "y": 4},
+        "targets": [
+          {
+            "expr": "pnl_total_usd",
+            "legendFormat": "Cumulative PNL",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "type": "graph",
+        "title": "Win/Loss Distribution",
+        "gridPos": {"h": 8, "w": 12, "x": 12, "y": 4},
+        "targets": [
+          {
+            "expr": "trades_winning",
+            "legendFormat": "Wins",
+            "refId": "A"
+          },
+          {
+            "expr": "trades_losing",
+            "legendFormat": "Losses",
+            "refId": "B"
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "type": "heatmap",
+        "title": "Market Regime Performance",
+        "gridPos": {"h": 8, "w": 24, "x": 0, "y": 12},
+        "targets": [
+          {
+            "expr": "regime_pnl_matrix",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "type": "stat",
+        "title": "Auto-Hedge Active",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 20},
+        "targets": [
+          {
+            "expr": "hedge_state",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "type": "stat",
+        "title": "Insurance Mode",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 20},
+        "targets": [
+          {
+            "expr": "insurance_mode_active",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "type": "stat",
+        "title": "ML Predictor Ready",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 20},
+        "targets": [
+          {
+            "expr": "ml_predictor_ready",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "type": "stat",
+        "title": "Anomalies Detected",
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 20},
+        "targets": [
+          {
+            "expr": "anomaly_detector_count",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "type": "table",
+        "title": "Recent Anomalies",
+        "gridPos": {"h": 6, "w": 24, "x": 0, "y": 24},
+        "targets": [
+          {
+            "expr": "anomaly_detector_last_anomaly",
+            "format": "table",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "type": "stat",
+        "title": "Weekly PNL",
+        "gridPos": {"h": 4, "w": 6, "x": 0, "y": 30},
+        "targets": [
+          {
+            "expr": "pnl_weekly_usd",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "type": "stat",
+        "title": "Profit-Share Pending",
+        "gridPos": {"h": 4, "w": 6, "x": 6, "y": 30},
+        "targets": [
+          {
+            "expr": "profit_share_pending_usd",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "type": "stat",
+        "title": "Total Withdrawn",
+        "gridPos": {"h": 4, "w": 6, "x": 12, "y": 30},
+        "targets": [
+          {
+            "expr": "auto_withdraw_total_usd",
+            "refId": "A"
+          }
+        ]
+      },
+      {
+        "id": 16,
+        "type": "stat",
+        "title": "Account Buffer",
+        "gridPos": {"h": 4, "w": 6, "x": 18, "y": 30},
+        "targets": [
+          {
+            "expr": "account_buffer_usd",
+            "refId": "A"
+          }
+        ]
+      }
+    ],
+    "templating": {
+      "list": []
+    },
+    "time": {
+      "from": "now-24h",
+      "to": "now"
+    },
+    "timepicker": {
+      "refresh_intervals": ["10s", "30s", "1m", "5m", "15m", "30m", "1h", "2h", "1d"]
+    }
+  }
+}

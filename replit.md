@@ -4,75 +4,39 @@
 AlgoGPT is an autonomous AI-driven algorithmic trading platform designed for 24/7 operation on Binance Futures. It analyzes 534 symbols, executing intelligent trades based on 7 integrated strategies and dynamic capital management. The platform features an AI-driven MetaBrain that determines all trade parameters, aiming for 4-10 high-quality daily trades. It prioritizes scalability, autonomous operation through a self-adaptive engine, and complete data persistence, optimized for diverse market conditions. The business vision is to provide a robust, self-optimizing algorithmic trading solution with high market potential due to its autonomous and AI-driven adaptability.
 
 ## User Preferences
-I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically.
-
-## Recent Changes (v10.3.1 - SL/TP Stages + Multi-User + RBAC + Dashboard KPIs COMPLETED)
-- **Priority 1 COMPLETED: SL/TP Dynamic Stages 1-3**: 
-  - Created `utils/sltp_stages_manager.py` (402 lines) - Full Stage 1-3 implementation
-  - Stage 1: Move SL to BE+ after TP1 hit
-  - Stage 2: Trailing SL auto-updates with locked profit
-  - Stage 3: Auto-exit at TP2/TP3/SL
-- **Priority 2 COMPLETED: Multi-User + Telegram Auth + RBAC**:
-  - Created `utils/user_models.py` - SQLAlchemy User model with roles (admin/user/viewer)
-  - Created `utils/rbac.py` - Role-Based Access Control middleware
-  - Created `routes/user_auth.py` - Registration, QR login, One-Tap auth, API keys, admin auto-switch
-- **Priority 3 COMPLETED: Dashboard KPIs (Auto-Switch Counter + SL-Saves + Missed Trades + Locked Profit)**:
-  - Created `utils/kpi_tracker.py` (350+ lines):
-    - Auto-Switch Counter (tracks admin user switches)
-    - SL-Saves Tracker (positions saved by SL management)
-    - Missed Trades Logger (rejected trade proposals)
-    - Locked Profit Display (cumulative from SL/TP stages)
-  - Created `routes/kpi_tracker.py` (300+ lines):
-    - GET `/kpi/summary` - Complete KPI dashboard summary
-    - GET `/kpi/auto-switch` - Auto-switch counter with period filtering
-    - GET `/kpi/sl-saves` - SL-saves count + profit
-    - GET `/kpi/missed-trades` - Missed trades list with reasons breakdown
-    - GET `/kpi/locked-profit` - Locked profit tracking
-    - POST endpoints for internal KPI tracking
-- **Infrastructure**: Fully dynamic for multi-user scaling + auto-pagination when system grows
-- **Previous**: v10.2.0 SL/TP Stages, v10.1.1 DeepSeek Disabled
+I prefer iterative development with clear, concise communication. Please ask for my approval before making any major changes or executing trades. Provide detailed explanations for complex concepts but keep status updates brief and to the point. I like to have visibility into the system's decision-making process, especially regarding trade proposals and risk management. I prefer using interactive menus and quick scripts for common operations. All communication in Hebrew. Automatic trading with 100% dynamic automation - no time-based patterns. SL/TP fully dynamic. Budget scales with wallet size automatically. All features must activate dynamically/automatically when system is ready.
 
 ## System Architecture
 
 ### UI/UX
-The system provides a dashboard UI and enhanced Telegram notifications, utilizing HTML formatting, emojis, and inline interactive buttons for user interaction.
+The system provides a dashboard UI and enhanced Telegram notifications, utilizing HTML formatting, emojis, and inline interactive buttons for user interaction. Weekly Reports and ULTRA-PLUS dashboards provide comprehensive real-time monitoring.
 
 ### Technical Implementations
-The core application is built with FastAPI and Gunicorn, emphasizing modularity and policy management via YAML files. All critical data is saved to a PostgreSQL database.
+The core application is built with FastAPI and Gunicorn, emphasizing modularity and policy management via YAML files. All critical data is saved to a PostgreSQL database. All ULTRA-PLUS systems operate with dynamic auto-activation.
 
 **Core Features:**
-- **Automated Trading Modes**: Supports MARKET, HYBRID, and FULL AUTO execution.
-- **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, ATR-based trailing stops, and auto-flip position reversal.
+- **Automated Trading Modes**: Supports MARKET, HYBRID, and FULL AUTO execution with dynamic management of open positions (TP, SL, BE logic, ATR-based trailing stops, auto-flip).
 - **Market Scanner**: Autonomous multi-timeframe technical analysis across Binance Futures with weighted trend detection.
 - **AI-Powered Proposals**: Uses DeepSeek Chat for trade decisions with adaptive Risk/Reward, intelligent brain management, and dynamic quality threshold enforcement.
-- **Technical-Only Trading (NEW v9.4.1)**: Pure technical analysis fallback system - generates trade proposals without ANY AI dependency. Automatic activation when AI providers unavailable (402, 429, timeout). Includes Technical Strategy Selector (ADX/RSI/Volatility based) and Technical Trade Generator (ATR-based SL/TP). System works 24/7 even if all AI providers fail.
-- **Resilient Trade Generation**: Two-tier proposal system: Primary (AI-driven) → Fallback (Technical-only). No single point of failure. System automatically switches between modes with zero downtime.
+- **Resilient Trade Generation**: Two-tier proposal system: Primary (AI-driven) and Fallback (Technical-only, with Technical Strategy Selector and Trade Generator). Automatically switches between modes with zero downtime.
 - **GRID Trading**: Integrated FUTURES GRID trading with dynamic symbol selection, tiered strategies, dynamic sizing, and automatic SL/TP protection.
-- **Risk Management**: Includes quality filters, dynamic filters, liquidity checks, cooldowns, daily trade caps, and a circuit breaker.
-- **Dynamic Budget System**: 100% dynamic trade budget calculation based on equity-tied ceiling, quality multiplier, volatility adjustment, and floor/cap. Auto-detects wallet balance and dynamically scales all trading parameters based on balance tiers.
-- **Dynamic SL/TP Calculation**: ATR-based Stop Loss and RR-based Take Profit with multi-target TP.
-- **MetaBrain - AI-Driven Precision Trading**: Features a 3-stage auto-deployment engine, 1-Brain Lean Architecture (DeepSeek Chat), intelligent brain management, smart override logic, regime-based dynamic MIN_QUALITY, precision calculator, deep market analyzer, dynamic protection manager, balance-tiered risk profiles, auto-strategy selection, dynamic trailing SL, auto-flip multi-timeframe analysis, and a regime detection engine.
-- **Adaptive Win Rate Optimizer**: Tracks recent performance, calculates Sharpe ratio, adjusts position sizing dynamically, scales SL/TP based on confidence, and incorporates regime-aware adjustments.
-- **ExecutionBot**: Centralized architecture for all trade execution logic with source-aware approval gating and Stage Engine integration, ensuring 100% SL/TP protection.
-- **Auto-Optimization System**: Self-adaptive trading through intelligent parameter tuning, multi-level protection, and a symbol tiering engine with dynamic blacklist management.
+- **Risk Management**: Includes quality filters, dynamic filters, liquidity checks, cooldowns, daily trade caps, and a circuit breaker, alongside a Dynamic Budget System and Dynamic SL/TP Calculation (ATR-based).
+- **Multi-User Support + RBAC**: Full user management with admin/user/viewer roles, Telegram auth, and API key management.
+- **Advanced Monitoring**: Real-time tracking of auto-switches, SL-saves, missed trades, locked profit, and automated weekly reports.
+- **ULTRA-PLUS Systems**: Seven advanced systems: ML Predictor (price forecasting), Freeze Manager (auto-freeze risky symbols), Performance Heatmap (win/loss tracking), Profit-Share System (automatic billing), Auto-Withdraw (profit extraction), Insurance Mode (auto-hedge detection), and Anomaly Detector (critical anomaly detection).
+- **MetaBrain - AI-Driven Precision Trading**: Features a 3-stage auto-deployment engine, 1-Brain Lean Architecture, intelligent brain management, regime-based dynamic MIN_QUALITY, and a regime detection engine.
+- **Adaptive Win Rate Optimizer**: Tracks performance, calculates Sharpe ratio, adjusts position sizing, and scales SL/TP based on confidence.
+- **ExecutionBot**: Centralized architecture for all trade execution logic with source-aware approval gating and Stage Engine integration.
+- **Auto-Optimization System**: Self-adaptive trading through intelligent parameter tuning, multi-level protection, and dynamic blacklist management.
 - **Insurance Monitor System**: Multi-layered account protection including Drawdown Protection, Margin Ratio Defense, Cross/Isolated Balancer, and a Circuit Breaker.
-- **Validation & Safety Infrastructure**: Includes a Validation Pipeline, Fail-Closed Decision Gates, Monte Carlo simulations, Live Health Monitor, 3-Layer Emergency Protection System, Hedge Position Manager, Stop Order Validator, Order Hygiene System, and an enhanced SL/TP ENGINE with critical validation.
-- **Hedge Mode Auto-Activation System**: Fully automatic Hedge Mode activation.
-- **Smart LIMIT+MARKET Order Router**: Decision matrix for intelligent order routing.
-- **Order Consolidation System**: Limits orders per symbol, auto-merges similar prices, and optimizes strategic TP levels.
-- **Hybrid Dynamic Leverage System**: 100% dynamic leverage (2-35x) adapting in real-time based on ADX.
-- **Trading Policy Filters**: System-wide protection via Symbol Filter Engine (100% dynamic volume filtering, liquidity, Binance whitelist/blacklist), Adaptive Volume Filter Integration, Market-Aware Threshold Selection, Order Quality Monitor, Position Limits Manager, and Trading Gatekeeper.
-- **Dynamic Smart Filter**: Regime-Aware + AUTO Percentile Strategy for adaptive volume analysis, auto-percentile strategy selection, adaptive volume thresholds, regime-based RR & quality thresholds, dynamic BTC correlation penalty, adaptive direction penalty, and market intelligence integration.
-- **Dynamic TOP 100 Symbol Filter**: Blocks trades for symbols outside the TOP 100.
-- **Binance Symbol Validator**: Universal coverage for all order creation paths with side-aware rounding, real-time sync with Binance, graceful fallback, and precision error prevention.
-- **Position Mode Management**: Prevents APIError -4061 through `POSITION_MODE_OVERRIDE`, auto-adaptation logic, centralized wrapper system, cache invalidation, retry logic fix, and startup skip logic.
-- **Trade Execution Pipeline**: Calculates quantity from budget, supports HYBRID flow, and persists metadata to Redis before execution.
-- **Telegram Digest System**: Consolidated notification system for batched reports.
-- **Margin Gate System**: Auto-pause scanning when margin insufficient, auto-resume when funds available.
-- **Critical AutoFix Engine**: Auto-detects and fixes critical issues (precision, order execution, position management, risk) with real-time monitoring and threshold-based triggers.
-- **Intelligent Trading Features**: Includes Pattern Recognition Engine, Adaptive Confidence Weights, Win Rate Optimizer, and Symbol-Specific Trading Rules.
-- **Quantum Trading Council System**: A 7-member expert AI council (DeepSeek, Grok, Claude, Qwen, Gemini, Falcon, Mixtral) with weighted voting for trade qualification, strategy routing, and smart token management based on budget and performance-based reallocation.
-- **External Brain Integration System**: A 6-bot cooperative trading team (Cryptohopper, 3Commas, WunderTrading, HyperTrader, Bybit Signals, TradingView) with dynamic capabilities, failover, consensus merging, self-learning, real-time management, zero downtime, and API endpoints for control.
+- **Validation & Safety Infrastructure**: Comprehensive validation pipeline, fail-closed decision gates, Monte Carlo simulations, Live Health Monitor, and a 3-Layer Emergency Protection System.
+- **Order Management**: Smart LIMIT+MARKET Order Router, Order Consolidation System, Hybrid Dynamic Leverage System, and Binance Symbol Validator.
+- **Trading Policy Filters**: System-wide protection via Symbol Filter Engine, Adaptive Volume Filter Integration, Market-Aware Threshold Selection, and Position Limits Manager.
+- **Dynamic Smart Filter**: Regime-Aware + AUTO Percentile Strategy for adaptive volume analysis, dynamic BTC correlation penalty, and market intelligence integration.
+- **Critical AutoFix Engine**: Auto-detects and fixes critical issues (precision, order execution, position management, risk) with real-time monitoring.
+- **Intelligent Trading Features**: Pattern Recognition Engine, Adaptive Confidence Weights, Win Rate Optimizer, and Symbol-Specific Trading Rules.
+- **Quantum Trading Council System**: A 7-member expert AI council with weighted voting for trade qualification and strategy routing.
+- **External Brain Integration System**: A 6-bot cooperative trading team (Cryptohopper, 3Commas, WunderTrading, HyperTrader, Bybit Signals, TradingView) with dynamic capabilities, failover, and self-learning.
 
 ### Deployment Architecture
 The production environment runs on Render.com with Background Workers and a Neon PostgreSQL database, connected to GitHub for auto-deployment. Replit is used for development.
