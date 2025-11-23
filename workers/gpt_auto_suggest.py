@@ -34,6 +34,8 @@ from utils.adaptive_budget_engine import get_adaptive_budget_engine  # ← Adapt
 from utils.critical_autofix_engine import get_critical_autofix_engine  # ← Critical AutoFix Engine (MetaBrain v9.2.5)
 from utils.critical_issues_monitor import get_critical_issues_monitor  # ← Critical Issues Monitor (MetaBrain v9.2.5)
 from utils.quantum_council_engine import QuantumCouncilEngine  # ← Quantum Council - 7 AI Expert Members (v9.3.9)
+from utils.technical_strategy_selector import get_technical_strategy_selector  # ← Technical Strategy Selection (NO AI needed)
+from utils.technical_trade_generator import get_technical_trade_generator  # ← Technical Trade Generation (NO AI needed)
 
 # Grid helper
 try:
@@ -1374,8 +1376,71 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
         except Exception as e:
             LOGGER.warning(f"Grok proposal generation failed for {symbol}: {e}")
     
+    # ========== FALLBACK TO TECHNICAL-ONLY TRADE GENERATION ==========
+    # When AI fails (402, 429, timeout), use pure technical analysis
     if data is None:
-        LOGGER.warning(f"NO PROPOSAL from AI for {symbol}")
+        LOGGER.warning(f"❌ AI providers unavailable for {symbol} - ACTIVATING TECHNICAL-ONLY FALLBACK")
+        
+        try:
+            # Get technical trade generator (NO API calls needed)
+            tech_generator = get_technical_trade_generator()
+            
+            # Extract price from context
+            curr_price = float(ctx.get("close", ctx.get("price", 0))) if ctx else 0
+            if curr_price <= 0:
+                LOGGER.error(f"❌ Cannot generate technical trade: Invalid price {curr_price}")
+                return None
+            
+            # Build indicators dict from context
+            indicators = {
+                "atr": float(ctx.get("atr", ctx.get("atr_percent", 2) * curr_price / 100)) if ctx else curr_price * 0.02,
+                "rsi": float(ctx.get("rsi", 50)) if ctx else 50,
+                "ema_20": float(ctx.get("ema_20", ctx.get("ema21", curr_price))) if ctx else curr_price,
+                "ema_50": float(ctx.get("ema_50", ctx.get("ema50", curr_price))) if ctx else curr_price,
+                "adx": float(ctx.get("adx", 20)) if ctx else 20,
+                "volatility": float(ctx.get("volatility", 5)) if ctx else 5,
+                "support": float(ctx.get("support", curr_price * 0.95)) if ctx else curr_price * 0.95,
+                "resistance": float(ctx.get("resistance", curr_price * 1.05)) if ctx else curr_price * 1.05,
+            }
+            
+            # Determine side from multi-TF analysis
+            tf_trend = ctx.get("tf_trend", "NEUTRAL") if ctx else "NEUTRAL"
+            side = "LONG" if tf_trend in ("LONG", "BULLISH") else ("SHORT" if tf_trend in ("SHORT", "BEARISH") else "LONG")
+            
+            # Generate technical trade
+            tech_trade = tech_generator.generate_trade(
+                symbol=symbol,
+                price=curr_price,
+                indicators=indicators,
+                side=side
+            )
+            
+            if tech_trade:
+                # Convert to AI proposal format
+                data = {
+                    "side": tech_trade.side,
+                    "entry": tech_trade.entry,
+                    "sl": tech_trade.sl,
+                    "tp1": tech_trade.tp1,
+                    "tp2": tech_trade.tp2,
+                    "tp3": tech_trade.tp3,
+                    "leverage": tech_trade.leverage,
+                    "success_pct": tech_trade.success_pct,
+                    "reason": tech_trade.reason,
+                    "confidence": tech_trade.confidence,
+                    "quality_score": tech_trade.quality_score,
+                }
+                LOGGER.info(f"✅ TECHNICAL FALLBACK generated proposal for {symbol}: {data}")
+            else:
+                LOGGER.warning(f"❌ Technical fallback also failed to generate trade for {symbol}")
+                return None
+        
+        except Exception as tech_err:
+            LOGGER.error(f"❌ Technical fallback error for {symbol}: {tech_err}")
+            return None
+    
+    if data is None:
+        LOGGER.warning(f"NO PROPOSAL from AI or TECHNICAL FALLBACK for {symbol}")
         return None
     
     # ===== CRITICAL VALIDATION: Ensure direction/side exists BEFORE parsing =====

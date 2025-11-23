@@ -19,6 +19,8 @@ The core application is built with FastAPI and Gunicorn, emphasizing modularity 
 - **Live Trade Management**: Dynamic management of open positions with TP, SL, BE logic, ATR-based trailing stops, and auto-flip position reversal.
 - **Market Scanner**: Autonomous multi-timeframe technical analysis across Binance Futures with weighted trend detection.
 - **AI-Powered Proposals**: Uses DeepSeek Chat for trade decisions with adaptive Risk/Reward, intelligent brain management, and dynamic quality threshold enforcement.
+- **Technical-Only Trading (NEW v9.4.1)**: Pure technical analysis fallback system - generates trade proposals without ANY AI dependency. Automatic activation when AI providers unavailable (402, 429, timeout). Includes Technical Strategy Selector (ADX/RSI/Volatility based) and Technical Trade Generator (ATR-based SL/TP). System works 24/7 even if all AI providers fail.
+- **Resilient Trade Generation**: Two-tier proposal system: Primary (AI-driven) → Fallback (Technical-only). No single point of failure. System automatically switches between modes with zero downtime.
 - **GRID Trading**: Integrated FUTURES GRID trading with dynamic symbol selection, tiered strategies, dynamic sizing, and automatic SL/TP protection.
 - **Risk Management**: Includes quality filters, dynamic filters, liquidity checks, cooldowns, daily trade caps, and a circuit breaker.
 - **Dynamic Budget System**: 100% dynamic trade budget calculation based on equity-tied ceiling, quality multiplier, volatility adjustment, and floor/cap. Auto-detects wallet balance and dynamically scales all trading parameters based on balance tiers.
