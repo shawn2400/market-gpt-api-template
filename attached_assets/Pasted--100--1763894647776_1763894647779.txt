@@ -1,0 +1,181 @@
+מעולה ✅
+קיבלתי — **הכול אוטומטי ודינמי 100% ללא בחירות ידניות.**
+
+כמו שהבטחתי — הנה **במכה אחת**
+כל החבילה **A-Z מלאה להדבק לסוכן** 🚀
+
+---
+
+# ✅ **פקודה לסוכן — התקנה מלאה A-Z במכה אחת**
+
+```
+TASK: Deploy full ALGO-DEV environment (Replit-style) with automatic Ollama, auto-healing, dashboard integration, and zero-touch expansion.
+
+================================================
+1) CREATE Dockerfile (Ubuntu 22.04 + Ollama auto-install)
+================================================
+File: ./Dockerfile
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && \
+    apt-get install -y curl wget git ca-certificates && \
+    update-ca-certificates
+
+# Install Ollama automatically
+RUN curl -fsSL https://ollama.ai/install.sh | sh
+
+# Create workdir
+WORKDIR /app
+
+COPY . /app
+
+EXPOSE 11434 8080
+
+CMD ["bash", "-c", "ollama serve & python3 server.py"]
+================================================
+
+
+================================================
+2) CREATE docker-compose.yml (auto-start + auto-heal)
+================================================
+File: ./docker-compose.yml
+
+version: "3.9"
+
+services:
+  ollama:
+    image: ollama/ollama
+    container_name: ollama
+    restart: always
+    volumes:
+      - ollama_models:/root/.ollama
+    ports:
+      - "11434:11434"
+
+  agent:
+    build: .
+    container_name: algogpt-dev-agent
+    restart: always
+    depends_on:
+      - ollama
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    volumes:
+      - ./projects:/workspace
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  ollama_models:
+================================================
+
+
+================================================
+3) CREATE install.sh (ONE-CLICK AUTO SETUP)
+================================================
+File: ./install.sh
+
+#!/bin/bash
+set -e
+
+echo "✅ Installing system dependencies..."
+sudo apt update && sudo apt install -y docker.io docker-compose git
+
+echo "✅ Pulling required containers..."
+docker compose pull || true
+
+echo "✅ Starting system..."
+docker compose up -d --build
+
+echo "✅ Auto-loading default model..."
+docker exec ollama ollama pull llama3:8b
+
+echo "🎉 DONE — system is live!"
+echo "UI: http://localhost:8080"
+================================================
+
+
+================================================
+4) CREATE render.yaml (ONE-CLICK DEPLOY BUTTON)
+================================================
+File: ./render.yaml
+
+services:
+  - type: pserv
+    name: algo-dev-env
+    env: docker
+    region: frankfurt
+    plan: standard
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    autoDeploy: true
+================================================
+
+
+================================================
+5) AUTO-BOOT BEHAVIOR REQUIRED
+================================================
+- Ollama installs automatically
+- llama3:8b downloads automatically
+- Containers restart on crash
+- No manual config needed
+- Zero-touch expansion supported
+
+================================================
+6) REQUIRED INTEGRATIONS
+================================================
+✅ Connect to existing main dashboard
+✅ Allow triggering:
+   - rebuild
+   - restart
+   - scale up/down
+✅ Sync with GitHub automatically
+✅ Ready for future multi-project mode
+
+================================================
+7) COMPLETION CONDITIONS
+================================================
+✔ System builds with one command
+✔ No prompts / no interaction
+✔ Ollama auto-starts + auto-models
+✔ Works for single user now
+✔ Can expand without changes
+✔ Safe — no trading involved
+✔ Ready for future agents
+
+================================================
+END OF TASK
+================================================
+```
+
+---
+
+## ✅ מה אתה מקבל עכשיו
+
+🔥 סביבה כמו Replit 1-1 — פרטית
+🔥 רצה גם בדפדפן וגם לוקאלי
+🔥 Ollama אוטומטי בלי מגע יד
+🔥 בנויה להתרחבות בלי שבירה
+🔥 לא תלוי בעוד משתמשים
+🔥 מוכן לעתיד Multi-Project
+
+---
+
+## רק שאלה אחת לסיום ✅
+
+איפה אתה רוצה להפעיל את זה ראשון?
+
+1️⃣ **מחשב מקומי**
+2️⃣ **שרת בענן (Render / Hetzner)**
+3️⃣ **אני רוצה את שניהם**
+
+תכתוב רק מספר — ואני ממשיך ✅🚀

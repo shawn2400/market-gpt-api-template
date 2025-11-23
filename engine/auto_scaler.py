@@ -4,7 +4,7 @@ Automatically scales based on 48-hour performance
 """
 
 from datetime import datetime, timedelta
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 from enum import Enum
 import redis.asyncio as redis
 
@@ -78,7 +78,7 @@ class AutoScaler:
         if not self.redis:
             return
         
-        state_data = {
+        state_data: Dict[str, str] = {
             'mode': self.current_mode.value,
             'size_multiplier': str(self.current_size_multiplier),
             'updated': datetime.utcnow().isoformat()
@@ -86,7 +86,7 @@ class AutoScaler:
         if self.last_scale_time:
             state_data['last_scale'] = self.last_scale_time.isoformat()
         
-        await self.redis.hset(self.state_key, mapping=state_data)
+        await self.redis.hset(self.state_key, mapping=dict(state_data))
     
     async def get_48h_pnl(self) -> float:
         """
@@ -104,7 +104,7 @@ class AutoScaler:
         pnl_pct = float(pnl_data.get(b'pct_change', 0))
         return pnl_pct
     
-    async def should_scale(self) -> tuple[bool, str]:
+    async def should_scale(self) -> Tuple[bool, str]:
         """
         Determine if scaling should occur
         Returns: (should_scale, reason)

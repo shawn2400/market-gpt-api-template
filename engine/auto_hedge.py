@@ -5,7 +5,7 @@ Fully automatic, no manual approval required
 
 import asyncio
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Tuple
 from enum import Enum
 import redis.asyncio as redis
 
@@ -67,7 +67,7 @@ class AutoHedge:
         if not self.redis:
             return
         
-        state_data = {
+        state_data: Dict[str, str] = {
             'current_state': self.current_state.value,
             'active_hedges': str(len(self.active_hedges)),
             'updated': datetime.utcnow().isoformat()
@@ -75,7 +75,7 @@ class AutoHedge:
         if self.last_activation:
             state_data['last_activation'] = self.last_activation.isoformat()
         
-        await self.redis.hset(self.state_key, mapping=state_data)
+        await self.redis.hset(self.state_key, mapping=dict(state_data))
     
     async def should_hedge(self) -> bool:
         """

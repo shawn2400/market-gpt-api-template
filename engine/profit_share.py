@@ -5,7 +5,7 @@ Auto-suspend if unpaid, auto-unlock on payment
 """
 
 from datetime import datetime, timedelta
-from typing import Dict, Optional, List
+from typing import Dict, Optional, List, Any
 import redis.asyncio as redis
 
 class ProfitShare:
@@ -40,12 +40,12 @@ class ProfitShare:
         if self.redis:
             await self.load_billing()
     
-    async def load_billing(self):
+    async def load_billing(self) -> None:
         """Load current billing state"""
         if not self.redis:
             return
         
-        billing_data = await self.redis.hgetall(self.billing_key)
+        billing_data: Dict[Any, Any] = await self.redis.hgetall(self.billing_key)
         if billing_data:
             self.current_billing = {
                 'total_profit': float(billing_data.get(b'total_profit', 0)),
@@ -142,12 +142,16 @@ class ProfitShare:
         due_amount = max(0, total_profit * self.profit_share_rate)
         
         # Calculate win rate by exchange
-        invoice_lines = []
+        invoice_lines: List[Dict[str, Any]] = []
         
         for exchange, profit in profit_data['by_exchange'].items():
             # Get trade count for this exchange
-            trades = await self.redis.lrange(f"trades:{exchange}:week", 0, -1)
-            win_count = len([t for t in trades if eval(t).get('pnl', 0) > 0])
+            if self.redis:
+                trades = await self.redis.lrange(f"trades:{exchange}:week", 0, -1)
+                win_count = len([t for t in trades if eval(t).get('pnl', 0) > 0])
+            else:
+                trades = []
+                win_count = 0
             
             invoice_lines.append({
                 'exchange': exchange,
@@ -156,18 +160,28 @@ class ProfitShare:
                 'profit': profit
             })
         
-        self.current_billing['total_profit'] = total_profit
-        self.current_billing['due_amount'] = due_amount
-        
-        await self.save_billing()
+        if self.current_billing:
+            self.current_billing['total_profit'] = total_profit
+            self.current_billing['due_amount'] = due_amount
+            
+            await self.save_billing()
+            
+            return {
+                'invoice_lines': invoice_lines,
+                'total_profit': total_profit,
+                'due_amount': due_amount,
+                'rate': f"{self.profit_share_rate * 100:.0f}%",
+                'due_date': self.current_billing['due_date'],
+                'wallet': 'TBD'  # Placeholder
+            }
         
         return {
             'invoice_lines': invoice_lines,
-            'total_profit': total_profit,
-            'due_amount': due_amount,
-            'rate': f"{self.profit_share_rate * 100:.0f}%",
-            'due_date': self.current_billing['due_date'],
-            'wallet': 'TBD'  # Placeholder
+            'total_profit': 0.0,
+            'due_amount': 0.0,
+            'rate': '18%',
+            'due_date': '',
+            'wallet': 'TBD'
         }
     
     async def mark_paid(self, amount: float) -> bool:
@@ -229,10 +243,10 @@ class ProfitShare:
         overdue = await self.check_overdue()
         
         return {
-            'current_billing': self.current_billing,
+            'current_billing': self.current_billing if self.current_billing else {},
             'overdue': overdue,
             'suspended': self.suspended,
-            'payment_status': 'PAID' if self.current_billing['paid'] else 'PENDING'
+            'payment_status': 'PAID' if (self.current_billing and self.current_billing.get('paid')) else 'PENDING'
         }
 
 

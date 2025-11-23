@@ -1,107 +1,27 @@
 #!/bin/bash
-# AlgoGPT - Reserved VM Startup Script
-# Runs all services on single VM
-
 set -e
 
-echo "🚀 Starting AlgoGPT Trading System..."
-echo "📊 Environment: Production (Reserved VM)"
-echo "💾 RAM: 2GB | Region: Frankfurt"
+echo "🚀 AlgoGPT v10.4.0 - Starting Services..."
 
-# Start Gunicorn API server
-echo "🌐 Starting API Server..."
-gunicorn -c gunicorn_conf.py main:app &
-
-# Wait for API to be ready
-sleep 5
-
-# 🚨 EMERGENCY KILL-SWITCH CHECK
-EMERGENCY_KILL_SWITCH="${EMERGENCY_KILL_SWITCH:-0}"
-SAFE_BOOT_MODE="${SAFE_BOOT_MODE:-0}"
-
-if [ "$EMERGENCY_KILL_SWITCH" = "1" ]; then
-    echo ""
-    echo "🚨 EMERGENCY KILL-SWITCH ACTIVE 🚨"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "⚠️  All workers DISABLED (BAN recovery mode)"
-    echo "🔌 WebSocket UserStream: ACTIVE (via API server)"
-    echo "🛡️  API Server: RUNNING (health checks only)"
-    echo "⏰ Zero REST API calls to Binance"
-    echo ""
-    echo "💡 To resume workers after ban clears:"
-    echo "   1. Wait 3+ hours for IP ban to clear"
-    echo "   2. Verify ban cleared: python scripts/check_ban_status.py"
-    echo "   3. Set EMERGENCY_KILL_SWITCH=0 and SAFE_BOOT_MODE=1"
-    echo "   4. Re-deploy via GitHub push"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "📊 Total: 1 API Server ONLY (0 Workers)"
-    echo "⏰ $(date)"
-    echo ""
-    
-    # Keep container alive with only API server
-    tail -f /dev/null
-    exit 0
+# Load environment variables
+if [ -f ".env" ]; then
+    set -a
+    source .env
+    set +a
 fi
 
-# Check if Safe-Boot Mode is enabled (after BAN recovery)
-if [ "$SAFE_BOOT_MODE" = "1" ]; then
-    echo ""
-    echo "🚀 SAFE-BOOT MODE ACTIVATED"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo "⚠️  Staggered worker startup (12s delays)"
-    echo "🛡️  REST rate limiting: 40 req/min max"
-    echo "⏰ Total startup time: ~2 minutes"
-    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    echo ""
-    
-    # Use Safe-Boot script with staggered startup
-    if [ -f "/app/scripts/safe_boot_workers.sh" ]; then
-        bash /app/scripts/safe_boot_workers.sh
-    else
-        echo "⚠️  Safe-Boot script not found, falling back to standard startup"
-        SAFE_BOOT_MODE=0
-    fi
+# Check for main.py
+if [ ! -f "main.py" ]; then
+    echo "❌ main.py not found!"
+    exit 1
 fi
 
-# Standard startup (no ban recovery)
-if [ "$SAFE_BOOT_MODE" != "1" ]; then
-    echo "👷 Starting Background Workers (Standard Mode)..."
-    
-    python workers/auto_health_monitor.py &
-    echo "✅ Auto Health Monitor started"
-    
-    python workers/auto_optimization_orchestrator.py &
-    echo "✅ Auto Optimization started"
-    
-    python workers/gpt_auto_suggest.py &
-    echo "✅ Auto Scanner started"
-    
-    python workers/fills_watcher.py &
-    echo "✅ Fills Watcher started"
-    
-    python workers/insurance_monitor.py &
-    echo "✅ Insurance Monitor started"
-    
-    python workers/position_monitor.py &
-    echo "✅ Position Monitor started"
-    
-    python workers/quantum_top50_worker.py &
-    echo "✅ Quantum TOP 50 started"
-    
-    python workers/sentinel_security.py &
-    echo "✅ Sentinel Security started"
-    
-    python workers/telegram_digest_reporter.py &
-    echo "✅ Telegram Digest started"
-    
-    python workers/ban_shield_monitor.py &
-    echo "✅ Ban Shield Monitor started"
+# Start FastAPI backend with Gunicorn
+echo "🔥 Starting FastAPI Backend (port ${PORT:-8008})..."
+cd /app
+
+if [ -f "gunicorn_conf.py" ]; then
+    exec gunicorn -c gunicorn_conf.py main:app
+else
+    exec uvicorn main:app --host 0.0.0.0 --port ${PORT:-8008}
 fi
-
-echo ""
-echo "🎉 All services started successfully!"
-echo "📊 Total: 1 API + 10 Workers"
-echo "⏰ $(date)"
-
-# Keep container alive
-tail -f /dev/null

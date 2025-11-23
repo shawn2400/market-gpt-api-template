@@ -1,42 +1,37 @@
-# Production Dockerfile for AlgoGPT
-FROM python:3.11-slim-bookworm
+# Production Dockerfile for AlgoGPT v10.4.0
+FROM ubuntu:22.04
 
-ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1 \
-    PIP_DISABLE_PIP_VERSION_CHECK=1 \
-    DEBIAN_FRONTEND=noninteractive \
-    TZ=Asia/Jerusalem \
-    PORT=10000 \
-    PYTHONPATH=/app
-
-# Install system dependencies including monitoring tools
-RUN apt-get update -y \
- && apt-get install -y --no-install-recommends \
-    tini \
-    ca-certificates \
-    tzdata \
-    curl \
-    procps \
-    net-tools \
- && ln -fs /usr/share/zoneinfo/$TZ /etc/localtime \
- && dpkg-reconfigure -f noninteractive tzdata \
- && rm -rf /var/lib/apt/lists/*
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+ENV TZ=Asia/Jerusalem
+ENV PORT=8008
 
 WORKDIR /app
-COPY requirements.txt .
-RUN python -m pip install --upgrade pip \
- && pip install --no-cache-dir -r requirements.txt
 
+# System dependencies
+RUN apt-get update && apt-get install -y \
+    python3.11 python3.11-dev python3-pip \
+    git curl wget unzip nano jq build-essential \
+    ca-certificates apt-transport-https tini \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy Python dependencies
+COPY requirements.txt .
+RUN pip3 install --no-cache-dir -r requirements.txt
+
+# Copy application
 COPY . .
 
-# Copy startup script and make executable
-COPY start.sh /app/start.sh
-RUN chmod +x /app/start.sh
+# Make scripts executable
+RUN chmod +x /app/start.sh /app/install.sh 2>/dev/null || true
 
-EXPOSE 10000
+# Create necessary directories
+RUN mkdir -p workspace backups logs data
+
+EXPOSE 8008 8080 8443 11434
+
 HEALTHCHECK --interval=30s --timeout=8s --retries=5 \
-  CMD curl -fsS http://127.0.0.1:${PORT}/readyz || exit 1
+    CMD curl -fsS http://127.0.0.1:${PORT}/readyz || exit 1
 
-ENTRYPOINT ["/usr/bin/tini","--"]
+ENTRYPOINT ["/usr/bin/tini", "--"]
 CMD ["/app/start.sh"]
