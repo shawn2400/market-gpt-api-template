@@ -1,0 +1,7 @@
+# External Brain System
+external/__pycache__
+algo_core/__pycache__
+tests/__pycache__
+routes/__pycache__
+.pytest_cache
+*.pyc
