@@ -1,0 +1,295 @@
+🔥 קיבלת — **ULTRA-PLUS MODE**
+זו הגרסה הכי מתקדמת שבנויה עד היום:
+
+### ✅ 5 מצבי שוק
+
+### ✅ AI-Sentiment
+
+### ✅ **News Impact Engine**
+
+### ✅ **Funding Regime Filter**
+
+### ✅ הכול דינמי • אוטומטי • מסונכרן עם Auto-Flip + SL/TP
+
+### ✅ מתאים לפרודקשן בלי שום קונפיג מצדך
+
+והנה — **הודעה אחת לסוכן**
+העתק → הדבק → מבצע:
+
+---
+
+# 🚀 **פקודה לסוכן — ULTRA-PLUS ENGINE (AI NEWS + FUNDING REGIME)**
+
+```
+Task: Upgrade ULTRA engine to ULTRA-PLUS version with:
+
+1) AI News-Impact module
+2) Funding Regime Filter
+3) Integration with existing 5-mode system
+4) 100% automatic adaptation
+5) No manual configuration
+6) Full sync with Auto-Flip + SL/TP manager
+```
+
+---
+
+## ✅ **1) AI NEWS-IMPACT ENGINE — NEW MODULE**
+
+### **Data Sources (lightweight only):**
+
+```
+CryptoPanic API (filtered)
+Binance announcements feed
+Funding spikes alerts
+Liquidation alerts (low rate)
+AltRank sentiment (optional, cached)
+```
+
+### **Processing Rules:**
+
+```
+Poll every 15 minutes
+Cache headlines for 6h
+Classify into:
+    + bullish impact
+    - bearish impact
+    0 neutral / noise
+Remove duplicates and low-confidence items
+```
+
+### **Output:**
+
+```
+news_impact_score = -1.0 → +1.0
+confidence = 0 → 1
+event_type = normal | high-impact | critical
+```
+
+### **Integration Logic:**
+
+```
+IF high-impact news negative:
+    block new longs for 45–90m
+    tighten SL × 0.85
+    disable auto-flip temporarily
+
+IF high-impact news positive:
+    allow continuation entries
+    widen TP2 slightly
+    enable trailing boost
+
+IF critical news (both directions):
+    freeze new entries for 60m
+    reduce active position size -50%
+    no auto-flip allowed
+```
+
+No notifications unless total freeze.
+
+---
+
+## ✅ **2) FUNDING REGIME FILTER — NEW LAYER**
+
+### **Inputs (Futures only):**
+
+```
+current_funding_rate
+1h funding delta
+OI delta (1h)
+perp/premium index
+```
+
+### **Regime Classification:**
+
+```
+REGIME A — Extreme Positive Funding
+   (overheated longs)
+REGIME B — Extreme Negative Funding
+   (over-crowded shorts)
+REGIME C — Neutral / balanced
+REGIME D — Transition regime
+```
+
+### **Behavior Per Regime:**
+
+#### ✅ REGIME A (positive high — long crowded)
+
+```
+reduce long exposure -35%
+auto-flip allowed only on structure break
+SL tightened
+no scaling into longs
+prefer short reversals only with confirmation
+```
+
+#### ✅ REGIME B (negative high — short crowded)
+
+```
+reduce short exposure -35%
+disable auto-flip to short
+allow long reversals with stronger confirmation
+TP1 reduced to secure early profit
+```
+
+#### ✅ REGIME C (neutral)
+
+```
+no restrictions
+standard ULTRA mode behavior
+```
+
+#### ✅ REGIME D (transition)
+
+```
+block auto-flip temporarily
+no new entries for 15–30m
+SL trailing slowed
+```
+
+---
+
+## ✅ **3) FULL INTEGRATION WITH 5-MODE SYSTEM**
+
+### Priority stack:
+
+```
+1) HI-VOLATILITY SHOCK overrides everything
+2) Critical NEWS overrides Mode + Funding
+3) Funding Regime modifies behavior but not Mode switch
+4) Mode determines SL/TP profile
+5) Sentiment influences aggressiveness
+```
+
+No conflicts.
+No manual tuning.
+
+---
+
+## ✅ **4) SL/TP REQUIREMENTS (UNCHANGED + ENHANCED)**
+
+Global rules MUST remain:
+
+```
+SL never moves backwards
+SL must always lock profit after BE+
+If SL update fails:
+    keep existing SL
+    retry with backoff
+    never remove before confirm
+```
+
+Enhancements under ULTRA-PLUS:
+
+```
+During critical news:
+    do not widen SL
+    no BE delay
+    priority = capital protection
+```
+
+---
+
+## ✅ **5) AUTO-FLIP SYNCHRONIZATION**
+
+Auto-flip ALLOWED only when:
+
+```
+mode ∈ [REVERSAL, STRONG_REVERSAL]
+funding_regime ∈ [B, C]
+news_impact_score not critical
+daily_loss_cap not triggered
+```
+
+Auto-flip BLOCKED when:
+
+```
+CHOP
+HI-SHOCK
+REGIME A extreme
+critical news event
+cooldown active
+```
+
+---
+
+## ✅ **6) DASHBOARD REQUIREMENTS**
+
+Add new ULTRA-PLUS fields:
+
+```
+Market Mode (1-5)
+AI Sentiment score
+News impact score + type
+Funding regime (A/B/C/D)
+Auto-flip status
+Protection flags
+Volatility index
+```
+
+Admin controls (only visible, not editable):
+
+```
+• Force refresh symbol
+• Pause auto-flip (global)
+• Resume auto-flip
+```
+
+No manual editing of profiles.
+
+---
+
+## ✅ **7) STATE STORAGE**
+
+Persist:
+
+```
+news_impact_score
+news_event_type
+funding_regime
+funding_confidence
+last_news_timestamp
+last_regime_change
+auto_flip_block_reason
+```
+
+Store in Redis
+TTL: 24h for news, 72h for regime state
+
+---
+
+## ✅ **8) TESTS REQUIRED**
+
+```
+test_critical_news_freezes_entries()
+test_positive_news_allows_continuation()
+test_funding_extreme_blocks_auto_flip()
+test_regime_transition_halts_new_positions()
+test_no_mode_conflicts_with_ultra()
+test_sl_protection_kept_during_news()
+test_profits_locked_even_in_shock()
+```
+
+All previous ULTRA tests must still pass.
+
+---
+
+## ✅ **COMPLETION CONDITIONS**
+
+✔ AI news integrated without heavy API
+✔ Funding regime filter active & automatic
+✔ No trades during extreme risk windows
+✔ SL/TP always lock profit
+✔ Auto-flip safe & supervised
+✔ Zero manual config
+✔ Fully production-ready
+
+---
+
+אם אתה רוצה עכשיו:
+
+🔥 **תרשים ענק של ULTRA-PLUS State-Machine**
+או
+🔥 קוד מוכן ל-`trade_manager.py` + `mode_engine.py`
+
+תגיד מילה:
+**"תן את הקוד"** 🚀
