@@ -1403,9 +1403,20 @@ async def _ai_consensus_suggest_v2(symbol: str, ctx: Dict[str, Any], for_spot: b
                 "resistance": float(ctx.get("resistance", curr_price * 1.05)) if ctx else curr_price * 1.05,
             }
             
-            # Determine side from multi-TF analysis
+            # Determine side from multi-TF analysis with intelligent tie-breaker
             tf_trend = ctx.get("tf_trend", "NEUTRAL") if ctx else "NEUTRAL"
-            side = "LONG" if tf_trend in ("LONG", "BULLISH") else ("SHORT" if tf_trend in ("SHORT", "BEARISH") else "LONG")
+            
+            if tf_trend in ("LONG", "BULLISH"):
+                side = "LONG"
+                LOGGER.info(f"📊 Technical fallback: {symbol} → {side} (tf_trend={tf_trend})")
+            elif tf_trend in ("SHORT", "BEARISH"):
+                side = "SHORT"
+                LOGGER.info(f"📊 Technical fallback: {symbol} → {side} (tf_trend={tf_trend})")
+            else:  # NEUTRAL - use EMA alignment as intelligent tie-breaker
+                ema_20 = float(indicators.get("ema_20", curr_price))
+                ema_50 = float(indicators.get("ema_50", curr_price))
+                side = "LONG" if ema_20 > ema_50 else "SHORT"
+                LOGGER.info(f"📊 Technical fallback: {symbol} → {side} (EMA20={ema_20:.2f} vs EMA50={ema_50:.2f})")
             
             # Generate technical trade
             tech_trade = tech_generator.generate_trade(
@@ -1773,19 +1784,19 @@ async def propose_futures(symbol: str, ctx: Dict[str, Any], success_floor: float
         mi_engine = get_market_intelligence()
         btc_direction, btc_penalty = mi_engine.check_btc_correlation(symbol, prop.get("side", "LONG"))
         
-        # 🔴 HARD GATE: Block ANY conflicting BTC trade (penalty > 0.5 = significant conflict)
-        # LONG trades: Reject if BTC bearish (penalty > 0.5)
-        # SHORT trades: Reject if BTC bullish (penalty > 0.5)
-        if btc_penalty > 0.5 and prop.get("side") == "LONG" and btc_direction == "BEARISH":
+        # 🔴 HARD GATE: Block ANY conflicting BTC trade (penalty > 0 = ANY conflict)
+        # LONG trades: Reject if BTC bearish (penalty > 0)
+        # SHORT trades: Reject if BTC bullish (penalty > 0)
+        if btc_penalty > 0 and prop.get("side") == "LONG" and btc_direction == "BEARISH":
             LOGGER.warning(
                 f"🔴 REJECTED {symbol}: BTC bearish conflict (BTC={btc_direction}, "
-                f"penalty={btc_penalty:.2f} > 0.5, blocking LONG trades)"
+                f"penalty={btc_penalty:.2f}, blocking ALL LONG trades)"
             )
             return None
-        elif btc_penalty > 0.5 and prop.get("side") == "SHORT" and btc_direction == "BULLISH":
+        elif btc_penalty > 0 and prop.get("side") == "SHORT" and btc_direction == "BULLISH":
             LOGGER.warning(
                 f"🔴 REJECTED {symbol}: BTC bullish conflict (BTC={btc_direction}, "
-                f"penalty={btc_penalty:.2f} > 0.5, blocking SHORT trades)"
+                f"penalty={btc_penalty:.2f}, blocking ALL SHORT trades)"
             )
             return None
         
