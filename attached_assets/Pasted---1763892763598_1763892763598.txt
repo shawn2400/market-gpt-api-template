@@ -1,0 +1,153 @@
+הבנתי ✅
+אתה רוצה **את כל השלושה ביחד** + מסונכרן **אוטומטי**, בלי ידיים, בלי רענון, הכול חי.
+
+אז הנה — **פקודה אחת לסוכן** הכול-כול-כול במכה אחת:
+
+---
+
+# ✅ פקודה לסוכן — דשבורד FULL-MODE חי + שליטה מלאה
+
+**Task:** ליישם דשבורד מערכת חי הכולל את כל התצוגות והבקרה הבאות:
+
+### ✅ 1) חיווי מצב בריאות מערכת
+
+* מצב realtime: **OK / WARNING / CRITICAL**
+* מבוסס על:
+
+  * CPU > 85%
+  * RAM < 500MB
+  * Auto-Recovery פעיל
+  * Kill-Switch מצב
+
+### ✅ 2) גרף חי CPU/RAM
+
+* דגימה כל 5 שניות
+* הצגת 1-3 שעות אחורה
+* ללא עומס (WebSocket push)
+
+### ✅ 3) Heatmap של אירועי Auto-Scale
+
+* צבעים:
+
+  * 🟢 scale-up הצליח
+  * 🟡 skipped (לא נחוץ)
+  * 🔴 failed / blocked
+* לפי timeline יומי + שבועי
+
+### ✅ 4) טבלת מצב תהליכים
+
+מציג חי:
+
+* auto-scale
+* auto-upgrade
+* auto-pause
+* recovery mode
+* failover
+* circuit breaker
+* hedging engine
+* news-filter status
+
+### ✅ 5) שליטה דו-כיוונית מלאה
+
+מהדשבורד ניתן:
+
+* ✅ Enable / Disable Auto-Scale
+* ✅ Force Scale-Up
+* ✅ Freeze All (Kill-Switch)
+* ✅ Restart Auto-Recovery
+* ✅ Toggle Hedge Engine
+* ✅ Toggle News-Block Mode
+
+### ✅ 6) אין צורך ב-SSH
+
+הכול עובד דרך API בלבד.
+
+---
+
+## ✅ קוד API — להדביק עכשיו
+
+### `main.py`
+
+```python
+@app.get("/system/state")
+async def system_state():
+    return system_state_manager.get_snapshot()
+```
+
+### WebSocket
+
+```python
+@app.websocket("/ws/system")
+async def system_stream(ws: WebSocket):
+    await ws.accept()
+    while True:
+        await ws.send_json(system_state_manager.get_snapshot())
+        await asyncio.sleep(5)
+```
+
+---
+
+## ✅ קובץ React מוכן — להוסיף
+
+`dashboard/components/SystemMonitor.jsx`
+
+```jsx
+export default function SystemMonitor() {
+  const [data, setData] = useState(null);
+
+  useEffect(() => {
+    const ws = new WebSocket("wss://YOUR_DOMAIN/ws/system");
+    ws.onmessage = (msg) => setData(JSON.parse(msg.data));
+  }, []);
+
+  if (!data) return <Spinner />;
+
+  return (
+    <div>
+      <h2>System Health: {data.health_status}</h2>
+
+      <LiveChart cpu={data.cpu_history} ram={data.ram_history} />
+
+      <Heatmap events={data.scale_events} />
+
+      <ControlPanel />
+    </div>
+  );
+}
+```
+
+---
+
+## ✅ הוספת שליטה מהדשבורד
+
+```python
+@app.post("/system/control")
+async def system_control(cmd: str):
+    actions.execute(cmd)
+    return {"ok": True}
+```
+
+---
+
+## ✅ תנאי הצלחה (לבדיקה)
+
+הסוכן מסיים רק אם:
+
+✔ 3 תצוגות פעילות בו-זמנית
+✔ כל הנתונים חיים דרך WebSocket
+✔ אין פולינג
+✔ כפתורים שולטים באמת
+✔ Kill-Switch עובד
+✔ Recovery אפשרי
+✔ משתמש יחיד – עובד ✅
+✔ מוכן להתרחבות בעתיד
+
+---
+
+אם אתה רוצה עכשיו:
+
+✅ הוספת **AI-Alerts** (המערכת שולחת רק כשמשהו קורה באמת)
+✅ התראה אם CPU/Failover/News-Freeze הופעל
+✅ לוג אוטומטי ל-Grafana + Loki
+
+תגיד לי: **"הוסף AI-Alerts"** 🚀
